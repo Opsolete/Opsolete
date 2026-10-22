@@ -19,7 +19,7 @@
   <dl class="kv">
     <dt>ID</dt><dd><code>{{.ID}}</code></dd>
     <dt>Module</dt><dd><code>{{.ModuleSource}}</code> <span class="tag">{{.ModuleRef}}</span></dd>
-    <dt>State key</dt><dd><code>{{.StateKey}}</code></dd>
+    <dt>State</dt><dd>{{with $.Versions}}{{with index . 0}}<span class="tag">v{{.Serial}}</span> saved {{.CreatedAt.Format "2006-01-02 15:04"}}{{end}}{{else}}<span class="muted">none yet</span>{{end}}</dd>
     {{with .CreatedBy}}<dt>Deployed by</dt><dd>{{.}}</dd>{{end}}
     {{with .Runner}}<dt>Runner</dt><dd>{{.}}</dd>{{end}}
     <dt>Inputs</dt><dd>{{range $k, $v := .Inputs}}<code>{{$k}} = {{$v}}</code><br>{{else}}<span class="muted">none</span>{{end}}</dd>
@@ -32,6 +32,29 @@
 <table>
 <tr><th>Name</th><th>Value</th></tr>
 {{range $k, $v := .}}<tr><td><code>{{$k}}</code></td><td><code>{{json $v}}</code></td></tr>{{end}}
+</table>
+</div>
+{{end}}
+
+<h2>Resources <small>{{len $.Resources}}{{with $.Versions}}{{with index . 0}} · from state v{{.Serial}}{{end}}{{end}}</small></h2>
+{{with $.Resources}}
+<div class="card flush">
+<table>
+<tr><th>Address</th><th>Type</th><th>Provider</th></tr>
+{{range .}}<tr><td><code>{{.Address}}</code></td><td>{{.Type}}</td><td><small>{{provider .Provider}}</small></td></tr>{{end}}
+</table>
+</div>
+{{else}}
+<p class="muted">{{if eq .Status "queued" "running"}}Shown after the run.{{else if not $.Versions}}No state saved yet.{{else if not (index $.Versions 0).Indexed}}The current state version isn't indexed (the run couldn't read it back).{{else}}The current state holds no resources.{{end}}</p>
+{{end}}
+
+{{with $.Versions}}
+<h2>State versions</h2>
+<div class="card flush">
+<table>
+<tr><th>Version</th><th>Saved</th><th>Size</th><th>Resources</th></tr>
+{{range .}}<tr><td><span class="tag">v{{.Serial}}</span></td><td class="nowrap">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td>
+  <td>{{.Size}} B</td><td>{{if .Indexed}}{{.Resources}}{{else}}<span class="muted">not indexed</span>{{end}}</td></tr>{{end}}
 </table>
 </div>
 {{end}}

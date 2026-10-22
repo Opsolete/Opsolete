@@ -13,7 +13,7 @@ Lifecycle: `queued` (waiting for a runner) → `running` → `succeeded` | `fail
 nix develop        # or `direnv allow`; gives go, gopls, postgres 17, terraform, just
 just               # list tasks
 just run           # start project-local postgres (.devdata/, unix socket) + app on :8080
-just runner        # in a 2nd terminal: a runner on this machine (local backend, state in .devdata/state)
+just runner        # in a 2nd terminal: a runner on this machine (state goes to .devdata/state-store)
 just test          # gofmt check, vet, all tests incl. DB tests
 just smoke         # nix build, boot the binary, submit a deployment end-to-end
 just check         # test + smoke, run before committing
@@ -49,6 +49,7 @@ Then open http://localhost:8080. Migrations run on startup.
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | | Login via OpenID Connect, required unless `AUTH_DEV_USER` is set |
 | `ADMIN_EMAILS`  |           | Comma-separated emails that get the admin role at login |
 | `AUTH_DEV_USER` |           | **Local dev only:** skip login and treat every visitor as this email (set in the nix dev shell) |
+| `STATE_STORE`   | required with deployments | Where workspace state files live, as a [Go CDK blob URL](https://gocloud.dev/howto/blob/): `azblob://tfstate`, `s3://tfstate?region=eu-west-1` (add `&endpoint=…&use_path_style=true` for S3-compatible stores), `gs://tfstate`, `file:///path` (dev). Credentials come from the platform's usual env vars or workload identity |
 
 ## Login
 
@@ -59,7 +60,17 @@ All pages require login. Health checks, the registry protocol (`/v1/…`, which 
 - **Users** can deploy templates, see deployments and destroy their own deployments. **Admins** can also destroy anyone's deployment and, with `TEMPLATE_EDITOR=1`, use the template builder and upload modules.
 - Cross-site form posts are rejected (`http.CrossOriginProtection`). If a proxy rewrites the `Host` header, keep it equal to the browser's origin.
 
-Endpoints: `/healthz` (liveness), `/readyz` (checks the DB), `/` (templates), `/templates/{id}` (form), `/deployments`, `/deployments/{id}` (detail, history, live log, outputs), `/deployments/{id}/logs` (raw log), `POST /deployments/{id}/destroy`, `/auth/login|callback|logout`, `/registry`, `/v1/modules/…` (registry protocol), `/api/runner/v1/…` (runner API).
+Endpoints: `/healthz` (liveness), `/readyz` (checks the DB), `/` (templates), `/templates/{id}` (form), `/deployments`, `/deployments/{id}` (detail, history, live log, outputs), `/deployments/{id}/logs` (raw log), `POST /deployments/{id}/destroy`, `/auth/login|callback|logout`, `/resources`, `/registry`, `/v1/modules/…` (registry protocol), `/api/runner/v1/…` (runner API), `/api/state/v1/{id}` (Terraform state backend).
+
+## Workspaces and state
+
+Each deployment is a **workspace** with exactly one Terraform state. Form2Stack is the state backend, the way HCP Terraform is: runners use Terraform's built-in [`http` backend](https://developer.hashicorp.com/terraform/language/backend/http) against `/api/state/v1/<workspace>`, so they need no storage credentials and the same protocol works on every cloud.
+
+- **Storage:** every saved state is a new, immutable **state version**: a file in `STATE_STORE` under `form2stack/<template>/<workspace>/<serial>-<random>.tfstate`. Postgres keeps only the version list. Writes with an older serial or a different lineage are refused.
+- **Locking:** Terraform's `LOCK`/`UNLOCK` calls take a lock in Postgres, so the blob store needs no locking features of its own. A second locker gets `423` with the holder's lock info. When a run ends or its runner disappears, its lock is released.
+- **Credentials:** a run's state password is an HMAC of the workspace and its lease. Only the run that holds a workspace can read or write its state, only that workspace's, and only until the run ends. The server keeps no state passwords.
+- **Resources page:** `/resources` lists the resources (address, type, provider, module) in every workspace's **current state version**, with a filter. The index belongs to a state version, like HCP Terraform's. At the end of a run, the runner reads the state back (`terraform show -json`, parsed with HashiCorp's `terraform-json`) and sends names and types only. Attribute values never reach Postgres or the UI.
+- **Security:** state files contain secrets in plain text, and the server can read them. Give the server an identity that can only access the state container, and turn on encryption at rest in the store. The server never holds cloud credentials to change infrastructure.
 
 ## Runners
 
@@ -79,24 +90,20 @@ Endpoints: `/healthz` (liveness), `/readyz` (checks the DB), `/` (templates), `/
 |---|---|---|
 | `F2S_SERVER_URL` | required | How the runner reaches Form2Stack (in k8s: the Service URL). Registry modules are fetched from here too |
 | `F2S_RUNNER_TOKEN` | required | `form2stack token <name> runner` |
-| `F2S_BACKEND` | `local` | Terraform backend type: `azurerm`, `s3`, … The runner sets `key=<deployment state key>` |
-| `F2S_BACKEND_CONFIG_<KEY>` | | Backend settings, e.g. `F2S_BACKEND_CONFIG_STORAGE_ACCOUNT_NAME=st…` → `-backend-config=storage_account_name=st…` |
-| `F2S_STATE_DIR` | `/state` | `local` backend only, for dev. Put it on a volume, or state is lost |
 | `F2S_JOB_TIMEOUT` | `1h` | Hard limit per deployment |
 | `F2S_RUNNER_NAME` | hostname | Shown on deployments; the pod name in k8s |
 
-Provider credentials go to the runner as the usual env vars, for example `ARM_*` for azurerm (on AKS: `ARM_USE_AKS_WORKLOAD_IDENTITY=true`). The `azurerm` backend locks state via blob leases. Module code runs on the runner with those credentials, so scope them to what Form2Stack may deploy.
+Provider credentials go to the runner as the usual env vars, for example `ARM_*` for azurerm (on AKS: `ARM_USE_AKS_WORKLOAD_IDENTITY=true`). Runners need no state storage credentials. Module code runs on the runner with the provider credentials, so scope them to what Form2Stack may deploy.
 
 **Containers**
 
 ```sh
 just image app && just image runner
 docker run -e DATABASE_URL=… -e PUBLIC_URL=https://form2stack.example.com -e OIDC_ISSUER=… -e OIDC_CLIENT_ID=… \
-  -e OIDC_CLIENT_SECRET=… -e ADMIN_EMAILS=you@example.com -p 8080:8080 form2stack-app
+  -e OIDC_CLIENT_SECRET=… -e ADMIN_EMAILS=you@example.com -e STATE_STORE=azblob://tfstate -e AZURE_STORAGE_ACCOUNT=… \
+  -p 8080:8080 form2stack-app
 docker run --rm -e DATABASE_URL=… form2stack-app token runner-1 runner        # prints the runner token
-docker run -e F2S_SERVER_URL=http://form2stack:8080 -e F2S_RUNNER_TOKEN=… \
-  -e F2S_BACKEND=azurerm -e F2S_BACKEND_CONFIG_RESOURCE_GROUP_NAME=… -e F2S_BACKEND_CONFIG_STORAGE_ACCOUNT_NAME=… \
-  -e F2S_BACKEND_CONFIG_CONTAINER_NAME=tfstate -e F2S_BACKEND_CONFIG_USE_AZUREAD_AUTH=true -e ARM_… form2stack-runner
+docker run -e F2S_SERVER_URL=http://form2stack:8080 -e F2S_RUNNER_TOKEN=… -e ARM_… form2stack-runner
 ```
 
 **On Kubernetes:**

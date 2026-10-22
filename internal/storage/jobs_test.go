@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/rudesome/form2stack/internal/runnerapi"
 )
 
 func testStore(t *testing.T) *Store {
@@ -93,10 +95,23 @@ func TestJobLifecycle(t *testing.T) {
 		t.Fatalf("cursor: %+v", more)
 	}
 
-	if err := s.FinishJob(ctx, d.ID, j.LeaseID, "succeeded", "", map[string]any{"id": "abc"}); err != nil {
+	res := []runnerapi.Resource{
+		{Address: "azurerm_storage_account.this", Type: "azurerm_storage_account", Name: "this", Provider: "registry.terraform.io/hashicorp/azurerm"},
+		{Address: "module.net.azurerm_subnet.a[0]", Type: "azurerm_subnet", Name: "a", Provider: "registry.terraform.io/hashicorp/azurerm", Module: "module.net"},
+	}
+	if err := s.AddStateVersion(ctx, d.ID, StateVersion{Serial: 3, Lineage: "lin", BlobKey: "k/" + d.ID, MD5: "m", Size: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.FinishJob(ctx, d.ID, j.LeaseID, "failed", "", nil); !errors.Is(err, ErrLeaseLost) {
+	if err := s.FinishJob(ctx, d.ID, j.LeaseID, "succeeded", "", map[string]any{"id": "abc"}, res); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Resources(ctx, "", d.ID); err != nil || len(got) != 2 || got[1].Module != "module.net" || got[0].TemplateID != "job-test" || got[0].Serial != 3 {
+		t.Fatalf("inventory: %+v %v", got, err)
+	}
+	if got, _ := s.Resources(ctx, "SUBNET", d.ID); len(got) != 1 || got[0].Type != "azurerm_subnet" {
+		t.Fatalf("filter: %+v", got)
+	}
+	if err := s.FinishJob(ctx, d.ID, j.LeaseID, "failed", "", nil, nil); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("finishing twice must fail, got %v", err)
 	}
 	got, hist, err := s.GetDeployment(ctx, d.ID)

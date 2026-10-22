@@ -16,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"gocloud.dev/blob"
+
 	"github.com/rudesome/form2stack/internal/auth"
 	"github.com/rudesome/form2stack/internal/registry"
 	"github.com/rudesome/form2stack/internal/runnerapi"
@@ -31,9 +33,11 @@ type Server struct {
 	Templates *templates.Catalog
 	Registry  *registry.Registry
 	Auth      *auth.Auth
-	Features  Features
-	Log       *slog.Logger
-	pages     *template.Template
+	// StateStore holds the workspaces' Terraform state files (any gocloud.dev/blob URL).
+	StateStore *blob.Bucket
+	Features   Features
+	Log        *slog.Logger
+	pages      *template.Template
 }
 
 // Features are the components this instance serves; a disabled one has no routes at all.
@@ -43,11 +47,12 @@ type Features struct {
 	Editor      bool // template builder (needs Deployments) and module uploads (needs Registry), admins only
 }
 
-func New(store *storage.Store, tpls *templates.Catalog, reg *registry.Registry, a *auth.Auth, f Features, log *slog.Logger) *Server {
+func New(store *storage.Store, tpls *templates.Catalog, reg *registry.Registry, a *auth.Auth, state *blob.Bucket, f Features, log *slog.Logger) *Server {
 	pages := template.Must(template.New("").Funcs(template.FuncMap{"join": strings.Join, "json": toJSON,
 		"user": func() auth.User { return auth.User{} }, "section": func() string { return "" },
-		"features": func() Features { return f }}).ParseFS(views, "views/*.html"))
-	return &Server{Store: store, Templates: tpls, Registry: reg, Auth: a, Features: f, Log: log, pages: pages}
+		"features": func() Features { return f },
+		"provider": func(p string) string { return strings.TrimPrefix(p, "registry.terraform.io/") }}).ParseFS(views, "views/*.html"))
+	return &Server{Store: store, Templates: tpls, Registry: reg, Auth: a, StateStore: state, Features: f, Log: log, pages: pages}
 }
 
 // CheckTemplates fails if a template needs a disabled component: with the registry off,
@@ -90,9 +95,11 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("POST /templates/{id}/edit", s.admin(s.saveTemplate))
 	}
 	s.runnerRoutes(mux)
+	s.stateRoutes(mux)
 	mux.HandleFunc("GET /deployments", s.deployments)
 	mux.HandleFunc("GET /deployments/{id}", s.deployment)
 	mux.HandleFunc("POST /deployments/{id}/destroy", s.destroy)
+	mux.HandleFunc("GET /resources", s.resources)
 	// CrossOriginProtection rejects cross-site browser POSTs (CSRF); token clients send no Origin and pass.
 	return s.logRequests(http.NewCrossOriginProtection().Handler(s.requireLogin(mux)))
 }
@@ -100,7 +107,8 @@ func (s *Server) Handler() http.Handler {
 // public paths authenticate themselves (API tokens, signed URLs) or must work without login.
 func public(path string) bool {
 	return path == "/healthz" || path == "/readyz" || path == "/.well-known/terraform.json" ||
-		strings.HasPrefix(path, "/v1/") || strings.HasPrefix(path, runnerapi.Prefix+"/") || strings.HasPrefix(path, "/auth/")
+		strings.HasPrefix(path, "/v1/") || strings.HasPrefix(path, runnerapi.Prefix+"/") ||
+		strings.HasPrefix(path, runnerapi.StatePrefix+"/") || strings.HasPrefix(path, "/auth/")
 }
 
 // requireLogin puts the signed-in user on the request; everything not public needs one.
@@ -230,9 +238,49 @@ func (s *Server) deployment(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not load deployment", http.StatusInternalServerError)
 		return
 	}
+	res, err := s.Store.Resources(r.Context(), "", d.ID)
+	if err != nil {
+		s.Log.Error("deployment resources", "err", err)
+		http.Error(w, "could not load deployment", http.StatusInternalServerError)
+		return
+	}
+	versions, err := s.Store.StateVersions(r.Context(), d.ID, 10)
+	if err != nil {
+		s.Log.Error("state versions", "err", err)
+		http.Error(w, "could not load deployment", http.StatusInternalServerError)
+		return
+	}
 	active := d.Status == "queued" || d.Status == "running"
 	canDestroy := !active && d.Status != "destroyed" && mayDestroy(auth.FromContext(r.Context()), d)
-	s.render(w, r, http.StatusOK, "deployment.html", map[string]any{"D": d, "History": hist, "Active": active, "CanDestroy": canDestroy})
+	s.render(w, r, http.StatusOK, "deployment.html", map[string]any{"D": d, "History": hist, "Active": active,
+		"CanDestroy": canDestroy, "Resources": res, "Versions": versions})
+}
+
+type typeCount struct {
+	Type  string
+	Count int
+}
+
+// resources lists everything Form2Stack manages, as last reported by the runners.
+func (s *Server) resources(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	list, err := s.Store.Resources(r.Context(), q, "")
+	if err != nil {
+		s.Log.Error("list resources", "err", err)
+		http.Error(w, "could not load resources", http.StatusInternalServerError)
+		return
+	}
+	var types []typeCount // list is ordered by type
+	deployments := map[string]bool{}
+	for _, res := range list {
+		if n := len(types); n == 0 || types[n-1].Type != res.Type {
+			types = append(types, typeCount{Type: res.Type})
+		}
+		types[len(types)-1].Count++
+		deployments[res.DeploymentID] = true
+	}
+	s.render(w, r, http.StatusOK, "resources.html", map[string]any{"Resources": list, "Types": types,
+		"Deployments": len(deployments), "Q": q})
 }
 
 // mayDestroy: the user who deployed it, or an admin.

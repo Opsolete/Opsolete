@@ -44,12 +44,12 @@ run: db-start
 token name scope="registry": db-start
     @go run ./cmd/form2stack token "{{name}}" "{{scope}}"
 
-# run a runner on this machine against `just run` (local backend, state in .devdata/state)
+# run a runner on this machine against `just run` (state goes to the server's STATE_STORE)
 runner: env
     #!/usr/bin/env bash
     set -euo pipefail
     export F2S_RUNNER_TOKEN=$(go run ./cmd/form2stack token "local-$(hostname)" runner)
-    export F2S_SERVER_URL=${F2S_SERVER_URL:-http://127.0.0.1:8080} F2S_BACKEND=${F2S_BACKEND:-local} F2S_STATE_DIR=$PGHOST/state
+    export F2S_SERVER_URL=${F2S_SERVER_URL:-http://127.0.0.1:8080}
     exec go run ./cmd/form2stack runner
 
 # build a container image: target is app or runner; set DOCKER_HOST=ssh://user@host to build remotely

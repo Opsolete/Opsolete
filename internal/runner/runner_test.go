@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -27,10 +26,56 @@ type fakeServer struct {
 	mu            sync.Mutex
 	logs          strings.Builder
 	finish        *runnerapi.FinishRequest
-	conflictAfter string // answer log posts with 409 (lease lost) once the log contains this
+	conflictAfter string            // answer log posts with 409 (lease lost) once the log contains this
+	states        map[string][]byte // http state backend: workspace id -> state
+	locks         map[string]string // workspace id -> lock id
+}
+
+// state is a minimal Terraform http state backend with the server's rules: per-run credentials,
+// and writes only under the lock.
+func (f *fakeServer) state(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, runnerapi.StatePrefix+"/")
+	if u, p, ok := r.BasicAuth(); !ok || u != id || p != "state-tok" {
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.states == nil {
+		f.states, f.locks = map[string][]byte{}, map[string]string{}
+	}
+	body, _ := io.ReadAll(r.Body)
+	var info struct{ ID string }
+	json.Unmarshal(body, &info)
+	switch r.Method {
+	case "GET":
+		if b, ok := f.states[id]; ok {
+			w.Write(b)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case "POST":
+		if f.locks[id] == "" || r.URL.Query().Get("ID") != f.locks[id] {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		f.states[id] = body
+	case "LOCK":
+		if f.locks[id] != "" {
+			w.WriteHeader(http.StatusLocked)
+			return
+		}
+		f.locks[id] = info.ID
+	case "UNLOCK":
+		delete(f.locks, id)
+	}
 }
 
 func (f *fakeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, runnerapi.StatePrefix+"/") {
+		f.state(w, r)
+		return
+	}
 	if r.Method == http.MethodGet {
 		if b, ok := f.modules[r.URL.Path]; ok {
 			w.Write(b)
@@ -70,8 +115,8 @@ func testRunner(t *testing.T, srv *httptest.Server) *Runner {
 		}
 	}
 	u, _ := url.Parse(srv.URL)
-	r := New(config.Runner{ServerURL: u, Token: "tok", Name: "test", Terraform: tf, Backend: "local",
-		StateDir: t.TempDir(), JobTimeout: time.Minute}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	r := New(config.Runner{ServerURL: u, Token: "tok", Name: "test", Terraform: tf, JobTimeout: time.Minute},
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	return r
 }
 
@@ -100,7 +145,7 @@ output "secret" {
   sensitive = true
 }`)
 	job := runnerapi.Job{DeploymentID: "d1", LeaseID: "lease", LeaseSeconds: 120, ModuleSource: src,
-		StateKey: "form2stack/t/d1.tfstate", Vars: map[string]any{"greeting": "hello"}}
+		StateToken: "state-tok", Vars: map[string]any{"greeting": "hello"}}
 	r.Execute(context.Background(), job)
 
 	if f.finish == nil || f.finish.Status != "succeeded" {
@@ -109,17 +154,24 @@ output "secret" {
 	if f.finish.Outputs["msg"] != "hello" || f.finish.Outputs["secret"] != "(sensitive)" {
 		t.Fatalf("outputs: %+v", f.finish.Outputs)
 	}
+	want := runnerapi.Resource{Address: "terraform_data.this", Type: "terraform_data", Name: "this", Provider: "terraform.io/builtin/terraform"}
+	if len(f.finish.Resources) != 1 || f.finish.Resources[0] != want {
+		t.Fatalf("resources: %+v", f.finish.Resources)
+	}
 	logs := f.logs.String()
 	for _, want := range []string{"==> terraform plan", "Apply complete! Resources: 1 added", "==> done"} {
 		if !strings.Contains(logs, want) {
 			t.Errorf("logs missing %q:\n%s", want, logs)
 		}
 	}
-	if strings.Contains(logs, "hunter2") || strings.Contains(logs, "secret-signature") {
+	if strings.Contains(logs, "hunter2") || strings.Contains(logs, "secret-signature") || strings.Contains(logs, `"values"`) {
 		t.Errorf("sensitive value or signed URL leaked into logs:\n%s", logs)
 	}
-	if _, err := os.Stat(filepath.Join(r.StateDir, job.StateKey)); err != nil {
-		t.Fatalf("state not written to the deployment's own key: %v", err)
+	if !strings.Contains(string(f.states["d1"]), `"terraform_data"`) || f.locks["d1"] != "" {
+		t.Fatalf("state not saved to the server, or lock not released: %q %q", f.states["d1"], f.locks["d1"])
+	}
+	if strings.Contains(logs, "state-tok") {
+		t.Error("state password leaked into the logs")
 	}
 
 	// Same deployment again: state is reused, so nothing changes.
@@ -129,12 +181,27 @@ output "secret" {
 		t.Fatalf("second run should be a no-op:\n%s", f.logs.String())
 	}
 
+	// A failed run still reports what's in state, without streaming the state itself.
+	f.logs.Reset()
+	bad := job
+	bad.Vars = map[string]any{} // greeting is required: plan fails
+	r.Execute(context.Background(), bad)
+	if f.finish.Status != "failed" || len(f.finish.Resources) != 1 {
+		t.Fatalf("failed run: %+v", f.finish)
+	}
+	if strings.Contains(f.logs.String(), `"values"`) || strings.Contains(f.logs.String(), "hunter2") {
+		t.Fatalf("state leaked into the log of a failed run:\n%s", f.logs.String())
+	}
+
 	// Destroy tears down what's in the deployment's state.
 	f.logs.Reset()
 	job.Action = "destroy"
 	r.Execute(context.Background(), job)
 	if f.finish.Status != "succeeded" || f.finish.Outputs != nil || !strings.Contains(f.logs.String(), "Apply complete! Resources: 0 added, 0 changed, 1 destroyed") {
 		t.Fatalf("destroy: %+v\n%s", f.finish, f.logs.String())
+	}
+	if f.finish.Resources == nil || len(f.finish.Resources) != 0 {
+		t.Fatalf("after destroy the inventory must be reported empty, not unknown: %#v", f.finish.Resources)
 	}
 }
 
@@ -145,7 +212,7 @@ func TestExecuteReportsFailure(t *testing.T) {
 	r := testRunner(t, srv)
 	src := f.module(t, `variable "n" { type = number }`)
 	r.Execute(context.Background(), runnerapi.Job{DeploymentID: "d2", LeaseID: "lease", LeaseSeconds: 120,
-		ModuleSource: src, StateKey: "s/d2.tfstate", Vars: map[string]any{"n": "not a number"}})
+		ModuleSource: src, StateToken: "state-tok", Vars: map[string]any{"n": "not a number"}})
 	if f.finish == nil || f.finish.Status != "failed" || !strings.HasPrefix(f.finish.Message, "plan: ") {
 		t.Fatalf("finish: %+v", f.finish)
 	}
@@ -165,7 +232,7 @@ resource "terraform_data" "slow" {
 }`)
 	start := time.Now()
 	r.Execute(context.Background(), runnerapi.Job{DeploymentID: "d3", LeaseID: "lease", LeaseSeconds: 120,
-		ModuleSource: src, StateKey: "s/d3.tfstate"})
+		ModuleSource: src, StateToken: "state-tok"})
 	if f.finish != nil {
 		t.Fatalf("a runner without the lease must not report a result: %+v", f.finish)
 	}

@@ -17,6 +17,12 @@ import (
 	"syscall"
 	"time"
 
+	"gocloud.dev/blob"
+	_ "gocloud.dev/blob/azureblob" // azblob:// state stores
+	_ "gocloud.dev/blob/fileblob"  // file://
+	_ "gocloud.dev/blob/gcsblob"   // gs://
+	_ "gocloud.dev/blob/s3blob"    // s3:// (AWS and S3-compatible stores)
+
 	"github.com/rudesome/form2stack/internal/auth"
 	"github.com/rudesome/form2stack/internal/config"
 	httpserver "github.com/rudesome/form2stack/internal/http"
@@ -141,7 +147,22 @@ func serve(log *slog.Logger) error {
 	}
 	log.Info("templates loaded", "count", len(tpls.List()), "dir", cfg.TemplatesDir, "editor", cfg.TemplateEditor)
 
-	app := httpserver.New(store, tpls, reg, authn, httpserver.Features{
+	var state *blob.Bucket
+	if cfg.Deployments {
+		if cfg.StateStore == "" {
+			return errors.New("STATE_STORE is required for deployments, e.g. azblob://tfstate, s3://tfstate?region=…, gs://tfstate or file:///path")
+		}
+		if state, err = blob.OpenBucket(ctx, cfg.StateStore); err != nil {
+			return fmt.Errorf("STATE_STORE: %w", err)
+		}
+		defer state.Close()
+		// Fail at startup, not at the first run, if the store is unreachable or the credentials are wrong.
+		if _, err := state.Exists(ctx, "form2stack-startup-check"); err != nil {
+			return fmt.Errorf("STATE_STORE not usable: %w", err)
+		}
+	}
+
+	app := httpserver.New(store, tpls, reg, authn, state, httpserver.Features{
 		Deployments: cfg.Deployments, Registry: cfg.Registry, Editor: cfg.TemplateEditor}, log)
 	if err := app.CheckTemplates(); err != nil {
 		return err

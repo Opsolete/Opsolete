@@ -29,15 +29,15 @@ EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/form2stack"]
 
 # One job at a time per container; scale with replicas. git: git:: module sources;
-# sh: local-exec provisioners. State never stays here except with the dev-only local backend.
+# sh: local-exec provisioners. State never stays here: it lives on the Form2Stack server's state store.
 FROM alpine:3.22 AS runner
 RUN apk add --no-cache ca-certificates git openssh-client \
  && adduser -D -u 10001 runner \
- && mkdir -p /state /home/runner/.terraform.d/plugin-cache \
- && chown -R runner:runner /state /home/runner
+ && mkdir -p /home/runner/.terraform.d/plugin-cache \
+ && chown -R runner:runner /home/runner
 COPY --from=terraform /usr/local/bin/terraform /usr/local/bin/terraform
 COPY --from=build /out/form2stack /usr/local/bin/form2stack
 USER 10001
 # Provider plugins are reused across jobs (mount a volume to keep them across restarts).
-ENV HOME=/home/runner F2S_STATE_DIR=/state TF_PLUGIN_CACHE_DIR=/home/runner/.terraform.d/plugin-cache TF_IN_AUTOMATION=1
+ENV HOME=/home/runner TF_PLUGIN_CACHE_DIR=/home/runner/.terraform.d/plugin-cache TF_IN_AUTOMATION=1
 ENTRYPOINT ["/usr/local/bin/form2stack", "runner"]

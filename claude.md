@@ -67,7 +67,8 @@ Decision (October 2026): deployments run on **Form2Stack's own runners**. The ea
 - Runners pull jobs over HTTPS with a runner-scoped token, so they need no database access and no inbound connectivity. Each claim returns a lease id (fencing token) that every later write must present. Leases expire without heartbeats, and the server then fails the job instead of retrying it.
 - Runners execute Terraform through `terraform-exec` (init → plan → apply → output), one job at a time, in a throwaway working directory, as a non-root user.
 - Runners stream output to the server, which stores it and serves it to the browser via Server-Sent Events. Sensitive outputs never leave the runner.
-- Runners own cloud and backend credentials, not the server. Every deployment gets its own state key in a remote backend with locking.
+- Runners own cloud credentials, not the server. Each deployment is a **workspace** with one Terraform state.
+- Decision (October 2026): Form2Stack is the state backend, HCP-style. Runners use Terraform's `http` backend against the server with a per-run credential (HMAC of workspace + lease). The server stores immutable state versions in blob storage via Go CDK (`STATE_STORE`: azblob, s3, gs, file) and locks in PostgreSQL. A resource index (names/types only) is stored per state version.
 - The target platform is Kubernetes: runners scale as replicas, and the first SIGTERM drains (finishes the current job) while a second interrupts it.
 
 ## 4. Minimal Application Architecture
@@ -91,7 +92,7 @@ Use this structure as a starting point, not as a reason to introduce unnecessary
 - Use official HashiCorp Terraform Go libraries where appropriate.
 - Reuse existing Terraform modules instead of rewriting infrastructure definitions.
 - Avoid shell-command construction and arbitrary command execution from user input.
-- Do not store Terraform state files in PostgreSQL; persist state references and deployment metadata instead.
+- Do not store Terraform state files in PostgreSQL; they live in the state store. PostgreSQL holds the version list, locks and a per-version resource index.
 - Never expose sensitive Terraform state or credentials through the web interface.
 - Pin dependencies to compatible versions and commit `go.mod` and `go.sum`.
 - Verify library compatibility and supported APIs before choosing versions.
@@ -116,8 +117,8 @@ Then implement JSON templates, dynamic forms, authentication, and the execution 
 
 The division of responsibility:
 
-- **Form2Stack server:** authentication · JSON forms · module registry · PostgreSQL · job queue · log storage and streaming.
-- **Form2Stack runners:** pull jobs, run the approved module with Terraform via `terraform-exec`, and hold the cloud and backend credentials.
-- **Terraform + existing modules:** plan · apply · outputs · state, in a remote backend with locking and one state key per deployment.
+- **Form2Stack server:** authentication · JSON forms · module registry · PostgreSQL · job queue · log storage and streaming · Terraform state backend (versions in blob storage, locks in PostgreSQL).
+- **Form2Stack runners:** pull jobs, run the approved module with Terraform via `terraform-exec`, and hold the cloud credentials.
+- **Terraform + existing modules:** plan · apply · outputs, with state in the Form2Stack `http` backend, one state per workspace.
 
-Runners never touch the database, and the server never holds cloud credentials.
+Runners never touch the database or the state store directly. The server holds read/write access to the state store only, never cloud credentials to change infrastructure.

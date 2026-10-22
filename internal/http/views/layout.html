@@ -88,7 +88,11 @@
   .alert.warn { background: var(--warn-soft); color: var(--warn); }
   .actions { display: flex; gap: .6rem; flex-wrap: wrap; align-items: center; margin-top: 1.6rem; }
   .inline { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
-  .inline select { flex: 1; }
+  .inline select, .inline input { flex: 1; }
+  .chips { display: flex; flex-wrap: wrap; gap: .4rem; margin: 0 0 1rem; }
+  .chips a { font-size: .8rem; padding: .2rem .65rem; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+  .chips a:hover { border-color: var(--brand); text-decoration: none; }
+  .chips a[aria-current="true"] { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
 
   /* buttons */
   button, .btn { display: inline-flex; align-items: center; gap: .4rem; font: inherit; font-weight: 600; font-size: .92rem; cursor: pointer;
@@ -136,6 +140,7 @@
     {{if .Deployments}}
     <a href="/"{{if or (eq $s "") (eq $s "templates")}} aria-current="page"{{end}}>Templates</a>
     <a href="/deployments"{{if eq $s "deployments"}} aria-current="page"{{end}}>Deployments</a>
+    <a href="/resources"{{if eq $s "resources"}} aria-current="page"{{end}}>Resources</a>
     {{end}}
     {{if .Registry}}<a href="/registry"{{if eq $s "registry"}} aria-current="page"{{end}}>Registry</a>{{end}}
     {{end}}

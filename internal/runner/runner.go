@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform-exec/tfexec"
+	tfjson "github.com/hashicorp/terraform-json"
 
 	"github.com/rudesome/form2stack/internal/config"
 	"github.com/rudesome/form2stack/internal/runnerapi"
@@ -42,7 +43,7 @@ func New(c config.Runner, log *slog.Logger) *Runner {
 // claiming but lets the current job finish; cancelling hard interrupts terraform (SIGINT,
 // so it can release its state lock).
 func (r *Runner) Run(ctx, hard context.Context) error {
-	r.Log.Info("runner started", "name", r.Name, "server", r.ServerURL.String(), "backend", r.Backend)
+	r.Log.Info("runner started", "name", r.Name, "server", r.ServerURL.String())
 	backoff := time.Second
 	for ctx.Err() == nil {
 		job, ok, err := r.claim(ctx)
@@ -99,13 +100,13 @@ func (r *Runner) Execute(hard context.Context, job runnerapi.Job) {
 	if strings.HasPrefix(src, "/") { // this server's registry: a short-lived signed archive URL
 		rel, err := url.Parse(src)
 		if err != nil {
-			r.finish(log, job, "failed", "invalid module source from server", nil)
+			r.finish(log, job, "failed", "invalid module source from server", nil, nil)
 			return
 		}
 		src = r.ServerURL.ResolveReference(rel).String()
 	}
 	ship := newShipper(r, job, cancel, src)
-	status, msg, outputs := r.terraform(ctx, job, src, ship)
+	status, msg, outputs, resources := r.terraform(ctx, job, src, ship)
 	ship.Close()
 	if ship.lost.Load() {
 		log.Warn("lease lost; result not reported")
@@ -117,17 +118,17 @@ func (r *Runner) Execute(hard context.Context, job runnerapi.Job) {
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		status, msg = "failed", fmt.Sprintf("timed out after %s", r.JobTimeout)
 	}
-	r.finish(log, job, status, msg, outputs)
+	r.finish(log, job, status, msg, outputs, resources)
 }
 
-func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w io.Writer) (status, msg string, outputs map[string]any) {
-	fail := func(step string, err error) (string, string, map[string]any) {
+func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w io.Writer) (status, msg string, outputs map[string]any, resources []runnerapi.Resource) {
+	fail := func(step string, err error) (string, string, map[string]any, []runnerapi.Resource) {
 		fmt.Fprintf(w, "\n==> %s failed\n", step)
 		m := step + ": " + err.Error()
 		if len(m) > 2000 {
 			m = m[:2000] + "…"
 		}
-		return "failed", m, nil
+		return "failed", m, nil, nil
 	}
 	dir, err := os.MkdirTemp("", "f2s-job-*")
 	if err != nil {
@@ -145,7 +146,7 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	if err := tf.Init(ctx, tfexec.FromModule(src), tfexec.Backend(false)); err != nil {
 		return fail("fetch module", err)
 	}
-	backend := fmt.Sprintf("terraform {\n  backend %q {}\n}\n", r.Backend)
+	backend := "terraform {\n  backend \"http\" {}\n}\n"
 	if err := os.WriteFile(filepath.Join(dir, "form2stack_backend.tf"), []byte(backend), 0o600); err != nil {
 		return fail("write backend", err)
 	}
@@ -159,15 +160,13 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	if err := os.WriteFile(filepath.Join(dir, "form2stack.auto.tfvars.json"), vars, 0o600); err != nil {
 		return fail("write variables", err)
 	}
-	opts, err := r.backendOptions(job.StateKey)
-	if err != nil {
-		return fail("configure backend", err)
-	}
-
-	fmt.Fprintf(w, "\n==> terraform init (%s backend)\n", r.Backend)
-	if err := tf.Init(ctx, append(opts, tfexec.Reconfigure(true))...); err != nil {
+	fmt.Fprintln(w, "\n==> terraform init (Form2Stack state)")
+	if err := tf.Init(ctx, append(r.backendOptions(job), tfexec.Reconfigure(true))...); err != nil {
 		return fail("init", err)
 	}
+	// From here on the state is reachable: report what's in it however the run ends,
+	// since a failed apply can leave resources behind too.
+	defer func() { resources = inventory(ctx, tf) }()
 	destroy := job.Action == "destroy"
 	step := "plan"
 	if destroy {
@@ -188,7 +187,7 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	}
 	if destroy {
 		fmt.Fprintln(w, "\n==> done")
-		return "succeeded", "", nil
+		return "succeeded", "", nil, nil
 	}
 	// `output -json` prints sensitive values in clear text: keep it out of the streamed log.
 	tf.SetStdout(io.Discard)
@@ -209,31 +208,55 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 		}
 	}
 	fmt.Fprintln(w, "\n==> done")
-	return "succeeded", "", outputs
+	return "succeeded", "", outputs, nil
 }
 
-// backendOptions points the configured backend at this deployment's own state.
-// shortcut: key-based backends (azurerm, s3, ...) plus local; gcs ("prefix") etc. need a case here.
-func (r *Runner) backendOptions(stateKey string) ([]tfexec.InitOption, error) {
-	var opts []tfexec.InitOption
-	for _, kv := range r.BackendConfig {
-		opts = append(opts, tfexec.BackendConfig(kv))
+// inventory lists the managed resources in the deployment's state: names only, never attribute
+// values. nil means the state couldn't be read, so the server keeps its previous inventory.
+func inventory(ctx context.Context, tf *tfexec.Terraform) []runnerapi.Resource {
+	if ctx.Err() != nil {
+		return nil
 	}
-	if r.Backend != "local" {
-		return append(opts, tfexec.BackendConfig("key="+stateKey)), nil
+	tf.SetStdout(io.Discard) // show -json prints the whole state, secrets included
+	tf.SetStderr(io.Discard)
+	st, err := tf.Show(ctx)
+	if err != nil {
+		return nil
 	}
-	if !filepath.IsLocal(stateKey) {
-		return nil, fmt.Errorf("unsafe state key %q", stateKey)
+	out := []runnerapi.Resource{}
+	var walk func(m *tfjson.StateModule)
+	walk = func(m *tfjson.StateModule) {
+		for _, r := range m.Resources {
+			if r.Mode == tfjson.ManagedResourceMode {
+				out = append(out, runnerapi.Resource{Address: r.Address, Type: r.Type, Name: r.Name, Provider: r.ProviderName, Module: m.Address})
+			}
+		}
+		for _, c := range m.ChildModules {
+			walk(c)
+		}
 	}
-	path := filepath.Join(r.StateDir, stateKey)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, err
+	if st.Values != nil && st.Values.RootModule != nil {
+		walk(st.Values.RootModule)
 	}
-	return append(opts, tfexec.BackendConfig("path="+path)), nil
+	return out
 }
 
-func (r *Runner) finish(log *slog.Logger, job runnerapi.Job, status, msg string, outputs map[string]any) {
-	body, _ := json.Marshal(runnerapi.FinishRequest{Status: status, Message: msg, Outputs: outputs})
+// backendOptions points Terraform's http backend at the workspace's state on the server. The
+// password only works while this run holds the lease. Terraform keeps it in the work directory's
+// .terraform/, which module code could read during the run: it only reaches this workspace's state.
+func (r *Runner) backendOptions(job runnerapi.Job) []tfexec.InitOption {
+	addr := r.ServerURL.JoinPath(runnerapi.StatePrefix, job.DeploymentID).String()
+	return []tfexec.InitOption{
+		tfexec.BackendConfig("address=" + addr),
+		tfexec.BackendConfig("lock_address=" + addr),
+		tfexec.BackendConfig("unlock_address=" + addr),
+		tfexec.BackendConfig("username=" + job.DeploymentID),
+		tfexec.BackendConfig("password=" + job.StateToken),
+	}
+}
+
+func (r *Runner) finish(log *slog.Logger, job runnerapi.Job, status, msg string, outputs map[string]any, resources []runnerapi.Resource) {
+	body, _ := json.Marshal(runnerapi.FinishRequest{Status: status, Message: msg, Outputs: outputs, Resources: resources})
 	for attempt := 1; ; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		code, resp, err := r.call(ctx, "/jobs/"+job.DeploymentID+"/finish", job.LeaseID, "application/json", body)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"mime/multipart"
@@ -14,6 +15,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gocloud.dev/blob/memblob"
 
 	"github.com/rudesome/form2stack/internal/auth"
 	"github.com/rudesome/form2stack/internal/auth/authtest"
@@ -45,7 +48,7 @@ func newApp(t *testing.T, dir string, store *storage.Store, a *auth.Auth, f Feat
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(store, tpls, testReg, a, f, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return New(store, tpls, testReg, a, memblob.OpenBucket(nil), f, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
 func devAuth(t *testing.T, store *storage.Store, email string, admin bool) *auth.Auth {
@@ -432,6 +435,52 @@ func TestRunnerAPI(t *testing.T) {
 	}
 
 	jobPath := "/jobs/" + d.ID
+
+	// State backend, as Terraform's http backend calls it.
+	stateCall := func(method, query, token, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, runnerapi.StatePrefix+"/"+d.ID+query, strings.NewReader(body))
+		if token != "" {
+			req.SetBasicAuth(d.ID, token)
+		}
+		return do(h, req)
+	}
+	state := func(serial int, lineage, resource string) string {
+		return fmt.Sprintf(`{"version":4,"serial":%d,"lineage":%q,"resources":[%s]}`, serial, lineage, resource)
+	}
+	v1 := state(1, "lin", `{"mode":"managed","type":"azurerm_storage_account","name":"this"}`)
+	for _, c := range []struct {
+		method, query, token, body string
+		want                       int
+	}{
+		{"GET", "", "", "", http.StatusUnauthorized},
+		{"GET", "", "forged", "", http.StatusForbidden},
+		{"GET", "", job.StateToken, "", http.StatusNoContent},       // new workspace
+		{"POST", "?ID=l1", job.StateToken, v1, http.StatusConflict}, // not locked
+		{"LOCK", "", job.StateToken, `{"ID":"l1","Who":"runner"}`, http.StatusOK},
+		{"LOCK", "", job.StateToken, `{"ID":"l2"}`, http.StatusLocked},
+		{"POST", "?ID=l2", job.StateToken, v1, http.StatusConflict}, // someone else's lock id
+		{"POST", "?ID=l1", job.StateToken, `{"not":"state"}`, http.StatusBadRequest},
+		{"POST", "?ID=l1", job.StateToken, v1, http.StatusOK},
+		{"POST", "?ID=l1", job.StateToken, v1, http.StatusOK},                          // unchanged: no new version
+		{"POST", "?ID=l1", job.StateToken, state(0, "lin", ""), http.StatusConflict},   // older serial
+		{"POST", "?ID=l1", job.StateToken, state(2, "other", ""), http.StatusConflict}, // other lineage
+		{"UNLOCK", "", job.StateToken, `{"ID":"l1"}`, http.StatusOK},
+	} {
+		if rec := stateCall(c.method, c.query, c.token, c.body); rec.Code != c.want {
+			t.Fatalf("%s%s %s: %d, want %d: %s", c.method, c.query, c.body, rec.Code, c.want, rec.Body.String())
+		}
+	}
+	if rec := stateCall("GET", "", job.StateToken, ""); rec.Body.String() != v1 {
+		t.Fatalf("read back state: %q", rec.Body.String())
+	}
+	if vs, _ := store.StateVersions(ctx, d.ID, 10); len(vs) != 1 || vs[0].Serial != 1 || vs[0].Indexed {
+		t.Fatalf("state versions: %+v", vs)
+	}
+	// The holder sees who has the lock.
+	stateCall("LOCK", "", job.StateToken, `{"ID":"l3","Who":"alice"}`)
+	if rec := stateCall("LOCK", "", job.StateToken, `{"ID":"l4"}`); rec.Code != http.StatusLocked || !strings.Contains(rec.Body.String(), "alice") {
+		t.Fatalf("lock conflict body: %d %s", rec.Code, rec.Body.String())
+	}
 	if rec := call(runnerTok, jobPath+"/logs", "stolen", "x"); rec.Code != http.StatusConflict {
 		t.Fatalf("wrong lease must get 409: %d", rec.Code)
 	}
@@ -446,8 +495,20 @@ func TestRunnerAPI(t *testing.T) {
 	if rec := call(runnerTok, jobPath+"/finish", job.LeaseID, `{"status":"bogus"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid status accepted: %d", rec.Code)
 	}
-	if rec := call(runnerTok, jobPath+"/finish", job.LeaseID, `{"status":"succeeded","outputs":{"id":"abc"}}`); rec.Code != http.StatusNoContent {
+	if rec := call(runnerTok, jobPath+"/finish", job.LeaseID, `{"status":"succeeded","outputs":{"id":"abc"},
+		"resources":[{"address":"azurerm_storage_account.this","type":"azurerm_storage_account","name":"this","provider":"registry.terraform.io/hashicorp/azurerm"}]}`); rec.Code != http.StatusNoContent {
 		t.Fatalf("finish: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// The run is over: its state credentials and its lock are gone with it.
+	if rec := stateCall("GET", "", job.StateToken, ""); rec.Code != http.StatusForbidden {
+		t.Fatalf("state access after the run: %d", rec.Code)
+	}
+	if lock, _ := store.StateLockID(ctx, d.ID); lock != "" {
+		t.Fatalf("lock survived the run: %q", lock)
+	}
+	if vs, _ := store.StateVersions(ctx, d.ID, 10); !vs[0].Indexed || vs[0].Resources != 1 {
+		t.Fatalf("finish must index the current state version: %+v", vs)
 	}
 
 	// Raw log and SSE stream: the stream replays everything, then ends with "done".
@@ -467,8 +528,17 @@ func TestRunnerAPI(t *testing.T) {
 	if resumed := do(h, req).Body.String(); strings.Contains(resumed, "line one") || !strings.Contains(resumed, "line two") {
 		t.Fatalf("resume: %q", resumed)
 	}
-	if page := get(h, "/deployments/"+d.ID).Body.String(); !strings.Contains(page, "<code>&#34;abc&#34;</code>") || !strings.Contains(page, "r1") {
-		t.Fatalf("detail page lacks outputs/runner: %s", page)
+	if page := get(h, "/deployments/"+d.ID).Body.String(); !strings.Contains(page, "<code>&#34;abc&#34;</code>") || !strings.Contains(page, "r1") ||
+		!strings.Contains(page, "<code>azurerm_storage_account.this</code>") {
+		t.Fatalf("detail page lacks outputs/runner/resources: %s", page)
+	}
+	inventory := func(q string) string { return get(h, "/resources?q="+url.QueryEscape(q)).Body.String() }
+	if page := inventory("storage_ACCOUNT"); !strings.Contains(page, "<code>azurerm_storage_account.this</code>") ||
+		!strings.Contains(page, `href="/deployments/`+d.ID+`"`) || !strings.Contains(page, "hashicorp/azurerm") {
+		t.Fatalf("resources page: %s", page)
+	}
+	if page := inventory("no-such-type"); strings.Contains(page, "azurerm_storage_account.this") {
+		t.Fatal("filter ignored")
 	}
 
 	if job.Action != "apply" {
@@ -492,12 +562,36 @@ func TestRunnerAPI(t *testing.T) {
 	if rec := post(h, "/deployments/"+d.ID+"/destroy", nil); rec.Code != http.StatusConflict {
 		t.Fatalf("destroy while queued: %d", rec.Code)
 	}
-	rec = call(runnerTok, "/jobs/claim", "", `{"runner":"r1"}`)
-	if json.Unmarshal(rec.Body.Bytes(), &job); rec.Code != 200 || job.DeploymentID != d.ID || job.Action != "destroy" {
-		t.Fatalf("destroy claim: %d %s", rec.Code, rec.Body.String())
+	claimDestroy := func() {
+		t.Helper()
+		rec := call(runnerTok, "/jobs/claim", "", `{"runner":"r1"}`)
+		if json.Unmarshal(rec.Body.Bytes(), &job); rec.Code != 200 || job.DeploymentID != d.ID || job.Action != "destroy" {
+			t.Fatalf("destroy claim: %d %s", rec.Code, rec.Body.String())
+		}
 	}
-	if rec := call(runnerTok, jobPath+"/finish", job.LeaseID, `{"status":"succeeded"}`); rec.Code != http.StatusNoContent {
+	claimDestroy()
+	// A run that couldn't read state (resources null) keeps the last inventory.
+	if rec := call(runnerTok, jobPath+"/finish", job.LeaseID, `{"status":"failed","message":"init: boom"}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("finish failed destroy: %d", rec.Code)
+	}
+	if !strings.Contains(inventory(""), "azurerm_storage_account.this") {
+		t.Fatal("inventory lost after a run that didn't report one")
+	}
+	if rec := post(h, "/deployments/"+d.ID+"/destroy", nil); rec.Code != http.StatusSeeOther {
+		t.Fatalf("retry destroy: %d", rec.Code)
+	}
+	claimDestroy()
+	// The destroy saves an empty state as a new version; the index follows the current version.
+	for _, c := range [][3]string{{"LOCK", "", `{"ID":"d1"}`}, {"POST", "?ID=d1", state(2, "lin", "")}, {"UNLOCK", "", `{"ID":"d1"}`}} {
+		if rec := stateCall(c[0], c[1], job.StateToken, c[2]); rec.Code != http.StatusOK {
+			t.Fatalf("destroy %s: %d %s", c[0], rec.Code, rec.Body.String())
+		}
+	}
+	if rec := call(runnerTok, jobPath+"/finish", job.LeaseID, `{"status":"succeeded","resources":[]}`); rec.Code != http.StatusNoContent {
 		t.Fatalf("finish destroy: %d", rec.Code)
+	}
+	if page := get(h, "/deployments/"+d.ID).Body.String(); strings.Contains(page, "azurerm_storage_account.this") || !strings.Contains(page, "v2") {
+		t.Fatalf("destroyed workspace still lists resources, or misses its state versions: %s", page)
 	}
 	got, hist, _ := store.GetDeployment(ctx, d.ID)
 	if got.Status != "destroyed" || got.Outputs != nil || hist[len(hist)-1].Status != "destroyed" {

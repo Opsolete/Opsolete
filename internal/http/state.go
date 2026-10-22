@@ -1,0 +1,203 @@
+package httpserver
+
+import (
+	"bytes"
+	"crypto/hmac"
+	"crypto/md5"
+	"crypto/rand"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+
+	"gocloud.dev/blob"
+
+	"github.com/rudesome/form2stack/internal/runnerapi"
+	"github.com/rudesome/form2stack/internal/storage"
+)
+
+const maxStateSize = 64 << 20
+
+// Terraform http state backend, one state per workspace (deployment):
+// https://developer.hashicorp.com/terraform/language/backend/http
+// Runners authenticate with per-run credentials (username = workspace id, password = stateToken),
+// so only the run that holds a workspace's lease can read or write its state, and only during that run.
+func (s *Server) stateRoutes(mux *http.ServeMux) {
+	p := runnerapi.StatePrefix + "/{id}"
+	mux.HandleFunc("GET "+p, s.stateAuth(s.getState))
+	mux.HandleFunc("POST "+p, s.stateAuth(s.putState))
+	mux.HandleFunc("LOCK "+p, s.stateAuth(s.lockState))
+	mux.HandleFunc("UNLOCK "+p, s.stateAuth(s.unlockState))
+}
+
+// stateToken is a run's state password. It is derived from the lease, so it dies with the run.
+func (s *Server) stateToken(id, lease string) string {
+	m := hmac.New(sha256.New, s.Registry.Key)
+	m.Write([]byte("form2stack state\x00" + id + "\x00" + lease))
+	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
+}
+
+func (s *Server) stateAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != id {
+			http.Error(w, "state credentials required", http.StatusUnauthorized)
+			return
+		}
+		lease, err := s.Store.LeaseOf(r.Context(), id)
+		if errors.Is(err, sql.ErrNoRows) {
+			http.Error(w, "no run holds this workspace", http.StatusForbidden)
+			return
+		}
+		if err != nil {
+			s.Log.Error("state auth", "err", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if !hmac.Equal([]byte(pass), []byte(s.stateToken(id, lease))) {
+			http.Error(w, "invalid state credentials", http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
+	vs, err := s.Store.StateVersions(r.Context(), r.PathValue("id"), 1)
+	if err != nil {
+		s.stateError(w, "list state versions", err)
+		return
+	}
+	if len(vs) == 0 {
+		w.WriteHeader(http.StatusNoContent) // new workspace: no state yet
+		return
+	}
+	b, err := s.StateStore.ReadAll(r.Context(), vs[0].BlobKey)
+	if err != nil {
+		s.stateError(w, "read state", err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(b)
+}
+
+func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
+	ctx, id := r.Context(), r.PathValue("id")
+	lockID, err := s.Store.StateLockID(ctx, id)
+	if err != nil {
+		s.stateError(w, "state lock", err)
+		return
+	}
+	if lockID == "" || r.URL.Query().Get("ID") != lockID {
+		http.Error(w, "the state must be locked by this run", http.StatusConflict)
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxStateSize))
+	if err != nil {
+		http.Error(w, fmt.Sprintf("state larger than %d MB", maxStateSize>>20), http.StatusRequestEntityTooLarge)
+		return
+	}
+	sum := md5.Sum(body)
+	if h := r.Header.Get("Content-MD5"); h != "" && h != base64.StdEncoding.EncodeToString(sum[:]) {
+		http.Error(w, "Content-MD5 mismatch", http.StatusBadRequest)
+		return
+	}
+	// Only the header fields needed to version the file; the state itself is Terraform's business.
+	var head struct {
+		Serial  *int64 `json:"serial"`
+		Lineage string `json:"lineage"`
+	}
+	if err := json.Unmarshal(body, &head); err != nil || head.Serial == nil || head.Lineage == "" {
+		http.Error(w, "not a Terraform state file", http.StatusBadRequest)
+		return
+	}
+	v := storage.StateVersion{Serial: *head.Serial, Lineage: head.Lineage, MD5: hex.EncodeToString(sum[:]), Size: int64(len(body))}
+	cur, err := s.Store.StateVersions(ctx, id, 1)
+	if err != nil {
+		s.stateError(w, "list state versions", err)
+		return
+	}
+	if len(cur) > 0 {
+		switch {
+		case cur[0].Lineage != v.Lineage:
+			http.Error(w, "state lineage differs from the workspace's state", http.StatusConflict)
+			return
+		case v.Serial < cur[0].Serial:
+			http.Error(w, "state serial is older than the workspace's state", http.StatusConflict)
+			return
+		case v.MD5 == cur[0].MD5:
+			w.WriteHeader(http.StatusOK) // unchanged: no new version
+			return
+		}
+	}
+	d, _, err := s.Store.GetDeployment(ctx, id)
+	if err != nil {
+		s.stateError(w, "get workspace", err)
+		return
+	}
+	v.BlobKey = fmt.Sprintf("%s/%d-%s.tfstate", strings.TrimSuffix(d.StateKey, ".tfstate"), v.Serial, rand.Text())
+	if err := s.StateStore.WriteAll(ctx, v.BlobKey, body, &blob.WriterOptions{ContentType: "application/json"}); err != nil {
+		s.stateError(w, "write state", err)
+		return
+	}
+	if err := s.Store.AddStateVersion(ctx, id, v); err != nil {
+		s.stateError(w, "record state version", err) // the blob is orphaned, which is harmless
+		return
+	}
+	s.Log.Info("state saved", "workspace", id, "serial", v.Serial, "bytes", v.Size)
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) lockState(w http.ResponseWriter, r *http.Request) {
+	info, lockID, ok := readLockInfo(w, r)
+	if !ok {
+		return
+	}
+	held, ok, err := s.Store.LockState(r.Context(), r.PathValue("id"), lockID, info)
+	if err != nil {
+		s.stateError(w, "lock state", err)
+		return
+	}
+	if !ok { // Terraform shows who holds the lock from this body
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusLocked)
+		w.Write(held)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) unlockState(w http.ResponseWriter, r *http.Request) {
+	_, lockID, ok := readLockInfo(w, r)
+	if !ok {
+		return
+	}
+	if err := s.Store.UnlockState(r.Context(), r.PathValue("id"), lockID); err != nil {
+		s.stateError(w, "unlock state", err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// readLockInfo reads Terraform's LockInfo JSON and returns it with its ID.
+func readLockInfo(w http.ResponseWriter, r *http.Request) ([]byte, string, bool) {
+	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<10))
+	var info struct{ ID string }
+	if err != nil || json.Unmarshal(b, &info) != nil || info.ID == "" {
+		http.Error(w, "body must be Terraform lock info with an ID", http.StatusBadRequest)
+		return nil, "", false
+	}
+	return bytes.TrimSpace(b), info.ID, true
+}
+
+func (s *Server) stateError(w http.ResponseWriter, what string, err error) {
+	s.Log.Error(what, "err", err)
+	http.Error(w, "internal error", http.StatusInternalServerError)
+}

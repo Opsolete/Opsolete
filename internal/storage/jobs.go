@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+
+	"github.com/rudesome/form2stack/internal/runnerapi"
 )
 
 // ErrLeaseLost means the caller no longer holds the job: it expired, finished or was never claimed.
@@ -96,7 +98,8 @@ func (s *Store) AppendLog(ctx context.Context, id, lease, chunk string, ttl time
 }
 
 // FinishJob records the result of a job and releases its lease. A successful destroy ends as 'destroyed'.
-func (s *Store) FinishJob(ctx context.Context, id, lease, status, message string, outputs map[string]any) error {
+// resources is the index of the workspace's current state version; nil means the runner couldn't read it.
+func (s *Store) FinishJob(ctx context.Context, id, lease, status, message string, outputs map[string]any, resources []runnerapi.Resource) error {
 	out, err := json.Marshal(outputs)
 	if err != nil {
 		return err
@@ -110,7 +113,7 @@ func (s *Store) FinishJob(ctx context.Context, id, lease, status, message string
 	err = tx.QueryRowContext(ctx, `UPDATE deployments SET
 		status = CASE WHEN action = 'destroy' AND $3 = 'succeeded' THEN 'destroyed' ELSE $3 END,
 		outputs = CASE WHEN action = 'apply' THEN $4::jsonb WHEN $3 = 'succeeded' THEN NULL ELSE outputs END,
-		lease_id = NULL, lease_until = NULL, updated_at = now()
+		lease_id = NULL, lease_until = NULL, state_lock = NULL, updated_at = now()
 		WHERE id::text = $1 AND lease_id = $2 AND status = 'running' RETURNING status`, id, lease, status, out).Scan(&final)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrLeaseLost
@@ -122,6 +125,11 @@ func (s *Store) FinishJob(ctx context.Context, id, lease, status, message string
 		VALUES ($1::uuid, $2, NULLIF($3, ''))`, id, final, message); err != nil {
 		return err
 	}
+	if resources != nil {
+		if err := indexState(ctx, tx, id, resources); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -130,7 +138,7 @@ func (s *Store) FinishJob(ctx context.Context, id, lease, status, message string
 func (s *Store) ReapExpiredLeases(ctx context.Context) ([]string, error) {
 	rows, err := s.DB.QueryContext(ctx, `
 		WITH r AS (
-			UPDATE deployments SET status = 'failed', lease_id = NULL, lease_until = NULL, updated_at = now()
+			UPDATE deployments SET status = 'failed', lease_id = NULL, lease_until = NULL, state_lock = NULL, updated_at = now()
 			WHERE status = 'running' AND lease_id IS NOT NULL AND lease_until < now() RETURNING id
 		)
 		INSERT INTO deployment_status_history (deployment_id, status, message)

@@ -56,7 +56,7 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 		if ok {
 			s.Log.Info("job claimed", "id", j.DeploymentID, "action", j.Action, "runner", req.Runner)
 			writeJSON(w, runnerapi.Job{
-				DeploymentID: j.DeploymentID, LeaseID: j.LeaseID, StateKey: j.StateKey, Action: j.Action, Vars: j.Inputs,
+				DeploymentID: j.DeploymentID, LeaseID: j.LeaseID, StateToken: s.stateToken(j.DeploymentID, j.LeaseID), Action: j.Action, Vars: j.Inputs,
 				LeaseSeconds: int(leaseTTL.Seconds()),
 				ModuleSource: s.Registry.RunnerSource(templates.Module{Source: j.ModuleSource, Ref: j.ModuleRef}, runnerSrcTTL),
 			})
@@ -94,9 +94,9 @@ func (s *Server) jobFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	err := s.Store.FinishJob(r.Context(), id, r.Header.Get(runnerapi.LeaseHeader), req.Status, req.Message, req.Outputs)
+	err := s.Store.FinishJob(r.Context(), id, r.Header.Get(runnerapi.LeaseHeader), req.Status, req.Message, req.Outputs, req.Resources)
 	if err == nil {
-		s.Log.Info("job finished", "id", id, "status", req.Status)
+		s.Log.Info("job finished", "id", id, "status", req.Status, "resources", len(req.Resources))
 	}
 	s.leaseResult(w, err)
 }

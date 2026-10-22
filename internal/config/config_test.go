@@ -2,7 +2,6 @@ package config
 
 import (
 	"os"
-	"strings"
 	"testing"
 )
 
@@ -55,15 +54,11 @@ func TestLoadRunner(t *testing.T) {
 		t.Fatal("expected error without token")
 	}
 	t.Setenv("F2S_RUNNER_TOKEN", "secret")
-	t.Setenv("F2S_BACKEND", "azurerm")
-	t.Setenv("F2S_BACKEND_CONFIG_STORAGE_ACCOUNT_NAME", "st")
-	t.Setenv("F2S_BACKEND_CONFIG_CONTAINER_NAME", "tfstate")
 	c, err := LoadRunner()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Token != "secret" || c.Backend != "azurerm" || c.JobTimeout.String() != "1h0m0s" ||
-		strings.Join(c.BackendConfig, ",") != "container_name=tfstate,storage_account_name=st" {
+	if c.Token != "secret" || c.JobTimeout.String() != "1h0m0s" {
 		t.Fatalf("runner config: %+v", c)
 	}
 	if _, set := os.LookupEnv("F2S_RUNNER_TOKEN"); set {
