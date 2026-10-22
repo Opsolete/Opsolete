@@ -1,2 +1,143 @@
 # Form2Stack
 From forms to infrastructure. Automatically.
+
+Pick a template and fill in a form generated from JSON. Form2Stack records the deployment in PostgreSQL and queues it, and a **Form2Stack runner** runs the pinned Terraform module (init → plan → apply). You watch the output live in the browser, and the Terraform outputs show up when it's done.
+
+Lifecycle: `queued` (waiting for a runner) → `running` → `succeeded` | `failed` | `canceled`. Every change lands in the deployment's status history.
+
+## Run locally with Nix (recommended)
+
+```sh
+nix develop        # or `direnv allow`; gives go, gopls, postgres 17, terraform, just
+just               # list tasks
+just run           # start project-local postgres (.devdata/, unix socket) + app on :8080
+just runner        # in a 2nd terminal: a runner on this machine (local backend, state in .devdata/state)
+just test          # gofmt check, vet, all tests incl. DB tests
+just smoke         # nix build, boot the binary, submit a deployment end-to-end
+just check         # test + smoke, run before committing
+just token <name>  # registry token for Terraform clients
+just image app|runner   # container images (DOCKER_HOST=ssh://user@host to build remotely)
+just psql | db-reset | down
+```
+
+`nix build` only sees files tracked by git, so `git add` new files first. After changing dependencies in `go.mod`, update `vendorHash` in `flake.nix` (set it to `nixpkgs.lib.fakeHash`, run `nix build`, and copy the hash it prints).
+
+## Run locally without Nix
+
+Requirements: Go 1.26+, PostgreSQL 13+ (it needs `gen_random_uuid()`).
+
+```sh
+docker compose up -d            # or use any local PostgreSQL
+export DATABASE_URL=postgres://form2stack:form2stack@localhost:5432/form2stack
+go run ./cmd/form2stack
+```
+
+Then open http://localhost:8080. Migrations run on startup.
+
+| Env var         | Default   | Purpose                                |
+|-----------------|-----------|----------------------------------------|
+| `DATABASE_URL`  | required  | PostgreSQL connection string           |
+| `ADDR`          | `:8080`   | HTTP listen address                    |
+| `TEMPLATES_DIR` | `catalog` | Directory of JSON template definitions |
+| `TEMPLATE_EDITOR` | off    | `1` enables the template builder and module uploads (on in the nix dev shell) |
+| `PUBLIC_URL`    | `http://form2stack.localhost:8080` | How Terraform clients reach the app; its host is the registry hostname |
+
+Endpoints: `/healthz` (liveness), `/readyz` (checks the DB), `/` (templates), `/templates/{id}` (form), `/deployments`, `/deployments/{id}` (detail, history, live log, outputs), `/deployments/{id}/logs` (raw log), `/registry`, `/v1/modules/…` (registry protocol), `/api/runner/v1/…` (runner API).
+
+## Runners
+
+`form2stack runner` executes deployments. It's the same binary as the server, packaged as the `runner` image: Alpine, git and Terraform 1.17.0 pinned by checksum, running as a non-root user.
+
+**How it works**
+
+- **Pull, don't push.** Runners long-poll `POST /api/runner/v1/jobs/claim` with a *runner* token. They need no database credentials and accept no inbound connections. Registry tokens can't claim jobs, and runner tokens can't use the registry.
+- **Postgres queue.** Queued deployments are the jobs. `FOR UPDATE SKIP LOCKED` lets any number of runners claim without double-running a job.
+- **Leases and fencing.** A claim returns a lease id that every log, heartbeat and finish call must send. Log posts double as heartbeats, sent about every 30 s while idle. If a runner disappears for 2 minutes, the server fails the job ("runner stopped responding") and fences the old runner off. A 409 tells a runner it lost the job, so it interrupts Terraform. Jobs are never auto-retried, because a half-applied run needs a human.
+- **Isolation.** One job at a time per runner, in a fresh temp directory that's removed afterwards. Terraform runs via HashiCorp's `terraform-exec`: `init -from-module`, then `plan -out`, `apply <plan>` and `output`. Each run is capped by `F2S_JOB_TIMEOUT`.
+- **Logs.** Output is shipped about once a second, cut at line ends, and capped at 10 MB per deployment. The deployment page follows it live via Server-Sent Events, resuming with `Last-Event-ID` after reconnects. `/deployments/<id>/logs` serves the raw log.
+- **Secrets.** Sensitive outputs are shown as `(sensitive)` and never leave the runner. The `output -json` call isn't streamed, and signed module URLs are redacted from logs. The runner reads its `F2S_*` settings and then removes them from its environment, so Terraform, providers and module code never see the runner token.
+- **Shutdown.** The first SIGTERM stops claiming and lets the current job finish. A second one interrupts Terraform with SIGINT, so it releases its state lock, and the job ends as `canceled`. Set the pod's `terminationGracePeriodSeconds` to cover a job.
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `F2S_SERVER_URL` | required | How the runner reaches Form2Stack (in k8s: the Service URL). Registry modules are fetched from here too |
+| `F2S_RUNNER_TOKEN` | required | `form2stack token <name> runner` |
+| `F2S_BACKEND` | `local` | Terraform backend type: `azurerm`, `s3`, … The runner sets `key=<deployment state key>` |
+| `F2S_BACKEND_CONFIG_<KEY>` | | Backend settings, e.g. `F2S_BACKEND_CONFIG_STORAGE_ACCOUNT_NAME=st…` → `-backend-config=storage_account_name=st…` |
+| `F2S_STATE_DIR` | `/state` | `local` backend only, for dev. Put it on a volume, or state is lost |
+| `F2S_JOB_TIMEOUT` | `1h` | Hard limit per deployment |
+| `F2S_RUNNER_NAME` | hostname | Shown on deployments; the pod name in k8s |
+
+Provider credentials go to the runner as the usual env vars, for example `ARM_*` for azurerm (on AKS: `ARM_USE_AKS_WORKLOAD_IDENTITY=true`). The `azurerm` backend locks state via blob leases. Module code runs on the runner with those credentials, so scope them to what Form2Stack may deploy.
+
+**Containers**
+
+```sh
+just image app && just image runner
+docker run -e DATABASE_URL=… -e PUBLIC_URL=https://form2stack.example.com -p 8080:8080 form2stack-app
+docker run --rm -e DATABASE_URL=… form2stack-app token runner-1 runner        # prints the runner token
+docker run -e F2S_SERVER_URL=http://form2stack:8080 -e F2S_RUNNER_TOKEN=… \
+  -e F2S_BACKEND=azurerm -e F2S_BACKEND_CONFIG_RESOURCE_GROUP_NAME=… -e F2S_BACKEND_CONFIG_STORAGE_ACCOUNT_NAME=… \
+  -e F2S_BACKEND_CONFIG_CONTAINER_NAME=tfstate -e F2S_BACKEND_CONFIG_USE_AZUREAD_AUTH=true -e ARM_… form2stack-runner
+```
+
+**On Kubernetes:**
+- Run two Deployments of the same images.
+- Pass the runner token and cloud credentials as Secrets (or workload identity).
+- Scale runners with `replicas`, one job each at a time.
+- Point `F2S_SERVER_URL` at the app's Service, so registry downloads stay inside the cluster.
+- Optionally mount a volume at `TF_PLUGIN_CACHE_DIR` to keep providers between restarts.
+
+## CI and releases
+
+`.github/workflows/ci.yml` runs on every PR and every push to `master`:
+- **`test`:** gofmt, vet, and all tests against a Postgres service, with Terraform 1.17.0 for the runner tests.
+- **`nix`:** `nix build`, which also catches a stale `vendorHash`.
+- **`images`:** builds the `app` and `runner` images. They're pushed **only when a release is created**.
+
+**Versions come from commit messages** ([Conventional Commits](https://www.conventionalcommits.org) → SemVer, via [release-please](https://github.com/googleapis/release-please)):
+
+| Commit (= PR title, squash-merged) | Next version from 0.4.2 | Once ≥ 1.0.0 |
+|---|---|---|
+| `fix: …`, `perf: …` | 0.4.3 | patch |
+| `feat: …` | 0.5.0 | minor |
+| `feat!: …` or a `BREAKING CHANGE:` footer | 0.5.0 (pre-1.0, breaking bumps minor) | major |
+| `docs:`, `chore:`, `ci:`, `test:`, `refactor:`, … | no release | no release |
+
+After each merge, release-please keeps a **release PR** open. It holds the next version and the `CHANGELOG.md` entries. Merging that PR tags `vX.Y.Z`, creates the GitHub release, and pushes `ghcr.io/rudesome/form2stack-app` and `-runner` tagged `X.Y.Z`, `X.Y` and `latest`. To ship 1.0.0, merge a commit with a `Release-As: 1.0.0` footer. The first release is computed from all of history, so make the commit introducing this MVP a `feat: …`.
+
+`pr-title.yml` rejects PRs whose title isn't a Conventional Commit. With squash merges the title becomes the commit on `master`, so history stays parseable.
+
+**Locking down `master`** (repo settings, one-time):
+1. **General → Pull Requests:** allow only *squash merging*, and set its default commit message to *Pull request title*:
+   ```sh
+   gh api -X PATCH repos/rudesome/Form2Stack -F allow_squash_merge=true -F allow_merge_commit=false \
+     -F allow_rebase_merge=false -f squash_merge_commit_title=PR_TITLE -f squash_merge_commit_message=PR_BODY -F delete_branch_on_merge=true
+   ```
+2. **Rules → Rulesets → New branch ruleset** for `master`: require a pull request, require the status checks `test`, `nix`, `images (app)`, `images (runner)` and `conventional-commit`, block force pushes, and restrict deletions.
+3. **Release PR checks:** PRs opened with the default `GITHUB_TOKEN` don't trigger workflows, so the release PR would never get its required checks. Add a fine-grained PAT, or a GitHub App token with *contents* and *pull requests* write access, as the secret `RELEASE_PLEASE_TOKEN`.
+4. **Images:** GHCR packages start out private. Make them public, or give your cluster a pull secret.
+
+## Tests
+
+```sh
+go test ./...
+TEST_DATABASE_URL=$DATABASE_URL go test ./internal/storage   # database tests
+```
+
+## Templates
+
+Each `catalog/*.json` file describes one existing Terraform module pinned to an approved `ref`, plus its inputs (`string`, `number`, `bool`, `select`, with optional `required`, `pattern`, `options` and `default`). See `catalog/storage-account.json`.
+
+## Module registry
+
+Form2Stack is a private Terraform module registry, built on the standard [module registry protocol](https://developer.hashicorp.com/terraform/internals/module-registry-protocol): `/.well-known/terraform.json`, `GET /v1/modules/:ns/:name/:system/versions` and `.../:version/download`. HashiCorp's `terraform-config-inspect` reads each uploaded module's variables, `terraform-registry-address` validates addresses and `go-version` handles semver.
+
+- **Upload:** on `/registry`, pick a namespace, name, system and semver version, plus a `.tar.gz` with the module at its root (`tar czf module.tar.gz -C path/to/module .`). Versions are immutable.
+- **Use from Terraform:** run `just token my-laptop`, then `export TF_TOKEN_form2stack_example_com=<token>`, then `module "x" { source = "form2stack.example.com/platform/storage/azurerm" version = "1.0.0" }`. Terraform only talks to registries over HTTPS on a hostname with a dot, so put the app behind TLS in production.
+- **Docs:** each upload gets generated documentation at `/registry/<ns>/<name>/<system>/<version>`, similar to `terraform-docs`. It includes a usage snippet with the required inputs, Terraform and provider requirements, inputs (type, default, required), outputs, resources, data sources, module calls and the archive's `README.md` shown as plain text. A **Markdown** link (`.../docs.md`) serves HashiCorp's `tfconfig.RenderMarkdown` output to paste into a repo. Versions uploaded before docs existed show a notice; upload a new version to get docs.
+- **Downloads:** `download` returns a 10-minute HMAC-signed archive URL, because Terraform doesn't send the token to archive URLs. Runners get a fresh 15-minute signed path with each job. The signing key is kept in Postgres.
+
+## Template builder
+
+With `TEMPLATE_EDITOR=1`, open **+ New template** (`/templates/new`) or **edit** on any template. Choose **Start from a registry module** and the module source, version and one form field per variable are filled in for you. Complex variable types (list, map, object) are flagged, not generated. You can also type a `git::` source and ref by hand, then add one row per form field (variable name, label, type, required, pattern, dropdown options, default). Each new template gets a random UUID as its id. Saving runs the same validation as startup, checks that a referenced registry version exists, writes `catalog/<id>.json` and shows the generated deploy form right away. Review and commit the file like any other change. Keep the builder off in shared environments until there's login: a template decides which module the runners execute.

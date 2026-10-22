@@ -1,0 +1,41 @@
+{{template "top"}}
+<h1>Module registry</h1>
+<p>Private Terraform module registry on <code>{{.Host}}</code>. Use a module in Terraform with
+<code>source = "{{.Host}}/&lt;namespace&gt;/&lt;name&gt;/&lt;system&gt;"</code> and a <code>version</code>, authenticated with
+<code>TF_TOKEN_…</code> (create a token with <code>just token &lt;name&gt;</code>).</p>
+
+<table>
+<tr><th>Module</th><th>Version</th><th>Variables</th><th>Uploaded</th>{{if .Editor}}<th></th>{{end}}</tr>
+{{$editor := .Editor}}{{$host := .Host}}
+{{range .Modules}}
+<tr>
+  <td><a href="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}"><code>{{$host}}/{{.Namespace}}/{{.Name}}/{{.System}}</code></a></td>
+  <td>{{.Version}}</td>
+  <td>{{len .Variables}}</td>
+  <td>{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
+  {{if $editor}}<td><a href="/templates/new?module={{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}">Create template</a></td>{{end}}
+</tr>
+{{else}}
+<tr><td colspan="5">No modules uploaded yet.</td></tr>
+{{end}}
+</table>
+
+{{if .Editor}}
+<h2>Upload a module version</h2>
+{{with .Error}}<p class="err" role="alert">{{.}}</p>{{end}}
+<form method="post" enctype="multipart/form-data" class="card">
+  <label for="namespace">Namespace</label>
+  <input id="namespace" name="namespace" value="{{index .Form "namespace"}}" required placeholder="platform">
+  <label for="name">Name</label>
+  <input id="name" name="name" value="{{index .Form "name"}}" required placeholder="storage-account">
+  <label for="system">System</label>
+  <input id="system" name="system" value="{{index .Form "system"}}" required placeholder="azurerm">
+  <label for="version">Version</label>
+  <input id="version" name="version" value="{{index .Form "version"}}" required placeholder="1.0.0">
+  <label for="archive">Module archive (.tar.gz, module files at the root)</label>
+  <input id="archive" name="archive" type="file" accept=".tar.gz,.tgz,application/gzip" required>
+  <p><small>Create one with <code>tar czf module.tar.gz -C path/to/module .</code></small></p>
+  <button type="submit">Upload</button>
+</form>
+{{end}}
+{{template "bottom"}}

@@ -1,0 +1,26 @@
+{{define "top"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Form2Stack</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 52rem; margin: 2rem auto; padding: 0 1rem; color: #222; }
+  nav a { margin-right: 1rem; }
+  .card { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+  label { display: block; margin-top: 1rem; font-weight: 600; }
+  input, select { padding: .4rem; min-width: 18rem; }
+  .err { color: #b00020; font-size: .9rem; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: .4rem; border-bottom: 1px solid #eee; font-size: .9rem; }
+  .status { padding: .1rem .5rem; border-radius: 1rem; background: #eee; }
+  .status.running, .status.queued { background: #fff3cd; }
+  .status.succeeded { background: #d1f2d9; }
+  .status.failed, .status.canceled { background: #f8d7da; }
+  pre.log { background: #111; color: #ddd; max-height: 32rem; overflow: auto; white-space: pre-wrap; font-size: .8rem; }
+  button { margin-top: 1.5rem; padding: .5rem 1.2rem; }
+</style>
+</head>
+<body>
+<nav><strong>Form2Stack</strong> &nbsp; <a href="/">Templates</a><a href="/deployments">Deployments</a><a href="/registry">Registry</a></nav>
+{{end}}
+{{define "bottom"}}</body></html>{{end}}

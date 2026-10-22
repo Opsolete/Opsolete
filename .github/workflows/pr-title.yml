@@ -1,0 +1,23 @@
+name: pr-title
+
+# Squash merges turn the PR title into the commit on master, and release-please derives the next
+# SemVer from those commits, so the title must be a Conventional Commit. Separate from ci.yml so
+# editing a title doesn't rerun the tests.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions: {}
+
+jobs:
+  conventional-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          re='^(feat|fix|perf|refactor|docs|test|build|ci|chore|revert|style)(\([a-z0-9._/-]+\))?!?: [^ ].*'
+          if [[ ! "$TITLE" =~ $re ]]; then
+            echo "::error::PR title must be a Conventional Commit, e.g. 'feat(runner): stream logs', 'fix: …' or 'feat!: …' for breaking changes. Got: $TITLE"
+            exit 1
+          fi

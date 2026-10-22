@@ -1,0 +1,47 @@
+{{template "top"}}
+{{with .D}}
+<h1>{{.TemplateID}} <span class="status {{.Status}}" id="status">{{.Status}}</span></h1>
+<div class="card">
+  <table>
+    <tr><th>ID</th><td><code>{{.ID}}</code></td></tr>
+    <tr><th>Module</th><td><code>{{.ModuleSource}}</code> {{.ModuleRef}}</td></tr>
+    <tr><th>State key</th><td><code>{{.StateKey}}</code></td></tr>
+    {{with .Runner}}<tr><th>Runner</th><td>{{.}}</td></tr>{{end}}
+    <tr><th>Inputs</th><td>{{range $k, $v := .Inputs}}{{$k}} = {{$v}}<br>{{end}}</td></tr>
+  </table>
+</div>
+
+{{with .Outputs}}
+<h2>Outputs</h2>
+<table>
+<tr><th>Name</th><th>Value</th></tr>
+{{range $k, $v := .}}<tr><td><code>{{$k}}</code></td><td><code>{{json $v}}</code></td></tr>{{end}}
+</table>
+{{end}}
+
+<h2>Log <small><a href="/deployments/{{.ID}}/logs">raw</a></small></h2>
+<pre id="log" class="card log" aria-live="polite">{{if eq .Status "queued"}}Waiting for a runner…{{end}}</pre>
+{{end}}
+
+<h2>History</h2>
+<table>
+<tr><th>Time</th><th>Status</th><th>Message</th></tr>
+{{range .History}}
+<tr><td>{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td><td>{{.Status}}</td><td>{{with .Message}}{{.}}{{end}}</td></tr>
+{{end}}
+</table>
+
+<script>
+  // Follow the log live; reload once at the end so status and outputs are current.
+  const log = document.getElementById("log"), wasActive = {{.Active}};
+  const es = new EventSource(location.pathname + "/logs/stream");
+  let first = true;
+  es.onmessage = (e) => {
+    if (first) { log.textContent = ""; first = false; }
+    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+    log.textContent += e.data;
+    if (atBottom) log.scrollTop = log.scrollHeight;
+  };
+  es.addEventListener("done", () => { es.close(); if (wasActive) location.reload(); });
+</script>
+{{template "bottom"}}

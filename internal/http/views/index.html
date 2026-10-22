@@ -1,0 +1,14 @@
+{{template "top"}}
+<h1>Templates</h1>
+{{if .Editor}}<p><a href="/templates/new">+ New template</a></p>{{end}}
+{{$editor := .Editor}}
+{{range .Templates}}
+<div class="card">
+  <h3><a href="/templates/{{.ID}}">{{.Name}}</a></h3>
+  <p>{{.Description}}</p>
+  <small>module ref {{.Module.Ref}}{{if $editor}} · <a href="/templates/{{.ID}}/edit">edit</a>{{end}}</small>
+</div>
+{{else}}
+<p>No templates yet. {{if .Editor}}<a href="/templates/new">Create one</a> or add{{else}}Add{{end}} JSON files to the catalog directory.</p>
+{{end}}
+{{template "bottom"}}

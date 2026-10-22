@@ -1,0 +1,9 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: form2stack
+      POSTGRES_PASSWORD: form2stack
+      POSTGRES_DB: form2stack
+    ports:
+      - "5432:5432"

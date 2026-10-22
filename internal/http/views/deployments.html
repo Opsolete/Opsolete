@@ -1,0 +1,18 @@
+{{template "top"}}
+<h1>Deployments</h1>
+<table>
+<tr><th>Created</th><th>Template</th><th>Ref</th><th>Status</th><th>Inputs</th><th>State key</th></tr>
+{{range .}}
+<tr>
+  <td><a href="/deployments/{{.ID}}">{{.CreatedAt.Format "2006-01-02 15:04"}}</a></td>
+  <td>{{.TemplateID}}</td>
+  <td>{{.ModuleRef}}</td>
+  <td><span class="status {{.Status}}">{{.Status}}</span></td>
+  <td>{{range $k, $v := .Inputs}}{{$k}}={{$v}}<br>{{end}}</td>
+  <td><code>{{.StateKey}}</code></td>
+</tr>
+{{else}}
+<tr><td colspan="6">No deployments yet.</td></tr>
+{{end}}
+</table>
+{{template "bottom"}}

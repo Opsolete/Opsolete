@@ -1,0 +1,315 @@
+// Package httpserver contains HTTP handlers, routing and middleware.
+package httpserver
+
+import (
+	"crypto/rand"
+	"database/sql"
+	"embed"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"html/template"
+	"log/slog"
+	"net/http"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/rudesome/form2stack/internal/registry"
+	"github.com/rudesome/form2stack/internal/storage"
+	"github.com/rudesome/form2stack/internal/templates"
+)
+
+//go:embed views/*.html
+var views embed.FS
+
+type Server struct {
+	Store     *storage.Store
+	Templates *templates.Catalog
+	Registry  *registry.Registry
+	Editor    bool // enables the template builder and module uploads
+	Log       *slog.Logger
+	pages     *template.Template
+}
+
+func New(store *storage.Store, tpls *templates.Catalog, reg *registry.Registry, editor bool, log *slog.Logger) *Server {
+	pages := template.Must(template.New("").Funcs(template.FuncMap{"join": strings.Join, "json": toJSON}).ParseFS(views, "views/*.html"))
+	return &Server{Store: store, Templates: tpls, Registry: reg, Editor: editor, Log: log, pages: pages}
+}
+
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
+	mux.HandleFunc("GET /readyz", s.ready)
+	mux.HandleFunc("GET /{$}", s.index)
+	mux.HandleFunc("GET /templates/{id}", s.form)
+	mux.HandleFunc("POST /templates/{id}", s.deploy)
+	if s.Editor {
+		mux.HandleFunc("GET /templates/new", s.builder)
+		mux.HandleFunc("POST /templates/new", s.saveTemplate)
+		mux.HandleFunc("GET /templates/{id}/edit", s.builder)
+		mux.HandleFunc("POST /templates/{id}/edit", s.saveTemplate)
+	}
+	s.registryRoutes(mux)
+	s.runnerRoutes(mux)
+	mux.HandleFunc("GET /deployments", s.deployments)
+	mux.HandleFunc("GET /deployments/{id}", s.deployment)
+	return s.logRequests(mux)
+}
+
+func (s *Server) logRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		next.ServeHTTP(w, r)
+		s.Log.Info("request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(start))
+	})
+}
+
+func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
+	if err := s.Store.DB.PingContext(r.Context()); err != nil {
+		s.Log.Error("readiness check failed", "err", err)
+		http.Error(w, "database unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	w.Write([]byte("ready"))
+}
+
+func (s *Server) index(w http.ResponseWriter, r *http.Request) {
+	s.render(w, http.StatusOK, "index.html", map[string]any{"Templates": s.Templates.List(), "Editor": s.Editor})
+}
+
+type formPage struct {
+	T      templates.Template
+	Editor bool
+	Values map[string]string
+	Errors map[string]string
+}
+
+func (s *Server) form(w http.ResponseWriter, r *http.Request) {
+	t, ok := s.Templates.Get(r.PathValue("id"))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	vals := map[string]string{}
+	for _, in := range t.Inputs {
+		vals[in.Name] = in.Default
+	}
+	s.render(w, http.StatusOK, "form.html", formPage{T: t, Editor: s.Editor, Values: vals})
+}
+
+func (s *Server) deploy(w http.ResponseWriter, r *http.Request) {
+	t, ok := s.Templates.Get(r.PathValue("id"))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	raw := map[string]string{}
+	for _, in := range t.Inputs {
+		raw[in.Name] = r.PostForm.Get(in.Name)
+	}
+	vals, errs := t.Validate(raw)
+	if len(errs) > 0 {
+		s.render(w, http.StatusUnprocessableEntity, "form.html", formPage{T: t, Editor: s.Editor, Values: raw, Errors: errs})
+		return
+	}
+	d, err := s.Store.CreateDeployment(r.Context(), t.ID, t.Module.Source, t.Module.Ref, vals)
+	if err != nil {
+		s.Log.Error("create deployment", "err", err)
+		http.Error(w, "could not create deployment", http.StatusInternalServerError)
+		return
+	}
+	s.Log.Info("deployment created", "id", d.ID, "template", t.ID, "status", d.Status)
+	http.Redirect(w, r, "/deployments/"+d.ID, http.StatusSeeOther)
+}
+
+func (s *Server) deployments(w http.ResponseWriter, r *http.Request) {
+	list, err := s.Store.ListDeployments(r.Context())
+	if err != nil {
+		s.Log.Error("list deployments", "err", err)
+		http.Error(w, "could not load deployments", http.StatusInternalServerError)
+		return
+	}
+	s.render(w, http.StatusOK, "deployments.html", list)
+}
+
+func (s *Server) deployment(w http.ResponseWriter, r *http.Request) {
+	d, hist, err := s.Store.GetDeployment(r.Context(), r.PathValue("id"))
+	if errors.Is(err, sql.ErrNoRows) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		s.Log.Error("get deployment", "err", err)
+		http.Error(w, "could not load deployment", http.StatusInternalServerError)
+		return
+	}
+	active := d.Status == "queued" || d.Status == "running"
+	s.render(w, http.StatusOK, "deployment.html", map[string]any{"D": d, "History": hist, "Active": active})
+}
+
+type builderPage struct {
+	T        templates.Template
+	Rows     []templates.Input // existing inputs plus blank rows to fill in
+	Editing  bool
+	Error    string
+	Warning  string
+	Modules  []storage.Module // registry modules to start from
+	Selected string           // ns/name/system/version picked from the registry
+}
+
+func (s *Server) renderBuilder(w http.ResponseWriter, r *http.Request, status int, p builderPage) {
+	mods, err := s.Store.ListModules(r.Context())
+	if err != nil {
+		s.Log.Error("list modules", "err", err)
+		http.Error(w, "could not load modules", http.StatusInternalServerError)
+		return
+	}
+	p.Modules = mods
+	p.Rows = append(slices.Clone(p.T.Inputs), make([]templates.Input, 3)...)
+	s.render(w, status, "builder.html", p)
+}
+
+func (s *Server) builder(w http.ResponseWriter, r *http.Request) {
+	p := builderPage{T: templates.Template{Module: templates.Module{Ref: "v1.0.0"}}}
+	if id := r.PathValue("id"); id != "" {
+		t, ok := s.Templates.Get(id)
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		p.T, p.Editing = t, true
+	}
+	// ?module=ns/name/system/version: point the template at a registry module and generate its fields.
+	if sel := r.URL.Query().Get("module"); sel != "" {
+		parts := strings.Split(sel, "/")
+		if len(parts) != 4 {
+			http.Error(w, "module must be namespace/name/system/version", http.StatusBadRequest)
+			return
+		}
+		m, err := s.Store.GetModule(r.Context(), parts[0], parts[1], parts[2], parts[3])
+		if errors.Is(err, sql.ErrNoRows) {
+			http.NotFound(w, r)
+			return
+		}
+		if err != nil {
+			s.Log.Error("get module", "err", err)
+			http.Error(w, "could not load module", http.StatusInternalServerError)
+			return
+		}
+		_, _, _, source, err := s.Registry.Address(m.Namespace, m.Name, m.System)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		inputs, skipped := registry.Inputs(m.Variables)
+		p.T.Module = templates.Module{Source: source, Ref: m.Version}
+		p.T.Inputs = inputs
+		if p.T.Name == "" {
+			p.T.Name = m.Name
+		}
+		p.Selected = sel
+		if len(skipped) > 0 {
+			p.Warning = "Not generated (complex types need a default in the module or a future JSON field): " + strings.Join(skipped, ", ")
+		}
+	}
+	s.renderBuilder(w, r, http.StatusOK, p)
+}
+
+func (s *Server) saveTemplate(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	t := templateFromForm(r)
+	editing := r.PathValue("id") != ""
+	if editing {
+		if _, ok := s.Templates.Get(r.PathValue("id")); !ok {
+			http.NotFound(w, r)
+			return
+		}
+		t.ID = r.PathValue("id") // the id is the file name; it can't change on edit
+	} else {
+		t.ID = newID()
+	}
+	fail := func(msg string) {
+		s.renderBuilder(w, r, http.StatusUnprocessableEntity, builderPage{T: t, Editing: editing, Error: msg, Selected: r.PostForm.Get("selected")})
+	}
+	// A template pointing at this registry must reference a version that exists, or the deploy fails later.
+	if ns, name, sys, ok := s.Registry.ParseSource(t.Module.Source); ok {
+		if _, err := s.Store.GetModule(r.Context(), ns, name, sys, t.Module.Ref); errors.Is(err, sql.ErrNoRows) {
+			fail(fmt.Sprintf("registry module %s has no version %q", t.Module.Source, t.Module.Ref))
+			return
+		} else if err != nil {
+			s.Log.Error("get module", "err", err)
+			fail("could not check registry module")
+			return
+		}
+	}
+	if err := s.Templates.Save(t, editing); err != nil {
+		fail(err.Error())
+		return
+	}
+	s.Log.Info("template saved", "id", t.ID, "dir", s.Templates.Dir)
+	http.Redirect(w, r, "/templates/"+t.ID, http.StatusSeeOther)
+}
+
+// toJSON renders a value (e.g. a variable default) compactly for display.
+func toJSON(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprint(v)
+	}
+	return string(b)
+}
+
+// newID returns a random UUIDv4, the same format as deployment ids.
+func newID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	b[6] = b[6]&0x0f | 0x40
+	b[8] = b[8]&0x3f | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+}
+
+// templateFromForm reads the builder form; input rows are parallel in_* lists and rows without a name are dropped.
+func templateFromForm(r *http.Request) templates.Template {
+	f := r.PostForm
+	get := func(key string) string { return strings.TrimSpace(f.Get(key)) }
+	t := templates.Template{
+		Name: get("name"), Description: get("description"),
+		Module: templates.Module{Source: get("module_source"), Ref: get("module_ref")},
+	}
+	at := func(key string, i int) string {
+		if v := f[key]; i < len(v) {
+			return strings.TrimSpace(v[i])
+		}
+		return ""
+	}
+	for i, name := range f["in_name"] {
+		if name = strings.TrimSpace(name); name == "" {
+			continue
+		}
+		in := templates.Input{Name: name, Label: at("in_label", i), Type: at("in_type", i),
+			Required: at("in_required", i) == "yes", Pattern: at("in_pattern", i), Default: at("in_default", i)}
+		for _, o := range strings.Split(at("in_options", i), ",") {
+			if o = strings.TrimSpace(o); o != "" {
+				in.Options = append(in.Options, o)
+			}
+		}
+		t.Inputs = append(t.Inputs, in)
+	}
+	return t
+}
+
+func (s *Server) render(w http.ResponseWriter, status int, name string, data any) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	if err := s.pages.ExecuteTemplate(w, name, data); err != nil {
+		s.Log.Error("render", "page", name, "err", err)
+	}
+}

@@ -1,0 +1,15 @@
+{
+  "id": "storage-account",
+  "name": "Azure Storage Account",
+  "description": "A general-purpose v2 storage account with optional blob versioning.",
+  "module": {
+    "source": "git::https://dev.azure.com/your-org/infra/_git/terraform-modules//storage-account",
+    "ref": "v1.0.0"
+  },
+  "inputs": [
+    { "name": "name", "label": "Account name", "type": "string", "required": true, "pattern": "^[a-z0-9]{3,24}$" },
+    { "name": "location", "label": "Region", "type": "select", "required": true, "options": ["westeurope", "northeurope"], "default": "westeurope" },
+    { "name": "retention_days", "label": "Soft-delete retention (days)", "type": "number", "default": "7" },
+    { "name": "enable_versioning", "label": "Enable blob versioning", "type": "bool" }
+  ]
+}
