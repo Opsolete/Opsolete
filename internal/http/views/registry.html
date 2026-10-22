@@ -1,28 +1,40 @@
 {{template "top"}}
-<h1>Module registry</h1>
-<p>Private Terraform module registry on <code>{{.Host}}</code>. Use a module in Terraform with
-<code>source = "{{.Host}}/&lt;namespace&gt;/&lt;name&gt;/&lt;system&gt;"</code> and a <code>version</code>, authenticated with
-<code>TF_TOKEN_…</code> (create a token with <code>just token &lt;name&gt;</code>).</p>
+<div class="page-head">
+  <div>
+    <h1>Module registry</h1>
+    <p class="muted">Private Terraform module registry on <code>{{.Host}}</code>.</p>
+  </div>
+</div>
 
+<div class="card">
+  <p>Use a module from Terraform, authenticated with <code>TF_TOKEN_…</code> (create a token with <code>just token &lt;name&gt;</code>):</p>
+  <pre class="code">module "example" {
+  source  = "{{.Host}}/&lt;namespace&gt;/&lt;name&gt;/&lt;system&gt;"
+  version = "1.0.0"
+}</pre>
+</div>
+
+<div class="card flush">
 <table>
 <tr><th>Module</th><th>Version</th><th>Variables</th><th>Uploaded</th>{{if .Editor}}<th></th>{{end}}</tr>
 {{$editor := .Editor}}{{$host := .Host}}
 {{range .Modules}}
 <tr>
   <td><a href="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}"><code>{{$host}}/{{.Namespace}}/{{.Name}}/{{.System}}</code></a></td>
-  <td>{{.Version}}</td>
+  <td><span class="tag">{{.Version}}</span></td>
   <td>{{len .Variables}}</td>
-  <td>{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
-  {{if $editor}}<td><a href="/templates/new?module={{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}">Create template</a></td>{{end}}
+  <td class="nowrap">{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
+  {{if $editor}}<td class="nowrap"><a href="/templates/new?module={{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}">Create template</a></td>{{end}}
 </tr>
 {{else}}
-<tr><td colspan="5">No modules uploaded yet.</td></tr>
+<tr><td colspan="5" class="empty">No modules uploaded yet.</td></tr>
 {{end}}
 </table>
+</div>
 
 {{if .Editor}}
 <h2>Upload a module version</h2>
-{{with .Error}}<p class="err" role="alert">{{.}}</p>{{end}}
+{{with .Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
 <form method="post" enctype="multipart/form-data" class="card">
   <label for="namespace">Namespace</label>
   <input id="namespace" name="namespace" value="{{index .Form "namespace"}}" required placeholder="platform">
@@ -34,8 +46,8 @@
   <input id="version" name="version" value="{{index .Form "version"}}" required placeholder="1.0.0">
   <label for="archive">Module archive (.tar.gz, module files at the root)</label>
   <input id="archive" name="archive" type="file" accept=".tar.gz,.tgz,application/gzip" required>
-  <p><small>Create one with <code>tar czf module.tar.gz -C path/to/module .</code></small></p>
-  <button type="submit">Upload</button>
+  <p class="hint">Create one with <code>tar czf module.tar.gz -C path/to/module .</code></p>
+  <div class="actions"><button type="submit">Upload</button></div>
 </form>
 {{end}}
 {{template "bottom"}}

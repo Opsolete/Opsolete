@@ -27,7 +27,7 @@ func (s *Server) registryRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /registry", s.registryPage)
 	mux.HandleFunc("GET /registry/{ns}/{name}/{system}/{version}", s.moduleDocs)
 	mux.HandleFunc("GET /registry/{ns}/{name}/{system}/{version}/docs.md", s.moduleDocs)
-	if s.Editor {
+	if s.Features.Editor {
 		mux.HandleFunc("POST /registry", s.admin(s.uploadModule))
 	}
 }

@@ -1,43 +1,54 @@
 {{template "top"}}
+<a class="back" href="/deployments">← Deployments</a>
 {{with .D}}
-<h1>{{.TemplateID}} <span class="status {{.Status}}" id="status">{{.Status}}{{if eq .Action "destroy"}}{{if ne .Status "destroyed"}} (destroy){{end}}{{end}}</span></h1>
+<div class="page-head">
+  <div>
+    <h1>{{.TemplateID}}
+      <span class="status {{.Status}}" id="status">{{.Status}}{{if and (eq .Action "destroy") (ne .Status "destroyed")}} (destroy){{end}}</span></h1>
+    <p class="muted">Created {{.CreatedAt.Format "2006-01-02 15:04"}}{{with .CreatedBy}} by {{.}}{{end}}</p>
+  </div>
+  {{if $.CanDestroy}}
+  <form method="post" action="/deployments/{{.ID}}/destroy"
+    onsubmit="return confirm('Destroy all resources of this deployment? This runs terraform destroy and cannot be undone.')">
+    <button type="submit" class="danger">Destroy resources</button>
+  </form>
+  {{end}}
+</div>
+
 <div class="card">
-  <table>
-    <tr><th>ID</th><td><code>{{.ID}}</code></td></tr>
-    <tr><th>Module</th><td><code>{{.ModuleSource}}</code> {{.ModuleRef}}</td></tr>
-    <tr><th>State key</th><td><code>{{.StateKey}}</code></td></tr>
-    {{with .CreatedBy}}<tr><th>Deployed by</th><td>{{.}}</td></tr>{{end}}
-    {{with .Runner}}<tr><th>Runner</th><td>{{.}}</td></tr>{{end}}
-    <tr><th>Inputs</th><td>{{range $k, $v := .Inputs}}{{$k}} = {{$v}}<br>{{end}}</td></tr>
-  </table>
+  <dl class="kv">
+    <dt>ID</dt><dd><code>{{.ID}}</code></dd>
+    <dt>Module</dt><dd><code>{{.ModuleSource}}</code> <span class="tag">{{.ModuleRef}}</span></dd>
+    <dt>State key</dt><dd><code>{{.StateKey}}</code></dd>
+    {{with .CreatedBy}}<dt>Deployed by</dt><dd>{{.}}</dd>{{end}}
+    {{with .Runner}}<dt>Runner</dt><dd>{{.}}</dd>{{end}}
+    <dt>Inputs</dt><dd>{{range $k, $v := .Inputs}}<code>{{$k}} = {{$v}}</code><br>{{else}}<span class="muted">none</span>{{end}}</dd>
+  </dl>
 </div>
 
 {{with .Outputs}}
 <h2>Outputs</h2>
+<div class="card flush">
 <table>
 <tr><th>Name</th><th>Value</th></tr>
 {{range $k, $v := .}}<tr><td><code>{{$k}}</code></td><td><code>{{json $v}}</code></td></tr>{{end}}
 </table>
-{{end}}
-
-{{if $.CanDestroy}}
-<form method="post" action="/deployments/{{.ID}}/destroy"
-  onsubmit="return confirm('Destroy all resources of this deployment? This runs terraform destroy and cannot be undone.')">
-  <button type="submit" class="danger">Destroy resources</button>
-</form>
+</div>
 {{end}}
 
 <h2>Log <small><a href="/deployments/{{.ID}}/logs">raw</a></small></h2>
-<pre id="log" class="card log" aria-live="polite">{{if eq .Status "queued"}}Waiting for a runner…{{end}}</pre>
+<pre id="log" class="log" aria-live="polite">{{if eq .Status "queued"}}Waiting for a runner…{{end}}</pre>
 {{end}}
 
 <h2>History</h2>
+<div class="card flush">
 <table>
 <tr><th>Time</th><th>Status</th><th>Message</th></tr>
 {{range .History}}
-<tr><td>{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td><td>{{.Status}}</td><td>{{with .Message}}{{.}}{{end}}</td></tr>
+<tr><td class="nowrap">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td><td><span class="status {{.Status}}">{{.Status}}</span></td><td>{{with .Message}}{{.}}{{end}}</td></tr>
 {{end}}
 </table>
+</div>
 
 <script>
   // Follow the log live; reload once at the end so status and outputs are current.

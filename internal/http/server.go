@@ -31,33 +31,65 @@ type Server struct {
 	Templates *templates.Catalog
 	Registry  *registry.Registry
 	Auth      *auth.Auth
-	Editor    bool // enables the template builder and module uploads (for admins)
+	Features  Features
 	Log       *slog.Logger
 	pages     *template.Template
 }
 
-func New(store *storage.Store, tpls *templates.Catalog, reg *registry.Registry, a *auth.Auth, editor bool, log *slog.Logger) *Server {
+// Features are the components this instance serves; a disabled one has no routes at all.
+type Features struct {
+	Deployments bool // templates, deploy forms, deployments, runner API
+	Registry    bool // module registry pages and the Terraform registry protocol
+	Editor      bool // template builder (needs Deployments) and module uploads (needs Registry), admins only
+}
+
+func New(store *storage.Store, tpls *templates.Catalog, reg *registry.Registry, a *auth.Auth, f Features, log *slog.Logger) *Server {
 	pages := template.Must(template.New("").Funcs(template.FuncMap{"join": strings.Join, "json": toJSON,
-		"user": func() auth.User { return auth.User{} }}).ParseFS(views, "views/*.html"))
-	return &Server{Store: store, Templates: tpls, Registry: reg, Auth: a, Editor: editor, Log: log, pages: pages}
+		"user": func() auth.User { return auth.User{} }, "section": func() string { return "" },
+		"features": func() Features { return f }}).ParseFS(views, "views/*.html"))
+	return &Server{Store: store, Templates: tpls, Registry: reg, Auth: a, Features: f, Log: log, pages: pages}
+}
+
+// CheckTemplates fails if a template needs a disabled component: with the registry off,
+// a template pointing at it would only fail later, on the runner.
+func (s *Server) CheckTemplates() error {
+	for _, t := range s.Templates.List() {
+		if err := s.checkSource(t); err != nil {
+			return fmt.Errorf("template %s: %w", t.ID, err)
+		}
+	}
+	return nil
+}
+
+func (s *Server) checkSource(t templates.Template) error {
+	if _, _, _, ok := s.Registry.ParseSource(t.Module.Source); ok && !s.Features.Registry {
+		return fmt.Errorf("module %s is in this registry, which is disabled (REGISTRY_ENABLED=false)", t.Module.Source)
+	}
+	return nil
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 	mux.HandleFunc("GET /readyz", s.ready)
+	s.Auth.Routes(mux)
+	if s.Features.Registry {
+		s.registryRoutes(mux)
+	}
+	if !s.Features.Deployments {
+		mux.Handle("GET /{$}", http.RedirectHandler("/registry", http.StatusFound))
+		return s.logRequests(http.NewCrossOriginProtection().Handler(s.requireLogin(mux)))
+	}
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("GET /templates/{id}", s.form)
 	mux.HandleFunc("POST /templates/{id}", s.deploy)
-	if s.Editor {
+	if s.Features.Editor {
 		mux.HandleFunc("GET /templates/new", s.admin(s.builder))
 		mux.HandleFunc("POST /templates/new", s.admin(s.saveTemplate))
 		mux.HandleFunc("GET /templates/{id}/edit", s.admin(s.builder))
 		mux.HandleFunc("POST /templates/{id}/edit", s.admin(s.saveTemplate))
 	}
-	s.registryRoutes(mux)
 	s.runnerRoutes(mux)
-	s.Auth.Routes(mux)
 	mux.HandleFunc("GET /deployments", s.deployments)
 	mux.HandleFunc("GET /deployments/{id}", s.deployment)
 	mux.HandleFunc("POST /deployments/{id}/destroy", s.destroy)
@@ -103,7 +135,7 @@ func (s *Server) admin(next http.HandlerFunc) http.HandlerFunc {
 
 // canEdit: the builder and module uploads are on and the user is an admin.
 func (s *Server) canEdit(r *http.Request) bool {
-	return s.Editor && auth.FromContext(r.Context()).Admin()
+	return s.Features.Editor && auth.FromContext(r.Context()).Admin()
 }
 
 func (s *Server) logRequests(next http.Handler) http.Handler {
@@ -244,16 +276,19 @@ type builderPage struct {
 	Warning  string
 	Modules  []storage.Module // registry modules to start from
 	Selected string           // ns/name/system/version picked from the registry
+	Registry bool             // registry enabled: offer "start from a registry module"
 }
 
 func (s *Server) renderBuilder(w http.ResponseWriter, r *http.Request, status int, p builderPage) {
-	mods, err := s.Store.ListModules(r.Context())
-	if err != nil {
-		s.Log.Error("list modules", "err", err)
-		http.Error(w, "could not load modules", http.StatusInternalServerError)
-		return
+	if p.Registry = s.Features.Registry; p.Registry {
+		mods, err := s.Store.ListModules(r.Context())
+		if err != nil {
+			s.Log.Error("list modules", "err", err)
+			http.Error(w, "could not load modules", http.StatusInternalServerError)
+			return
+		}
+		p.Modules = mods
 	}
-	p.Modules = mods
 	p.Rows = append(slices.Clone(p.T.Inputs), make([]templates.Input, 3)...)
 	s.render(w, r, status, "builder.html", p)
 }
@@ -269,7 +304,7 @@ func (s *Server) builder(w http.ResponseWriter, r *http.Request) {
 		p.T, p.Editing = t, true
 	}
 	// ?module=ns/name/system/version: point the template at a registry module and generate its fields.
-	if sel := r.URL.Query().Get("module"); sel != "" {
+	if sel := r.URL.Query().Get("module"); sel != "" && s.Features.Registry {
 		parts := strings.Split(sel, "/")
 		if len(parts) != 4 {
 			http.Error(w, "module must be namespace/name/system/version", http.StatusBadRequest)
@@ -322,6 +357,10 @@ func (s *Server) saveTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	fail := func(msg string) {
 		s.renderBuilder(w, r, http.StatusUnprocessableEntity, builderPage{T: t, Editing: editing, Error: msg, Selected: r.PostForm.Get("selected")})
+	}
+	if err := s.checkSource(t); err != nil {
+		fail(err.Error())
+		return
 	}
 	// A template pointing at this registry must reference a version that exists, or the deploy fails later.
 	if ns, name, sys, ok := s.Registry.ParseSource(t.Module.Source); ok {
@@ -397,7 +436,9 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, name
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	pages.Funcs(template.FuncMap{"user": func() auth.User { return u }})
+	// section is the first path segment, for highlighting the current nav entry.
+	section, _, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
+	pages.Funcs(template.FuncMap{"user": func() auth.User { return u }, "section": func() string { return section }})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	if err := pages.ExecuteTemplate(w, name, data); err != nil {

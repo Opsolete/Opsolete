@@ -141,9 +141,17 @@ func serve(log *slog.Logger) error {
 	}
 	log.Info("templates loaded", "count", len(tpls.List()), "dir", cfg.TemplatesDir, "editor", cfg.TemplateEditor)
 
-	go reapLostRunners(ctx, store, log)
+	app := httpserver.New(store, tpls, reg, authn, httpserver.Features{
+		Deployments: cfg.Deployments, Registry: cfg.Registry, Editor: cfg.TemplateEditor}, log)
+	if err := app.CheckTemplates(); err != nil {
+		return err
+	}
+	log.Info("components", "deployments", cfg.Deployments, "registry", cfg.Registry)
+	if cfg.Deployments {
+		go reapLostRunners(ctx, store, log)
+	}
 
-	srv := &http.Server{Addr: cfg.Addr, Handler: httpserver.New(store, tpls, reg, authn, cfg.TemplateEditor, log).Handler(),
+	srv := &http.Server{Addr: cfg.Addr, Handler: app.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		// Shutdown doesn't cancel requests; this ends log streams and runner long-polls on SIGTERM.
 		BaseContext: func(net.Listener) context.Context { return ctx }}

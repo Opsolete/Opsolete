@@ -1,52 +1,65 @@
 {{template "top"}}
-<h1>{{if .Editing}}Edit {{.T.Name}}{{else}}New template{{end}}</h1>
-{{if .Editing}}<p><small>ID <code>{{.T.ID}}</code></small></p>{{end}}
+<a class="back" href="/">← Templates</a>
+<div class="page-head">
+  <div>
+    <h1>{{if .Editing}}Edit {{.T.Name}}{{else}}New template{{end}}</h1>
+    {{if .Editing}}<p class="muted">ID <code>{{.T.ID}}</code></p>{{else}}<p class="muted">A template turns a Terraform module into a deploy form.</p>{{end}}
+  </div>
+</div>
 
+{{if .Registry}}
 <form method="get" class="card">
   <label for="module">Start from a registry module</label>
   {{$sel := .Selected}}
-  <select id="module" name="module">
-    <option value="">choose a module version…</option>
-    {{range .Modules}}{{$v := printf "%s/%s/%s/%s" .Namespace .Name .System .Version}}
-    <option value="{{$v}}"{{if eq $v $sel}} selected{{end}}>{{.Namespace}}/{{.Name}}/{{.System}} {{.Version}}</option>
-    {{end}}
-  </select>
-  <button type="submit" style="margin-top:0">Use module</button>
-  <p><small>Sets the module source and version and generates a form field per module variable{{if .Editing}} (replaces the fields below){{end}}. Upload modules in the <a href="/registry">registry</a>.</small></p>
+  <div class="inline">
+    <select id="module" name="module">
+      <option value="">choose a module version…</option>
+      {{range .Modules}}{{$v := printf "%s/%s/%s/%s" .Namespace .Name .System .Version}}
+      <option value="{{$v}}"{{if eq $v $sel}} selected{{end}}>{{.Namespace}}/{{.Name}}/{{.System}} {{.Version}}</option>
+      {{end}}
+    </select>
+    <button type="submit" class="secondary">Use module</button>
+  </div>
+  <p class="hint">Sets the module source and version and generates a form field per module variable{{if .Editing}} (replaces the fields below){{end}}. Upload modules in the <a href="/registry">registry</a>.</p>
 </form>
+{{end}}
 
-{{with .Error}}<p class="err" role="alert">{{.}}</p>{{end}}
-{{with .Warning}}<p class="err" role="status">{{.}}</p>{{end}}
+{{with .Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
+{{with .Warning}}<div class="alert warn" role="status">{{.}}</div>{{end}}
 <form method="post">
-  <input type="hidden" name="selected" value="{{.Selected}}">
-  <label for="name">Name</label>
-  <input id="name" name="name" value="{{.T.Name}}" required>
+  <div class="card">
+    <input type="hidden" name="selected" value="{{.Selected}}">
+    <label for="name">Name <span class="req" aria-hidden="true">*</span></label>
+    <input id="name" name="name" value="{{.T.Name}}" required>
 
-  <label for="description">Description</label>
-  <input id="description" name="description" value="{{.T.Description}}" style="width:100%">
+    <label for="description">Description</label>
+    <input id="description" name="description" value="{{.T.Description}}" class="wide">
 
-  <label for="module_source">Terraform module source (registry address or git::…)</label>
-  <input id="module_source" name="module_source" value="{{.T.Module.Source}}" required style="width:100%"
-    placeholder="git::https://dev.azure.com/org/project/_git/modules//storage-account">
+    <label for="module_source">Terraform module source <span class="req" aria-hidden="true">*</span></label>
+    <input id="module_source" name="module_source" value="{{.T.Module.Source}}" required class="wide"
+      placeholder="git::https://dev.azure.com/org/project/_git/modules//storage-account">
+    <p class="hint">A registry address or a <code>git::</code> URL.</p>
 
-  <label for="module_ref">Approved module version / git ref</label>
-  <input id="module_ref" name="module_ref" value="{{.T.Module.Ref}}" required>
+    <label for="module_ref">Approved module version / git ref <span class="req" aria-hidden="true">*</span></label>
+    <input id="module_ref" name="module_ref" value="{{.T.Module.Ref}}" required>
+  </div>
 
   <h2>Form fields</h2>
-  <p><small>Each row becomes a form field and a Terraform variable. Clear a row's variable name to remove it. Options are comma-separated (dropdowns only).</small></p>
+  <p class="muted">Each row becomes a form field and a Terraform variable. Clear a row's variable name to remove it. Options are comma-separated (dropdowns only).</p>
+  <div class="card flush">
   <table id="fields">
     <tr><th>Variable</th><th>Label</th><th>Type</th><th>Required</th><th>Pattern</th><th>Options</th><th>Default</th></tr>
     {{range .Rows}}
     <tr>
       <td><input name="in_name" value="{{.Name}}" aria-label="variable name" style="min-width:7rem"></td>
       <td><input name="in_label" value="{{.Label}}" aria-label="label" style="min-width:8rem"></td>
-      <td><select name="in_type" aria-label="type" style="min-width:0">
+      <td><select name="in_type" aria-label="type">
         <option>string</option>
         <option{{if eq .Type "number"}} selected{{end}}>number</option>
         <option{{if eq .Type "bool"}} selected{{end}}>bool</option>
         <option{{if eq .Type "select"}} selected{{end}}>select</option>
       </select></td>
-      <td><select name="in_required" aria-label="required" style="min-width:0">
+      <td><select name="in_required" aria-label="required">
         <option value="no">no</option><option value="yes"{{if .Required}} selected{{end}}>yes</option>
       </select></td>
       <td><input name="in_pattern" value="{{.Pattern}}" aria-label="regex pattern" style="min-width:6rem"></td>
@@ -55,8 +68,11 @@
     </tr>
     {{end}}
   </table>
-  <button type="button" id="add-row">Add field</button>
-  <button type="submit">Save template</button>
+  </div>
+  <div class="actions">
+    <button type="button" id="add-row" class="secondary">+ Add field</button>
+    <button type="submit">Save template</button>
+  </div>
 </form>
 <script>
   // Progressive enhancement: without JS you still get three blank rows per save.

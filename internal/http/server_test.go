@@ -37,11 +37,15 @@ func newServer(t *testing.T, dir string, editor bool, store *storage.Store) http
 }
 
 func newServerAs(t *testing.T, dir string, editor bool, store *storage.Store, a *auth.Auth) http.Handler {
+	return newApp(t, dir, store, a, Features{Deployments: true, Registry: true, Editor: editor}).Handler()
+}
+
+func newApp(t *testing.T, dir string, store *storage.Store, a *auth.Auth, f Features) *Server {
 	tpls, err := templates.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(store, tpls, testReg, a, editor, slog.New(slog.NewTextHandler(io.Discard, nil))).Handler()
+	return New(store, tpls, testReg, a, f, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
 func devAuth(t *testing.T, store *storage.Store, email string, admin bool) *auth.Auth {
@@ -153,6 +157,54 @@ func TestEditorIsAdminOnly(t *testing.T) {
 	}
 	if page := get(h, "/").Body.String(); strings.Contains(page, "New template") || !strings.Contains(page, "someone@example.com") {
 		t.Fatalf("index for non-admin: %s", page)
+	}
+}
+
+func TestFeatureSwitches(t *testing.T) {
+	a := devAuth(t, nil, "admin@example.com", true)
+	noRegistry := newApp(t, "../../catalog", nil, a, Features{Deployments: true, Editor: true}).Handler()
+	for _, path := range []string{"/registry", "/.well-known/terraform.json", "/v1/modules/a/b/c/versions"} {
+		if rec := get(noRegistry, path); rec.Code != http.StatusNotFound {
+			t.Errorf("registry off, GET %s: %d", path, rec.Code)
+		}
+	}
+	if page := get(noRegistry, "/").Body.String(); strings.Contains(page, `href="/registry"`) || !strings.Contains(page, `href="/deployments"`) {
+		t.Fatalf("nav with registry off: %s", page)
+	}
+	if page := get(noRegistry, "/templates/new").Body.String(); strings.Contains(page, "Start from a registry module") {
+		t.Fatal("builder must not offer registry modules when the registry is off")
+	}
+	// Registry templates are refused while the registry is off.
+	form := url.Values{"name": {"x"}, "module_source": {"f2s.example.com/acme/storage/azurerm"}, "module_ref": {"1.0.0"}}
+	dir := t.TempDir()
+	if rec := post(newApp(t, dir, nil, a, Features{Deployments: true, Editor: true}).Handler(), "/templates/new", form); rec.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(rec.Body.String(), "disabled") {
+		t.Fatalf("registry template saved with registry off: %d", rec.Code)
+	}
+	if err := newApp(t, dir, nil, a, Features{Deployments: true}).CheckTemplates(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dir+"/reg.json", []byte(`{"id":"reg","name":"r","module":{"source":"f2s.example.com/acme/storage/azurerm","ref":"1.0.0"},"inputs":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := newApp(t, dir, nil, a, Features{Deployments: true}).CheckTemplates(); err == nil {
+		t.Fatal("startup must fail on a registry template while the registry is off")
+	}
+
+	registryOnly := newApp(t, "../../catalog", nil, a, Features{Registry: true, Editor: true}).Handler()
+	if rec := get(registryOnly, "/"); rec.Code != http.StatusFound || rec.Header().Get("Location") != "/registry" {
+		t.Fatalf("deployments off, GET /: %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	for _, path := range []string{"/deployments", "/templates/storage-account", "/templates/new"} {
+		if rec := get(registryOnly, path); rec.Code != http.StatusNotFound {
+			t.Errorf("deployments off, GET %s: %d", path, rec.Code)
+		}
+	}
+	if rec := post(registryOnly, runnerapi.Prefix+"/jobs/claim", nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("runner API must be off with deployments: %d", rec.Code)
+	}
+	if rec := get(registryOnly, "/.well-known/terraform.json"); rec.Code != http.StatusOK {
+		t.Fatalf("registry protocol must stay on: %d", rec.Code)
 	}
 }
 

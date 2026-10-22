@@ -3,11 +3,13 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -16,6 +18,9 @@ type Config struct {
 	Addr         string // HTTP listen address
 	DatabaseURL  string // PostgreSQL connection string
 	TemplatesDir string // directory with JSON template definitions (a Git checkout)
+	// Components; at least one must be on. Off removes its pages and API routes.
+	Deployments bool // templates, deployments and the runner API
+	Registry    bool // private module registry (pages and Terraform protocol)
 	// TemplateEditor enables the web template builder (admins only), which writes into TemplatesDir.
 	// Off by default: a template decides which module the runners execute.
 	TemplateEditor bool
@@ -43,6 +48,16 @@ func Load() (Config, error) {
 	if c.DatabaseURL == "" {
 		return c, errors.New("DATABASE_URL is required")
 	}
+	var err error
+	if c.Deployments, err = getbool("DEPLOYMENTS_ENABLED"); err != nil {
+		return c, err
+	}
+	if c.Registry, err = getbool("REGISTRY_ENABLED"); err != nil {
+		return c, err
+	}
+	if !c.Deployments && !c.Registry {
+		return c, errors.New("DEPLOYMENTS_ENABLED and REGISTRY_ENABLED are both off: nothing to serve")
+	}
 	pu, err := url.Parse(getenv("PUBLIC_URL", "http://form2stack.localhost:8080"))
 	if err != nil || (pu.Scheme != "http" && pu.Scheme != "https") || !strings.Contains(pu.Hostname(), ".") || pu.Path != "" && pu.Path != "/" {
 		return c, errors.New("PUBLIC_URL must be like https://form2stack.example.com (a hostname with a dot, no path)")
@@ -50,6 +65,15 @@ func Load() (Config, error) {
 	pu.Path = ""
 	c.PublicURL = pu
 	return c, nil
+}
+
+// getbool reads an on-by-default switch.
+func getbool(key string) (bool, error) {
+	b, err := strconv.ParseBool(getenv(key, "true"))
+	if err != nil {
+		return false, fmt.Errorf("%s must be true or false", key)
+	}
+	return b, nil
 }
 
 func getenv(key, def string) string {

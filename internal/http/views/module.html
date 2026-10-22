@@ -1,17 +1,22 @@
 {{template "top"}}
-<p><a href="/registry">← Registry</a></p>
-<h1>{{.Namespace}}/{{.Name}}/{{.System}} <small>{{.Version}}</small></h1>
+<a class="back" href="/registry">← Registry</a>
+<div class="page-head">
+  <div>
+    <h1>{{.Namespace}}/{{.Name}}/{{.System}} <span class="tag">{{.Version}}</span></h1>
+    <p class="muted"><code>{{.Source}}</code></p>
+  </div>
+  {{if .Editor}}<a class="btn" href="/templates/new?module={{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}">Create template</a>{{end}}
+</div>
 <p>
   Versions: {{$cur := .Version}}{{$base := printf "/registry/%s/%s/%s" .Namespace .Name .System}}
   {{range .Versions}}{{if eq . $cur}}<strong>{{.}}</strong>{{else}}<a href="{{$base}}/{{.}}">{{.}}</a>{{end}} {{end}}
   {{with .Docs.Module}} · <a href="{{$base}}/{{$cur}}/docs.md">Markdown</a>{{end}}
-  {{if .Editor}} · <a href="/templates/new?module={{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}">Create template</a>{{end}}
 </p>
 
 {{$src := .Source}}{{$ver := .Version}}{{$name := .Name}}
 {{with .Docs.Module}}
 <h2>Usage</h2>
-<pre class="card">module "{{$name}}" {
+<pre class="code">module "{{$name}}" {
   source  = "{{$src}}"
   version = "{{$ver}}"
 {{range .Variables}}{{if .Required}}
@@ -20,14 +25,17 @@
 
 {{if or .RequiredCore .RequiredProviders}}
 <h2>Requirements</h2>
+<div class="card flush">
 <table>
 <tr><th>Name</th><th>Source</th><th>Version</th></tr>
 {{with .RequiredCore}}<tr><td>terraform</td><td></td><td><code>{{join . ", "}}</code></td></tr>{{end}}
 {{range $k, $p := .RequiredProviders}}<tr><td>{{$k}}</td><td>{{$p.Source}}</td><td><code>{{join $p.VersionConstraints ", "}}</code></td></tr>{{end}}
 </table>
+</div>
 {{end}}
 
 <h2>Inputs</h2>
+<div class="card flush">
 <table>
 <tr><th>Name</th><th>Description</th><th>Type</th><th>Default</th><th>Required</th></tr>
 {{range .Variables}}
@@ -41,8 +49,10 @@
 {{else}}<tr><td colspan="5">No inputs.</td></tr>
 {{end}}
 </table>
+</div>
 
 <h2>Outputs</h2>
+<div class="card flush">
 <table>
 <tr><th>Name</th><th>Description</th></tr>
 {{range .Outputs}}
@@ -50,22 +60,27 @@
 {{else}}<tr><td colspan="2">No outputs.</td></tr>
 {{end}}
 </table>
+</div>
 
 {{if or .ManagedResources .DataResources}}
 <h2>Resources</h2>
+<div class="card flush">
 <table>
 <tr><th>Name</th><th>Kind</th><th>File</th></tr>
 {{range .ManagedResources}}<tr><td><code>{{.Type}}.{{.Name}}</code></td><td>resource</td><td>{{.Pos.Filename}}:{{.Pos.Line}}</td></tr>{{end}}
 {{range .DataResources}}<tr><td><code>data.{{.Type}}.{{.Name}}</code></td><td>data source</td><td>{{.Pos.Filename}}:{{.Pos.Line}}</td></tr>{{end}}
 </table>
+</div>
 {{end}}
 
 {{with .ModuleCalls}}
 <h2>Modules</h2>
+<div class="card flush">
 <table>
 <tr><th>Name</th><th>Source</th><th>Version</th></tr>
 {{range .}}<tr><td><code>{{.Name}}</code></td><td><code>{{.Source}}</code></td><td>{{.Version}}</td></tr>{{end}}
 </table>
+</div>
 {{end}}
 {{else}}
 <p>No generated docs for this version: it was uploaded before docs existed. Upload a new version to get them.</p>
@@ -73,6 +88,6 @@
 
 {{with .Docs.Readme}}
 <h2>README</h2>
-<pre class="card" style="white-space:pre-wrap">{{.}}</pre>
+<pre class="code" style="white-space:pre-wrap">{{.}}</pre>
 {{end}}
 {{template "bottom"}}

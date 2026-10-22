@@ -42,6 +42,8 @@ Then open http://localhost:8080. Migrations run on startup.
 | `DATABASE_URL`  | required  | PostgreSQL connection string           |
 | `ADDR`          | `:8080`   | HTTP listen address                    |
 | `TEMPLATES_DIR` | `catalog` | Directory of JSON template definitions |
+| `DEPLOYMENTS_ENABLED` | `true` | Templates, deploy forms, deployments and the runner API. `false` makes Form2Stack a module registry only |
+| `REGISTRY_ENABLED` | `true` | Module registry pages and the Terraform registry protocol. With `false`, startup fails if a template uses a registry module |
 | `TEMPLATE_EDITOR` | off    | `1` enables the template builder and module uploads for admins (on in the nix dev shell) |
 | `PUBLIC_URL`    | `http://form2stack.localhost:8080` | How browsers and Terraform clients reach the app. Its host is the registry hostname, and the OIDC callback is `PUBLIC_URL/auth/callback` |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | | Login via OpenID Connect, required unless `AUTH_DEV_USER` is set |

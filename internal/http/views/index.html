@@ -1,14 +1,29 @@
 {{template "top"}}
-<h1>Templates</h1>
-{{if .Editor}}<p><a href="/templates/new">+ New template</a></p>{{end}}
+<div class="page-head">
+  <div>
+    <h1>Templates</h1>
+    <p class="muted">Pick a template, fill in the form, and a runner deploys it with Terraform.</p>
+  </div>
+  {{if .Editor}}<a class="btn" href="/templates/new">+ New template</a>{{end}}
+</div>
 {{$editor := .Editor}}
-{{range .Templates}}
-<div class="card">
-  <h3><a href="/templates/{{.ID}}">{{.Name}}</a></h3>
-  <p>{{.Description}}</p>
-  <small>module ref {{.Module.Ref}}{{if $editor}} · <a href="/templates/{{.ID}}/edit">edit</a>{{end}}</small>
+{{with .Templates}}
+<div class="grid">
+  {{range .}}
+  <article class="card tile">
+    <h3><a href="/templates/{{.ID}}">{{.Name}}</a></h3>
+    <p>{{or .Description "No description."}}</p>
+    <footer>
+      <span class="tag" title="module version">{{.Module.Ref}}</span>
+      <span>{{if $editor}}<a href="/templates/{{.ID}}/edit">Edit</a> · {{end}}<a href="/templates/{{.ID}}">Deploy →</a></span>
+    </footer>
+  </article>
+  {{end}}
 </div>
 {{else}}
-<p>No templates yet. {{if .Editor}}<a href="/templates/new">Create one</a> or add{{else}}Add{{end}} JSON files to the catalog directory.</p>
+<div class="card empty">
+  <p><strong>No templates yet.</strong></p>
+  <p>{{if .Editor}}<a href="/templates/new">Create one</a> or add{{else}}Add{{end}} JSON files to the catalog directory.</p>
+</div>
 {{end}}
 {{template "bottom"}}

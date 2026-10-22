@@ -7,7 +7,7 @@ import (
 )
 
 func TestLoad(t *testing.T) {
-	for _, k := range []string{"ADDR", "PUBLIC_URL"} {
+	for _, k := range []string{"ADDR", "PUBLIC_URL", "DEPLOYMENTS_ENABLED", "REGISTRY_ENABLED"} {
 		t.Setenv(k, "")
 	}
 	t.Setenv("DATABASE_URL", "")
@@ -20,9 +20,24 @@ func TestLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Addr != ":8080" || c.TemplatesDir != "catalog" || c.PublicURL.Host != "form2stack.localhost:8080" {
+	if c.Addr != ":8080" || c.TemplatesDir != "catalog" || c.PublicURL.Host != "form2stack.localhost:8080" || !c.Deployments || !c.Registry {
 		t.Fatalf("unexpected defaults: %+v", c)
 	}
+
+	t.Setenv("REGISTRY_ENABLED", "false")
+	if c, err := Load(); err != nil || c.Registry || !c.Deployments {
+		t.Fatalf("REGISTRY_ENABLED=false: %+v %v", c, err)
+	}
+	t.Setenv("DEPLOYMENTS_ENABLED", "0")
+	if _, err := Load(); err == nil {
+		t.Fatal("both components off must be rejected")
+	}
+	t.Setenv("DEPLOYMENTS_ENABLED", "nope")
+	if _, err := Load(); err == nil {
+		t.Fatal("invalid switch value must be rejected")
+	}
+	t.Setenv("DEPLOYMENTS_ENABLED", "")
+	t.Setenv("REGISTRY_ENABLED", "")
 
 	for _, bad := range []string{"http://localhost:8080", "ftp://a.b", "https://a.b/sub"} {
 		t.Setenv("PUBLIC_URL", bad)

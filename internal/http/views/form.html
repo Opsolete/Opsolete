@@ -1,24 +1,36 @@
 {{template "top"}}
-<h1>{{.T.Name}}</h1>
-{{if .Editor}}<p><a href="/templates/{{.T.ID}}/edit">Edit template</a></p>{{end}}
-<p>{{.T.Description}}</p>
-<form method="post">
+<a class="back" href="/">← Templates</a>
+<div class="page-head">
+  <div>
+    <h1>{{.T.Name}}</h1>
+    {{with .T.Description}}<p class="muted">{{.}}</p>{{end}}
+  </div>
+  {{if .Editor}}<a class="btn secondary" href="/templates/{{.T.ID}}/edit">Edit template</a>{{end}}
+</div>
+<form method="post" class="card">
 {{$v := .Values}}{{$e := .Errors}}
 {{range .T.Inputs}}
-  <label for="{{.Name}}">{{or .Label .Name}}{{if .Required}} *{{end}}</label>
-  {{if eq .Type "select"}}
+  {{if eq .Type "bool"}}
+    <label for="{{.Name}}"><input type="checkbox" id="{{.Name}}" name="{{.Name}}"{{if eq (index $v .Name) "on" "true"}} checked{{end}}>
+      {{or .Label .Name}}</label>
+  {{else}}
+    <label for="{{.Name}}">{{or .Label .Name}}{{if .Required}} <span class="req" aria-hidden="true">*</span>{{end}}</label>
+    {{if eq .Type "select"}}
     <select id="{{.Name}}" name="{{.Name}}">
       {{$cur := index $v .Name}}
       {{range .Options}}<option{{if eq . $cur}} selected{{end}}>{{.}}</option>{{end}}
     </select>
-  {{else if eq .Type "bool"}}
-    <input type="checkbox" id="{{.Name}}" name="{{.Name}}"{{if eq (index $v .Name) "on" "true"}} checked{{end}} style="min-width:0">
-  {{else}}
+    {{else}}
     <input id="{{.Name}}" name="{{.Name}}" value="{{index $v .Name}}"
       {{if eq .Type "number"}}type="number" step="any"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}>
+    {{end}}
   {{end}}
-  {{with index $e .Name}}<div class="err" role="alert">{{.}}</div>{{end}}
+  {{with index $e .Name}}<p class="err" role="alert">{{.}}</p>{{end}}
 {{end}}
-<button type="submit">Deploy</button>
+  <p class="hint">Deploys <code>{{.T.Module.Source}}</code> at <code>{{.T.Module.Ref}}</code>.</p>
+  <div class="actions">
+    <button type="submit">Deploy</button>
+    <a class="btn secondary" href="/">Cancel</a>
+  </div>
 </form>
 {{template "bottom"}}
