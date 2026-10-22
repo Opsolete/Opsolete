@@ -50,6 +50,7 @@
           export AUTH_DEV_USER=dev@localhost ADMIN_EMAILS=dev@localhost # dev only: no OIDC login locally
           export STATE_STORE="file://$PGHOST/state-store?create_dir=1&metadata=skip" # workspace state files
           export PUBLIC_URL=http://form2stack.localhost:8080 # registry host needs a dot
+          export SECRET_KEY=dev-only-secret-key-not-for-production # encrypts VCS tokens; dev only
           echo "form2stack: run 'just' to list tasks ('just run', 'just check')"
         '';
       };

@@ -4,6 +4,7 @@
     <h1>Module registry</h1>
     <p class="muted">Private Terraform module registry on <code>{{.Host}}</code>.</p>
   </div>
+  {{if .VCS}}<a class="btn" href="#publish">Publish module</a>{{end}}
 </div>
 
 <div class="card">
@@ -31,6 +32,37 @@
 {{end}}
 </table>
 </div>
+
+{{if .VCS}}
+<h2 id="publish">Publish from a VCS provider</h2>
+{{with .Linked}}
+<div class="card flush">
+<table>
+<tr><th>Module</th><th>Repository</th><th>Last sync</th><th></th></tr>
+{{range .}}
+<tr>
+  <td><code>{{.Namespace}}/{{.Name}}/{{.System}}</code></td>
+  <td><span class="tag">{{.Connection}}</span> {{.Repo}}</td>
+  <td>{{with .SyncedAt}}{{.Format "2006-01-02 15:04"}}{{else}}<span class="muted">never</span>{{end}}
+    {{with .SyncError}}<p class="err">{{.}}</p>{{end}}</td>
+  <td><form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/sync"><button type="submit" class="secondary small">Sync now</button></form></td>
+</tr>
+{{end}}
+</table>
+</div>
+{{end}}
+<div class="card">
+  <p>Every semver tag (<code>v1.2.0</code> or <code>1.2.0</code>) of a published repository becomes a module version, checked every 5 minutes.</p>
+  {{with .Connections}}
+  <form method="get" action="/registry/publish" class="inline">
+    <select name="connection" aria-label="VCS connection">{{range .}}<option value="{{.ID}}">{{.Name}} ({{.Provider}})</option>{{end}}</select>
+    <button type="submit">Choose repository →</button>
+  </form>
+  {{else}}
+  <p class="muted"><a href="/vcs">Connect a VCS provider</a> (GitHub or Azure DevOps) first.</p>
+  {{end}}
+</div>
+{{end}}
 
 {{if .Editor}}
 <h2>Upload a module version</h2>

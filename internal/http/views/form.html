@@ -1,4 +1,17 @@
 {{template "top"}}
+{{with .Configure}}
+<a class="back" href="/workspaces/{{.Name}}">← {{.Name}}</a>
+<div class="page-head">
+  <div>
+    <h1>Configure {{.Name}}</h1>
+    <p class="muted">Change the inputs{{if or (ne .ModuleRef $.T.Module.Ref) (ne .ModuleSource $.T.Module.Source)}} and move to the template's module version{{end}}, then plan the change.</p>
+  </div>
+</div>
+{{if or (ne .ModuleRef $.T.Module.Ref) (ne .ModuleSource $.T.Module.Source)}}
+<div class="alert warn" role="status">Module update: <code>{{.ModuleRef}}</code> → <code>{{$.T.Module.Ref}}</code>{{if ne .ModuleSource $.T.Module.Source}} (source <code>{{$.T.Module.Source}}</code>){{end}}. Fill in any new inputs below.</div>
+{{end}}
+{{with $.Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
+{{else}}
 <a class="back" href="/">← Templates</a>
 <div class="page-head">
   <div>
@@ -7,8 +20,10 @@
   </div>
   {{if .Editor}}<a class="btn secondary" href="/templates/{{.T.ID}}/edit">Edit template</a>{{end}}
 </div>
+{{end}}
 <form method="post" class="card">
 {{$v := .Values}}{{$e := .Errors}}
+{{if not .Configure}}
   <label for="f2s-workspace">Workspace name <span class="req" aria-hidden="true">*</span></label>
   <input id="f2s-workspace" name="f2s-workspace" value="{{.Workspace}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}"
     placeholder="{{.T.ID}}-prod" aria-describedby="f2s-workspace-hint">
@@ -23,6 +38,7 @@
   <label for="f2s-auto-apply"><input type="checkbox" id="f2s-auto-apply" name="f2s-auto-apply"{{if .AutoApply}} checked{{end}}>
     Auto-apply: apply plans without asking for confirmation</label>
   <hr style="border:0;border-top:1px solid var(--border);margin:1.4rem 0 .4rem">
+{{end}}
 {{range .T.Inputs}}
   {{if eq .Type "bool"}}
     <label for="{{.Name}}"><input type="checkbox" id="{{.Name}}" name="{{.Name}}"{{if eq (index $v .Name) "on" "true"}} checked{{end}}>
@@ -43,8 +59,13 @@
 {{end}}
   <p class="hint">Deploys <code>{{.T.Module.Source}}</code> at <code>{{.T.Module.Ref}}</code>.</p>
   <div class="actions">
+    {{with .Configure}}
+    <button type="submit">Save configuration &amp; start plan</button>
+    <a class="btn secondary" href="/workspaces/{{.Name}}">Cancel</a>
+    {{else}}
     <button type="submit">Create workspace &amp; plan</button>
     <a class="btn secondary" href="/">Cancel</a>
+    {{end}}
   </div>
 </form>
 {{template "bottom"}}

@@ -13,12 +13,22 @@
     {{else}}
     <form method="post" action="/workspaces/{{$w.Name}}/runs"><input type="hidden" name="action" value="apply">
       <button type="submit">New run</button></form>
+    {{if .HasTemplate}}<a class="btn secondary" href="/workspaces/{{$w.Name}}/configure">Configure…</a>{{end}}
     <form method="post" action="/workspaces/{{$w.Name}}/runs"><input type="hidden" name="action" value="destroy">
       <button type="submit" class="danger">Destroy…</button></form>
     {{end}}
   </div>
   {{end}}
 </div>
+
+{{if and .Update $.CanOperate}}
+<div class="alert warn" role="status">
+  A new module version is available: the template now uses <code>{{.Update.Ref}}</code>, this workspace runs <code>{{$w.ModuleRef}}</code>.
+  <a href="/workspaces/{{$w.Name}}/configure">View update →</a>
+</div>
+{{else if .Update}}
+<div class="alert warn" role="status">A new module version (<code>{{.Update.Ref}}</code>) is available; someone with operate access can apply it.</div>
+{{end}}
 
 <div class="card">
   <dl class="kv">

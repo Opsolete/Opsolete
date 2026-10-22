@@ -2,11 +2,16 @@
 <a class="back" href="/registry">← Registry</a>
 <div class="page-head">
   <div>
-    <h1>{{.Namespace}}/{{.Name}}/{{.System}} <span class="tag">{{.Version}}</span></h1>
-    <p class="muted"><code>{{.Source}}</code></p>
+    <h1>{{.Namespace}}/{{.Name}}/{{.System}} <span class="tag">{{.Version}}</span>{{if .Templates}} <span class="status no_changes">No-code ready</span>{{end}}</h1>
+    <p class="muted"><code>{{.Source}}</code>{{with .Linked}} · published from <span class="tag">{{.Connection}}</span> {{.Repo}}{{end}}</p>
   </div>
-  {{if .Editor}}<a class="btn" href="/templates/new?module={{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}">Create template</a>{{end}}
+  <div class="inline">
+    {{with .Linked}}{{if $.Admin}}<form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/sync"><button type="submit" class="secondary">Sync now</button></form>{{end}}{{end}}
+    {{if .Editor}}<a class="btn secondary" href="/templates/new?module={{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}">Create template</a>{{end}}
+    {{range .Templates}}<a class="btn" href="/templates/{{.ID}}">Provision workspace{{if gt (len $.Templates) 1}}: {{.Name}}{{end}}</a>{{end}}
+  </div>
 </div>
+{{with .Templates}}<p class="muted">Provisioning uses the template's pinned version{{range .}} (<strong>{{.Name}}</strong>: <code>{{.Module.Ref}}</code>){{end}}. Workspaces on an older version get an update notice.</p>{{end}}
 <p>
   Versions: {{$cur := .Version}}{{$base := printf "/registry/%s/%s/%s" .Namespace .Name .System}}
   {{range .Versions}}{{if eq . $cur}}<strong>{{.}}</strong>{{else}}<a href="{{$base}}/{{.}}">{{.}}</a>{{end}} {{end}}

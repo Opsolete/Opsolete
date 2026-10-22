@@ -55,6 +55,7 @@ Then open http://localhost:8080. Migrations run on startup.
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | | Login via OpenID Connect, required unless `AUTH_DEV_USER` is set |
 | `ADMIN_EMAILS`  |           | Comma-separated emails that get the admin role at login |
 | `AUTH_DEV_USER` |           | **Local dev only:** skip login and treat every visitor as this email (set in the nix dev shell) |
+| `SECRET_KEY`    |           | At least 32 characters; encrypts VCS access tokens in Postgres. Set it (and keep it stable) to turn on [VCS providers](#vcs-providers-publish-modules-from-github-or-azure-devops) |
 | `STATE_STORE`   | required with deployments | Where workspace state files live, as a [Go CDK blob URL](https://gocloud.dev/howto/blob/): `azblob://tfstate`, `s3://tfstate?region=eu-west-1` (add `&endpoint=…&use_path_style=true` for S3-compatible stores), `gs://tfstate`, `file:///path` (dev). Credentials come from the platform's usual env vars or workload identity |
 
 ## Login
@@ -76,7 +77,7 @@ Teams are your IdP's groups. At every login Form2Stack records the ID token's `g
 - Group membership changes take effect at the user's next login. Grants and revokes take effect immediately.
 - Local dev: `AUTH_DEV_GROUPS=grp-a,grp-b` gives the dev user groups.
 
-Endpoints: `/healthz` (liveness), `/readyz` (checks the DB), `/` (templates), `/templates/{id}` (form, creates a workspace), `/workspaces`, `/workspaces/{name}` (overview, runs, outputs, resources, state versions), `POST /workspaces/{name}/runs` (`action=apply|destroy`), `POST …/rename`, `POST …/access` (admins), `/workspaces/{name}/runs/{id}` (plan, confirm/discard/cancel, live log, history) and its `/logs`, `/auth/login|callback|logout`, `/resources`, `/registry`, `/v1/modules/…` (registry protocol), `/api/runner/v1/…` (runner API), `/api/state/v1/{id}` (Terraform state backend).
+Endpoints: `/healthz` (liveness), `/readyz` (checks the DB), `/` (templates), `/templates/{id}` (form, creates a workspace), `/workspaces`, `/workspaces/{name}` (overview, runs, outputs, resources, state versions), `POST /workspaces/{name}/runs` (`action=apply|destroy`), `POST …/rename`, `POST …/access` (admins), `/workspaces/{name}/runs/{id}` (plan, confirm/discard/cancel, live log, history) and its `/logs`, `/auth/login|callback|logout`, `/resources`, `/registry`, `/registry/publish`, `/vcs` (admins), `GET|POST /workspaces/{name}/configure`, `/v1/modules/…` (registry protocol), `/api/runner/v1/…` (runner API), `/api/state/v1/{id}` (Terraform state backend).
 
 ## Workspaces and state
 
@@ -218,6 +219,18 @@ Form2Stack is a private Terraform module registry, built on the standard [module
 - **Use from Terraform:** run `just token my-laptop`, then `export TF_TOKEN_form2stack_example_com=<token>`, then `module "x" { source = "form2stack.example.com/platform/storage/azurerm" version = "1.0.0" }`. Terraform only talks to registries over HTTPS on a hostname with a dot, so put the app behind TLS in production.
 - **Docs:** each upload gets generated documentation at `/registry/<ns>/<name>/<system>/<version>`, similar to `terraform-docs`. It includes a usage snippet with the required inputs, Terraform and provider requirements, inputs (type, default, required), outputs, resources, data sources, module calls and the archive's `README.md` shown as plain text. A **Markdown** link (`.../docs.md`) serves HashiCorp's `tfconfig.RenderMarkdown` output to paste into a repo. Versions uploaded before docs existed show a notice; upload a new version to get docs.
 - **Downloads:** `download` returns a 10-minute HMAC-signed archive URL, because Terraform doesn't send the token to archive URLs. Runners get a fresh 15-minute signed path with each job. The signing key is kept in Postgres.
+
+### VCS providers: publish modules from GitHub or Azure DevOps
+
+The HCP Terraform [no-code flow](https://developer.hashicorp.com/terraform/tutorials/cloud/no-code-provisioning), with `SECRET_KEY` set:
+
+1. **Connect** (admins, **VCS providers** in the nav): name, provider, API URL and a read-only access token. GitHub: leave the URL empty for github.com, or use `https://<host>/api/v3` for Enterprise Server; a fine-grained token with *Contents: read*. Azure DevOps: `https://dev.azure.com/<org>` and a PAT with *Code (Read)*. The token is checked by listing repos, stored AES-GCM encrypted with `SECRET_KEY`, and never shown again. Changing `SECRET_KEY` makes stored tokens unreadable: delete and re-add the connections.
+2. **Publish** (registry page → *Publish module*): pick a repository and a namespace. A repo named `terraform-<system>-<name>` fills in name and system. The module must be at the repo root.
+3. **Versions:** every semver tag (`v1.2.0` or `1.2.0`) becomes an immutable module version, with generated docs, like an upload. The server checks linked repos every 5 minutes and on *Sync now*, so it needs no webhooks or public endpoint. Sync errors (for example a tag without `.tf` files at the root) show on the registry page. Moving a tag doesn't change a version that was already published.
+4. **No-code ready:** a template pointing at the module (create one from the module page) makes it *No-code ready* and adds **Provision workspace**. The template is the no-code settings: the pinned version and dropdown options.
+5. **Update a workspace:** when the template is moved to a newer version, workspaces on an older one show *A new module version is available*. **View update** (or **Configure…** at any time) shows the form filled with the workspace's inputs, plus any new ones. Saving moves the workspace to the template's version and queues a plan, which is confirmed as usual.
+
+The server talks to the providers' REST APIs (no `git` binary): GitHub's tarball and Azure DevOps' zip download. Archives are repacked with the repo root at the archive root, without symlinks or paths that escape it.
 
 ## Template builder
 

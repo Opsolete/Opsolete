@@ -36,6 +36,7 @@ type Server struct {
 	// StateStore holds the workspaces' Terraform state files (any gocloud.dev/blob URL).
 	StateStore *blob.Bucket
 	Features   Features
+	VCSKey     []byte // encrypts VCS tokens; set when Features.VCS
 	Log        *slog.Logger
 	pages      *template.Template
 }
@@ -45,6 +46,7 @@ type Features struct {
 	Deployments bool // templates, deploy forms, deployments, runner API
 	Registry    bool // module registry pages and the Terraform registry protocol
 	Editor      bool // template builder (needs Deployments) and module uploads (needs Registry), admins only
+	VCS         bool // publish registry modules from GitHub / Azure DevOps (needs Registry and SECRET_KEY)
 }
 
 func New(store *storage.Store, tpls *templates.Catalog, reg *registry.Registry, a *auth.Auth, state *blob.Bucket, f Features, log *slog.Logger) *Server {
@@ -81,6 +83,9 @@ func (s *Server) Handler() http.Handler {
 	s.Auth.Routes(mux)
 	if s.Features.Registry {
 		s.registryRoutes(mux)
+	}
+	if s.Features.VCS {
+		s.vcsRoutes(mux)
 	}
 	if !s.Features.Deployments {
 		mux.Handle("GET /{$}", http.RedirectHandler("/registry", http.StatusFound))

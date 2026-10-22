@@ -13,8 +13,10 @@ import (
 
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
 
+	"github.com/rudesome/form2stack/internal/auth"
 	"github.com/rudesome/form2stack/internal/registry"
 	"github.com/rudesome/form2stack/internal/storage"
+	"github.com/rudesome/form2stack/internal/templates"
 )
 
 // Terraform registry protocol (modules.v1): https://developer.hashicorp.com/terraform/internals/module-registry-protocol
@@ -116,11 +118,14 @@ func (s *Server) moduleArchive(w http.ResponseWriter, r *http.Request) {
 }
 
 type registryPage struct {
-	Modules []storage.Module
-	Editor  bool
-	Host    string
-	Error   string
-	Form    map[string]string
+	Modules     []storage.Module
+	Editor      bool
+	VCS         bool // VCS publishing is on and the user is an admin
+	Connections []storage.VCSConnection
+	Linked      []storage.VCSModule
+	Host        string
+	Error       string
+	Form        map[string]string
 }
 
 func (s *Server) registryPage(w http.ResponseWriter, r *http.Request) {
@@ -134,8 +139,18 @@ func (s *Server) renderRegistry(w http.ResponseWriter, r *http.Request, status i
 		http.Error(w, "could not load modules", http.StatusInternalServerError)
 		return
 	}
-	s.render(w, r, status, "registry.html", registryPage{Modules: mods, Editor: s.canEdit(r),
-		Host: s.Registry.PublicURL.Host, Error: errMsg, Form: form})
+	p := registryPage{Modules: mods, Editor: s.canEdit(r), Host: s.Registry.PublicURL.Host, Error: errMsg, Form: form,
+		VCS: s.Features.VCS && auth.FromContext(r.Context()).Admin()}
+	if p.VCS {
+		if p.Connections, err = s.Store.VCSConnections(r.Context()); err == nil {
+			p.Linked, err = s.Store.VCSModules(r.Context())
+		}
+		if err != nil {
+			s.internalError(w, "vcs modules", err)
+			return
+		}
+	}
+	s.render(w, r, status, "registry.html", p)
 }
 
 func (s *Server) uploadModule(w http.ResponseWriter, r *http.Request) {
@@ -233,9 +248,28 @@ func (s *Server) moduleDocs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	var linked *storage.VCSModule
+	if s.Features.VCS {
+		if m, err := s.Store.GetVCSModule(r.Context(), ns, name, sys); err == nil {
+			linked = &m
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			s.internalError(w, "get vcs module", err)
+			return
+		}
+	}
+	// No-code ready: templates that deploy this module (their pinned version may differ).
+	var tpls []templates.Template
+	if s.Features.Deployments {
+		for _, t := range s.Templates.List() {
+			if t.Module.Source == source {
+				tpls = append(tpls, t)
+			}
+		}
+	}
 	s.render(w, r, http.StatusOK, "module.html", map[string]any{
 		"Namespace": ns, "Name": name, "System": sys, "Version": ver, "Versions": versions,
-		"Source": source, "Docs": docs, "Editor": s.canEdit(r),
+		"Source": source, "Docs": docs, "Editor": s.canEdit(r), "Linked": linked, "Templates": tpls,
+		"Admin": auth.FromContext(r.Context()).Admin(),
 	})
 }
 

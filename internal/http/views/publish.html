@@ -1,0 +1,28 @@
+{{template "top"}}
+<a class="back" href="/registry">← Registry</a>
+<div class="page-head">
+  <div>
+    <h1>Publish a module</h1>
+    <p class="muted">From <strong>{{.Conn.Name}}</strong> ({{.Conn.Provider}}, <code>{{.Conn.BaseURL}}</code>).</p>
+  </div>
+</div>
+{{with .Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
+<form method="post" action="/registry/publish" class="card">
+  <input type="hidden" name="connection" value="{{.Conn.ID}}">
+  <label for="repo">Repository <span class="req" aria-hidden="true">*</span></label>
+  <input id="repo" name="repo" list="repos" value="{{index .Form "repo"}}" required class="wide" aria-describedby="repo-hint"
+    placeholder="{{if eq .Conn.Provider "azure-devops"}}project/repo{{else}}owner/repo{{end}}">
+  <datalist id="repos">{{range .Repos}}<option value="{{.}}">{{end}}</datalist>
+  <p class="hint" id="repo-hint">The module must be at the repository root. Named <code>terraform-&lt;system&gt;-&lt;name&gt;</code>, name and system are filled in for you.</p>
+
+  <label for="namespace">Namespace <span class="req" aria-hidden="true">*</span></label>
+  <input id="namespace" name="namespace" value="{{index .Form "namespace"}}" required placeholder="platform">
+  <label for="name">Name</label>
+  <input id="name" name="name" value="{{index .Form "name"}}" placeholder="from the repo name">
+  <label for="system">System (provider)</label>
+  <input id="system" name="system" value="{{index .Form "system"}}" placeholder="azurerm">
+  <p class="hint">Published as <code>{{.Host}}/&lt;namespace&gt;/&lt;name&gt;/&lt;system&gt;</code>. Every semver tag becomes a version.</p>
+
+  <div class="actions"><button type="submit">Publish module</button><a class="btn secondary" href="/registry">Cancel</a></div>
+</form>
+{{template "bottom"}}

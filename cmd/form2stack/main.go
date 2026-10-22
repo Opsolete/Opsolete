@@ -32,6 +32,7 @@ import (
 	"github.com/rudesome/form2stack/internal/runner"
 	"github.com/rudesome/form2stack/internal/storage"
 	"github.com/rudesome/form2stack/internal/templates"
+	"github.com/rudesome/form2stack/internal/vcs"
 )
 
 func main() {
@@ -172,12 +173,17 @@ func serve(log *slog.Logger) error {
 		}
 	}
 
+	vcsOn := cfg.Registry && cfg.SecretKey != ""
 	app := httpserver.New(store, tpls, reg, authn, state, httpserver.Features{
-		Deployments: cfg.Deployments, Registry: cfg.Registry, Editor: cfg.TemplateEditor}, log)
+		Deployments: cfg.Deployments, Registry: cfg.Registry, Editor: cfg.TemplateEditor, VCS: vcsOn}, log)
+	if vcsOn {
+		app.VCSKey = vcs.Key(cfg.SecretKey)
+		go vcs.Poll(ctx, store, app.VCSKey, 5*time.Minute, log)
+	}
 	if err := app.CheckTemplates(); err != nil {
 		return err
 	}
-	log.Info("components", "deployments", cfg.Deployments, "registry", cfg.Registry)
+	log.Info("components", "deployments", cfg.Deployments, "registry", cfg.Registry, "vcs", vcsOn)
 	if cfg.Deployments {
 		go reapLostRunners(ctx, store, log)
 	}

@@ -34,6 +34,8 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /workspaces/{name}", s.workspace)
 	mux.HandleFunc("POST /workspaces/{name}/runs", s.newRun)
 	mux.HandleFunc("POST /workspaces/{name}/settings", s.workspaceSettings)
+	mux.HandleFunc("GET /workspaces/{name}/configure", s.configureForm)
+	mux.HandleFunc("POST /workspaces/{name}/configure", s.configureWorkspace)
 	mux.HandleFunc("POST /workspaces/{name}/rename", s.renameWorkspace)
 	mux.HandleFunc("POST /workspaces/{name}/access", s.admin(s.workspaceAccess))
 	mux.HandleFunc("GET /workspaces/{name}/runs/{run}", s.run)
@@ -70,6 +72,8 @@ type formPage struct {
 	Workspace string
 	AutoApply bool
 	Identity  string
+	Configure *storage.Workspace // set: change this workspace's inputs and module version instead of creating one
+	Error     string
 }
 
 func (s *Server) form(w http.ResponseWriter, r *http.Request) {
@@ -226,7 +230,14 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 	if len(runs) > 0 && runs[0].Active() {
 		active = &runs[0]
 	}
+	// HCP no-code style: the template now pins another module version than the workspace runs.
+	var update *templates.Module
+	t, hasTemplate := s.Templates.Get(ws.TemplateID)
+	if hasTemplate && (t.Module.Source != ws.ModuleSource || t.Module.Ref != ws.ModuleRef) {
+		update = &t.Module
+	}
 	s.render(w, r, http.StatusOK, "workspace.html", map[string]any{"W": ws, "Runs": runs, "Active": active,
+		"Update": update, "HasTemplate": hasTemplate,
 		"Resources": res, "Versions": versions, "Outputs": outputs, "Destroyed": destroyed, "Grants": grants,
 		"CanOperate": level == levelOperate, "Admin": auth.FromContext(ctx).Admin()})
 }
@@ -254,6 +265,70 @@ func (s *Server) newRun(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Log.Info("run queued", "workspace", ws.Name, "run", run.ID, "action", action, "user", u.Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID, http.StatusSeeOther)
+}
+
+// configureForm shows the template's form filled with the workspace's inputs, for its current template
+// version: new inputs get their defaults, removed ones are dropped on save.
+func (s *Server) configureForm(w http.ResponseWriter, r *http.Request) {
+	ws, t, ok := s.loadConfigure(w, r)
+	if !ok {
+		return
+	}
+	vals := map[string]string{}
+	for _, in := range t.Inputs {
+		vals[in.Name] = in.Default
+		if v, ok := ws.Inputs[in.Name]; ok {
+			vals[in.Name] = fmt.Sprint(v)
+		}
+	}
+	s.render(w, r, http.StatusOK, "form.html", formPage{T: t, Values: vals, Configure: &ws})
+}
+
+// configureWorkspace saves new inputs and the template's module version, and starts a plan.
+func (s *Server) configureWorkspace(w http.ResponseWriter, r *http.Request) {
+	ws, t, ok := s.loadConfigure(w, r)
+	if !ok {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	raw := map[string]string{}
+	for _, in := range t.Inputs {
+		raw[in.Name] = r.PostForm.Get(in.Name)
+	}
+	vals, errs := t.Validate(raw)
+	page := formPage{T: t, Values: raw, Errors: errs, Configure: &ws}
+	if len(errs) > 0 {
+		s.render(w, r, http.StatusUnprocessableEntity, "form.html", page)
+		return
+	}
+	u := auth.FromContext(r.Context())
+	run, err := s.Store.ConfigureWorkspace(r.Context(), ws.ID, t.Module.Source, t.Module.Ref, vals, u.ID)
+	if errors.Is(err, storage.ErrRunActive) {
+		page.Error = err.Error()
+		s.render(w, r, http.StatusConflict, "form.html", page)
+		return
+	}
+	if err != nil {
+		s.internalError(w, "configure workspace", err)
+		return
+	}
+	s.Log.Info("workspace configured", "workspace", ws.Name, "module", t.Module.Source, "ref", t.Module.Ref, "run", run.ID, "user", u.Email)
+	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID, http.StatusSeeOther)
+}
+
+func (s *Server) loadConfigure(w http.ResponseWriter, r *http.Request) (storage.Workspace, templates.Template, bool) {
+	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
+	if !ok {
+		return ws, templates.Template{}, false
+	}
+	t, ok := s.Templates.Get(ws.TemplateID)
+	if !ok {
+		http.Error(w, "this workspace's template no longer exists", http.StatusNotFound)
+	}
+	return ws, t, ok
 }
 
 func (s *Server) workspaceSettings(w http.ResponseWriter, r *http.Request) {

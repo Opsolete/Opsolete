@@ -34,6 +34,8 @@ type Config struct {
 	// PublicURL is how Terraform clients reach this app; its host is the module registry hostname
 	// (Terraform requires a dot in it and HTTPS for registry clients).
 	PublicURL *url.URL
+	// SecretKey encrypts VCS access tokens in Postgres. Empty: VCS connections are off.
+	SecretKey string
 }
 
 func Load() (Config, error) {
@@ -49,9 +51,13 @@ func Load() (Config, error) {
 		AuthDevGroups:    strings.FieldsFunc(os.Getenv("AUTH_DEV_GROUPS"), func(r rune) bool { return r == ',' }),
 		StateStore:       os.Getenv("STATE_STORE"),
 		AdminEmails:      strings.Split(os.Getenv("ADMIN_EMAILS"), ","),
+		SecretKey:        os.Getenv("SECRET_KEY"),
 	}
 	if c.DatabaseURL == "" {
 		return c, errors.New("DATABASE_URL is required")
+	}
+	if c.SecretKey != "" && len(c.SecretKey) < 32 {
+		return c, errors.New("SECRET_KEY must be at least 32 characters (e.g. openssl rand -base64 32)")
 	}
 	var err error
 	if c.Deployments, err = getbool("DEPLOYMENTS_ENABLED"); err != nil {
