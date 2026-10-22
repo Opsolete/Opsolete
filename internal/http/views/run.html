@@ -1,0 +1,69 @@
+{{template "top"}}
+{{$w := .W}}{{$r := .R}}
+<a class="back" href="/workspaces/{{$w.Name}}">← {{$w.Name}}</a>
+<div class="page-head">
+  <div>
+    <h1>{{if eq $r.Action "destroy"}}Destroy{{else}}Run{{end}} <span class="status {{$r.Status}}" id="status">{{status $r.Status}}</span></h1>
+    <p class="muted">{{$r.CreatedAt.Format "2006-01-02 15:04:05"}}{{with $r.CreatedBy}} · triggered by {{.}}{{end}}{{with $r.ConfirmedBy}} · confirmed by {{.}}{{end}}{{with $r.Runner}} · runner {{.}}{{end}}</p>
+  </div>
+</div>
+
+{{with $r.Plan}}
+<div class="card">
+  <h3>Plan: <span class="plan">{{.Add}} to add, {{.Change}} to change, {{.Destroy}} to destroy</span></h3>
+  {{with .Changes}}
+  <table>
+  {{range .}}<tr><td class="nowrap" style="width:6rem"><span class="change {{.Action}}">{{.Action}}</span></td><td><code>{{.Address}}</code></td></tr>{{end}}
+  </table>
+  {{else}}<p class="muted">Only output values change.</p>{{end}}
+  {{if and (eq $r.Status "needs_confirmation") $.CanOperate}}
+  <div class="actions">
+    <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/confirm">
+      <button type="submit"{{if eq $r.Action "destroy"}} class="danger"{{end}}>Confirm &amp; {{if eq $r.Action "destroy"}}destroy{{else}}apply{{end}}</button></form>
+    <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/discard">
+      <button type="submit" class="secondary">Discard</button></form>
+  </div>
+  {{else if eq $r.Status "needs_confirmation"}}
+  <p class="muted">Waiting for the workspace's owner or an admin to confirm.</p>
+  {{end}}
+</div>
+{{else}}{{if eq $r.Status "no_changes"}}<div class="card"><p>No changes: the infrastructure matches the configuration{{if eq $r.Action "destroy"}} (nothing to destroy){{end}}.</p></div>{{end}}
+{{end}}
+
+{{with $r.Outputs}}
+<h2>Outputs</h2>
+<div class="card flush">
+<table>
+<tr><th>Name</th><th>Value</th></tr>
+{{range $k, $v := .}}<tr><td><code>{{$k}}</code></td><td><code>{{json $v}}</code></td></tr>{{end}}
+</table>
+</div>
+{{end}}
+
+<h2>Log <small><a href="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/logs">raw</a></small></h2>
+<pre id="log" class="log" aria-live="polite">{{if eq $r.Status "plan_queued" "apply_queued"}}Waiting for a runner…{{end}}</pre>
+
+<h2>History</h2>
+<div class="card flush">
+<table>
+<tr><th>Time</th><th>Status</th><th>Message</th></tr>
+{{range .History}}
+<tr><td class="nowrap">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td><td><span class="status {{.Status}}">{{status .Status}}</span></td><td>{{with .Message}}{{.}}{{end}}</td></tr>
+{{end}}
+</table>
+</div>
+
+<script>
+  // Follow the log live; reload once a runner is done with the run (finished, or waiting for confirmation).
+  const log = document.getElementById("log"), wasWorking = {{$r.Working}};
+  const es = new EventSource(location.pathname + "/logs/stream");
+  let first = true;
+  es.onmessage = (e) => {
+    if (first) { log.textContent = ""; first = false; }
+    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+    log.textContent += e.data;
+    if (atBottom) log.scrollTop = log.scrollHeight;
+  };
+  es.addEventListener("done", () => { es.close(); if (wasWorking) location.reload(); });
+</script>
+{{template "bottom"}}

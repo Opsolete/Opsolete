@@ -27,7 +27,8 @@ const maxStateSize = 64 << 20
 // Terraform http state backend, one state per workspace (deployment):
 // https://developer.hashicorp.com/terraform/language/backend/http
 // Runners authenticate with per-run credentials (username = workspace id, password = stateToken),
-// so only the run that holds a workspace's lease can read or write its state, and only during that run.
+// so only the run a runner is working on can read or write the workspace's state, and only while it
+// is planning or applying.
 func (s *Server) stateRoutes(mux *http.ServeMux) {
 	p := runnerapi.StatePrefix + "/{id}"
 	mux.HandleFunc("GET "+p, s.stateAuth(s.getState))
@@ -36,10 +37,11 @@ func (s *Server) stateRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("UNLOCK "+p, s.stateAuth(s.unlockState))
 }
 
-// stateToken is a run's state password. It is derived from the lease, so it dies with the run.
-func (s *Server) stateToken(id, lease string) string {
+// stateToken is a run's state password. It is per run, not per phase: Terraform embeds the backend
+// config in the saved plan, so the apply phase authenticates with what the plan phase used.
+func (s *Server) stateToken(workspaceID, runID string) string {
 	m := hmac.New(sha256.New, s.Registry.Key)
-	m.Write([]byte("form2stack state\x00" + id + "\x00" + lease))
+	m.Write([]byte("form2stack state\x00" + workspaceID + "\x00" + runID))
 	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
 
@@ -51,9 +53,9 @@ func (s *Server) stateAuth(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "state credentials required", http.StatusUnauthorized)
 			return
 		}
-		lease, err := s.Store.LeaseOf(r.Context(), id)
+		run, err := s.Store.WorkingRun(r.Context(), id)
 		if errors.Is(err, sql.ErrNoRows) {
-			http.Error(w, "no run holds this workspace", http.StatusForbidden)
+			http.Error(w, "no run is working on this workspace", http.StatusForbidden)
 			return
 		}
 		if err != nil {
@@ -61,7 +63,7 @@ func (s *Server) stateAuth(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		if !hmac.Equal([]byte(pass), []byte(s.stateToken(id, lease))) {
+		if !hmac.Equal([]byte(pass), []byte(s.stateToken(id, run))) {
 			http.Error(w, "invalid state credentials", http.StatusForbidden)
 			return
 		}
@@ -137,12 +139,12 @@ func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	d, _, err := s.Store.GetDeployment(ctx, id)
+	ws, err := s.Store.GetWorkspaceByID(ctx, id)
 	if err != nil {
 		s.stateError(w, "get workspace", err)
 		return
 	}
-	v.BlobKey = fmt.Sprintf("%s/%d-%s.tfstate", strings.TrimSuffix(d.StateKey, ".tfstate"), v.Serial, rand.Text())
+	v.BlobKey = fmt.Sprintf("%s/%d-%s.tfstate", strings.TrimSuffix(ws.StateKey, ".tfstate"), v.Serial, rand.Text())
 	if err := s.StateStore.WriteAll(ctx, v.BlobKey, body, &blob.WriterOptions{ContentType: "application/json"}); err != nil {
 		s.stateError(w, "write state", err)
 		return

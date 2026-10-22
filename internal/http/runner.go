@@ -1,15 +1,15 @@
 package httpserver
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
+
+	"gocloud.dev/gcerrors"
 
 	"github.com/rudesome/form2stack/internal/runnerapi"
 	"github.com/rudesome/form2stack/internal/storage"
@@ -20,10 +20,11 @@ import (
 var claimWait = 20 * time.Second
 
 const (
-	leaseTTL     = 2 * time.Minute  // runners heartbeat well within this
-	maxLogBytes  = 10 << 20         // per deployment
-	maxLogChunk  = 256 << 10        // per request
-	runnerSrcTTL = 15 * time.Minute // signed archive URL handed to the runner; it downloads right away
+	leaseTTL        = 2 * time.Minute  // runners heartbeat well within this
+	maxLogBytes     = 10 << 20         // per run
+	maxLogChunk     = 256 << 10        // per request
+	maxArtifactSize = 256 << 20        // saved plans embed the configuration; generous
+	runnerSrcTTL    = 15 * time.Minute // signed archive URL handed to the runner; it downloads right away
 )
 
 // Runner API: runners pull work over HTTPS with a runner-scoped token, so they need no
@@ -33,8 +34,8 @@ func (s *Server) runnerRoutes(mux *http.ServeMux) {
 	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/logs", s.requireToken(storage.ScopeRunner, s.jobLogs))
 	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/heartbeat", s.requireToken(storage.ScopeRunner, s.jobHeartbeat))
 	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/finish", s.requireToken(storage.ScopeRunner, s.jobFinish))
-	mux.HandleFunc("GET /deployments/{id}/logs", s.logText)
-	mux.HandleFunc("GET /deployments/{id}/logs/stream", s.logStream)
+	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/artifacts/{name}", s.requireToken(storage.ScopeRunner, s.putArtifact))
+	mux.Handle("GET "+runnerapi.Prefix+"/jobs/{id}/artifacts/{name}", s.requireToken(storage.ScopeRunner, s.getArtifact))
 }
 
 func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
@@ -54,10 +55,10 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if ok {
-			s.Log.Info("job claimed", "id", j.DeploymentID, "action", j.Action, "runner", req.Runner)
+			s.Log.Info("job claimed", "run", j.RunID, "phase", j.Phase, "action", j.Action, "runner", req.Runner)
 			writeJSON(w, runnerapi.Job{
-				DeploymentID: j.DeploymentID, LeaseID: j.LeaseID, StateToken: s.stateToken(j.DeploymentID, j.LeaseID), Action: j.Action, Vars: j.Inputs,
-				LeaseSeconds: int(leaseTTL.Seconds()),
+				RunID: j.RunID, WorkspaceID: j.WorkspaceID, Phase: j.Phase, Action: j.Action, LeaseID: j.LeaseID,
+				LeaseSeconds: int(leaseTTL.Seconds()), StateToken: s.stateToken(j.WorkspaceID, j.RunID), Vars: j.Inputs,
 				ModuleSource: s.Registry.RunnerSource(templates.Module{Source: j.ModuleSource, Ref: j.ModuleRef}, runnerSrcTTL),
 			})
 			return
@@ -88,17 +89,89 @@ func (s *Server) jobHeartbeat(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) jobFinish(w http.ResponseWriter, r *http.Request) {
 	var req runnerapi.FinishRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil ||
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<20)).Decode(&req); err != nil ||
 		(req.Status != "succeeded" && req.Status != "failed" && req.Status != "canceled") {
 		writeErrors(w, http.StatusBadRequest, "status must be succeeded, failed or canceled")
 		return
 	}
 	id := r.PathValue("id")
-	err := s.Store.FinishJob(r.Context(), id, r.Header.Get(runnerapi.LeaseHeader), req.Status, req.Message, req.Outputs, req.Resources)
+	status, err := s.Store.FinishJob(r.Context(), id, r.Header.Get(runnerapi.LeaseHeader), req.Status, req.Message,
+		req.Outputs, req.Plan, req.Resources)
 	if err == nil {
-		s.Log.Info("job finished", "id", id, "status", req.Status, "resources", len(req.Resources))
+		s.Log.Info("job finished", "run", id, "result", req.Status, "status", status)
+		if status != storage.NeedsConfirmation && status != storage.ApplyQueued {
+			s.deleteArtifacts(r, id) // the saved plan has been applied, or will never be
+		}
 	}
 	s.leaseResult(w, err)
+}
+
+// Saved plans and lock files live in the state store: a plan holds variable values and is as
+// sensitive as state. They exist from the plan phase until the run ends.
+func artifactKey(runID, name string) string { return "runs/" + runID + "/" + name }
+
+// putArtifact stores a plan phase's output; only the planning run may write its own artifacts.
+func (s *Server) putArtifact(w http.ResponseWriter, r *http.Request) {
+	id, name := r.PathValue("id"), r.PathValue("name")
+	if !s.artifactAccess(w, r, storage.Planning) {
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxArtifactSize))
+	if err != nil {
+		writeErrors(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("artifacts are limited to %d MB", maxArtifactSize>>20))
+		return
+	}
+	if err := s.StateStore.WriteAll(r.Context(), artifactKey(id, name), body, nil); err != nil {
+		s.Log.Error("write artifact", "err", err)
+		writeErrors(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// getArtifact hands the saved plan to the run's apply phase.
+func (s *Server) getArtifact(w http.ResponseWriter, r *http.Request) {
+	if !s.artifactAccess(w, r, storage.Applying) {
+		return
+	}
+	b, err := s.StateStore.ReadAll(r.Context(), artifactKey(r.PathValue("id"), r.PathValue("name")))
+	if gcerrors.Code(err) == gcerrors.NotFound {
+		writeErrors(w, http.StatusNotFound, "no such artifact")
+		return
+	}
+	if err != nil {
+		s.Log.Error("read artifact", "err", err)
+		writeErrors(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Write(b)
+}
+
+func (s *Server) artifactAccess(w http.ResponseWriter, r *http.Request, phase string) bool {
+	if name := r.PathValue("name"); name != runnerapi.ArtifactPlan && name != runnerapi.ArtifactLockfile {
+		writeErrors(w, http.StatusNotFound, "no such artifact")
+		return false
+	}
+	ok, err := s.Store.HoldsLease(r.Context(), r.PathValue("id"), r.Header.Get(runnerapi.LeaseHeader), phase)
+	if err != nil {
+		s.Log.Error("check lease", "err", err)
+		writeErrors(w, http.StatusInternalServerError, "internal error")
+		return false
+	}
+	if !ok {
+		writeErrors(w, http.StatusConflict, "job lease lost")
+	}
+	return ok
+}
+
+// deleteArtifacts removes a run's saved plan; failures only leave a stale file behind.
+func (s *Server) deleteArtifacts(r *http.Request, runID string) {
+	for _, name := range []string{runnerapi.ArtifactPlan, runnerapi.ArtifactLockfile} {
+		if err := s.StateStore.Delete(r.Context(), artifactKey(runID, name)); err != nil && gcerrors.Code(err) != gcerrors.NotFound {
+			s.Log.Warn("delete artifact", "run", runID, "name", name, "err", err)
+		}
+	}
 }
 
 // leaseResult answers 409 when the runner lost its lease, so it stops working on the job.
@@ -111,100 +184,5 @@ func (s *Server) leaseResult(w http.ResponseWriter, err error) {
 		writeErrors(w, http.StatusInternalServerError, "internal error")
 	default:
 		w.WriteHeader(http.StatusNoContent)
-	}
-}
-
-func (s *Server) logText(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if _, _, err := s.Store.GetDeployment(r.Context(), id); errors.Is(err, sql.ErrNoRows) {
-		http.NotFound(w, r)
-		return
-	} else if err != nil {
-		s.Log.Error("get deployment", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	var after int64
-	for {
-		chunks, err := s.Store.Logs(r.Context(), id, after, 500)
-		if err != nil {
-			s.Log.Error("read logs", "err", err)
-			return
-		}
-		for _, c := range chunks {
-			io.WriteString(w, c.Chunk)
-			after = c.Seq
-		}
-		if len(chunks) < 500 {
-			return
-		}
-	}
-}
-
-// logStream follows a deployment's log as Server-Sent Events. Event ids are log sequence numbers,
-// so a reconnecting EventSource resumes via Last-Event-ID. Ends with a "done" event once the
-// deployment is finished and the log is drained.
-// shortcut: polls Postgres every second; switch to LISTEN/NOTIFY if many viewers make that costly.
-func (s *Server) logStream(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	ctx := r.Context()
-	if _, _, err := s.Store.GetDeployment(ctx, id); errors.Is(err, sql.ErrNoRows) {
-		http.NotFound(w, r)
-		return
-	} else if err != nil {
-		s.Log.Error("get deployment", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	cursor, _ := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64)
-	rc := http.NewResponseController(w)
-	rc.SetWriteDeadline(time.Time{}) // long-lived response
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Accel-Buffering", "no") // stop nginx-style ingresses from buffering the stream
-	w.WriteHeader(http.StatusOK)
-
-	tick := time.NewTicker(time.Second)
-	defer tick.Stop()
-	idle := 0
-	for {
-		chunks, err := s.Store.Logs(ctx, id, cursor, 200)
-		if err != nil {
-			return
-		}
-		for _, c := range chunks {
-			fmt.Fprintf(w, "id: %d\n", c.Seq)
-			for _, line := range strings.Split(c.Chunk, "\n") {
-				fmt.Fprintf(w, "data: %s\n", line)
-			}
-			io.WriteString(w, "\n")
-			cursor = c.Seq
-		}
-		if len(chunks) == 0 {
-			d, _, err := s.Store.GetDeployment(ctx, id)
-			if err != nil {
-				return
-			}
-			if d.Status != "queued" && d.Status != "running" {
-				fmt.Fprintf(w, "event: done\ndata: %s\n\n", d.Status)
-				rc.Flush()
-				return
-			}
-			if idle++; idle%15 == 0 {
-				io.WriteString(w, ": keepalive\n\n")
-			}
-		}
-		if err := rc.Flush(); err != nil {
-			return
-		}
-		if len(chunks) == 200 {
-			continue // more backlog, don't wait
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-		}
 	}
 }

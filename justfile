@@ -78,10 +78,11 @@ smoke: build db-start
     trap 'kill $pid 2>/dev/null' EXIT
     for _ in $(seq 50); do curl -sf 127.0.0.1:18080/readyz >/dev/null && break; sleep 0.1; done
     curl -sf 127.0.0.1:18080/readyz >/dev/null || { cat "$PGHOST/smoke.log"; exit 1; }
-    code=$(curl -s -o /dev/null -w '%{http_code}' -d 'name=smoke01&location=westeurope&retention_days=1' 127.0.0.1:18080/templates/storage-account)
-    [ "$code" = 303 ] || { echo "deploy POST returned $code" >&2; cat "$PGHOST/smoke.log"; exit 1; }
-    curl -sf 127.0.0.1:18080/deployments | grep -q smoke01
-    echo "smoke ok: ready, deployment created and listed"
+    ws="smoke-$(date +%s)"
+    code=$(curl -s -o /dev/null -w '%{http_code}' -d "f2s-workspace=$ws&name=smoke01&location=westeurope&retention_days=1" 127.0.0.1:18080/templates/storage-account)
+    [ "$code" = 303 ] || { echo "create workspace POST returned $code" >&2; cat "$PGHOST/smoke.log"; exit 1; }
+    curl -sf 127.0.0.1:18080/workspaces | grep -q "$ws"
+    echo "smoke ok: ready, workspace created and listed"
 
 # everything before a commit: tests then smoke
 check: test smoke

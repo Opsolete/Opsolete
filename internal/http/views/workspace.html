@@ -1,0 +1,90 @@
+{{template "top"}}
+{{$w := .W}}
+<a class="back" href="/workspaces">← Workspaces</a>
+<div class="page-head">
+  <div>
+    <h1>{{$w.Name}}{{if .Destroyed}} <span class="status destroyed">destroyed</span>{{end}}</h1>
+    <p class="muted">From template <a href="/templates/{{$w.TemplateID}}">{{$w.TemplateID}}</a> · created {{$w.CreatedAt.Format "2006-01-02 15:04"}}{{with $w.CreatedBy}} by {{.}}{{end}}</p>
+  </div>
+  {{if .CanOperate}}
+  <div class="inline">
+    {{if .Active}}
+    <a class="btn secondary" href="/workspaces/{{$w.Name}}/runs/{{.Active.ID}}">Current run: {{status .Active.Status}} →</a>
+    {{else}}
+    <form method="post" action="/workspaces/{{$w.Name}}/runs"><input type="hidden" name="action" value="apply">
+      <button type="submit">New run</button></form>
+    <form method="post" action="/workspaces/{{$w.Name}}/runs"><input type="hidden" name="action" value="destroy">
+      <button type="submit" class="danger">Destroy…</button></form>
+    {{end}}
+  </div>
+  {{end}}
+</div>
+
+<div class="card">
+  <dl class="kv">
+    <dt>Module</dt><dd><code>{{$w.ModuleSource}}</code> <span class="tag">{{$w.ModuleRef}}</span></dd>
+    <dt>State</dt><dd>{{with .Versions}}{{with index . 0}}<span class="tag">v{{.Serial}}</span> saved {{.CreatedAt.Format "2006-01-02 15:04"}}{{end}}{{else}}<span class="muted">none yet</span>{{end}}</dd>
+    <dt>Inputs</dt><dd>{{range $k, $v := $w.Inputs}}<code>{{$k}} = {{$v}}</code><br>{{else}}<span class="muted">none</span>{{end}}</dd>
+    <dt>Apply method</dt><dd>
+      {{if .CanOperate}}
+      <form method="post" action="/workspaces/{{$w.Name}}/settings" class="inline">
+        <label style="margin:0;font-weight:normal"><input type="checkbox" name="auto_apply"{{if $w.AutoApply}} checked{{end}}>
+          Auto-apply: apply plans without confirmation (destroys always ask)</label>
+        <button type="submit" class="secondary small">Save</button>
+      </form>
+      {{else}}{{if $w.AutoApply}}Auto-apply{{else}}Manual: plans wait for confirmation{{end}}{{end}}
+    </dd>
+  </dl>
+</div>
+
+{{with .Outputs}}
+<h2>Outputs</h2>
+<div class="card flush">
+<table>
+<tr><th>Name</th><th>Value</th></tr>
+{{range $k, $v := .}}<tr><td><code>{{$k}}</code></td><td><code>{{json $v}}</code></td></tr>{{end}}
+</table>
+</div>
+{{end}}
+
+<h2>Runs</h2>
+<div class="card flush">
+<table>
+<tr><th>Run</th><th>Action</th><th>Status</th><th>Plan</th><th>Triggered by</th></tr>
+{{range .Runs}}
+<tr>
+  <td class="nowrap"><a href="/workspaces/{{$w.Name}}/runs/{{.ID}}">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</a></td>
+  <td>{{.Action}}</td>
+  <td><span class="status {{.Status}}">{{status .Status}}</span></td>
+  <td>{{with .Plan}}<span class="plan">+{{.Add}} ~{{.Change}} −{{.Destroy}}</span>{{end}}</td>
+  <td>{{.CreatedBy}}</td>
+</tr>
+{{else}}
+<tr><td colspan="5" class="empty">No runs yet.</td></tr>
+{{end}}
+</table>
+</div>
+
+<h2>Resources <small>{{len .Resources}}{{with .Versions}}{{with index . 0}} · from state v{{.Serial}}{{end}}{{end}}</small></h2>
+{{with .Resources}}
+<div class="card flush">
+<table>
+<tr><th>Address</th><th>Type</th><th>Provider</th></tr>
+{{range .}}<tr><td><code>{{.Address}}</code></td><td>{{.Type}}</td><td><small>{{provider .Provider}}</small></td></tr>{{end}}
+</table>
+</div>
+{{else}}
+<p class="muted">{{if not .Versions}}No state saved yet.{{else if not (index .Versions 0).Indexed}}The current state version isn't indexed (the run couldn't read it back).{{else}}The current state holds no resources.{{end}}</p>
+{{end}}
+
+{{with .Versions}}
+<h2>State versions</h2>
+<div class="card flush">
+<table>
+<tr><th>Version</th><th>Saved</th><th>Size</th><th>Resources</th></tr>
+{{range .}}<tr><td><span class="tag">v{{.Serial}}</span></td><td class="nowrap">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td>
+  <td>{{.Size}} B</td><td>{{if .Indexed}}{{.Resources}}{{else}}<span class="muted">not indexed</span>{{end}}</td></tr>{{end}}
+</table>
+</div>
+{{end}}
+{{template "bottom"}}

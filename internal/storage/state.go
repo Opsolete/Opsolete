@@ -23,19 +23,20 @@ type StateVersion struct {
 	CreatedAt time.Time
 }
 
-// LeaseOf returns the lease of a running workspace, or sql.ErrNoRows if no run holds it.
-func (s *Store) LeaseOf(ctx context.Context, id string) (string, error) {
-	var lease string
-	err := s.DB.QueryRowContext(ctx, `SELECT lease_id FROM deployments
-		WHERE id::text = $1 AND status = 'running' AND lease_id IS NOT NULL`, id).Scan(&lease)
-	return lease, err
+// WorkingRun returns the id of the run a runner is working on in a workspace (planning or
+// applying), or sql.ErrNoRows if none is.
+func (s *Store) WorkingRun(ctx context.Context, workspaceID string) (string, error) {
+	var run string
+	err := s.DB.QueryRowContext(ctx, `SELECT id FROM runs
+		WHERE workspace_id::text = $1 AND `+working+` AND lease_id IS NOT NULL`, workspaceID).Scan(&run)
+	return run, err
 }
 
 // StateVersions lists a workspace's state versions, newest first.
-func (s *Store) StateVersions(ctx context.Context, id string, limit int) ([]StateVersion, error) {
+func (s *Store) StateVersions(ctx context.Context, workspaceID string, limit int) ([]StateVersion, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT v.id, v.serial, v.lineage, v.blob_key, v.md5, v.size, v.indexed,
 			(SELECT count(*) FROM state_version_resources r WHERE r.state_version_id = v.id), v.created_at
-		FROM state_versions v WHERE v.deployment_id::text = $1 ORDER BY v.id DESC LIMIT $2`, id, limit)
+		FROM state_versions v WHERE v.workspace_id::text = $1 ORDER BY v.id DESC LIMIT $2`, workspaceID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +54,7 @@ func (s *Store) StateVersions(ctx context.Context, id string, limit int) ([]Stat
 
 // AddStateVersion records a state file written to blob storage as the workspace's current state.
 func (s *Store) AddStateVersion(ctx context.Context, id string, v StateVersion) error {
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO state_versions (deployment_id, serial, lineage, blob_key, md5, size)
+	_, err := s.DB.ExecContext(ctx, `INSERT INTO state_versions (workspace_id, serial, lineage, blob_key, md5, size)
 		VALUES ($1::uuid, $2, $3, $4, $5, $6)`, id, v.Serial, v.Lineage, v.BlobKey, v.MD5, v.Size)
 	return err
 }
@@ -63,17 +64,17 @@ func (s *Store) AddStateVersion(ctx context.Context, id string, v StateVersion) 
 func (s *Store) LockState(ctx context.Context, id, lockID string, info []byte) (held []byte, ok bool, err error) {
 	err = s.DB.QueryRowContext(ctx, `
 		WITH taken AS (
-			UPDATE deployments SET state_lock = $2::jsonb
+			UPDATE workspaces SET state_lock = $2::jsonb
 			WHERE id::text = $1 AND (state_lock IS NULL OR state_lock->>'ID' = $3) RETURNING 1
 		)
-		SELECT EXISTS (SELECT 1 FROM taken), COALESCE((SELECT state_lock::text FROM deployments WHERE id::text = $1), '')`,
+		SELECT EXISTS (SELECT 1 FROM taken), COALESCE((SELECT state_lock::text FROM workspaces WHERE id::text = $1), '')`,
 		id, string(info), lockID).Scan(&ok, &held)
 	return held, ok, err
 }
 
 // UnlockState releases the lock if lockID holds it.
 func (s *Store) UnlockState(ctx context.Context, id, lockID string) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE deployments SET state_lock = NULL
+	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET state_lock = NULL
 		WHERE id::text = $1 AND state_lock->>'ID' = $2`, id, lockID)
 	return err
 }
@@ -81,7 +82,7 @@ func (s *Store) UnlockState(ctx context.Context, id, lockID string) error {
 // StateLockID returns the ID of the workspace's current state lock, or "" if unlocked.
 func (s *Store) StateLockID(ctx context.Context, id string) (string, error) {
 	var lock sql.NullString
-	err := s.DB.QueryRowContext(ctx, `SELECT state_lock->>'ID' FROM deployments WHERE id::text = $1`, id).Scan(&lock)
+	err := s.DB.QueryRowContext(ctx, `SELECT state_lock->>'ID' FROM workspaces WHERE id::text = $1`, id).Scan(&lock)
 	return lock.String, err
 }
 
@@ -89,7 +90,7 @@ func (s *Store) StateLockID(ctx context.Context, id string) (string, error) {
 // what the runner read them from at the end of its run.
 func indexState(ctx context.Context, tx *sql.Tx, id string, resources []runnerapi.Resource) error {
 	var version int64
-	err := tx.QueryRowContext(ctx, `SELECT id FROM state_versions WHERE deployment_id::text = $1 ORDER BY id DESC LIMIT 1`, id).Scan(&version)
+	err := tx.QueryRowContext(ctx, `SELECT id FROM state_versions WHERE workspace_id::text = $1 ORDER BY id DESC LIMIT 1`, id).Scan(&version)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil // nothing was ever saved, so there is nothing to index
 	}
@@ -117,23 +118,21 @@ func indexState(ctx context.Context, tx *sql.Tx, id string, resources []runnerap
 // Resource is one resource in a workspace's current state, with the workspace it belongs to.
 type Resource struct {
 	runnerapi.Resource
-	DeploymentID string
-	TemplateID   string
-	Status       string // of the workspace
-	Serial       int64  // state version the index comes from
+	Workspace string // name
+	Serial    int64  // state version the index comes from
 }
 
 // Resources lists the resources in the current state of every workspace (or of one), optionally
 // only those whose address or type contains q (case-insensitive).
 // shortcut: no paging, capped at 2000 rows; add paging when inventories get that large.
-func (s *Store) Resources(ctx context.Context, q, deploymentID string) ([]Resource, error) {
+func (s *Store) Resources(ctx context.Context, q, workspaceID string) ([]Resource, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		WITH cur AS (SELECT DISTINCT ON (deployment_id) id, deployment_id, serial FROM state_versions
-			WHERE ($2 = '' OR deployment_id::text = $2) ORDER BY deployment_id, id DESC)
-		SELECT r.address, r.type, r.name, r.provider, r.module, d.id, d.template_id, d.status, cur.serial
-		FROM cur JOIN state_version_resources r ON r.state_version_id = cur.id JOIN deployments d ON d.id = cur.deployment_id
+		WITH cur AS (SELECT DISTINCT ON (workspace_id) id, workspace_id, serial FROM state_versions
+			WHERE ($2 = '' OR workspace_id::text = $2) ORDER BY workspace_id, id DESC)
+		SELECT r.address, r.type, r.name, r.provider, r.module, w.name, cur.serial
+		FROM cur JOIN state_version_resources r ON r.state_version_id = cur.id JOIN workspaces w ON w.id = cur.workspace_id
 		WHERE $1 = '' OR strpos(lower(r.address), lower($1)) > 0 OR strpos(lower(r.type), lower($1)) > 0
-		ORDER BY r.type, d.created_at DESC, r.address LIMIT 2000`, q, deploymentID)
+		ORDER BY r.type, w.name, r.address LIMIT 2000`, q, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +140,7 @@ func (s *Store) Resources(ctx context.Context, q, deploymentID string) ([]Resour
 	var out []Resource
 	for rows.Next() {
 		var r Resource
-		if err := rows.Scan(&r.Address, &r.Type, &r.Name, &r.Provider, &r.Module, &r.DeploymentID, &r.TemplateID, &r.Status, &r.Serial); err != nil {
+		if err := rows.Scan(&r.Address, &r.Type, &r.Name, &r.Provider, &r.Module, &r.Workspace, &r.Serial); err != nil {
 			return nil, err
 		}
 		out = append(out, r)

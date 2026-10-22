@@ -51,7 +51,8 @@ func New(store *storage.Store, tpls *templates.Catalog, reg *registry.Registry, 
 	pages := template.Must(template.New("").Funcs(template.FuncMap{"join": strings.Join, "json": toJSON,
 		"user": func() auth.User { return auth.User{} }, "section": func() string { return "" },
 		"features": func() Features { return f },
-		"provider": func(p string) string { return strings.TrimPrefix(p, "registry.terraform.io/") }}).ParseFS(views, "views/*.html"))
+		"provider": func(p string) string { return strings.TrimPrefix(p, "registry.terraform.io/") },
+		"status":   func(s string) string { return strings.ReplaceAll(s, "_", " ") }}).ParseFS(views, "views/*.html"))
 	return &Server{Store: store, Templates: tpls, Registry: reg, Auth: a, StateStore: state, Features: f, Log: log, pages: pages}
 }
 
@@ -86,8 +87,6 @@ func (s *Server) Handler() http.Handler {
 		return s.logRequests(http.NewCrossOriginProtection().Handler(s.requireLogin(mux)))
 	}
 	mux.HandleFunc("GET /{$}", s.index)
-	mux.HandleFunc("GET /templates/{id}", s.form)
-	mux.HandleFunc("POST /templates/{id}", s.deploy)
 	if s.Features.Editor {
 		mux.HandleFunc("GET /templates/new", s.admin(s.builder))
 		mux.HandleFunc("POST /templates/new", s.admin(s.saveTemplate))
@@ -96,10 +95,7 @@ func (s *Server) Handler() http.Handler {
 	}
 	s.runnerRoutes(mux)
 	s.stateRoutes(mux)
-	mux.HandleFunc("GET /deployments", s.deployments)
-	mux.HandleFunc("GET /deployments/{id}", s.deployment)
-	mux.HandleFunc("POST /deployments/{id}/destroy", s.destroy)
-	mux.HandleFunc("GET /resources", s.resources)
+	s.workspaceRoutes(mux)
 	// CrossOriginProtection rejects cross-site browser POSTs (CSRF); token clients send no Origin and pass.
 	return s.logRequests(http.NewCrossOriginProtection().Handler(s.requireLogin(mux)))
 }
@@ -165,155 +161,6 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, http.StatusOK, "index.html", map[string]any{"Templates": s.Templates.List(), "Editor": s.canEdit(r)})
-}
-
-type formPage struct {
-	T      templates.Template
-	Editor bool
-	Values map[string]string
-	Errors map[string]string
-}
-
-func (s *Server) form(w http.ResponseWriter, r *http.Request) {
-	t, ok := s.Templates.Get(r.PathValue("id"))
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	vals := map[string]string{}
-	for _, in := range t.Inputs {
-		vals[in.Name] = in.Default
-	}
-	s.render(w, r, http.StatusOK, "form.html", formPage{T: t, Editor: s.canEdit(r), Values: vals})
-}
-
-func (s *Server) deploy(w http.ResponseWriter, r *http.Request) {
-	t, ok := s.Templates.Get(r.PathValue("id"))
-	if !ok {
-		http.NotFound(w, r)
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad form", http.StatusBadRequest)
-		return
-	}
-	raw := map[string]string{}
-	for _, in := range t.Inputs {
-		raw[in.Name] = r.PostForm.Get(in.Name)
-	}
-	vals, errs := t.Validate(raw)
-	if len(errs) > 0 {
-		s.render(w, r, http.StatusUnprocessableEntity, "form.html", formPage{T: t, Editor: s.canEdit(r), Values: raw, Errors: errs})
-		return
-	}
-	u := auth.FromContext(r.Context())
-	d, err := s.Store.CreateDeployment(r.Context(), t.ID, t.Module.Source, t.Module.Ref, vals, u.ID)
-	if err != nil {
-		s.Log.Error("create deployment", "err", err)
-		http.Error(w, "could not create deployment", http.StatusInternalServerError)
-		return
-	}
-	s.Log.Info("deployment created", "id", d.ID, "template", t.ID, "status", d.Status, "user", u.Email)
-	http.Redirect(w, r, "/deployments/"+d.ID, http.StatusSeeOther)
-}
-
-func (s *Server) deployments(w http.ResponseWriter, r *http.Request) {
-	list, err := s.Store.ListDeployments(r.Context())
-	if err != nil {
-		s.Log.Error("list deployments", "err", err)
-		http.Error(w, "could not load deployments", http.StatusInternalServerError)
-		return
-	}
-	s.render(w, r, http.StatusOK, "deployments.html", list)
-}
-
-func (s *Server) deployment(w http.ResponseWriter, r *http.Request) {
-	d, hist, err := s.Store.GetDeployment(r.Context(), r.PathValue("id"))
-	if errors.Is(err, sql.ErrNoRows) {
-		http.NotFound(w, r)
-		return
-	}
-	if err != nil {
-		s.Log.Error("get deployment", "err", err)
-		http.Error(w, "could not load deployment", http.StatusInternalServerError)
-		return
-	}
-	res, err := s.Store.Resources(r.Context(), "", d.ID)
-	if err != nil {
-		s.Log.Error("deployment resources", "err", err)
-		http.Error(w, "could not load deployment", http.StatusInternalServerError)
-		return
-	}
-	versions, err := s.Store.StateVersions(r.Context(), d.ID, 10)
-	if err != nil {
-		s.Log.Error("state versions", "err", err)
-		http.Error(w, "could not load deployment", http.StatusInternalServerError)
-		return
-	}
-	active := d.Status == "queued" || d.Status == "running"
-	canDestroy := !active && d.Status != "destroyed" && mayDestroy(auth.FromContext(r.Context()), d)
-	s.render(w, r, http.StatusOK, "deployment.html", map[string]any{"D": d, "History": hist, "Active": active,
-		"CanDestroy": canDestroy, "Resources": res, "Versions": versions})
-}
-
-type typeCount struct {
-	Type  string
-	Count int
-}
-
-// resources lists everything Form2Stack manages, as last reported by the runners.
-func (s *Server) resources(w http.ResponseWriter, r *http.Request) {
-	q := strings.TrimSpace(r.URL.Query().Get("q"))
-	list, err := s.Store.Resources(r.Context(), q, "")
-	if err != nil {
-		s.Log.Error("list resources", "err", err)
-		http.Error(w, "could not load resources", http.StatusInternalServerError)
-		return
-	}
-	var types []typeCount // list is ordered by type
-	deployments := map[string]bool{}
-	for _, res := range list {
-		if n := len(types); n == 0 || types[n-1].Type != res.Type {
-			types = append(types, typeCount{Type: res.Type})
-		}
-		types[len(types)-1].Count++
-		deployments[res.DeploymentID] = true
-	}
-	s.render(w, r, http.StatusOK, "resources.html", map[string]any{"Resources": list, "Types": types,
-		"Deployments": len(deployments), "Q": q})
-}
-
-// mayDestroy: the user who deployed it, or an admin.
-func mayDestroy(u auth.User, d storage.Deployment) bool {
-	return u.Admin() || (d.CreatedBy != "" && d.CreatedBy == u.Email)
-}
-
-func (s *Server) destroy(w http.ResponseWriter, r *http.Request) {
-	u := auth.FromContext(r.Context())
-	d, _, err := s.Store.GetDeployment(r.Context(), r.PathValue("id"))
-	if errors.Is(err, sql.ErrNoRows) {
-		http.NotFound(w, r)
-		return
-	}
-	if err != nil {
-		s.Log.Error("get deployment", "err", err)
-		http.Error(w, "could not load deployment", http.StatusInternalServerError)
-		return
-	}
-	if !mayDestroy(u, d) {
-		http.Error(w, "only the user who deployed this, or an admin, can destroy it", http.StatusForbidden)
-		return
-	}
-	if err := s.Store.RequestDestroy(r.Context(), d.ID, u.Email); errors.Is(err, storage.ErrNotDestroyable) {
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	} else if err != nil {
-		s.Log.Error("request destroy", "err", err)
-		http.Error(w, "could not queue destroy", http.StatusInternalServerError)
-		return
-	}
-	s.Log.Info("destroy queued", "id", d.ID, "user", u.Email)
-	http.Redirect(w, r, "/deployments/"+d.ID, http.StatusSeeOther)
 }
 
 type builderPage struct {

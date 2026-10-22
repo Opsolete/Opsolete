@@ -119,13 +119,19 @@
   .status { display: inline-flex; align-items: center; gap: .4rem; padding: .15rem .65rem; border-radius: 999px; font-size: .78rem;
     font-weight: 600; white-space: nowrap; background: var(--code); color: var(--muted); vertical-align: middle; }
   .status::before { content: ""; width: .45rem; height: .45rem; border-radius: 50%; background: currentColor; }
-  .status.queued { background: var(--warn-soft); color: var(--warn); }
-  .status.running { background: var(--brand-soft); color: var(--brand); }
-  .status.running::before { animation: pulse 1.2s ease-in-out infinite; }
-  .status.succeeded { background: var(--ok-soft); color: var(--ok); }
-  .status.failed, .status.canceled { background: var(--danger-soft); color: var(--danger); }
+  .status.queued, .status.plan_queued, .status.apply_queued { background: var(--warn-soft); color: var(--warn); }
+  .status.needs_confirmation { background: var(--warn); color: var(--surface); }
+  .status.running, .status.planning, .status.applying { background: var(--brand-soft); color: var(--brand); }
+  .status.running::before, .status.planning::before, .status.applying::before { animation: pulse 1.2s ease-in-out infinite; }
+  .status.succeeded, .status.applied, .status.no_changes { background: var(--ok-soft); color: var(--ok); }
+  .status.failed, .status.errored, .status.canceled { background: var(--danger-soft); color: var(--danger); }
+  .plan { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9em; }
+  .change { font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .change.create { color: var(--ok); }
+  .change.update { color: var(--warn); }
+  .change.delete, .change.replace { color: var(--danger); }
   @keyframes pulse { 50% { opacity: .2; } }
-  @media (prefers-reduced-motion: reduce) { .status.running::before { animation: none; } .tile { transition: none; } }
+  @media (prefers-reduced-motion: reduce) { .status::before { animation: none !important; } .tile { transition: none; } }
 
   /* live log */
   pre.log { background: #0b0f19; color: #d4dae5; border-radius: var(--radius); padding: 1rem 1.2rem; max-height: 34rem;
@@ -139,7 +145,7 @@
     {{$s := section}}{{with features}}
     {{if .Deployments}}
     <a href="/"{{if or (eq $s "") (eq $s "templates")}} aria-current="page"{{end}}>Templates</a>
-    <a href="/deployments"{{if eq $s "deployments"}} aria-current="page"{{end}}>Deployments</a>
+    <a href="/workspaces"{{if eq $s "workspaces"}} aria-current="page"{{end}}>Workspaces</a>
     <a href="/resources"{{if eq $s "resources"}} aria-current="page"{{end}}>Resources</a>
     {{end}}
     {{if .Registry}}<a href="/registry"{{if eq $s "registry"}} aria-current="page"{{end}}>Registry</a>{{end}}

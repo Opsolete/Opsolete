@@ -63,12 +63,12 @@ Do not embed or reimplement the entire Terraform execution engine in the Go appl
 
 Decision (October 2026): deployments run on **Form2Stack's own runners**. The earlier Azure Pipelines executor has been removed, leaving a single execution path.
 
-- The server owns all state. Deployments in PostgreSQL double as the job queue (`FOR UPDATE SKIP LOCKED`).
+- The server owns all state. Runs in PostgreSQL double as the job queue (`FOR UPDATE SKIP LOCKED`).
 - Runners pull jobs over HTTPS with a runner-scoped token, so they need no database access and no inbound connectivity. Each claim returns a lease id (fencing token) that every later write must present. Leases expire without heartbeats, and the server then fails the job instead of retrying it.
 - Runners execute Terraform through `terraform-exec` (init → plan → apply → output), one job at a time, in a throwaway working directory, as a non-root user.
 - Runners stream output to the server, which stores it and serves it to the browser via Server-Sent Events. Sensitive outputs never leave the runner.
-- Runners own cloud credentials, not the server. Each deployment is a **workspace** with one Terraform state.
-- Decision (October 2026): Form2Stack is the state backend, HCP-style. Runners use Terraform's `http` backend against the server with a per-run credential (HMAC of workspace + lease). The server stores immutable state versions in blob storage via Go CDK (`STATE_STORE`: azblob, s3, gs, file) and locks in PostgreSQL. A resource index (names/types only) is stored per state version.
+- Runners own cloud credentials, not the server. A **workspace** holds one Terraform state; every change to it is a **run** (HCP-style): a plan phase, a human confirmation (or per-workspace auto-apply; destroys always ask), then an apply phase that applies the saved plan. Each phase is a separate job; the plan file and lock file travel between them via the state store. One active run per workspace.
+- Decision (October 2026): Form2Stack is the state backend, HCP-style. Runners use Terraform's `http` backend against the server with a per-run credential (HMAC of workspace + run, valid only while the run is planning or applying). The server stores immutable state versions in blob storage via Go CDK (`STATE_STORE`: azblob, s3, gs, file) and locks in PostgreSQL. A resource index (names/types only) is stored per state version.
 - The target platform is Kubernetes: runners scale as replicas, and the first SIGTERM drains (finishes the current job) while a second interrupts it.
 
 ## 4. Minimal Application Architecture

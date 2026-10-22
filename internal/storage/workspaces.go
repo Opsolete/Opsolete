@@ -1,0 +1,320 @@
+package storage
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/rudesome/form2stack/internal/runnerapi"
+)
+
+var (
+	ErrNameTaken      = errors.New("a workspace with this name already exists")
+	ErrRunActive      = errors.New("the workspace already has an active run: confirm or discard it, or wait for it to finish")
+	ErrNotConfirmable = errors.New("the run isn't waiting for confirmation")
+)
+
+// Workspace is a long-lived home for one Terraform state, created from a template.
+type Workspace struct {
+	ID           string
+	Name         string
+	TemplateID   string
+	ModuleSource string
+	ModuleRef    string
+	Inputs       map[string]any
+	StateKey     string // blob key prefix of its state versions
+	AutoApply    bool   // apply plans of apply runs without confirmation
+	CreatedBy    string // email; empty for workspaces from before login
+	CreatedAt    time.Time
+	Latest       *Run // most recent run
+}
+
+// Run statuses. A workspace has at most one active run (enforced by runs_one_active_idx).
+const (
+	PlanQueued        = "plan_queued"
+	Planning          = "planning"
+	NeedsConfirmation = "needs_confirmation"
+	ApplyQueued       = "apply_queued"
+	Applying          = "applying"
+	Applied           = "applied"
+	NoChanges         = "no_changes"
+	Discarded         = "discarded"
+	Errored           = "errored"
+	Canceled          = "canceled"
+)
+
+// Run is one plan → (confirm) → apply of a workspace, or of its destruction.
+type Run struct {
+	ID          string
+	WorkspaceID string
+	Action      string // apply | destroy
+	Status      string
+	Plan        *runnerapi.Plan // nil until planned, or when the plan had no changes
+	Outputs     map[string]any
+	Runner      *string
+	CreatedBy   string // emails
+	ConfirmedBy string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// Active: the run still holds its workspace (queued, working or waiting for confirmation).
+func (r Run) Active() bool {
+	switch r.Status {
+	case PlanQueued, Planning, NeedsConfirmation, ApplyQueued, Applying:
+		return true
+	}
+	return false
+}
+
+// Working: a runner is on it or about to be, so its log is still growing.
+func (r Run) Working() bool {
+	return r.Status == PlanQueued || r.Status == Planning || r.Status == ApplyQueued || r.Status == Applying
+}
+
+type StatusEntry struct {
+	Status    string
+	Message   *string
+	CreatedAt time.Time
+}
+
+const workspaceCols = `w.id, w.name, w.template_id, COALESCE(w.module_source, ''), w.module_ref, w.inputs, w.state_key,
+	w.auto_apply, COALESCE((SELECT email FROM users u WHERE u.id = w.created_by), ''), w.created_at`
+
+func scanWorkspace(row interface{ Scan(...any) error }, extra ...any) (Workspace, error) {
+	var w Workspace
+	var raw []byte
+	dest := append([]any{&w.ID, &w.Name, &w.TemplateID, &w.ModuleSource, &w.ModuleRef, &raw, &w.StateKey,
+		&w.AutoApply, &w.CreatedBy, &w.CreatedAt}, extra...)
+	if err := row.Scan(dest...); err != nil {
+		return w, err
+	}
+	return w, json.Unmarshal(raw, &w.Inputs)
+}
+
+const runCols = `r.id, r.workspace_id, r.action, r.status, r.plan, r.outputs, r.runner,
+	COALESCE((SELECT email FROM users u WHERE u.id = r.created_by), ''),
+	COALESCE((SELECT email FROM users u WHERE u.id = r.confirmed_by), ''), r.created_at, r.updated_at`
+
+func scanRun(row interface{ Scan(...any) error }) (Run, error) {
+	var r Run
+	var plan, outputs []byte
+	if err := row.Scan(&r.ID, &r.WorkspaceID, &r.Action, &r.Status, &plan, &outputs, &r.Runner,
+		&r.CreatedBy, &r.ConfirmedBy, &r.CreatedAt, &r.UpdatedAt); err != nil {
+		return r, err
+	}
+	if plan != nil {
+		if err := json.Unmarshal(plan, &r.Plan); err != nil {
+			return r, err
+		}
+	}
+	if outputs != nil {
+		if err := json.Unmarshal(outputs, &r.Outputs); err != nil {
+			return r, err
+		}
+	}
+	return r, nil
+}
+
+// CreateWorkspace creates a workspace and queues its first plan. createdBy is a user id, or empty.
+func (s *Store) CreateWorkspace(ctx context.Context, name, templateID, moduleSource, moduleRef string,
+	inputs map[string]any, autoApply bool, createdBy string) (Workspace, Run, error) {
+	raw, err := json.Marshal(inputs)
+	if err != nil {
+		return Workspace{}, Run{}, err
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return Workspace{}, Run{}, err
+	}
+	defer tx.Rollback()
+	var id string
+	err = tx.QueryRowContext(ctx, `
+		WITH id AS (SELECT gen_random_uuid() AS v)
+		INSERT INTO workspaces (id, name, template_id, module_source, module_ref, inputs, state_key, auto_apply, created_by)
+		SELECT v, $1, $2, $3, $4, $5, 'form2stack/' || $2 || '/' || v || '.tfstate', $6, NULLIF($7, '')::uuid FROM id
+		RETURNING id`, name, templateID, moduleSource, moduleRef, raw, autoApply, createdBy).Scan(&id)
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
+		return Workspace{}, Run{}, ErrNameTaken
+	}
+	if err != nil {
+		return Workspace{}, Run{}, err
+	}
+	run, err := createRun(ctx, tx, id, "apply", createdBy)
+	if err != nil {
+		return Workspace{}, Run{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Workspace{}, Run{}, err
+	}
+	w, err := s.GetWorkspace(ctx, name)
+	return w, run, err
+}
+
+// CreateRun queues a new plan (action apply or destroy) on a workspace without an active run.
+func (s *Store) CreateRun(ctx context.Context, workspaceID, action, createdBy string) (Run, error) {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return Run{}, err
+	}
+	defer tx.Rollback()
+	r, err := createRun(ctx, tx, workspaceID, action, createdBy)
+	if err != nil {
+		return Run{}, err
+	}
+	return r, tx.Commit()
+}
+
+func createRun(ctx context.Context, tx *sql.Tx, workspaceID, action, createdBy string) (Run, error) {
+	r := Run{WorkspaceID: workspaceID, Action: action, Status: PlanQueued}
+	err := tx.QueryRowContext(ctx, `INSERT INTO runs (workspace_id, action, status, created_by)
+		VALUES ($1::uuid, $2, $3, NULLIF($4, '')::uuid) RETURNING id, created_at`,
+		workspaceID, action, PlanQueued, createdBy).Scan(&r.ID, &r.CreatedAt)
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
+		return Run{}, ErrRunActive
+	}
+	if err != nil {
+		return Run{}, err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO run_status_history (run_id, status, message)
+		VALUES ($1, $2, $3 || ' plan queued, waiting for a runner')`, r.ID, PlanQueued, action)
+	return r, err
+}
+
+// GetWorkspace returns sql.ErrNoRows for an unknown name.
+func (s *Store) GetWorkspace(ctx context.Context, name string) (Workspace, error) {
+	return scanWorkspace(s.DB.QueryRowContext(ctx, `SELECT `+workspaceCols+` FROM workspaces w WHERE w.name = $1`, name))
+}
+
+// GetWorkspaceByID returns sql.ErrNoRows if the id is unknown or not a valid uuid.
+func (s *Store) GetWorkspaceByID(ctx context.Context, id string) (Workspace, error) {
+	return scanWorkspace(s.DB.QueryRowContext(ctx, `SELECT `+workspaceCols+` FROM workspaces w WHERE w.id::text = $1`, id))
+}
+
+// ListWorkspaces returns the 200 most recently active workspaces with their latest run.
+func (s *Store) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT `+workspaceCols+`, l.status, l.action, l.updated_at
+		FROM workspaces w LEFT JOIN LATERAL (SELECT status, action, updated_at FROM runs
+			WHERE workspace_id = w.id ORDER BY created_at DESC LIMIT 1) l ON true
+		ORDER BY COALESCE(l.updated_at, w.created_at) DESC LIMIT 200`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Workspace
+	for rows.Next() {
+		var status, action sql.NullString
+		var updated sql.NullTime
+		w, err := scanWorkspace(rows, &status, &action, &updated)
+		if err != nil {
+			return nil, err
+		}
+		if status.Valid {
+			w.Latest = &Run{Status: status.String, Action: action.String, UpdatedAt: updated.Time}
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+// SetAutoApply changes whether apply plans run without confirmation.
+func (s *Store) SetAutoApply(ctx context.Context, workspaceID string, on bool) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET auto_apply = $2, updated_at = now() WHERE id::text = $1`, workspaceID, on)
+	return err
+}
+
+// Runs lists a workspace's runs, newest first.
+func (s *Store) Runs(ctx context.Context, workspaceID string, limit int) ([]Run, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT `+runCols+` FROM runs r WHERE r.workspace_id::text = $1
+		ORDER BY r.created_at DESC LIMIT $2`, workspaceID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Run
+	for rows.Next() {
+		r, err := scanRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// CurrentOutputs returns the outputs of the workspace's last successful apply. destroyed is true
+// when the last successful run was a destroy.
+func (s *Store) CurrentOutputs(ctx context.Context, workspaceID string) (outputs map[string]any, destroyed bool, err error) {
+	var action string
+	var raw []byte
+	err = s.DB.QueryRowContext(ctx, `SELECT action, outputs FROM runs WHERE workspace_id::text = $1 AND status = $2
+		ORDER BY created_at DESC LIMIT 1`, workspaceID, Applied).Scan(&action, &raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil || raw == nil {
+		return nil, action == "destroy", err
+	}
+	return outputs, action == "destroy", json.Unmarshal(raw, &outputs)
+}
+
+// GetRun returns a run and its status history; sql.ErrNoRows if the id is unknown or not a uuid.
+func (s *Store) GetRun(ctx context.Context, id string) (Run, []StatusEntry, error) {
+	r, err := scanRun(s.DB.QueryRowContext(ctx, `SELECT `+runCols+` FROM runs r WHERE r.id::text = $1`, id))
+	if err != nil {
+		return r, nil, err
+	}
+	rows, err := s.DB.QueryContext(ctx, `SELECT status, message, created_at FROM run_status_history
+		WHERE run_id = $1 ORDER BY id`, r.ID)
+	if err != nil {
+		return r, nil, err
+	}
+	defer rows.Close()
+	var hist []StatusEntry
+	for rows.Next() {
+		var e StatusEntry
+		if err := rows.Scan(&e.Status, &e.Message, &e.CreatedAt); err != nil {
+			return r, nil, err
+		}
+		hist = append(hist, e)
+	}
+	return r, hist, rows.Err()
+}
+
+// ConfirmRun queues the apply of a plan that waits for confirmation.
+func (s *Store) ConfirmRun(ctx context.Context, id, userID, email string) error {
+	return s.decide(ctx, id, ApplyQueued, userID, "confirmed by "+email+", waiting for a runner")
+}
+
+// DiscardRun ends a run whose plan waits for confirmation, without applying it.
+func (s *Store) DiscardRun(ctx context.Context, id, email string) error {
+	return s.decide(ctx, id, Discarded, "", "discarded by "+email)
+}
+
+// decide moves a run out of needs_confirmation; confirmedBy (a user id) is recorded when set.
+func (s *Store) decide(ctx context.Context, id, status, confirmedBy, message string) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE runs SET status = $2, confirmed_by = COALESCE(NULLIF($3, '')::uuid, confirmed_by),
+		updated_at = now() WHERE id::text = $1 AND status = 'needs_confirmation'`, id, status, confirmedBy)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return ErrNotConfirmable
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO run_status_history (run_id, status, message) VALUES ($1::uuid, $2, $3)`,
+		id, status, message); err != nil {
+		return err
+	}
+	return tx.Commit()
+}

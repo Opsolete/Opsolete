@@ -2,7 +2,7 @@
 <div class="page-head">
   <div>
     <h1>Resources</h1>
-    <p class="muted">Everything Form2Stack manages: {{len .Resources}} resources in {{.Deployments}} workspaces, read from each workspace's current state version.</p>
+    <p class="muted">Everything Form2Stack manages: {{len .Resources}} resources in {{.Workspaces}} workspaces, read from each workspace's current state version.</p>
   </div>
 </div>
 
@@ -23,18 +23,17 @@
 
 <div class="card flush">
 <table>
-<tr><th>Address</th><th>Type</th><th>Provider</th><th>Workspace</th><th>State</th><th>Status</th></tr>
+<tr><th>Address</th><th>Type</th><th>Provider</th><th>Workspace</th><th>State</th></tr>
 {{range .Resources}}
 <tr>
   <td><code>{{.Address}}</code></td>
   <td>{{.Type}}</td>
   <td><small>{{provider .Provider}}</small></td>
-  <td><a href="/deployments/{{.DeploymentID}}">{{.TemplateID}}</a></td>
+  <td><a href="/workspaces/{{.Workspace}}">{{.Workspace}}</a></td>
   <td><span class="tag">v{{.Serial}}</span></td>
-  <td><span class="status {{.Status}}">{{.Status}}</span></td>
 </tr>
 {{else}}
-<tr><td colspan="6" class="empty">{{if .Q}}No resources match “{{.Q}}”.{{else}}No resources yet. They appear here after a runner finishes a deployment.{{end}}</td></tr>
+<tr><td colspan="5" class="empty">{{if .Q}}No resources match “{{.Q}}”.{{else}}No resources yet. They appear here after a run applies a plan.{{end}}</td></tr>
 {{end}}
 </table>
 </div>

@@ -89,9 +89,9 @@ func (r *Runner) claim(ctx context.Context) (runnerapi.Job, bool, error) {
 	}
 }
 
-// Execute runs one job and reports its result, unless the lease was lost on the way.
+// Execute runs one phase of a run and reports its result, unless the lease was lost on the way.
 func (r *Runner) Execute(hard context.Context, job runnerapi.Job) {
-	log := r.Log.With("deployment", job.DeploymentID)
+	log := r.Log.With("run", job.RunID, "phase", job.Phase)
 	log.Info("job started")
 	ctx, cancel := context.WithTimeout(hard, r.JobTimeout)
 	defer cancel()
@@ -100,13 +100,13 @@ func (r *Runner) Execute(hard context.Context, job runnerapi.Job) {
 	if strings.HasPrefix(src, "/") { // this server's registry: a short-lived signed archive URL
 		rel, err := url.Parse(src)
 		if err != nil {
-			r.finish(log, job, "failed", "invalid module source from server", nil, nil)
+			r.finish(log, job, runnerapi.FinishRequest{Status: "failed", Message: "invalid module source from server"})
 			return
 		}
 		src = r.ServerURL.ResolveReference(rel).String()
 	}
 	ship := newShipper(r, job, cancel, src)
-	status, msg, outputs, resources := r.terraform(ctx, job, src, ship)
+	res := r.terraform(ctx, job, src, ship)
 	ship.Close()
 	if ship.lost.Load() {
 		log.Warn("lease lost; result not reported")
@@ -114,21 +114,28 @@ func (r *Runner) Execute(hard context.Context, job runnerapi.Job) {
 	}
 	switch {
 	case hard.Err() != nil:
-		status, msg = "canceled", "runner was shut down during the run"
+		res.Status, res.Message = "canceled", "runner was shut down during the run"
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
-		status, msg = "failed", fmt.Sprintf("timed out after %s", r.JobTimeout)
+		res.Status, res.Message = "failed", fmt.Sprintf("timed out after %s", r.JobTimeout)
 	}
-	r.finish(log, job, status, msg, outputs, resources)
+	r.finish(log, job, res)
 }
 
-func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w io.Writer) (status, msg string, outputs map[string]any, resources []runnerapi.Resource) {
-	fail := func(step string, err error) (string, string, map[string]any, []runnerapi.Resource) {
+const (
+	planFile = "form2stack.tfplan"
+	lockFile = ".terraform.lock.hcl"
+)
+
+// terraform runs one phase in a throwaway directory. plan: save a plan, summarize it and upload
+// it with the provider lock file. apply: restore both, then apply exactly that plan.
+func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w io.Writer) (res runnerapi.FinishRequest) {
+	fail := func(step string, err error) runnerapi.FinishRequest {
 		fmt.Fprintf(w, "\n==> %s failed\n", step)
 		m := step + ": " + err.Error()
 		if len(m) > 2000 {
 			m = m[:2000] + "…"
 		}
-		return "failed", m, nil, nil
+		return runnerapi.FinishRequest{Status: "failed", Message: m}
 	}
 	dir, err := os.MkdirTemp("", "f2s-job-*")
 	if err != nil {
@@ -142,7 +149,7 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	tf.SetStdout(w)
 	tf.SetStderr(w)
 
-	fmt.Fprintf(w, "==> runner %s: deployment %s\n==> terraform init (fetch module)\n", r.Name, job.DeploymentID)
+	fmt.Fprintf(w, "==> runner %s: %s phase of %s run %s\n==> terraform init (fetch module)\n", r.Name, job.Phase, job.Action, job.RunID)
 	if err := tf.Init(ctx, tfexec.FromModule(src), tfexec.Backend(false)); err != nil {
 		return fail("fetch module", err)
 	}
@@ -160,34 +167,33 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	if err := os.WriteFile(filepath.Join(dir, "form2stack.auto.tfvars.json"), vars, 0o600); err != nil {
 		return fail("write variables", err)
 	}
+	if job.Phase == "apply" {
+		// Before init, so it installs exactly the providers the plan was made with.
+		if err := r.download(ctx, job, runnerapi.ArtifactLockfile, filepath.Join(dir, lockFile), false); err != nil {
+			return fail("download lock file", err)
+		}
+		if err := r.download(ctx, job, runnerapi.ArtifactPlan, filepath.Join(dir, planFile), true); err != nil {
+			return fail("download plan", err)
+		}
+	}
 	fmt.Fprintln(w, "\n==> terraform init (Form2Stack state)")
 	if err := tf.Init(ctx, append(r.backendOptions(job), tfexec.Reconfigure(true))...); err != nil {
 		return fail("init", err)
 	}
-	// From here on the state is reachable: report what's in it however the run ends,
-	// since a failed apply can leave resources behind too.
-	defer func() { resources = inventory(ctx, tf) }()
-	destroy := job.Action == "destroy"
-	step := "plan"
-	if destroy {
-		step = "plan -destroy"
+	if job.Phase == "plan" {
+		return r.plan(ctx, tf, dir, job, w, fail)
 	}
-	fmt.Fprintf(w, "\n==> terraform %s\n", step)
-	changes, err := tf.Plan(ctx, tfexec.Out("form2stack.tfplan"), tfexec.Destroy(destroy))
-	if err != nil {
-		return fail("plan", err)
+
+	// The apply writes state: report what's in it however it ends, since a failed apply can
+	// leave resources behind too.
+	defer func() { res.Resources = inventory(ctx, tf) }()
+	fmt.Fprintln(w, "\n==> terraform apply (saved plan)")
+	if err := tf.Apply(ctx, tfexec.DirOrPlan(planFile)); err != nil {
+		return fail("apply", err)
 	}
-	if changes {
-		fmt.Fprintln(w, "\n==> terraform apply")
-		if err := tf.Apply(ctx, tfexec.DirOrPlan("form2stack.tfplan")); err != nil {
-			return fail("apply", err)
-		}
-	} else {
-		fmt.Fprintln(w, "\n==> no changes, skipping apply")
-	}
-	if destroy {
+	if job.Action == "destroy" {
 		fmt.Fprintln(w, "\n==> done")
-		return "succeeded", "", nil, nil
+		return runnerapi.FinishRequest{Status: "succeeded"}
 	}
 	// `output -json` prints sensitive values in clear text: keep it out of the streamed log.
 	tf.SetStdout(io.Discard)
@@ -196,7 +202,7 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	if err != nil {
 		return fail("read outputs", err)
 	}
-	outputs = map[string]any{}
+	outputs := map[string]any{}
 	for k, o := range outs {
 		if o.Sensitive { // never leaves the runner
 			outputs[k] = "(sensitive)"
@@ -208,11 +214,85 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 		}
 	}
 	fmt.Fprintln(w, "\n==> done")
-	return "succeeded", "", outputs, nil
+	return runnerapi.FinishRequest{Status: "succeeded", Outputs: outputs}
 }
 
-// inventory lists the managed resources in the deployment's state: names only, never attribute
-// values. nil means the state couldn't be read, so the server keeps its previous inventory.
+// plan saves a plan; with changes it reports a summary and uploads the plan and the lock file
+// for the apply phase.
+func (r *Runner) plan(ctx context.Context, tf *tfexec.Terraform, dir string, job runnerapi.Job, w io.Writer,
+	fail func(string, error) runnerapi.FinishRequest) runnerapi.FinishRequest {
+	destroy := job.Action == "destroy"
+	step := "plan"
+	if destroy {
+		step = "plan -destroy"
+	}
+	fmt.Fprintf(w, "\n==> terraform %s\n", step)
+	changes, err := tf.Plan(ctx, tfexec.Out(planFile), tfexec.Destroy(destroy))
+	if err != nil {
+		return fail("plan", err)
+	}
+	if !changes {
+		fmt.Fprintln(w, "\n==> no changes")
+		return runnerapi.FinishRequest{Status: "succeeded"}
+	}
+	// `show -json` of a plan includes variable and attribute values: keep it out of the log.
+	tf.SetStdout(io.Discard)
+	tf.SetStderr(io.Discard)
+	p, err := tf.ShowPlanFile(ctx, planFile)
+	if err != nil {
+		return fail("read plan", err)
+	}
+	sum := summarize(p)
+	for _, a := range []struct{ name, file string }{{runnerapi.ArtifactPlan, planFile}, {runnerapi.ArtifactLockfile, lockFile}} {
+		b, err := os.ReadFile(filepath.Join(dir, a.file))
+		if errors.Is(err, os.ErrNotExist) && a.file == lockFile {
+			continue // no external providers, so no lock file
+		}
+		if err == nil {
+			err = r.upload(ctx, job, a.name, b)
+		}
+		if err != nil {
+			return fail("save plan", err)
+		}
+	}
+	fmt.Fprintf(w, "\n==> plan saved: %d to add, %d to change, %d to destroy\n", sum.Add, sum.Change, sum.Destroy)
+	return runnerapi.FinishRequest{Status: "succeeded", Plan: &sum}
+}
+
+// summarize counts a plan's resource changes, like Terraform's "Plan: x to add" line, and lists
+// their addresses. Values are never included.
+func summarize(p *tfjson.Plan) runnerapi.Plan {
+	sum := runnerapi.Plan{Changes: []runnerapi.Change{}}
+	for _, rc := range p.ResourceChanges {
+		if rc.Change == nil {
+			continue
+		}
+		a := rc.Change.Actions
+		var action string
+		switch {
+		case a.Replace():
+			sum.Add++
+			sum.Destroy++
+			action = "replace"
+		case a.Create():
+			sum.Add++
+			action = "create"
+		case a.Update():
+			sum.Change++
+			action = "update"
+		case a.Delete():
+			sum.Destroy++
+			action = "delete"
+		default: // no-op, read, forget
+			continue
+		}
+		sum.Changes = append(sum.Changes, runnerapi.Change{Address: rc.Address, Action: action})
+	}
+	return sum
+}
+
+// inventory lists the managed resources in the workspace's state: names only, never attribute
+// values. nil means the state couldn't be read, so the current state version stays unindexed.
 func inventory(ctx context.Context, tf *tfexec.Terraform) []runnerapi.Resource {
 	if ctx.Err() != nil {
 		return nil
@@ -242,27 +322,27 @@ func inventory(ctx context.Context, tf *tfexec.Terraform) []runnerapi.Resource {
 }
 
 // backendOptions points Terraform's http backend at the workspace's state on the server. The
-// password only works while this run holds the lease. Terraform keeps it in the work directory's
-// .terraform/, which module code could read during the run: it only reaches this workspace's state.
+// password only works while this run is planning or applying. Terraform keeps it in .terraform/ and
+// in the saved plan (module code could read it during the run): it only reaches this workspace's state.
 func (r *Runner) backendOptions(job runnerapi.Job) []tfexec.InitOption {
-	addr := r.ServerURL.JoinPath(runnerapi.StatePrefix, job.DeploymentID).String()
+	addr := r.ServerURL.JoinPath(runnerapi.StatePrefix, job.WorkspaceID).String()
 	return []tfexec.InitOption{
 		tfexec.BackendConfig("address=" + addr),
 		tfexec.BackendConfig("lock_address=" + addr),
 		tfexec.BackendConfig("unlock_address=" + addr),
-		tfexec.BackendConfig("username=" + job.DeploymentID),
+		tfexec.BackendConfig("username=" + job.WorkspaceID),
 		tfexec.BackendConfig("password=" + job.StateToken),
 	}
 }
 
-func (r *Runner) finish(log *slog.Logger, job runnerapi.Job, status, msg string, outputs map[string]any, resources []runnerapi.Resource) {
-	body, _ := json.Marshal(runnerapi.FinishRequest{Status: status, Message: msg, Outputs: outputs, Resources: resources})
+func (r *Runner) finish(log *slog.Logger, job runnerapi.Job, res runnerapi.FinishRequest) {
+	body, _ := json.Marshal(res)
 	for attempt := 1; ; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		code, resp, err := r.call(ctx, "/jobs/"+job.DeploymentID+"/finish", job.LeaseID, "application/json", body)
+		code, resp, err := r.call(ctx, "/jobs/"+job.RunID+"/finish", job.LeaseID, "application/json", body)
 		cancel()
 		if err == nil && code == http.StatusNoContent {
-			log.Info("job finished", "status", status)
+			log.Info("job finished", "status", res.Status)
 			return
 		}
 		if err == nil && code < 500 {
@@ -278,16 +358,59 @@ func (r *Runner) finish(log *slog.Logger, job runnerapi.Job, status, msg string,
 	}
 }
 
+// upload stores a plan phase's artifact on the server.
+func (r *Runner) upload(ctx context.Context, job runnerapi.Job, name string, b []byte) error {
+	code, resp, err := r.call(ctx, "/jobs/"+job.RunID+"/artifacts/"+name, job.LeaseID, "application/octet-stream", b)
+	if err == nil && code != http.StatusNoContent {
+		err = fmt.Errorf("HTTP %d: %s", code, resp)
+	}
+	return err
+}
+
+// download writes an artifact of the run's plan phase to path; a missing optional one is skipped.
+func (r *Runner) download(ctx context.Context, job runnerapi.Job, name, path string, required bool) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.ServerURL.JoinPath(runnerapi.Prefix, "jobs", job.RunID, "artifacts", name).String(), nil)
+	if err != nil {
+		return err
+	}
+	r.authorize(req, job.LeaseID)
+	resp, err := r.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound && !required {
+		return nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, b)
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+func (r *Runner) authorize(req *http.Request, lease string) {
+	req.Header.Set("Authorization", "Bearer "+r.Token)
+	if lease != "" {
+		req.Header.Set(runnerapi.LeaseHeader, lease)
+	}
+}
+
 func (r *Runner) call(ctx context.Context, path, lease, contentType string, body []byte) (int, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.ServerURL.JoinPath(runnerapi.Prefix, path).String(), bytes.NewReader(body))
 	if err != nil {
 		return 0, nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+r.Token)
+	r.authorize(req, lease)
 	req.Header.Set("Content-Type", contentType)
-	if lease != "" {
-		req.Header.Set(runnerapi.LeaseHeader, lease)
-	}
 	resp, err := r.HTTP.Do(req)
 	if err != nil {
 		return 0, nil, err
@@ -394,7 +517,7 @@ func (s *shipper) post(path string, body []byte) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	code, _, err := s.r.call(ctx, "/jobs/"+s.job.DeploymentID+path, s.job.LeaseID, "text/plain; charset=utf-8", body)
+	code, _, err := s.r.call(ctx, "/jobs/"+s.job.RunID+path, s.job.LeaseID, "text/plain; charset=utf-8", body)
 	if err == nil && code == http.StatusConflict {
 		s.lost.Store(true)
 		s.cancel() // someone else owns this deployment now; stop terraform

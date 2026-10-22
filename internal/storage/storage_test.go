@@ -2,46 +2,32 @@ package storage
 
 import (
 	"context"
-	"os"
+	"errors"
 	"testing"
 )
 
 // Requires a real PostgreSQL: TEST_DATABASE_URL=postgres://... go test ./...
-func TestDeploymentRoundTrip(t *testing.T) {
-	url := os.Getenv("TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("TEST_DATABASE_URL not set")
-	}
+func TestWorkspaceRoundTrip(t *testing.T) {
+	s := testStore(t)
 	ctx := context.Background()
-	s, err := Open(ctx, url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.DB.Close()
-	if err := s.Migrate(ctx); err != nil {
-		t.Fatal(err)
-	}
 	if err := s.Migrate(ctx); err != nil { // idempotent
 		t.Fatal(err)
 	}
-
-	d, err := s.CreateDeployment(ctx, "test-tpl", "git::x", "v1.0.0", map[string]any{"name": "abc"}, "")
-	if err != nil {
-		t.Fatal(err)
+	w, run := newWorkspace(t, s, false)
+	if w.StateKey != "form2stack/job-test/"+w.ID+".tfstate" || w.Inputs["n"] != 1.0 || run.Status != PlanQueued || run.Action != "apply" {
+		t.Fatalf("unexpected workspace/run: %+v %+v", w, run)
 	}
-	t.Cleanup(func() { s.DB.Exec(`DELETE FROM deployments WHERE id=$1`, d.ID) })
-	if d.Status != "queued" || d.StateKey != "form2stack/test-tpl/"+d.ID+".tfstate" {
-		t.Fatalf("unexpected deployment: %+v", d)
+	if _, _, err := s.CreateWorkspace(ctx, w.Name, "job-test", "git::x", "v1", nil, false, ""); !errors.Is(err, ErrNameTaken) {
+		t.Fatalf("duplicate name: %v", err)
 	}
-
-	list, err := s.ListDeployments(ctx)
+	list, err := s.ListWorkspaces(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, x := range list {
-		if x.ID == d.ID && x.Inputs["name"] == "abc" {
+		if x.Name == w.Name && x.Latest != nil && x.Latest.Status == PlanQueued {
 			return
 		}
 	}
-	t.Fatal("created deployment not listed")
+	t.Fatal("created workspace not listed with its latest run")
 }

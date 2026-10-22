@@ -1,11 +1,15 @@
 # Form2Stack
 From forms to infrastructure. Automatically.
 
-Pick a template and fill in a form generated from JSON. Form2Stack records the deployment in PostgreSQL and queues it, and a **Form2Stack runner** runs the pinned Terraform module (init → plan → apply). You watch the output live in the browser, and the Terraform outputs show up when it's done.
+Pick a template, name a **workspace** and fill in a form generated from JSON. A **Form2Stack runner** plans the pinned Terraform module, you review the plan and confirm it, and a runner applies exactly that plan. You watch the output live in the browser, and the Terraform outputs show up when it's done. It works like HCP Terraform's workspaces and runs.
 
-Lifecycle: `queued` (waiting for a runner) → `running` → `succeeded` | `failed` | `canceled`. Every change lands in the deployment's status history.
+**Runs:** every change to a workspace is a run: `plan_queued` → `planning` → `needs_confirmation` → (confirm) `apply_queued` → `applying` → `applied`. A run can also end as `no_changes`, `discarded` (plan not confirmed), `errored` or `canceled`. Each status change lands in the run's history.
 
-**Destroy:** on a finished deployment, **Destroy resources** re-queues it as a destroy run (`terraform plan -destroy`, then apply) against the same state key. When that succeeds, the deployment is `destroyed`. Only the user who deployed it, or an admin, can destroy it. A failed destroy can be retried.
+- **Plan, then apply.** The plan phase saves a plan file and reports what it will do (`+2 ~1 −0`, plus the resource addresses, never values). Confirming queues the apply phase, which may run on any runner and applies exactly the saved plan. Terraform refuses the apply if the state changed since the plan, so a stale plan can't be applied.
+- **Auto-apply** (per workspace, off by default) applies plans without confirmation. **Destroy runs always ask.**
+- **One active run per workspace.** A new run waits until the current one is applied, discarded or finished.
+- **New run** re-plans with the workspace's inputs, for example to fix drift. **Destroy…** plans `terraform plan -destroy`; once confirmed and applied, the workspace is marked destroyed. A new run can recreate it.
+- Only the user who created a workspace, or an admin, can start runs, confirm or discard plans and change its settings. Everyone logged in can see workspaces, runs and logs.
 
 ## Run locally with Nix (recommended)
 
@@ -15,7 +19,7 @@ just               # list tasks
 just run           # start project-local postgres (.devdata/, unix socket) + app on :8080
 just runner        # in a 2nd terminal: a runner on this machine (state goes to .devdata/state-store)
 just test          # gofmt check, vet, all tests incl. DB tests
-just smoke         # nix build, boot the binary, submit a deployment end-to-end
+just smoke         # nix build, boot the binary, create a workspace end-to-end
 just check         # test + smoke, run before committing
 just token <name>  # registry token for Terraform clients
 just image app|runner   # container images (DOCKER_HOST=ssh://user@host to build remotely)
@@ -42,7 +46,7 @@ Then open http://localhost:8080. Migrations run on startup.
 | `DATABASE_URL`  | required  | PostgreSQL connection string           |
 | `ADDR`          | `:8080`   | HTTP listen address                    |
 | `TEMPLATES_DIR` | `catalog` | Directory of JSON template definitions |
-| `DEPLOYMENTS_ENABLED` | `true` | Templates, deploy forms, deployments and the runner API. `false` makes Form2Stack a module registry only |
+| `DEPLOYMENTS_ENABLED` | `true` | Templates, workspaces, runs, the runner API and the state backend. `false` makes Form2Stack a module registry only |
 | `REGISTRY_ENABLED` | `true` | Module registry pages and the Terraform registry protocol. With `false`, startup fails if a template uses a registry module |
 | `TEMPLATE_EDITOR` | off    | `1` enables the template builder and module uploads for admins (on in the nix dev shell) |
 | `PUBLIC_URL`    | `http://form2stack.localhost:8080` | How browsers and Terraform clients reach the app. Its host is the registry hostname, and the OIDC callback is `PUBLIC_URL/auth/callback` |
@@ -57,32 +61,33 @@ All pages require login. Health checks, the registry protocol (`/v1/…`, which 
 
 - **OIDC:** authorization code flow with PKCE, using `coreos/go-oidc` and `x/oauth2`. It works with Entra ID, Google, Keycloak, Dex and similar. Register `PUBLIC_URL/auth/callback` as the redirect URI. The user is identified by the `email` claim, falling back to `preferred_username` (Entra ID). An explicit `email_verified: false` is rejected.
 - **Roles:** emails listed in `ADMIN_EMAILS` are `admin`, everyone else is `user`. The role is recorded at every login, so editing `ADMIN_EMAILS` takes effect at the next login. Sessions are HMAC-signed cookies that last 12 hours. Logging out ends the Form2Stack session, not the IdP session.
-- **Users** can deploy templates, see deployments and destroy their own deployments. **Admins** can also destroy anyone's deployment and, with `TEMPLATE_EDITOR=1`, use the template builder and upload modules.
+- **Users** can create workspaces from templates, see all workspaces and runs, and operate their own workspaces (runs, confirm/discard, destroy, settings). **Admins** can operate any workspace and, with `TEMPLATE_EDITOR=1`, use the template builder and upload modules.
 - Cross-site form posts are rejected (`http.CrossOriginProtection`). If a proxy rewrites the `Host` header, keep it equal to the browser's origin.
 
-Endpoints: `/healthz` (liveness), `/readyz` (checks the DB), `/` (templates), `/templates/{id}` (form), `/deployments`, `/deployments/{id}` (detail, history, live log, outputs), `/deployments/{id}/logs` (raw log), `POST /deployments/{id}/destroy`, `/auth/login|callback|logout`, `/resources`, `/registry`, `/v1/modules/…` (registry protocol), `/api/runner/v1/…` (runner API), `/api/state/v1/{id}` (Terraform state backend).
+Endpoints: `/healthz` (liveness), `/readyz` (checks the DB), `/` (templates), `/templates/{id}` (form, creates a workspace), `/workspaces`, `/workspaces/{name}` (overview, runs, outputs, resources, state versions), `POST /workspaces/{name}/runs` (`action=apply|destroy`), `/workspaces/{name}/runs/{id}` (plan, confirm/discard, live log, history) and its `/logs`, `/auth/login|callback|logout`, `/resources`, `/registry`, `/v1/modules/…` (registry protocol), `/api/runner/v1/…` (runner API), `/api/state/v1/{id}` (Terraform state backend).
 
 ## Workspaces and state
 
-Each deployment is a **workspace** with exactly one Terraform state. Form2Stack is the state backend, the way HCP Terraform is: runners use Terraform's built-in [`http` backend](https://developer.hashicorp.com/terraform/language/backend/http) against `/api/state/v1/<workspace>`, so they need no storage credentials and the same protocol works on every cloud.
+Each workspace has exactly one Terraform state. Form2Stack is the state backend, the way HCP Terraform is: runners use Terraform's built-in [`http` backend](https://developer.hashicorp.com/terraform/language/backend/http) against `/api/state/v1/<workspace>`, so they need no storage credentials and the same protocol works on every cloud.
 
 - **Storage:** every saved state is a new, immutable **state version**: a file in `STATE_STORE` under `form2stack/<template>/<workspace>/<serial>-<random>.tfstate`. Postgres keeps only the version list. Writes with an older serial or a different lineage are refused.
 - **Locking:** Terraform's `LOCK`/`UNLOCK` calls take a lock in Postgres, so the blob store needs no locking features of its own. A second locker gets `423` with the holder's lock info. When a run ends or its runner disappears, its lock is released.
-- **Credentials:** a run's state password is an HMAC of the workspace and its lease. Only the run that holds a workspace can read or write its state, only that workspace's, and only until the run ends. The server keeps no state passwords.
+- **Credentials:** a run's state password is an HMAC of the workspace and the run. It works only for that workspace and only while that run is planning or applying, so not while a plan waits for confirmation, and never after the run ends. It's per run, not per phase, because Terraform stores the backend config in the saved plan. The server keeps no state passwords.
 - **Resources page:** `/resources` lists the resources (address, type, provider, module) in every workspace's **current state version**, with a filter. The index belongs to a state version, like HCP Terraform's. At the end of a run, the runner reads the state back (`terraform show -json`, parsed with HashiCorp's `terraform-json`) and sends names and types only. Attribute values never reach Postgres or the UI.
 - **Security:** state files contain secrets in plain text, and the server can read them. Give the server an identity that can only access the state container, and turn on encryption at rest in the store. The server never holds cloud credentials to change infrastructure.
 
 ## Runners
 
-`form2stack runner` executes deployments. It's the same binary as the server, packaged as the `runner` image: Alpine, git and Terraform 1.17.0 pinned by checksum, running as a non-root user.
+`form2stack runner` executes runs, one phase (plan or apply) at a time. It's the same binary as the server, packaged as the `runner` image: Alpine, git and Terraform 1.17.0 pinned by checksum, running as a non-root user.
 
 **How it works**
 
 - **Pull, don't push.** Runners long-poll `POST /api/runner/v1/jobs/claim` with a *runner* token. They need no database credentials and accept no inbound connections. Registry tokens can't claim jobs, and runner tokens can't use the registry.
-- **Postgres queue.** Queued deployments are the jobs. `FOR UPDATE SKIP LOCKED` lets any number of runners claim without double-running a job.
+- **Postgres queue.** Queued run phases are the jobs. `FOR UPDATE SKIP LOCKED` lets any number of runners claim without double-running a job.
 - **Leases and fencing.** A claim returns a lease id that every log, heartbeat and finish call must send. Log posts double as heartbeats, sent about every 30 s while idle. If a runner disappears for 2 minutes, the server fails the job ("runner stopped responding") and fences the old runner off. A 409 tells a runner it lost the job, so it interrupts Terraform. Jobs are never auto-retried, because a half-applied run needs a human.
 - **Isolation.** One job at a time per runner, in a fresh temp directory that's removed afterwards. Terraform runs via HashiCorp's `terraform-exec`: `init -from-module`, then `plan -out`, `apply <plan>` and `output`. Each run is capped by `F2S_JOB_TIMEOUT`.
-- **Logs.** Output is shipped about once a second, cut at line ends, and capped at 10 MB per deployment. The deployment page follows it live via Server-Sent Events, resuming with `Last-Event-ID` after reconnects. `/deployments/<id>/logs` serves the raw log.
+- **Plans between phases.** The plan phase uploads the plan file and `.terraform.lock.hcl` to the server, which keeps them in `STATE_STORE` (a plan holds variable values, so it's as sensitive as state). The apply phase downloads both and restores the lock file before `init`, so it uses exactly the providers the plan used. Both files are deleted when the run ends.
+- **Logs.** Output is shipped about once a second, cut at line ends, and capped at 10 MB per run. The run page follows it live via Server-Sent Events, resuming with `Last-Event-ID` after reconnects. `…/runs/<id>/logs` serves the raw log.
 - **Secrets.** Sensitive outputs are shown as `(sensitive)` and never leave the runner. The `output -json` call isn't streamed, and signed module URLs are redacted from logs. The runner reads its `F2S_*` settings and then removes them from its environment, so Terraform, providers and module code never see the runner token.
 - **Shutdown.** The first SIGTERM stops claiming and lets the current job finish. A second one interrupts Terraform with SIGINT, so it releases its state lock, and the job ends as `canceled`. Set the pod's `terminationGracePeriodSeconds` to cover a job.
 
@@ -90,8 +95,8 @@ Each deployment is a **workspace** with exactly one Terraform state. Form2Stack 
 |---|---|---|
 | `F2S_SERVER_URL` | required | How the runner reaches Form2Stack (in k8s: the Service URL). Registry modules are fetched from here too |
 | `F2S_RUNNER_TOKEN` | required | `form2stack token <name> runner` |
-| `F2S_JOB_TIMEOUT` | `1h` | Hard limit per deployment |
-| `F2S_RUNNER_NAME` | hostname | Shown on deployments; the pod name in k8s |
+| `F2S_JOB_TIMEOUT` | `1h` | Hard limit per run phase |
+| `F2S_RUNNER_NAME` | hostname | Shown on runs; the pod name in k8s |
 
 Provider credentials go to the runner as the usual env vars, for example `ARM_*` for azurerm (on AKS: `ARM_USE_AKS_WORKLOAD_IDENTITY=true`). Runners need no state storage credentials. Module code runs on the runner with the provider credentials, so scope them to what Form2Stack may deploy.
 
