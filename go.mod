@@ -4,7 +4,7 @@ go 1.26.8
 
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0
-	github.com/go-jose/go-jose/v4 v4.1.5
+	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/hashicorp/go-version v1.9.0
 	github.com/hashicorp/terraform-config-inspect v0.0.0-20260904064934-75d64de68c31
 	github.com/hashicorp/terraform-exec v0.25.3
