@@ -31,9 +31,61 @@ db-start: env
 db-stop: env
     @pg_ctl status >/dev/null 2>&1 && pg_ctl -w stop >/dev/null && echo "postgres stopped" || true
 
-# wipe local postgres data
+# wipe local postgres data and the state files that belong to it
 db-reset: db-stop
-    rm -rf "$PGDATA"
+    rm -rf "$PGDATA" "$PGHOST/state-store"
+
+# load the examples (registry module, workspaces, variable set) into an empty dev database; a local runner applies them
+seed: db-start
+    #!/usr/bin/env bash
+    set -euo pipefail
+    base=http://127.0.0.1:18081 bin="$PGHOST/f2s-seed" out="$PGHOST/seed.out"
+    go build -o "$bin" ./cmd/form2stack
+    ADDR=127.0.0.1:18081 "$bin" > "$PGHOST/seed.log" 2>&1 &
+    pids=$!
+    trap 'kill $pids 2>/dev/null || true' EXIT
+    for _ in $(seq 100); do curl -sf $base/readyz >/dev/null && break; sleep 0.1; done
+    curl -sf $base/readyz >/dev/null || { cat "$PGHOST/seed.log"; exit 1; }
+    # req <path> <curl args>: fails on anything but 2xx/303, e.g. when the examples already exist (use `just reseed`)
+    req() {
+        local path=$1; shift
+        code=$(curl -s -o "$out" -w '%{http_code}' "$@" "$base$path")
+        [[ $code == 2* || $code == 303 ]] || { echo "seed: $path returned $code" >&2; sed 's/<[^>]*>//g' "$out" | grep -v '^\s*$' | tail -5 >&2; exit 1; }
+    }
+
+    echo "registry: examples/greeting 1.0.0 and 1.1.0"
+    for v in 1.0.0 1.1.0; do
+        tar czf "$PGHOST/greeting-$v.tar.gz" -C examples/modules/greeting/$v .
+        req /registry -F namespace=examples -F name=greeting -F system=terraform -F version=$v -F archive=@"$PGHOST/greeting-$v.tar.gz"
+    done
+
+    echo "variable set: example-azure (fake credentials)"
+    req /variable-sets -d name=example-azure -d description="Example credentials with fake values"
+    req /variable-sets/example-azure/variables -d category=env -d key=ARM_TENANT_ID -d value=00000000-0000-0000-0000-000000000001
+    req /variable-sets/example-azure/variables -d category=env -d key=ARM_CLIENT_SECRET -d value=not-a-real-secret -d sensitive=on
+
+    echo "workspaces: greeting-dev (auto-apply), greeting-prod (waits for confirmation), empty, imported, credentials-only"
+    req /templates/greeting -d f2s-workspace=greeting-dev -d f2s-auto-apply=on -d greeting=hello -d name=world
+    req /templates/greeting -d f2s-workspace=greeting-prod -d greeting=hi -d "name=Form2Stack team"
+    req /variable-sets/example-azure/workspaces -d workspace=greeting-prod
+    req /workspaces/new -d name=empty
+    req /workspaces/new -d name=imported
+    req /workspaces/imported/state -F state=@examples/state/imported.tfstate
+    req /workspaces/new -d name=credentials-only
+    req /workspaces/credentials-only/variables -d category=env -d key=ARM_SUBSCRIPTION_ID -d value=00000000-0000-0000-0000-000000000002
+    req /workspaces/credentials-only/variables -d category=env -d key=ARM_CLIENT_SECRET -d value=not-a-real-secret -d sensitive=on
+
+    echo "runner: applying greeting-dev, planning greeting-prod"
+    F2S_RUNNER_TOKEN=$("$bin" token "seed-runner" runner) F2S_SERVER_URL=$base "$bin" runner > "$PGHOST/seed-runner.log" 2>&1 &
+    pids="$pids $!"
+    for ws in greeting-dev:applied greeting-prod:needs_confirmation; do
+        for _ in $(seq 180); do curl -sf "$base/workspaces/${ws%%:*}" | grep -q "status ${ws#*:}\"" && continue 2; sleep 1; done
+        echo "seed: ${ws%%:*} never reached ${ws#*:}; see $PGHOST/seed-runner.log" >&2; exit 1
+    done
+    echo "seed ok: run 'just run' and open http://localhost:8080/workspaces"
+
+# wipe the dev database and state files, then load the examples
+reseed: db-reset seed
 
 # open psql on the dev database
 psql: db-start

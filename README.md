@@ -21,6 +21,7 @@ nix develop        # or `direnv allow`; gives go, gopls, postgres 17, terraform,
 just               # list tasks
 just run           # start project-local postgres (.devdata/, unix socket) + app on :8080
 just runner        # in a 2nd terminal: a runner on this machine (state goes to .devdata/state-store)
+just reseed        # wipe the dev DB + state files, then `just seed`: example data via the real endpoints
 just test          # gofmt check, vet, all tests incl. DB tests
 just smoke         # nix build, boot the binary, create a workspace end-to-end
 just check         # test + smoke, run before committing
@@ -28,6 +29,8 @@ just token <name>  # registry token for Terraform clients
 just image app|runner   # container images (DOCKER_HOST=ssh://user@host to build remotely)
 just psql | db-reset | down
 ```
+
+**Examples** (`just seed`, `examples/`): the registry module `examples/greeting/terraform` in versions 1.0.0 and 1.1.0, the `greeting` template (`catalog/greeting.json`), and workspaces of every kind: `greeting-dev` (applied, auto-apply), `greeting-prod` (plan waiting for confirmation, with the `example-azure` variable set), `empty`, `imported` (only an uploaded state) and `credentials-only` (only variables). The module uses Terraform's built-in `terraform_data`, so a local runner applies it without cloud credentials or provider downloads. All credentials in the examples are fake. `seed` expects an empty database, so use `just reseed` to start over.
 
 `nix build` only sees files tracked by git, so `git add` new files first. After changing dependencies in `go.mod`, update `vendorHash` in `flake.nix` (set it to `nixpkgs.lib.fakeHash`, run `nix build`, and copy the hash it prints).
 
