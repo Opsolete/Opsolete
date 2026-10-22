@@ -4,13 +4,13 @@
 <div class="page-head">
   <div>
     <h1>{{$w.Name}}{{if .Destroyed}} <span class="status destroyed">destroyed</span>{{end}}</h1>
-    <p class="muted">From template <a href="/templates/{{$w.TemplateID}}">{{$w.TemplateID}}</a> · created {{$w.CreatedAt.Format "2006-01-02 15:04"}}{{with $w.CreatedBy}} by {{.}}{{end}}</p>
+    <p class="muted">{{if $w.TemplateID}}From template <a href="/templates/{{$w.TemplateID}}">{{$w.TemplateID}}</a>{{else if $w.VCSConnectionID}}From <code>{{$w.VCSRepo}}</code> branch <code>{{$w.VCSBranch}}</code>{{else}}No configuration{{end}} · created {{$w.CreatedAt.Format "2006-01-02 15:04"}}{{with $w.CreatedBy}} by {{.}}{{end}}</p>
   </div>
   {{if .CanOperate}}
   <div class="inline">
     {{if .Active}}
     <a class="btn secondary" href="/workspaces/{{$w.Name}}/runs/{{.Active.ID}}">Current run: {{status .Active.Status}} →</a>
-    {{else}}
+    {{else if $w.HasConfig}}
     <form method="post" action="/workspaces/{{$w.Name}}/runs"><input type="hidden" name="action" value="apply">
       <button type="submit">New run</button></form>
     {{if .HasTemplate}}<a class="btn secondary" href="/workspaces/{{$w.Name}}/configure">Configure…</a>{{end}}
@@ -32,9 +32,11 @@
 
 <div class="card">
   <dl class="kv">
-    <dt>Module</dt><dd><code>{{$w.ModuleSource}}</code> <span class="tag">{{$w.ModuleRef}}</span></dd>
+    {{if $w.ModuleSource}}<dt>Module</dt><dd><code>{{$w.ModuleSource}}</code> <span class="tag">{{$w.ModuleRef}}</span></dd>{{end}}
+    {{if not $w.TemplateID}}<dt>Repository</dt><dd>{{if $w.VCSConnectionID}}<code>{{$w.VCSRepo}}</code> <span class="tag">{{$w.VCSBranch}}</span>{{else}}<span class="muted">none{{with $w.VCSRepo}} (was {{.}}; its VCS connection was deleted){{end}}</span>{{end}}
+      {{if and .CanOperate (features).VCS}} · <a href="/workspaces/{{$w.Name}}/vcs">{{if $w.VCSConnectionID}}Change{{else}}Link a repository{{end}}…</a>{{end}}</dd>{{end}}
     <dt>State</dt><dd>{{with .Versions}}{{with index . 0}}<span class="tag">v{{.Serial}}</span> saved {{.CreatedAt.Format "2006-01-02 15:04"}}{{end}}{{else}}<span class="muted">none yet</span>{{end}}</dd>
-    <dt>Inputs</dt><dd>{{range $k, $v := $w.Inputs}}<code>{{$k}} = {{$v}}</code><br>{{else}}<span class="muted">none</span>{{end}}</dd>
+    {{if $w.TemplateID}}<dt>Inputs</dt><dd>{{range $k, $v := $w.Inputs}}<code>{{$k}} = {{$v}}</code><br>{{else}}<span class="muted">none</span>{{end}}</dd>{{end}}
     <dt>Apply method</dt><dd>
       {{if .CanOperate}}
       <form method="post" action="/workspaces/{{$w.Name}}/settings" class="inline">
@@ -84,7 +86,7 @@
 </table>
 </div>
 {{else}}
-<p class="muted">{{if not .Versions}}No state saved yet.{{else if not (index .Versions 0).Indexed}}The current state version isn't indexed (the run couldn't read it back).{{else}}The current state holds no resources.{{end}}</p>
+<p class="muted">{{if not .Versions}}No state saved yet.{{else if not (index .Versions 0).Indexed}}The current state version isn't indexed yet (it was uploaded, or the run couldn't read it back); the next apply indexes it.{{else}}The current state holds no resources.{{end}}</p>
 {{end}}
 
 <h2 id="variables">Variables</h2>
@@ -122,6 +124,14 @@
   <label for="rename" style="margin:0">Name</label>
   <input id="rename" name="name" value="{{$w.Name}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}" style="max-width:24rem">
   <button type="submit" class="secondary">Rename</button>
+</form>
+<form method="post" action="/workspaces/{{$w.Name}}/state" enctype="multipart/form-data" class="card">
+  <label for="state" style="margin-top:0">Upload a state file</label>
+  <div class="inline">
+    <input type="file" id="state" name="state" accept=".tfstate,application/json" required aria-describedby="state-hint">
+    <button type="submit" class="secondary">Upload state</button>
+  </div>
+  <p class="hint" id="state-hint">Becomes the current state, e.g. to move a workspace here (<code>terraform state pull &gt; terraform.tfstate</code>). It must continue the current state (same lineage, no older serial).</p>
 </form>
 {{end}}
 

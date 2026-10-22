@@ -1,0 +1,29 @@
+{{define "vcsfields"}}
+{{$f := .Form}}
+<label for="vcs_connection">VCS connection</label>
+<select id="vcs_connection" name="vcs_connection">
+  <option value="">none: no repository</option>
+  {{range .Conns}}<option value="{{.ID}}"{{if eq .ID (index $f "vcs_connection")}} selected{{end}}>{{.Name}} ({{.Provider}})</option>{{end}}
+</select>
+<label for="vcs_repo">Repository</label>
+<input id="vcs_repo" name="vcs_repo" list="vcs-repos" value="{{index $f "vcs_repo"}}" class="wide" placeholder="owner/repo or project/repo">
+<datalist id="vcs-repos">{{range .Repos}}<option value="{{.}}">{{end}}</datalist>
+<label for="vcs_branch">Branch</label>
+<input id="vcs_branch" name="vcs_branch" value="{{index $f "vcs_branch"}}" placeholder="main">
+<p class="hint">Runs plan the Terraform configuration at the repository root, at the branch's latest commit.</p>
+{{end}}
+{{template "top"}}
+{{$w := .W}}
+<a class="back" href="/workspaces/{{$w.Name}}">← {{$w.Name}}</a>
+<div class="page-head">
+  <div>
+    <h1>Version control</h1>
+    <p class="muted">Where {{$w.Name}}'s runs get their Terraform configuration.</p>
+  </div>
+</div>
+{{with .VCS.Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
+<form method="post" class="card">
+  {{template "vcsfields" .VCS}}
+  <div class="actions"><button type="submit">Save</button><a class="btn secondary" href="/workspaces/{{$w.Name}}">Cancel</a></div>
+</form>
+{{template "bottom"}}

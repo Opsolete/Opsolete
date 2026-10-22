@@ -4,7 +4,7 @@
 <div class="page-head">
   <div>
     <h1>{{if eq $r.Action "destroy"}}Destroy{{else}}Run{{end}} <span class="status {{$r.Status}}" id="status">{{status $r.Status}}</span></h1>
-    <p class="muted">{{$r.CreatedAt.Format "2006-01-02 15:04:05"}}{{with $r.CreatedBy}} · triggered by {{.}}{{end}}{{with $r.ConfirmedBy}} · confirmed by {{.}}{{end}}{{with $r.Runner}} · runner {{.}}{{end}}</p>
+    <p class="muted">{{$r.CreatedAt.Format "2006-01-02 15:04:05"}}{{with $r.CreatedBy}} · triggered by {{.}}{{end}}{{with $r.ConfirmedBy}} · confirmed by {{.}}{{end}}{{with $r.Runner}} · runner {{.}}{{end}}{{with $r.VCSCommit}} · commit <code>{{printf "%.12s" .}}</code>{{end}}</p>
   </div>
   {{if and $.CanOperate $r.Working}}
   <div class="inline">

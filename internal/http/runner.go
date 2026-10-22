@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,6 +57,10 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 		}
 		if ok {
 			env, vars, err := s.runVariables(r.Context(), j.WorkspaceID, j.Inputs)
+			var src string
+			if err == nil {
+				src, err = s.jobSource(r.Context(), j)
+			}
 			if err != nil {
 				// The job is claimed: fail it rather than leave it to the lease reaper.
 				s.Log.Error("job variables", "run", j.RunID, "err", err)
@@ -68,7 +73,7 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, runnerapi.Job{
 				RunID: j.RunID, WorkspaceID: j.WorkspaceID, Phase: j.Phase, Action: j.Action, LeaseID: j.LeaseID,
 				LeaseSeconds: int(leaseTTL.Seconds()), StateToken: s.stateToken(j.WorkspaceID, j.RunID), Vars: vars, Env: env,
-				ModuleSource: s.Registry.RunnerSource(templates.Module{Source: j.ModuleSource, Ref: j.ModuleRef}, runnerSrcTTL),
+				ModuleSource: src,
 			})
 			return
 		}
@@ -81,6 +86,23 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 		case <-tick.C:
 		}
 	}
+}
+
+// jobSource is where the runner fetches the run's configuration: the template's module, or this
+// server's archive of the VCS commit the run plans (pinned at the plan phase, reused by the apply).
+func (s *Server) jobSource(ctx context.Context, j storage.Job) (string, error) {
+	switch {
+	case j.VCS:
+		if j.Phase == "plan" {
+			if err := s.pinCommit(ctx, j); err != nil {
+				return "", err
+			}
+		}
+		return s.Registry.SignedArchiveURL(vcsArchivePath(j.RunID), runnerSrcTTL), nil
+	case j.ModuleSource != "":
+		return s.Registry.RunnerSource(templates.Module{Source: j.ModuleSource, Ref: j.ModuleRef}, runnerSrcTTL), nil
+	}
+	return "", errors.New("the workspace has no configuration: link a repository or create it from a template")
 }
 
 func (s *Server) jobLogs(w http.ResponseWriter, r *http.Request) {

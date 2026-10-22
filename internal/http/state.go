@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/md5"
 	"crypto/rand"
@@ -111,50 +112,58 @@ func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Content-MD5 mismatch", http.StatusBadRequest)
 		return
 	}
+	if code, msg := s.saveState(ctx, id, body); code != http.StatusOK {
+		http.Error(w, msg, code)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// saveState stores body as the workspace's new current state version, unless it's the same as the
+// current one. The caller holds the state lock. It returns 200, or an error status and message.
+func (s *Server) saveState(ctx context.Context, id string, body []byte) (int, string) {
+	sum := md5.Sum(body)
 	// Only the header fields needed to version the file; the state itself is Terraform's business.
 	var head struct {
 		Serial  *int64 `json:"serial"`
 		Lineage string `json:"lineage"`
 	}
 	if err := json.Unmarshal(body, &head); err != nil || head.Serial == nil || head.Lineage == "" {
-		http.Error(w, "not a Terraform state file", http.StatusBadRequest)
-		return
+		return http.StatusBadRequest, "not a Terraform state file"
 	}
 	v := storage.StateVersion{Serial: *head.Serial, Lineage: head.Lineage, MD5: hex.EncodeToString(sum[:]), Size: int64(len(body))}
 	cur, err := s.Store.StateVersions(ctx, id, 1)
 	if err != nil {
-		s.stateError(w, "list state versions", err)
-		return
+		return s.stateFailure("list state versions", err)
 	}
 	if len(cur) > 0 {
 		switch {
 		case cur[0].Lineage != v.Lineage:
-			http.Error(w, "state lineage differs from the workspace's state", http.StatusConflict)
-			return
+			return http.StatusConflict, "state lineage differs from the workspace's state"
 		case v.Serial < cur[0].Serial:
-			http.Error(w, "state serial is older than the workspace's state", http.StatusConflict)
-			return
+			return http.StatusConflict, "state serial is older than the workspace's state"
 		case v.MD5 == cur[0].MD5:
-			w.WriteHeader(http.StatusOK) // unchanged: no new version
-			return
+			return http.StatusOK, "" // unchanged: no new version
 		}
 	}
 	ws, err := s.Store.GetWorkspaceByID(ctx, id)
 	if err != nil {
-		s.stateError(w, "get workspace", err)
-		return
+		return s.stateFailure("get workspace", err)
 	}
 	v.BlobKey = fmt.Sprintf("%s/%d-%s.tfstate", strings.TrimSuffix(ws.StateKey, ".tfstate"), v.Serial, rand.Text())
 	if err := s.StateStore.WriteAll(ctx, v.BlobKey, body, &blob.WriterOptions{ContentType: "application/json"}); err != nil {
-		s.stateError(w, "write state", err)
-		return
+		return s.stateFailure("write state", err)
 	}
 	if err := s.Store.AddStateVersion(ctx, id, v); err != nil {
-		s.stateError(w, "record state version", err) // the blob is orphaned, which is harmless
-		return
+		return s.stateFailure("record state version", err) // the blob is orphaned, which is harmless
 	}
 	s.Log.Info("state saved", "workspace", id, "serial", v.Serial, "bytes", v.Size)
-	w.WriteHeader(http.StatusOK)
+	return http.StatusOK, ""
+}
+
+func (s *Server) stateFailure(what string, err error) (int, string) {
+	s.Log.Error(what, "err", err)
+	return http.StatusInternalServerError, "internal error"
 }
 
 func (s *Server) lockState(w http.ResponseWriter, r *http.Request) {

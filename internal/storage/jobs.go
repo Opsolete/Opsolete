@@ -23,6 +23,7 @@ type Job struct {
 	LeaseID      string
 	ModuleSource string
 	ModuleRef    string
+	VCS          bool // configuration comes from the workspace's VCS branch
 	Inputs       map[string]any
 }
 
@@ -55,8 +56,9 @@ func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration
 		j.Phase = "apply"
 	}
 	var raw []byte
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(module_source, ''), module_ref, inputs FROM workspaces WHERE id = $1`,
-		j.WorkspaceID).Scan(&j.ModuleSource, &j.ModuleRef, &raw); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(module_source, ''), COALESCE(module_ref, ''),
+		vcs_connection_id IS NOT NULL, inputs FROM workspaces WHERE id = $1`,
+		j.WorkspaceID).Scan(&j.ModuleSource, &j.ModuleRef, &j.VCS, &raw); err != nil {
 		return Job{}, false, err
 	}
 	if err := json.Unmarshal(raw, &j.Inputs); err != nil {

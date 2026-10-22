@@ -730,6 +730,10 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 	if !strings.Contains(get(reader, "/workspaces").Body.String(), name) || get(reader, runURL).Code != 200 {
 		t.Fatal("a read grant must show the workspace and its runs")
 	}
+	if rec := get(owner, "/workspaces/new?template=vars"); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/templates/vars" ||
+		!strings.Contains(get(owner, "/workspaces/new").Body.String(), `<option value="vars">`) {
+		t.Fatalf("new workspace can start from a template: %d", rec.Code)
+	}
 	if rec := post(reader, wsURL+"/runs", url.Values{"action": {"destroy"}}); rec.Code != http.StatusForbidden {
 		t.Fatalf("read access must not start runs: %d", rec.Code)
 	}

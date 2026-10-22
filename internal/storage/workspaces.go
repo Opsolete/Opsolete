@@ -30,20 +30,28 @@ type Viewer struct {
 const visible = `($2 OR w.created_by = NULLIF($1, '')::uuid OR EXISTS (SELECT 1 FROM workspace_access a
 	JOIN users u ON u.id = NULLIF($1, '')::uuid WHERE a.workspace_id = w.id AND a.group_name = ANY(u.groups)))`
 
-// Workspace is a long-lived home for one Terraform state, created from a template.
+// Workspace is a long-lived home for one Terraform state. Its configuration comes from a template
+// (TemplateID, ModuleSource, ModuleRef, Inputs), from a VCS branch (VCS*), or from nowhere yet: an
+// empty workspace may hold just variables or an uploaded state.
 type Workspace struct {
-	ID           string
-	Name         string
-	TemplateID   string
-	ModuleSource string
-	ModuleRef    string
-	Inputs       map[string]any
-	StateKey     string // blob key prefix of its state versions
-	AutoApply    bool   // apply plans of apply runs without confirmation
-	CreatedBy    string // email; empty for workspaces from before login
-	CreatedAt    time.Time
-	Latest       *Run // most recent run
+	ID              string
+	Name            string
+	TemplateID      string // "" if not created from a template
+	ModuleSource    string
+	ModuleRef       string
+	Inputs          map[string]any
+	VCSConnectionID string // "" if not linked to a repository
+	VCSRepo         string
+	VCSBranch       string
+	StateKey        string // blob key prefix of its state versions
+	AutoApply       bool   // apply plans of apply runs without confirmation
+	CreatedBy       string // email; empty for workspaces from before login
+	CreatedAt       time.Time
+	Latest          *Run // most recent run
 }
+
+// HasConfig: there is Terraform configuration to plan, so runs can start.
+func (w Workspace) HasConfig() bool { return w.ModuleSource != "" || w.VCSConnectionID != "" }
 
 // Run statuses. A workspace has at most one active run (enforced by runs_one_active_idx).
 const (
@@ -72,6 +80,7 @@ type Run struct {
 	ConfirmedBy string
 	// CancelRequested: a user asked to cancel while a runner works on it.
 	CancelRequested bool
+	VCSCommit       string // commit a VCS workspace's run planned; "" until its plan fetched the configuration
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 }
@@ -96,13 +105,14 @@ type StatusEntry struct {
 	CreatedAt time.Time
 }
 
-const workspaceCols = `w.id, w.name, w.template_id, COALESCE(w.module_source, ''), w.module_ref, w.inputs, w.state_key,
-	w.auto_apply, COALESCE((SELECT email FROM users u WHERE u.id = w.created_by), ''), w.created_at`
+const workspaceCols = `w.id, w.name, COALESCE(w.template_id, ''), COALESCE(w.module_source, ''), COALESCE(w.module_ref, ''),
+	w.inputs, COALESCE(w.vcs_connection_id::text, ''), COALESCE(w.vcs_repo, ''), COALESCE(w.vcs_branch, ''), w.state_key, w.auto_apply, COALESCE((SELECT email FROM users u WHERE u.id = w.created_by), ''), w.created_at`
 
 func scanWorkspace(row interface{ Scan(...any) error }, extra ...any) (Workspace, error) {
 	var w Workspace
 	var raw []byte
-	dest := append([]any{&w.ID, &w.Name, &w.TemplateID, &w.ModuleSource, &w.ModuleRef, &raw, &w.StateKey,
+	dest := append([]any{&w.ID, &w.Name, &w.TemplateID, &w.ModuleSource, &w.ModuleRef, &raw,
+		&w.VCSConnectionID, &w.VCSRepo, &w.VCSBranch, &w.StateKey,
 		&w.AutoApply, &w.CreatedBy, &w.CreatedAt}, extra...)
 	if err := row.Scan(dest...); err != nil {
 		return w, err
@@ -112,13 +122,13 @@ func scanWorkspace(row interface{ Scan(...any) error }, extra ...any) (Workspace
 
 const runCols = `r.id, r.workspace_id, r.action, r.status, r.plan, r.outputs, r.runner,
 	COALESCE((SELECT email FROM users u WHERE u.id = r.created_by), ''),
-	COALESCE((SELECT email FROM users u WHERE u.id = r.confirmed_by), ''), r.cancel_requested, r.created_at, r.updated_at`
+	COALESCE((SELECT email FROM users u WHERE u.id = r.confirmed_by), ''), r.cancel_requested, COALESCE(r.vcs_commit, ''), r.created_at, r.updated_at`
 
 func scanRun(row interface{ Scan(...any) error }) (Run, error) {
 	var r Run
 	var plan, outputs []byte
 	if err := row.Scan(&r.ID, &r.WorkspaceID, &r.Action, &r.Status, &plan, &outputs, &r.Runner,
-		&r.CreatedBy, &r.ConfirmedBy, &r.CancelRequested, &r.CreatedAt, &r.UpdatedAt); err != nil {
+		&r.CreatedBy, &r.ConfirmedBy, &r.CancelRequested, &r.VCSCommit, &r.CreatedAt, &r.UpdatedAt); err != nil {
 		return r, err
 	}
 	if plan != nil {
@@ -134,9 +144,20 @@ func scanRun(row interface{ Scan(...any) error }) (Run, error) {
 	return r, nil
 }
 
-// CreateWorkspace creates a workspace and queues its first plan. createdBy is a user id, or empty.
+// CreateWorkspace creates a workspace from a template and queues its first plan. createdBy is a user id, or empty.
 func (s *Store) CreateWorkspace(ctx context.Context, name, templateID, moduleSource, moduleRef string,
 	inputs map[string]any, autoApply bool, createdBy string) (Workspace, Run, error) {
+	return s.createWorkspace(ctx, name, templateID, moduleSource, moduleRef, inputs, autoApply, createdBy, true)
+}
+
+// CreateEmptyWorkspace creates a workspace without configuration and without a run.
+func (s *Store) CreateEmptyWorkspace(ctx context.Context, name string, autoApply bool, createdBy string) (Workspace, error) {
+	w, _, err := s.createWorkspace(ctx, name, "", "", "", map[string]any{}, autoApply, createdBy, false)
+	return w, err
+}
+
+func (s *Store) createWorkspace(ctx context.Context, name, templateID, moduleSource, moduleRef string,
+	inputs map[string]any, autoApply bool, createdBy string, plan bool) (Workspace, Run, error) {
 	raw, err := json.Marshal(inputs)
 	if err != nil {
 		return Workspace{}, Run{}, err
@@ -150,7 +171,8 @@ func (s *Store) CreateWorkspace(ctx context.Context, name, templateID, moduleSou
 	err = tx.QueryRowContext(ctx, `
 		WITH id AS (SELECT gen_random_uuid() AS v)
 		INSERT INTO workspaces (id, name, template_id, module_source, module_ref, inputs, state_key, auto_apply, created_by)
-		SELECT v, $1, $2, $3, $4, $5, 'form2stack/' || $2 || '/' || v || '.tfstate', $6, NULLIF($7, '')::uuid FROM id
+		SELECT v, $1, NULLIF($2, ''), NULLIF($3, ''), NULLIF($4, ''), $5,
+			'form2stack/' || COALESCE(NULLIF($2, ''), 'workspaces') || '/' || v || '.tfstate', $6, NULLIF($7, '')::uuid FROM id
 		RETURNING id`, name, templateID, moduleSource, moduleRef, raw, autoApply, createdBy).Scan(&id)
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
 		return Workspace{}, Run{}, ErrNameTaken
@@ -158,9 +180,11 @@ func (s *Store) CreateWorkspace(ctx context.Context, name, templateID, moduleSou
 	if err != nil {
 		return Workspace{}, Run{}, err
 	}
-	run, err := createRun(ctx, tx, id, "apply", createdBy)
-	if err != nil {
-		return Workspace{}, Run{}, err
+	var run Run
+	if plan {
+		if run, err = createRun(ctx, tx, id, "apply", createdBy); err != nil {
+			return Workspace{}, Run{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return Workspace{}, Run{}, err
@@ -294,6 +318,22 @@ func (s *Store) SetGrant(ctx context.Context, workspaceID, group, level string) 
 	_, err := s.DB.ExecContext(ctx, `INSERT INTO workspace_access (workspace_id, group_name, level) VALUES ($1::uuid, $2, $3)
 		ON CONFLICT (workspace_id, group_name) DO UPDATE SET level = EXCLUDED.level`, workspaceID, group, level)
 	return err
+}
+
+// SetWorkspaceVCS links a workspace without a template to a repository branch; connID "" unlinks it.
+func (s *Store) SetWorkspaceVCS(ctx context.Context, workspaceID, connID, repo, branch string) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET vcs_connection_id = NULLIF($2, '')::uuid,
+		vcs_repo = NULLIF($3, ''), vcs_branch = NULLIF($4, ''), updated_at = now()
+		WHERE id::text = $1 AND template_id IS NULL`, workspaceID, connID, repo, branch)
+	return err
+}
+
+// PinVCSCommit records the commit a run plans, unless one is recorded already, and returns the
+// run's commit: the apply phase gets the commit its plan was made from.
+func (s *Store) PinVCSCommit(ctx context.Context, runID, commit string) (string, error) {
+	err := s.DB.QueryRowContext(ctx, `UPDATE runs SET vcs_commit = COALESCE(vcs_commit, $2)
+		WHERE id::text = $1 RETURNING vcs_commit`, runID, commit).Scan(&commit)
+	return commit, err
 }
 
 // SetAutoApply changes whether apply plans run without confirmation.

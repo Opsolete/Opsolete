@@ -25,10 +25,21 @@ const (
 
 var workspaceNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`)
 
+const workspaceNameRule = "2–63 lowercase letters, digits and dashes, starting with a letter or digit (not \"new\")"
+
+// validWorkspaceName: "new" is reserved for /workspaces/new.
+func validWorkspaceName(name string) bool { return workspaceNameRe.MatchString(name) && name != "new" }
+
 func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /templates/{id}", s.form)
 	mux.HandleFunc("POST /templates/{id}", s.createWorkspace)
 	mux.HandleFunc("GET /workspaces", s.workspaces)
+	mux.HandleFunc("GET /workspaces/new", s.newWorkspacePage)
+	mux.HandleFunc("POST /workspaces/new", s.createEmptyWorkspace)
+	mux.HandleFunc("GET /workspaces/{name}/vcs", s.workspaceVCSPage)
+	mux.HandleFunc("POST /workspaces/{name}/vcs", s.linkWorkspaceVCS)
+	mux.HandleFunc("POST /workspaces/{name}/state", s.uploadState)
+	mux.HandleFunc("GET /v1/vcs-archives/{file}", s.vcsArchive)
 	mux.HandleFunc("GET /workspaces/{name}", s.workspace)
 	mux.HandleFunc("POST /workspaces/{name}/runs", s.newRun)
 	mux.HandleFunc("POST /workspaces/{name}/settings", s.workspaceSettings)
@@ -106,8 +117,8 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 		errs = map[string]string{}
 	}
 	name := strings.TrimSpace(r.PostForm.Get(fieldWorkspace))
-	if !workspaceNameRe.MatchString(name) {
-		errs[fieldWorkspace] = "2–63 lowercase letters, digits and dashes, starting with a letter or digit"
+	if !validWorkspaceName(name) {
+		errs[fieldWorkspace] = workspaceNameRule
 	}
 	page := formPage{T: t, Editor: s.canEdit(r), Values: raw, Errors: errs, Workspace: name,
 		AutoApply: r.PostForm.Get(fieldAutoApply) != ""}
@@ -258,6 +269,10 @@ func (s *Server) newRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "action must be apply or destroy", http.StatusBadRequest)
 		return
 	}
+	if !ws.HasConfig() {
+		http.Error(w, "this workspace has no configuration to plan: link a repository first", http.StatusConflict)
+		return
+	}
 	run, err := s.Store.CreateRun(r.Context(), ws.ID, action, u.ID)
 	if errors.Is(err, storage.ErrRunActive) {
 		http.Error(w, err.Error(), http.StatusConflict)
@@ -354,8 +369,8 @@ func (s *Server) renameWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimSpace(r.PostFormValue("name"))
-	if !workspaceNameRe.MatchString(name) {
-		http.Error(w, "a workspace name is 2–63 lowercase letters, digits and dashes, starting with a letter or digit", http.StatusBadRequest)
+	if !validWorkspaceName(name) {
+		http.Error(w, "a workspace name is "+workspaceNameRule, http.StatusBadRequest)
 		return
 	}
 	if err := s.Store.RenameWorkspace(r.Context(), ws.ID, name); errors.Is(err, storage.ErrNameTaken) {

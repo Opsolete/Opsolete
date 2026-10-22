@@ -33,6 +33,9 @@ func fakeVCS(t *testing.T) *httptest.Server {
 	mux.HandleFunc("GET /gh/repos/acme/terraform-azurerm-storage/tags", gh(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`[{"name":"v1.1.0"},{"name":"latest"}]`))
 	}))
+	mux.HandleFunc("GET /gh/repos/acme/terraform-azurerm-storage/branches/main", gh(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"name":"main","commit":{"sha":"abc123"}}`))
+	}))
 	mux.HandleFunc("GET /gh/repos/acme/terraform-azurerm-storage/tarball/v1.1.0", gh(func(w http.ResponseWriter, r *http.Request) {
 		// Like GitHub: everything under one "owner-repo-sha/" directory.
 		w.Write(registrytest.TarGz(t, map[string]string{"acme-storage-abc123/main.tf": mainTF, "acme-storage-abc123/README.md": "hi"}))
@@ -51,6 +54,10 @@ func fakeVCS(t *testing.T) *httptest.Server {
 		w.Write([]byte(`{"value":[{"name":"storage","project":{"name":"Platform Team"}}]}`))
 	}))
 	mux.HandleFunc("GET /org/Platform Team/_apis/git/repositories/storage/refs", az(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("filter") == "heads/main" { // a prefix match, like the real one
+			w.Write([]byte(`{"value":[{"name":"refs/heads/main-old","objectId":"old"},{"name":"refs/heads/main","objectId":"def456"}]}`))
+			return
+		}
 		w.Write([]byte(`{"value":[{"name":"refs/tags/2.0.0"}]}`))
 	}))
 	mux.HandleFunc("GET /org/Platform Team/_apis/git/repositories/storage/items", az(func(w http.ResponseWriter, r *http.Request) {
@@ -83,11 +90,12 @@ func TestProviders(t *testing.T) {
 		repo, tag  string
 		wantFiles  []string
 		wantDenied bool
+		head       string
 	}{
-		{Conn{GitHub, srv.URL + "/gh", "gh-token"}, "acme/terraform-azurerm-storage", "v1.1.0", []string{"README.md", "main.tf"}, false},
-		{Conn{AzureDevOps, srv.URL + "/org", "az-pat"}, "Platform Team/storage", "2.0.0", []string{"main.tf", "sub/x.tf"}, false},
-		{Conn{GitHub, srv.URL + "/gh", "wrong"}, "", "", nil, true},
-		{Conn{AzureDevOps, srv.URL + "/org", "wrong"}, "", "", nil, true},
+		{Conn{GitHub, srv.URL + "/gh", "gh-token"}, "acme/terraform-azurerm-storage", "v1.1.0", []string{"README.md", "main.tf"}, false, "abc123"},
+		{Conn{AzureDevOps, srv.URL + "/org", "az-pat"}, "Platform Team/storage", "2.0.0", []string{"main.tf", "sub/x.tf"}, false, "def456"},
+		{Conn{GitHub, srv.URL + "/gh", "wrong"}, "", "", nil, true, ""},
+		{Conn{AzureDevOps, srv.URL + "/org", "wrong"}, "", "", nil, true, ""},
 	} {
 		repos, err := tc.conn.Repos(ctx)
 		if tc.wantDenied {
@@ -99,11 +107,14 @@ func TestProviders(t *testing.T) {
 		if err != nil || !slices.Contains(repos, tc.repo) {
 			t.Fatalf("%s repos: %v %v", tc.conn.Provider, repos, err)
 		}
+		if head, err := tc.conn.Head(ctx, tc.repo, "main"); err != nil || head != tc.head {
+			t.Fatalf("%s head of main: %q %v", tc.conn.Provider, head, err)
+		}
 		tags, err := tc.conn.Tags(ctx, tc.repo)
 		if err != nil || !slices.Contains(tags, tc.tag) {
 			t.Fatalf("%s tags: %v %v", tc.conn.Provider, tags, err)
 		}
-		archive, err := tc.conn.Archive(ctx, tc.repo, tc.tag)
+		archive, err := tc.conn.Archive(ctx, tc.repo, tc.tag, "tag")
 		if err != nil {
 			t.Fatalf("%s archive: %v", tc.conn.Provider, err)
 		}

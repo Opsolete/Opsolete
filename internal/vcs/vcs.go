@@ -201,9 +201,49 @@ func (c Conn) Tags(ctx context.Context, repo string) ([]string, error) {
 	return out, nil
 }
 
-// Archive downloads the repository at a tag as a registry module archive: a .tar.gz with the
-// repo root at the archive root.
-func (c Conn) Archive(ctx context.Context, repo, tag string) ([]byte, error) {
+// Head returns the commit a branch points at.
+func (c Conn) Head(ctx context.Context, repo, branch string) (string, error) {
+	a, b, err := splitRepo(repo)
+	if err != nil {
+		return "", err
+	}
+	switch c.Provider {
+	case GitHub:
+		var br struct {
+			Commit struct {
+				SHA string `json:"sha"`
+			} `json:"commit"`
+		}
+		err = c.getJSON(ctx, fmt.Sprintf("%s/repos/%s/%s/branches/%s", c.BaseURL, a, b, url.PathEscape(branch)), &br)
+		if err == nil && br.Commit.SHA == "" {
+			err = fmt.Errorf("branch %s not found in %s", branch, repo)
+		}
+		return br.Commit.SHA, err
+	case AzureDevOps:
+		var rs struct {
+			Value []struct {
+				Name     string `json:"name"`
+				ObjectID string `json:"objectId"`
+			} `json:"value"`
+		}
+		q := url.Values{"filter": {"heads/" + branch}, "api-version": {"7.1"}}
+		if err := c.getJSON(ctx, fmt.Sprintf("%s/%s/_apis/git/repositories/%s/refs?%s", c.BaseURL, a, b, q.Encode()), &rs); err != nil {
+			return "", err
+		}
+		for _, r := range rs.Value { // the filter is a prefix match
+			if r.Name == "refs/heads/"+branch {
+				return r.ObjectID, nil
+			}
+		}
+		return "", fmt.Errorf("branch %s not found in %s", branch, repo)
+	}
+	return "", fmt.Errorf("unknown VCS provider %q", c.Provider)
+}
+
+// Archive downloads the repository at a tag or commit (refType "tag" | "commit") as a module
+// archive: a .tar.gz with the repo root at the archive root.
+func (c Conn) Archive(ctx context.Context, repo, ref, refType string) ([]byte, error) {
+	tag := ref
 	a, b, err := splitRepo(repo)
 	if err != nil {
 		return nil, err
@@ -220,7 +260,7 @@ func (c Conn) Archive(ctx context.Context, repo, tag string) ([]byte, error) {
 		}
 	case AzureDevOps:
 		q := url.Values{"path": {"/"}, "recursionLevel": {"full"}, "$format": {"zip"}, "download": {"true"},
-			"versionDescriptor.version": {tag}, "versionDescriptor.versionType": {"tag"}, "api-version": {"7.1"}}
+			"versionDescriptor.version": {tag}, "versionDescriptor.versionType": {refType}, "api-version": {"7.1"}}
 		raw, err := c.get(ctx, fmt.Sprintf("%s/%s/_apis/git/repositories/%s/items?%s", c.BaseURL, a, b, q.Encode()), maxDownload)
 		if err != nil {
 			return nil, err
@@ -433,7 +473,7 @@ func sync(ctx context.Context, st *storage.Store, key []byte, m storage.VCSModul
 			continue // not a release tag, or already published (v1.0.0 and 1.0.0 are one version)
 		}
 		have[ver] = true
-		archive, err := c.Archive(ctx, m.Repo, tag)
+		archive, err := c.Archive(ctx, m.Repo, tag, "tag")
 		if err != nil {
 			errs = append(errs, fmt.Errorf("tag %s: %w", tag, err))
 			continue

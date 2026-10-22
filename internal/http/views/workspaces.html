@@ -2,23 +2,24 @@
 <div class="page-head">
   <div>
     <h1>Workspaces</h1>
-    <p class="muted">Each workspace holds one Terraform state and the runs that changed it. Create one from a <a href="/">template</a>.</p>
+    <p class="muted">Each workspace holds one Terraform state and the runs that changed it.</p>
   </div>
+  <a class="btn" href="/workspaces/new">+ New workspace</a>
 </div>
 <div class="card flush">
 <table>
-<tr><th>Workspace</th><th>Template</th><th>Version</th><th>Latest run</th><th>Owner</th><th>Updated</th></tr>
+<tr><th>Workspace</th><th>Configuration</th><th>Version</th><th>Latest run</th><th>Owner</th><th>Updated</th></tr>
 {{range .}}
 <tr>
   <td><a href="/workspaces/{{.Name}}"><strong>{{.Name}}</strong></a>{{if .AutoApply}} <span class="tag" title="plans of apply runs are applied without confirmation">auto-apply</span>{{end}}</td>
-  <td>{{.TemplateID}}</td>
-  <td><span class="tag">{{.ModuleRef}}</span></td>
+  <td>{{if .TemplateID}}{{.TemplateID}}{{else if .VCSConnectionID}}<code>{{.VCSRepo}}</code>{{else}}<span class="muted">none</span>{{end}}</td>
+  <td>{{if .TemplateID}}<span class="tag">{{.ModuleRef}}</span>{{else if .VCSConnectionID}}<span class="tag">{{.VCSBranch}}</span>{{end}}</td>
   <td>{{with .Latest}}<span class="status {{.Status}}">{{status .Status}}</span>{{if eq .Action "destroy"}} <small>destroy</small>{{end}}{{else}}<span class="muted">none</span>{{end}}</td>
   <td>{{.CreatedBy}}</td>
   <td class="nowrap">{{with .Latest}}{{.UpdatedAt.Format "2006-01-02 15:04"}}{{else}}{{.CreatedAt.Format "2006-01-02 15:04"}}{{end}}</td>
 </tr>
 {{else}}
-<tr><td colspan="6" class="empty">No workspaces yet. <a href="/">Create one from a template</a>.</td></tr>
+<tr><td colspan="6" class="empty">No workspaces yet. <a href="/workspaces/new">Create one</a>.</td></tr>
 {{end}}
 </table>
 </div>
