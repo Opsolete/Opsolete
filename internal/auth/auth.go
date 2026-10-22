@@ -43,12 +43,13 @@ func (u User) Admin() bool { return u.Role == "admin" }
 type Config struct {
 	Issuer, ClientID, ClientSecret string
 	DevUser                        string
+	DevGroups                      []string // the dev user's groups, as an IdP would send them
 	Admins                         []string // emails that get the admin role
 	PublicURL                      *url.URL // the callback is PublicURL/auth/callback
 }
 
-// SaveUser records a login and returns the user's id.
-type SaveUser func(ctx context.Context, email, role string) (string, error)
+// SaveUser records a login (with the IdP's groups, for team access) and returns the user's id.
+type SaveUser func(ctx context.Context, email, role string, groups []string) (string, error)
 
 type Auth struct {
 	key    []byte
@@ -73,7 +74,7 @@ func New(ctx context.Context, c Config, key []byte, save SaveUser) (*Auth, error
 		return nil, errors.New("set either OIDC_ISSUER or AUTH_DEV_USER, not both")
 	case c.DevUser != "":
 		u := User{Email: strings.ToLower(c.DevUser), Role: a.role(c.DevUser)}
-		id, err := save(ctx, u.Email, u.Role)
+		id, err := save(ctx, u.Email, u.Role, c.DevGroups)
 		if err != nil {
 			return nil, err
 		}
@@ -185,9 +186,10 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var c struct {
-		Email             string `json:"email"`
-		EmailVerified     *bool  `json:"email_verified"`
-		PreferredUsername string `json:"preferred_username"` // Entra ID often has no email claim
+		Email             string   `json:"email"`
+		EmailVerified     *bool    `json:"email_verified"`
+		PreferredUsername string   `json:"preferred_username"` // Entra ID often has no email claim
+		Groups            []string `json:"groups"`             // team access; must be enabled in the IdP
 	}
 	if err := idt.Claims(&c); err != nil {
 		http.Error(w, "login failed: claims", http.StatusForbidden)
@@ -199,7 +201,7 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := User{Email: email, Role: a.role(email)}
-	if u.ID, err = a.save(r.Context(), u.Email, u.Role); err != nil {
+	if u.ID, err = a.save(r.Context(), u.Email, u.Role, c.Groups); err != nil {
 		http.Error(w, "login failed: could not save user", http.StatusInternalServerError)
 		return
 	}

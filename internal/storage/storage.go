@@ -71,10 +71,13 @@ func (s *Store) Migrate(ctx context.Context) error {
 	return tx.Commit()
 }
 
-// UpsertUser records a login; the role follows ADMIN_EMAILS on every login.
-func (s *Store) UpsertUser(ctx context.Context, email, role string) (string, error) {
+// UpsertUser records a login; the role (from ADMIN_EMAILS) and the IdP groups are refreshed on every login.
+func (s *Store) UpsertUser(ctx context.Context, email, role string, groups []string) (string, error) {
+	if groups == nil {
+		groups = []string{}
+	}
 	var id string
-	err := s.DB.QueryRowContext(ctx, `INSERT INTO users (email, role) VALUES ($1, $2)
-		ON CONFLICT (email) DO UPDATE SET role = EXCLUDED.role RETURNING id`, email, role).Scan(&id)
+	err := s.DB.QueryRowContext(ctx, `INSERT INTO users (email, role, groups) VALUES ($1, $2, $3)
+		ON CONFLICT (email) DO UPDATE SET role = EXCLUDED.role, groups = EXCLUDED.groups RETURNING id`, email, role, groups).Scan(&id)
 	return id, err
 }

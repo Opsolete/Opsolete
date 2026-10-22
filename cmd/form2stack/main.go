@@ -2,7 +2,8 @@
 //
 //	form2stack                          serve the web UI, registry and runner API
 //	form2stack runner                   execute deployments (no database needed)
-//	form2stack token <name> [scope]     create an API token; scope is registry (default) or runner
+//	form2stack token <name> [scope] [pool]  create an API token; scope is registry (default) or runner;
+//	                                        a runner token's pool is the identity its runners run as
 package main
 
 import (
@@ -14,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
 	"syscall"
 	"time"
 
@@ -40,10 +42,10 @@ func main() {
 		err = serve(log)
 	case os.Args[1] == "runner" && len(os.Args) == 2:
 		err = runRunner(log)
-	case os.Args[1] == "token" && (len(os.Args) == 3 || len(os.Args) == 4):
+	case os.Args[1] == "token" && len(os.Args) >= 3 && len(os.Args) <= 5:
 		err = createToken()
 	default:
-		err = errors.New("usage: form2stack [runner | token <name> [registry|runner]]")
+		err = errors.New("usage: form2stack [runner | token <name> [registry | runner [pool]]]")
 	}
 	if err != nil {
 		log.Error("fatal", "err", err)
@@ -63,6 +65,8 @@ func openStore(ctx context.Context, cfg config.Config) (*storage.Store, error) {
 	return store, nil
 }
 
+var poolRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+
 func createToken() error {
 	cfg, err := config.Load()
 	if err != nil {
@@ -75,13 +79,19 @@ func createToken() error {
 	if scope != storage.ScopeRegistry && scope != storage.ScopeRunner {
 		return errors.New("scope must be registry or runner")
 	}
+	pool := ""
+	if len(os.Args) == 5 {
+		if pool = os.Args[4]; scope != storage.ScopeRunner || !poolRe.MatchString(pool) {
+			return errors.New("a pool is a runner token's identity: lowercase letters, digits and dashes")
+		}
+	}
 	ctx := context.Background()
 	store, err := openStore(ctx, cfg)
 	if err != nil {
 		return err
 	}
 	defer store.DB.Close()
-	token, err := store.CreateToken(ctx, os.Args[2], scope)
+	token, err := store.CreateToken(ctx, os.Args[2], scope, pool)
 	if err != nil {
 		return err
 	}
@@ -133,7 +143,7 @@ func serve(log *slog.Logger) error {
 
 	// Same key as the registry: cookie MACs are domain-separated from signed archive URLs.
 	authn, err := auth.New(ctx, auth.Config{Issuer: cfg.OIDCIssuer, ClientID: cfg.OIDCClientID, ClientSecret: cfg.OIDCClientSecret,
-		DevUser: cfg.AuthDevUser, Admins: cfg.AdminEmails, PublicURL: cfg.PublicURL}, key, store.UpsertUser)
+		DevUser: cfg.AuthDevUser, DevGroups: cfg.AuthDevGroups, Admins: cfg.AdminEmails, PublicURL: cfg.PublicURL}, key, store.UpsertUser)
 	if err != nil {
 		return err
 	}

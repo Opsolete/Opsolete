@@ -122,17 +122,17 @@ type Resource struct {
 	Serial    int64  // state version the index comes from
 }
 
-// Resources lists the resources in the current state of every workspace (or of one), optionally
-// only those whose address or type contains q (case-insensitive).
+// Resources lists the resources in the current state of every workspace v may see (or of one),
+// optionally only those whose address or type contains q (case-insensitive).
 // shortcut: no paging, capped at 2000 rows; add paging when inventories get that large.
-func (s *Store) Resources(ctx context.Context, q, workspaceID string) ([]Resource, error) {
+func (s *Store) Resources(ctx context.Context, v Viewer, q, workspaceID string) ([]Resource, error) {
 	rows, err := s.DB.QueryContext(ctx, `
 		WITH cur AS (SELECT DISTINCT ON (workspace_id) id, workspace_id, serial FROM state_versions
-			WHERE ($2 = '' OR workspace_id::text = $2) ORDER BY workspace_id, id DESC)
+			WHERE ($4 = '' OR workspace_id::text = $4) ORDER BY workspace_id, id DESC)
 		SELECT r.address, r.type, r.name, r.provider, r.module, w.name, cur.serial
 		FROM cur JOIN state_version_resources r ON r.state_version_id = cur.id JOIN workspaces w ON w.id = cur.workspace_id
-		WHERE $1 = '' OR strpos(lower(r.address), lower($1)) > 0 OR strpos(lower(r.type), lower($1)) > 0
-		ORDER BY r.type, w.name, r.address LIMIT 2000`, q, workspaceID)
+		WHERE `+visible+` AND ($3 = '' OR strpos(lower(r.address), lower($3)) > 0 OR strpos(lower(r.type), lower($3)) > 0)
+		ORDER BY r.type, w.name, r.address LIMIT 2000`, v.UserID, v.Admin, q, workspaceID)
 	if err != nil {
 		return nil, err
 	}

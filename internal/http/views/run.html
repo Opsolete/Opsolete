@@ -4,9 +4,22 @@
 <div class="page-head">
   <div>
     <h1>{{if eq $r.Action "destroy"}}Destroy{{else}}Run{{end}} <span class="status {{$r.Status}}" id="status">{{status $r.Status}}</span></h1>
-    <p class="muted">{{$r.CreatedAt.Format "2006-01-02 15:04:05"}}{{with $r.CreatedBy}} · triggered by {{.}}{{end}}{{with $r.ConfirmedBy}} · confirmed by {{.}}{{end}}{{with $r.Runner}} · runner {{.}}{{end}}</p>
+    <p class="muted">{{$r.CreatedAt.Format "2006-01-02 15:04:05"}}{{with $r.CreatedBy}} · triggered by {{.}}{{end}}{{with $r.ConfirmedBy}} · confirmed by {{.}}{{end}}{{with $r.Runner}} · runner {{.}}{{end}}{{with $w.Identity}} · pool {{.}}{{end}}</p>
   </div>
+  {{if and $.CanOperate $r.Working}}
+  <div class="inline">
+    {{if $r.CancelRequested}}
+    <span class="muted">Cancel requested…</span>
+    <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/cancel"
+      onsubmit="return confirm('Force cancel cuts the runner off at once. Terraform may not save resources it is creating right now. Only use this if the run does not stop.')">
+      <input type="hidden" name="force" value="1"><button type="submit" class="danger">Force cancel</button></form>
+    {{else}}
+    <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/cancel"><button type="submit" class="secondary">Cancel run</button></form>
+    {{end}}
+  </div>
+  {{end}}
 </div>
+{{if and (eq $r.Status "plan_queued" "apply_queued") $w.Identity}}<p class="muted">Waiting for a runner of the <strong>{{$w.Identity}}</strong> pool.</p>{{end}}
 
 {{with $r.Plan}}
 <div class="card">

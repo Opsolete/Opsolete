@@ -9,7 +9,9 @@ Pick a template, name a **workspace** and fill in a form generated from JSON. A 
 - **Auto-apply** (per workspace, off by default) applies plans without confirmation. **Destroy runs always ask.**
 - **One active run per workspace.** A new run waits until the current one is applied, discarded or finished.
 - **New run** re-plans with the workspace's inputs, for example to fix drift. **Destroy…** plans `terraform plan -destroy`; once confirmed and applied, the workspace is marked destroyed. A new run can recreate it.
-- Only the user who created a workspace, or an admin, can start runs, confirm or discard plans and change its settings. Everyone logged in can see workspaces, runs and logs.
+- **Cancel run:** a queued run is canceled at once. A running one is asked to stop: the runner interrupts Terraform (SIGINT), which finishes in-flight operations and **still saves state**, and the run ends `canceled`. If a runner doesn't react, **Force cancel** cuts it off immediately; its lease, state password and state lock die with the run, but resources Terraform was creating at that moment may be missing from state.
+- **Rename** a workspace from its page. State, runs and grants are keyed by its id and stay put.
+- **Access:** see [Teams](#teams-access-per-workspace). The creator and admins operate a workspace; IdP groups get `read` or `operate` per workspace. Without access, a workspace returns 404, as if it didn't exist.
 
 ## Run locally with Nix (recommended)
 
@@ -61,10 +63,20 @@ All pages require login. Health checks, the registry protocol (`/v1/…`, which 
 
 - **OIDC:** authorization code flow with PKCE, using `coreos/go-oidc` and `x/oauth2`. It works with Entra ID, Google, Keycloak, Dex and similar. Register `PUBLIC_URL/auth/callback` as the redirect URI. The user is identified by the `email` claim, falling back to `preferred_username` (Entra ID). An explicit `email_verified: false` is rejected.
 - **Roles:** emails listed in `ADMIN_EMAILS` are `admin`, everyone else is `user`. The role is recorded at every login, so editing `ADMIN_EMAILS` takes effect at the next login. Sessions are HMAC-signed cookies that last 12 hours. Logging out ends the Form2Stack session, not the IdP session.
-- **Users** can create workspaces from templates, see all workspaces and runs, and operate their own workspaces (runs, confirm/discard, destroy, settings). **Admins** can operate any workspace and, with `TEMPLATE_EDITOR=1`, use the template builder and upload modules.
+- **Users** can create workspaces from templates and see and operate their own, plus those granted to one of their groups. **Admins** see and operate every workspace, grant access, and with `TEMPLATE_EDITOR=1` use the template builder and upload modules.
 - Cross-site form posts are rejected (`http.CrossOriginProtection`). If a proxy rewrites the `Host` header, keep it equal to the browser's origin.
 
-Endpoints: `/healthz` (liveness), `/readyz` (checks the DB), `/` (templates), `/templates/{id}` (form, creates a workspace), `/workspaces`, `/workspaces/{name}` (overview, runs, outputs, resources, state versions), `POST /workspaces/{name}/runs` (`action=apply|destroy`), `/workspaces/{name}/runs/{id}` (plan, confirm/discard, live log, history) and its `/logs`, `/auth/login|callback|logout`, `/resources`, `/registry`, `/v1/modules/…` (registry protocol), `/api/runner/v1/…` (runner API), `/api/state/v1/{id}` (Terraform state backend).
+### Teams: access per workspace
+
+Teams are your IdP's groups. At every login Form2Stack records the ID token's `groups` claim for the user, in Postgres because it can be too large for a cookie.
+
+- On a workspace page, an admin grants a group `read` (see the workspace, its runs, logs, outputs and resources) or `operate` (also runs, confirm/discard, destroy, cancel, settings and rename). If a user is in several granted groups, the strongest grant wins.
+- Workspaces, their runs and the `/resources` page only show what the user may see. Workspaces created before login existed have no creator, so only admins see them until a group is granted.
+- **Entra ID:** in the app registration, under *Token configuration*, choose *Add groups claim* and select *Security groups* for the ID token. Entra sends group **object IDs**, so grant those. Users in more than 200 groups get an "overage" reference instead of the list, which Form2Stack doesn't follow (shortcut: assign groups to the app so the list stays short, or add a Microsoft Graph lookup if that's not enough). Keycloak and Dex need a `groups` mapper or scope.
+- Group membership changes take effect at the user's next login. Grants and revokes take effect immediately.
+- Local dev: `AUTH_DEV_GROUPS=grp-a,grp-b` gives the dev user groups.
+
+Endpoints: `/healthz` (liveness), `/readyz` (checks the DB), `/` (templates), `/templates/{id}` (form, creates a workspace), `/workspaces`, `/workspaces/{name}` (overview, runs, outputs, resources, state versions), `POST /workspaces/{name}/runs` (`action=apply|destroy`), `POST …/rename`, `POST …/access` (admins), `/workspaces/{name}/runs/{id}` (plan, confirm/discard/cancel, live log, history) and its `/logs`, `/auth/login|callback|logout`, `/resources`, `/registry`, `/v1/modules/…` (registry protocol), `/api/runner/v1/…` (runner API), `/api/state/v1/{id}` (Terraform state backend).
 
 ## Workspaces and state
 
@@ -112,11 +124,50 @@ docker run -e F2S_SERVER_URL=http://form2stack:8080 -e F2S_RUNNER_TOKEN=… -e A
 ```
 
 **On Kubernetes:**
-- Run two Deployments of the same images.
-- Pass the runner token and cloud credentials as Secrets (or workload identity).
+- Run two Deployments of the same images: the app, and one runner Deployment per [runner pool](#runner-pools-a-cloud-identity-per-workspace).
+- Pass the runner token as a Secret. Cloud credentials come from workload identity.
 - Scale runners with `replicas`, one job each at a time.
 - Point `F2S_SERVER_URL` at the app's Service, so registry downloads stay inside the cluster.
 - Optionally mount a volume at `TF_PLUGIN_CACHE_DIR` to keep providers between restarts.
+
+### Runner pools: a cloud identity per workspace
+
+A template lists the identities its workspaces may run as (`"identities": ["azure-sandbox", "azure-prod"]`, also in the template builder), and a workspace picks one at creation. Each identity is a **runner pool**: runners whose token belongs to that pool, running with that identity's cloud credentials. A workspace's runs only go to its pool. Templates without identities use the default pool.
+
+- **The pool is bound to the runner token**, not chosen by the runner: `form2stack token runner-prod runner azure-prod` (or `just runner azure-prod` locally). A sandbox runner can never claim a prod workspace's runs, which would carry prod variables and state.
+- **No secrets, no public endpoint on AKS:** each pool is a runner Deployment whose service account is federated with that identity's Entra managed identity (AKS workload identity). The azurerm provider then authenticates as it:
+
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: f2s-runner-azure-prod
+  annotations:
+    azure.workload.identity/client-id: <managed identity client id>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: f2s-runner-azure-prod }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: f2s-runner-azure-prod } }
+  template:
+    metadata:
+      labels: { app: f2s-runner-azure-prod, azure.workload.identity/use: "true" }
+    spec:
+      serviceAccountName: f2s-runner-azure-prod
+      terminationGracePeriodSeconds: 3600   # lets a running job finish on rollout
+      containers:
+        - name: runner
+          image: ghcr.io/rudesome/form2stack-runner:latest
+          env:
+            - { name: F2S_SERVER_URL, value: "http://form2stack:8080" }
+            - { name: F2S_RUNNER_TOKEN, valueFrom: { secretKeyRef: { name: f2s-runner-azure-prod, key: token } } }
+            - { name: ARM_USE_AKS_WORKLOAD_IDENTITY, value: "true" }
+            - { name: ARM_SUBSCRIPTION_ID, value: "<subscription id>" }
+```
+  Create the federated credential on the managed identity with issuer = your cluster's OIDC issuer URL and subject `system:serviceaccount:<namespace>:f2s-runner-azure-prod`. Give the identity only the Azure roles that pool's workspaces need.
+- A pool without running runners leaves its runs queued. The run page says which pool it is waiting for.
 
 ## CI and releases
 
@@ -157,7 +208,7 @@ TEST_DATABASE_URL=$DATABASE_URL go test ./internal/storage   # database tests
 
 ## Templates
 
-Each `catalog/*.json` file describes one existing Terraform module pinned to an approved `ref`, plus its inputs (`string`, `number`, `bool`, `select`, with optional `required`, `pattern`, `options` and `default`). See `catalog/storage-account.json`.
+Each `catalog/*.json` file describes one existing Terraform module pinned to an approved `ref`, plus its inputs (`string`, `number`, `bool`, `select`, with optional `required`, `pattern`, `options` and `default`) and optionally the `identities` (runner pools) its workspaces may run as. See `catalog/storage-account.json`.
 
 ## Module registry
 

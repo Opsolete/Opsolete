@@ -115,6 +115,8 @@ func (r *Runner) Execute(hard context.Context, job runnerapi.Job) {
 	switch {
 	case hard.Err() != nil:
 		res.Status, res.Message = "canceled", "runner was shut down during the run"
+	case ship.canceled.Load():
+		res.Status, res.Message = "canceled", "canceled by a user; Terraform was interrupted and saved its state"
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		res.Status, res.Message = "failed", fmt.Sprintf("timed out after %s", r.JobTimeout)
 	}
@@ -294,9 +296,10 @@ func summarize(p *tfjson.Plan) runnerapi.Plan {
 // inventory lists the managed resources in the workspace's state: names only, never attribute
 // values. nil means the state couldn't be read, so the current state version stays unindexed.
 func inventory(ctx context.Context, tf *tfexec.Terraform) []runnerapi.Resource {
-	if ctx.Err() != nil {
-		return nil
-	}
+	// Own context: after a cancel the job's context is done, but while the run holds its lease
+	// the state is still readable, and a half-applied state is the one most worth indexing.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
 	tf.SetStdout(io.Discard) // show -json prints the whole state, secrets included
 	tf.SetStderr(io.Discard)
 	st, err := tf.Show(ctx)
@@ -430,15 +433,16 @@ func sleep(ctx context.Context, d time.Duration) {
 // shipper buffers job output and posts it to the server about once a second, cut at line
 // boundaries. Posts double as heartbeats; a 409 means the lease is gone and the job is cancelled.
 type shipper struct {
-	r       *Runner
-	job     runnerapi.Job
-	cancel  context.CancelFunc
-	redact  *strings.Replacer
-	mu      sync.Mutex
-	buf     bytes.Buffer
-	lost    atomic.Bool
-	stop    chan struct{}
-	stopped chan struct{}
+	r        *Runner
+	job      runnerapi.Job
+	cancel   context.CancelFunc
+	redact   *strings.Replacer
+	mu       sync.Mutex
+	buf      bytes.Buffer
+	lost     atomic.Bool
+	canceled atomic.Bool // a user canceled the run: Terraform is interrupted, the lease kept
+	stop     chan struct{}
+	stopped  chan struct{}
 }
 
 const maxBuffered = 8 << 20 // if the server is unreachable for long, drop output rather than memory
@@ -520,8 +524,14 @@ func (s *shipper) post(path string, body []byte) bool {
 	code, _, err := s.r.call(ctx, "/jobs/"+s.job.RunID+path, s.job.LeaseID, "text/plain; charset=utf-8", body)
 	if err == nil && code == http.StatusConflict {
 		s.lost.Store(true)
-		s.cancel() // someone else owns this deployment now; stop terraform
+		s.cancel() // someone else owns this run now; stop terraform
 		return false
+	}
+	if err == nil && code == runnerapi.StatusCancel {
+		if !s.canceled.Swap(true) {
+			s.cancel() // SIGINT: Terraform finishes in-flight operations and saves state
+		}
+		return true
 	}
 	return err == nil && code == http.StatusNoContent
 }

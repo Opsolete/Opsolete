@@ -48,7 +48,9 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	for {
-		j, ok, err := s.Store.ClaimJob(r.Context(), req.Runner, leaseTTL)
+		// The pool comes from the token, never from the request: a runner can't ask for another identity's runs.
+		pool, _ := r.Context().Value(poolKey{}).(string)
+		j, ok, err := s.Store.ClaimJob(r.Context(), req.Runner, pool, leaseTTL)
 		if err != nil {
 			s.Log.Error("claim job", "err", err)
 			writeErrors(w, http.StatusInternalServerError, "internal error")
@@ -80,11 +82,23 @@ func (s *Server) jobLogs(w http.ResponseWriter, r *http.Request) {
 		writeErrors(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("log chunks are limited to %d KB", maxLogChunk>>10))
 		return
 	}
-	s.leaseResult(w, s.Store.AppendLog(r.Context(), r.PathValue("id"), r.Header.Get(runnerapi.LeaseHeader), strings.ToValidUTF8(string(b), "\uFFFD"), leaseTTL, maxLogBytes))
+	cancel, err := s.Store.AppendLog(r.Context(), r.PathValue("id"), r.Header.Get(runnerapi.LeaseHeader), strings.ToValidUTF8(string(b), "\uFFFD"), leaseTTL, maxLogBytes)
+	s.liveResult(w, cancel, err)
 }
 
 func (s *Server) jobHeartbeat(w http.ResponseWriter, r *http.Request) {
-	s.leaseResult(w, s.Store.Heartbeat(r.Context(), r.PathValue("id"), r.Header.Get(runnerapi.LeaseHeader), leaseTTL))
+	cancel, err := s.Store.Heartbeat(r.Context(), r.PathValue("id"), r.Header.Get(runnerapi.LeaseHeader), leaseTTL)
+	s.liveResult(w, cancel, err)
+}
+
+// liveResult answers a log post or heartbeat: 202 asks the runner to cancel gracefully (it keeps
+// its lease, so Terraform can still save state), 409 means the lease is gone.
+func (s *Server) liveResult(w http.ResponseWriter, cancel bool, err error) {
+	if err == nil && cancel {
+		w.WriteHeader(runnerapi.StatusCancel)
+		return
+	}
+	s.leaseResult(w, err)
 }
 
 func (s *Server) jobFinish(w http.ResponseWriter, r *http.Request) {

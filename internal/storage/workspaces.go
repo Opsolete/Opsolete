@@ -16,7 +16,19 @@ var (
 	ErrNameTaken      = errors.New("a workspace with this name already exists")
 	ErrRunActive      = errors.New("the workspace already has an active run: confirm or discard it, or wait for it to finish")
 	ErrNotConfirmable = errors.New("the run isn't waiting for confirmation")
+	ErrNotCancelable  = errors.New("the run can't be canceled: it isn't queued or running")
 )
+
+// Viewer is who asks: admins see everything, others their own workspaces and those granted to
+// one of their groups.
+type Viewer struct {
+	UserID string
+	Admin  bool
+}
+
+// visible is the SQL condition for "viewer ($1 = user id, $2 = admin) may see workspace w".
+const visible = `($2 OR w.created_by = NULLIF($1, '')::uuid OR EXISTS (SELECT 1 FROM workspace_access a
+	JOIN users u ON u.id = NULLIF($1, '')::uuid WHERE a.workspace_id = w.id AND a.group_name = ANY(u.groups)))`
 
 // Workspace is a long-lived home for one Terraform state, created from a template.
 type Workspace struct {
@@ -28,6 +40,7 @@ type Workspace struct {
 	Inputs       map[string]any
 	StateKey     string // blob key prefix of its state versions
 	AutoApply    bool   // apply plans of apply runs without confirmation
+	Identity     string // runner pool (cloud identity) its runs execute in; "" is the default pool
 	CreatedBy    string // email; empty for workspaces from before login
 	CreatedAt    time.Time
 	Latest       *Run // most recent run
@@ -58,8 +71,10 @@ type Run struct {
 	Runner      *string
 	CreatedBy   string // emails
 	ConfirmedBy string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// CancelRequested: a user asked to cancel while a runner works on it.
+	CancelRequested bool
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // Active: the run still holds its workspace (queued, working or waiting for confirmation).
@@ -83,13 +98,13 @@ type StatusEntry struct {
 }
 
 const workspaceCols = `w.id, w.name, w.template_id, COALESCE(w.module_source, ''), w.module_ref, w.inputs, w.state_key,
-	w.auto_apply, COALESCE((SELECT email FROM users u WHERE u.id = w.created_by), ''), w.created_at`
+	w.auto_apply, w.identity, COALESCE((SELECT email FROM users u WHERE u.id = w.created_by), ''), w.created_at`
 
 func scanWorkspace(row interface{ Scan(...any) error }, extra ...any) (Workspace, error) {
 	var w Workspace
 	var raw []byte
 	dest := append([]any{&w.ID, &w.Name, &w.TemplateID, &w.ModuleSource, &w.ModuleRef, &raw, &w.StateKey,
-		&w.AutoApply, &w.CreatedBy, &w.CreatedAt}, extra...)
+		&w.AutoApply, &w.Identity, &w.CreatedBy, &w.CreatedAt}, extra...)
 	if err := row.Scan(dest...); err != nil {
 		return w, err
 	}
@@ -98,13 +113,13 @@ func scanWorkspace(row interface{ Scan(...any) error }, extra ...any) (Workspace
 
 const runCols = `r.id, r.workspace_id, r.action, r.status, r.plan, r.outputs, r.runner,
 	COALESCE((SELECT email FROM users u WHERE u.id = r.created_by), ''),
-	COALESCE((SELECT email FROM users u WHERE u.id = r.confirmed_by), ''), r.created_at, r.updated_at`
+	COALESCE((SELECT email FROM users u WHERE u.id = r.confirmed_by), ''), r.cancel_requested, r.created_at, r.updated_at`
 
 func scanRun(row interface{ Scan(...any) error }) (Run, error) {
 	var r Run
 	var plan, outputs []byte
 	if err := row.Scan(&r.ID, &r.WorkspaceID, &r.Action, &r.Status, &plan, &outputs, &r.Runner,
-		&r.CreatedBy, &r.ConfirmedBy, &r.CreatedAt, &r.UpdatedAt); err != nil {
+		&r.CreatedBy, &r.ConfirmedBy, &r.CancelRequested, &r.CreatedAt, &r.UpdatedAt); err != nil {
 		return r, err
 	}
 	if plan != nil {
@@ -122,7 +137,7 @@ func scanRun(row interface{ Scan(...any) error }) (Run, error) {
 
 // CreateWorkspace creates a workspace and queues its first plan. createdBy is a user id, or empty.
 func (s *Store) CreateWorkspace(ctx context.Context, name, templateID, moduleSource, moduleRef string,
-	inputs map[string]any, autoApply bool, createdBy string) (Workspace, Run, error) {
+	inputs map[string]any, autoApply bool, identity, createdBy string) (Workspace, Run, error) {
 	raw, err := json.Marshal(inputs)
 	if err != nil {
 		return Workspace{}, Run{}, err
@@ -135,9 +150,9 @@ func (s *Store) CreateWorkspace(ctx context.Context, name, templateID, moduleSou
 	var id string
 	err = tx.QueryRowContext(ctx, `
 		WITH id AS (SELECT gen_random_uuid() AS v)
-		INSERT INTO workspaces (id, name, template_id, module_source, module_ref, inputs, state_key, auto_apply, created_by)
-		SELECT v, $1, $2, $3, $4, $5, 'form2stack/' || $2 || '/' || v || '.tfstate', $6, NULLIF($7, '')::uuid FROM id
-		RETURNING id`, name, templateID, moduleSource, moduleRef, raw, autoApply, createdBy).Scan(&id)
+		INSERT INTO workspaces (id, name, template_id, module_source, module_ref, inputs, state_key, auto_apply, identity, created_by)
+		SELECT v, $1, $2, $3, $4, $5, 'form2stack/' || $2 || '/' || v || '.tfstate', $6, $7, NULLIF($8, '')::uuid FROM id
+		RETURNING id`, name, templateID, moduleSource, moduleRef, raw, autoApply, identity, createdBy).Scan(&id)
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
 		return Workspace{}, Run{}, ErrNameTaken
 	}
@@ -195,12 +210,13 @@ func (s *Store) GetWorkspaceByID(ctx context.Context, id string) (Workspace, err
 	return scanWorkspace(s.DB.QueryRowContext(ctx, `SELECT `+workspaceCols+` FROM workspaces w WHERE w.id::text = $1`, id))
 }
 
-// ListWorkspaces returns the 200 most recently active workspaces with their latest run.
-func (s *Store) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
+// ListWorkspaces returns the 200 most recently active workspaces v may see, with their latest run.
+func (s *Store) ListWorkspaces(ctx context.Context, v Viewer) ([]Workspace, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT `+workspaceCols+`, l.status, l.action, l.updated_at
 		FROM workspaces w LEFT JOIN LATERAL (SELECT status, action, updated_at FROM runs
 			WHERE workspace_id = w.id ORDER BY created_at DESC LIMIT 1) l ON true
-		ORDER BY COALESCE(l.updated_at, w.created_at) DESC LIMIT 200`)
+		WHERE `+visible+`
+		ORDER BY COALESCE(l.updated_at, w.created_at) DESC LIMIT 200`, v.UserID, v.Admin)
 	if err != nil {
 		return nil, err
 	}
@@ -219,6 +235,66 @@ func (s *Store) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
 		out = append(out, w)
 	}
 	return out, rows.Err()
+}
+
+// RenameWorkspace changes a workspace's name; its state and runs are keyed by id and stay put.
+func (s *Store) RenameWorkspace(ctx context.Context, id, name string) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET name = $2, updated_at = now() WHERE id::text = $1`, id, name)
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
+		return ErrNameTaken
+	}
+	return err
+}
+
+// Access returns what userID may do in a workspace through being its creator or through a group
+// grant: "operate", "read" or "". Admins are handled by the caller.
+func (s *Store) Access(ctx context.Context, workspaceID, userID string) (string, error) {
+	var level string
+	err := s.DB.QueryRowContext(ctx, `SELECT CASE
+			WHEN w.created_by IS NOT NULL AND w.created_by = NULLIF($2, '')::uuid THEN 'operate'
+			WHEN bool_or(a.level = 'operate') THEN 'operate'
+			WHEN count(a.level) > 0 THEN 'read' ELSE '' END
+		FROM workspaces w
+		LEFT JOIN users u ON u.id = NULLIF($2, '')::uuid
+		LEFT JOIN workspace_access a ON a.workspace_id = w.id AND a.group_name = ANY(u.groups)
+		WHERE w.id::text = $1 GROUP BY w.id, w.created_by`, workspaceID, userID).Scan(&level)
+	return level, err
+}
+
+// Grant is one group's access to a workspace.
+type Grant struct {
+	Group string
+	Level string // read | operate
+}
+
+// Grants lists a workspace's group grants.
+func (s *Store) Grants(ctx context.Context, workspaceID string) ([]Grant, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT group_name, level FROM workspace_access
+		WHERE workspace_id::text = $1 ORDER BY group_name`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Grant
+	for rows.Next() {
+		var g Grant
+		if err := rows.Scan(&g.Group, &g.Level); err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+// SetGrant gives a group read or operate access to a workspace; level "" removes the grant.
+func (s *Store) SetGrant(ctx context.Context, workspaceID, group, level string) error {
+	if level == "" {
+		_, err := s.DB.ExecContext(ctx, `DELETE FROM workspace_access WHERE workspace_id::text = $1 AND group_name = $2`, workspaceID, group)
+		return err
+	}
+	_, err := s.DB.ExecContext(ctx, `INSERT INTO workspace_access (workspace_id, group_name, level) VALUES ($1::uuid, $2, $3)
+		ON CONFLICT (workspace_id, group_name) DO UPDATE SET level = EXCLUDED.level`, workspaceID, group, level)
+	return err
 }
 
 // SetAutoApply changes whether apply plans run without confirmation.

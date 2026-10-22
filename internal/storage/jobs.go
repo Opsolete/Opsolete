@@ -26,9 +26,10 @@ type Job struct {
 	Inputs       map[string]any
 }
 
-// ClaimJob hands the longest-waiting queued phase (plan or confirmed apply) to runner, or returns
-// ok=false if there is none. SKIP LOCKED lets any number of runners claim without handing out a job twice.
-func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration) (Job, bool, error) {
+// ClaimJob hands the longest-waiting queued phase (plan or confirmed apply) of a workspace in the
+// runner's pool (identity) to runner, or returns ok=false if there is none. SKIP LOCKED lets any
+// number of runners claim without handing out a job twice.
+func (s *Store) ClaimJob(ctx context.Context, runner, identity string, lease time.Duration) (Job, bool, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return Job{}, false, err
@@ -39,10 +40,11 @@ func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration
 	err = tx.QueryRowContext(ctx, `
 		UPDATE runs SET status = CASE status WHEN 'plan_queued' THEN 'planning' ELSE 'applying' END,
 			runner = $1, lease_id = $2, lease_until = now() + make_interval(secs => $3), updated_at = now()
-		WHERE id = (SELECT id FROM runs WHERE status IN ('plan_queued', 'apply_queued')
-			ORDER BY updated_at FOR UPDATE SKIP LOCKED LIMIT 1)
+		WHERE id = (SELECT r.id FROM runs r JOIN workspaces w ON w.id = r.workspace_id
+			WHERE r.status IN ('plan_queued', 'apply_queued') AND w.identity = $4
+			ORDER BY r.updated_at FOR UPDATE OF r SKIP LOCKED LIMIT 1)
 		RETURNING id, workspace_id, action, status`,
-		runner, j.LeaseID, lease.Seconds()).Scan(&j.RunID, &j.WorkspaceID, &j.Action, &status)
+		runner, j.LeaseID, lease.Seconds(), identity).Scan(&j.RunID, &j.WorkspaceID, &j.Action, &status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, false, nil
 	}
@@ -70,11 +72,14 @@ func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration
 
 const working = `status IN ('planning', 'applying')`
 
-// Heartbeat extends the lease of a running job.
-func (s *Store) Heartbeat(ctx context.Context, runID, lease string, ttl time.Duration) error {
-	res, err := s.DB.ExecContext(ctx, `UPDATE runs SET lease_until = now() + make_interval(secs => $3)
-		WHERE id::text = $1 AND lease_id = $2 AND `+working, runID, lease, ttl.Seconds())
-	return leaseResult(res, err)
+// Heartbeat extends the lease of a running job. cancel reports that a user asked to cancel it.
+func (s *Store) Heartbeat(ctx context.Context, runID, lease string, ttl time.Duration) (cancel bool, err error) {
+	err = s.DB.QueryRowContext(ctx, `UPDATE runs SET lease_until = now() + make_interval(secs => $3)
+		WHERE id::text = $1 AND lease_id = $2 AND `+working+` RETURNING cancel_requested`, runID, lease, ttl.Seconds()).Scan(&cancel)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, ErrLeaseLost
+	}
+	return cancel, err
 }
 
 // HoldsLease reports whether lease is the current lease of a run in the given phase status.
@@ -86,22 +91,22 @@ func (s *Store) HoldsLease(ctx context.Context, runID, lease, status string) (bo
 }
 
 // AppendLog stores a chunk of job output and extends the lease. Past maxBytes the log is
-// truncated (with one marker line) but the job keeps running.
-func (s *Store) AppendLog(ctx context.Context, runID, lease, chunk string, ttl time.Duration, maxBytes int64) error {
+// truncated (with one marker line) but the job keeps running. cancel is as for Heartbeat.
+func (s *Store) AppendLog(ctx context.Context, runID, lease, chunk string, ttl time.Duration, maxBytes int64) (cancel bool, err error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback()
 	var total int64
 	err = tx.QueryRowContext(ctx, `UPDATE runs SET lease_until = now() + make_interval(secs => $3),
-		log_bytes = log_bytes + $4 WHERE id::text = $1 AND lease_id = $2 AND `+working+` RETURNING log_bytes`,
-		runID, lease, ttl.Seconds(), len(chunk)).Scan(&total)
+		log_bytes = log_bytes + $4 WHERE id::text = $1 AND lease_id = $2 AND `+working+` RETURNING log_bytes, cancel_requested`,
+		runID, lease, ttl.Seconds(), len(chunk)).Scan(&total, &cancel)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ErrLeaseLost
+		return false, ErrLeaseLost
 	}
 	if err != nil {
-		return err
+		return false, err
 	}
 	before := total - int64(len(chunk))
 	switch {
@@ -109,12 +114,60 @@ func (s *Store) AppendLog(ctx context.Context, runID, lease, chunk string, ttl t
 	case before <= maxBytes:
 		chunk = "\n[form2stack: log truncated, limit reached]\n"
 	default:
-		return tx.Commit()
+		return cancel, tx.Commit()
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO run_logs (run_id, chunk) VALUES ($1, $2)`, runID, chunk); err != nil {
-		return err
+		return false, err
 	}
-	return tx.Commit()
+	return cancel, tx.Commit()
+}
+
+// CancelRun cancels a queued run at once. A run a runner works on is asked to stop: the runner
+// interrupts Terraform, which still saves state, and reports it canceled. force cancels it right
+// away instead and fences the runner off (its state password dies with the run), for runners
+// that don't react; resources being created at that moment may then be missing from state.
+// It returns the run's new status.
+func (s *Store) CancelRun(ctx context.Context, id, email string, force bool) (string, error) {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback()
+	var status, workspaceID string
+	err = tx.QueryRowContext(ctx, `SELECT status, workspace_id FROM runs WHERE id::text = $1 FOR UPDATE`, id).Scan(&status, &workspaceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotCancelable
+	}
+	if err != nil {
+		return "", err
+	}
+	msg := "canceled by " + email
+	switch {
+	case status == PlanQueued || status == ApplyQueued || ((status == Planning || status == Applying) && force):
+		if force && status != PlanQueued && status != ApplyQueued {
+			msg = "force-canceled by " + email + "; the runner was cut off, check the state for resources it may have missed"
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE runs SET status = 'canceled', lease_id = NULL, lease_until = NULL,
+			updated_at = now() WHERE id::text = $1`, id); err != nil {
+			return "", err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE workspaces SET state_lock = NULL WHERE id = $1`, workspaceID); err != nil {
+			return "", err
+		}
+		status = Canceled
+	case status == Planning || status == Applying:
+		if _, err := tx.ExecContext(ctx, `UPDATE runs SET cancel_requested = true WHERE id::text = $1`, id); err != nil {
+			return "", err
+		}
+		msg = "cancel requested by " + email + ": waiting for Terraform to stop and save state"
+	default:
+		return "", ErrNotCancelable
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO run_status_history (run_id, status, message) VALUES ($1::uuid, $2, $3)`,
+		id, status, msg); err != nil {
+		return "", err
+	}
+	return status, tx.Commit()
 }
 
 // FinishJob records the result of a phase, releases the lease and the workspace's state lock, and
@@ -246,18 +299,4 @@ func (s *Store) Logs(ctx context.Context, runID string, after int64, limit int) 
 		out = append(out, c)
 	}
 	return out, rows.Err()
-}
-
-func leaseResult(res sql.Result, err error) error {
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return ErrLeaseLost
-	}
-	return nil
 }

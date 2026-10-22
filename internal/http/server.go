@@ -302,6 +302,11 @@ func templateFromForm(r *http.Request) templates.Template {
 		Name: get("name"), Description: get("description"),
 		Module: templates.Module{Source: get("module_source"), Ref: get("module_ref")},
 	}
+	for _, id := range strings.Split(get("identities"), ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			t.Identities = append(t.Identities, id)
+		}
+	}
 	at := func(key string, i int) string {
 		if v := f[key]; i < len(v) {
 			return strings.TrimSpace(v[i])

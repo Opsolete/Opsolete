@@ -31,6 +31,7 @@ type fakeServer struct {
 	locks         map[string]string // workspace id -> lock id
 	artifacts     map[string][]byte // "<run>/<name>" -> saved plan / lock file
 	stateToken    string            // the state password of the job being executed
+	cancelAfter   string            // answer log posts with 202 (user canceled) once the log contains this
 }
 
 // artifact stores and serves plan artifacts, like the server, only for the job's lease.
@@ -128,6 +129,10 @@ func (f *fakeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.logs.Write(body)
 		if f.conflictAfter != "" && strings.Contains(f.logs.String(), f.conflictAfter) {
 			w.WriteHeader(http.StatusConflict)
+			return
+		}
+		if f.cancelAfter != "" && strings.Contains(f.logs.String(), f.cancelAfter) {
+			w.WriteHeader(runnerapi.StatusCancel)
 			return
 		}
 	case strings.HasSuffix(r.URL.Path, "/finish"):
@@ -305,5 +310,33 @@ resource "terraform_data" "slow" {
 	}
 	if d := time.Since(start); d > 45*time.Second {
 		t.Fatalf("terraform was not interrupted (took %s)", d)
+	}
+}
+
+func TestCancelSavesState(t *testing.T) {
+	f := &fakeServer{}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	r := testRunner(t, srv)
+	src := f.module(t, `
+resource "terraform_data" "slow" {
+  provisioner "local-exec" {
+    command = "sleep 60"
+  }
+}`)
+	f.do(t, r, job("c", "plan", "apply", src, nil))
+	f.cancelAfter = "==> terraform apply"
+	start := time.Now()
+	res, logs := f.do(t, r, job("c", "apply", "apply", src, nil))
+	if res.Status != "canceled" || !strings.Contains(res.Message, "canceled by a user") {
+		t.Fatalf("canceled run: %+v\n%s", res, logs)
+	}
+	if d := time.Since(start); d > 45*time.Second {
+		t.Fatalf("terraform was not interrupted (took %s)", d)
+	}
+	// The interrupted resource exists in the cloud now: Terraform must have saved it to state, and
+	// the run reports it, so nothing is orphaned.
+	if !strings.Contains(string(f.states["ws1"]), "terraform_data") || len(res.Resources) != 1 || f.locks["ws1"] != "" {
+		t.Fatalf("a graceful cancel must save state: resources %+v, state %q, lock %q", res.Resources, f.states["ws1"], f.locks["ws1"])
 	}
 }

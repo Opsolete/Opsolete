@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +22,7 @@ import (
 const (
 	fieldWorkspace = "f2s-workspace"
 	fieldAutoApply = "f2s-auto-apply"
+	fieldIdentity  = "f2s-identity"
 )
 
 var workspaceNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`)
@@ -32,18 +34,28 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /workspaces/{name}", s.workspace)
 	mux.HandleFunc("POST /workspaces/{name}/runs", s.newRun)
 	mux.HandleFunc("POST /workspaces/{name}/settings", s.workspaceSettings)
+	mux.HandleFunc("POST /workspaces/{name}/rename", s.renameWorkspace)
+	mux.HandleFunc("POST /workspaces/{name}/access", s.admin(s.workspaceAccess))
 	mux.HandleFunc("GET /workspaces/{name}/runs/{run}", s.run)
 	mux.HandleFunc("POST /workspaces/{name}/runs/{run}/confirm", s.confirmRun)
 	mux.HandleFunc("POST /workspaces/{name}/runs/{run}/discard", s.discardRun)
+	mux.HandleFunc("POST /workspaces/{name}/runs/{run}/cancel", s.cancelRun)
 	mux.HandleFunc("GET /workspaces/{name}/runs/{run}/logs", s.logText)
 	mux.HandleFunc("GET /workspaces/{name}/runs/{run}/logs/stream", s.logStream)
 	mux.HandleFunc("GET /resources", s.resources)
 }
 
-// mayOperate: the user who created the workspace, or an admin, may run, confirm, destroy and configure it.
-func mayOperate(u auth.User, w storage.Workspace) bool {
-	return u.Admin() || (w.CreatedBy != "" && w.CreatedBy == u.Email)
+func viewer(r *http.Request) storage.Viewer {
+	u := auth.FromContext(r.Context())
+	return storage.Viewer{UserID: u.ID, Admin: u.Admin()}
 }
+
+// Access levels in a workspace: admins and its creator operate it (runs, confirm, destroy, settings,
+// rename), groups get read or operate per workspace. Without access a workspace doesn't exist (404).
+const (
+	levelRead    = "read"
+	levelOperate = "operate"
+)
 
 func (s *Server) internalError(w http.ResponseWriter, what string, err error) {
 	s.Log.Error(what, "err", err)
@@ -57,6 +69,7 @@ type formPage struct {
 	Errors    map[string]string
 	Workspace string
 	AutoApply bool
+	Identity  string
 }
 
 func (s *Server) form(w http.ResponseWriter, r *http.Request) {
@@ -95,13 +108,18 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !workspaceNameRe.MatchString(name) {
 		errs[fieldWorkspace] = "2–63 lowercase letters, digits and dashes, starting with a letter or digit"
 	}
-	page := formPage{T: t, Editor: s.canEdit(r), Values: raw, Errors: errs, Workspace: name, AutoApply: r.PostForm.Get(fieldAutoApply) != ""}
+	identity := r.PostForm.Get(fieldIdentity)
+	if (len(t.Identities) == 0 && identity != "") || (len(t.Identities) > 0 && !slices.Contains(t.Identities, identity)) {
+		errs[fieldIdentity] = "choose one of the template's identities"
+	}
+	page := formPage{T: t, Editor: s.canEdit(r), Values: raw, Errors: errs, Workspace: name,
+		AutoApply: r.PostForm.Get(fieldAutoApply) != "", Identity: identity}
 	if len(errs) > 0 {
 		s.render(w, r, http.StatusUnprocessableEntity, "form.html", page)
 		return
 	}
 	u := auth.FromContext(r.Context())
-	ws, run, err := s.Store.CreateWorkspace(r.Context(), name, t.ID, t.Module.Source, t.Module.Ref, vals, page.AutoApply, u.ID)
+	ws, run, err := s.Store.CreateWorkspace(r.Context(), name, t.ID, t.Module.Source, t.Module.Ref, vals, page.AutoApply, identity, u.ID)
 	if errors.Is(err, storage.ErrNameTaken) {
 		errs[fieldWorkspace] = err.Error()
 		s.render(w, r, http.StatusUnprocessableEntity, "form.html", page)
@@ -116,7 +134,7 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) workspaces(w http.ResponseWriter, r *http.Request) {
-	list, err := s.Store.ListWorkspaces(r.Context())
+	list, err := s.Store.ListWorkspaces(r.Context(), viewer(r))
 	if err != nil {
 		s.internalError(w, "list workspaces", err)
 		return
@@ -124,40 +142,57 @@ func (s *Server) workspaces(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, http.StatusOK, "workspaces.html", list)
 }
 
-// loadWorkspace writes a 404 or 500 and returns ok=false when the workspace can't be loaded.
-func (s *Server) loadWorkspace(w http.ResponseWriter, r *http.Request) (storage.Workspace, bool) {
+// loadWorkspace loads the {name} workspace if the user has at least the given access level; it
+// writes a 404 (no access looks like no workspace), 403 or 500 and returns ok=false otherwise.
+func (s *Server) loadWorkspace(w http.ResponseWriter, r *http.Request, need string) (ws storage.Workspace, level string, ok bool) {
 	ws, err := s.Store.GetWorkspace(r.Context(), r.PathValue("name"))
 	if errors.Is(err, sql.ErrNoRows) {
 		http.NotFound(w, r)
-		return ws, false
+		return ws, "", false
 	}
 	if err != nil {
 		s.internalError(w, "get workspace", err)
-		return ws, false
+		return ws, "", false
 	}
-	return ws, true
+	u := auth.FromContext(r.Context())
+	level = levelOperate
+	if !u.Admin() {
+		if level, err = s.Store.Access(r.Context(), ws.ID, u.ID); err != nil {
+			s.internalError(w, "workspace access", err)
+			return ws, "", false
+		}
+	}
+	switch {
+	case level == "":
+		http.NotFound(w, r)
+		return ws, "", false
+	case need == levelOperate && level != levelOperate:
+		http.Error(w, "you have read-only access to this workspace", http.StatusForbidden)
+		return ws, level, false
+	}
+	return ws, level, true
 }
 
 // loadRun loads the {run} of the {name} workspace; a run of another workspace is a 404.
-func (s *Server) loadRun(w http.ResponseWriter, r *http.Request) (storage.Workspace, storage.Run, []storage.StatusEntry, bool) {
-	ws, ok := s.loadWorkspace(w, r)
+func (s *Server) loadRun(w http.ResponseWriter, r *http.Request, need string) (storage.Workspace, storage.Run, []storage.StatusEntry, string, bool) {
+	ws, level, ok := s.loadWorkspace(w, r, need)
 	if !ok {
-		return ws, storage.Run{}, nil, false
+		return ws, storage.Run{}, nil, "", false
 	}
 	run, hist, err := s.Store.GetRun(r.Context(), r.PathValue("run"))
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && run.WorkspaceID != ws.ID) {
 		http.NotFound(w, r)
-		return ws, run, nil, false
+		return ws, run, nil, "", false
 	}
 	if err != nil {
 		s.internalError(w, "get run", err)
-		return ws, run, nil, false
+		return ws, run, nil, "", false
 	}
-	return ws, run, hist, true
+	return ws, run, hist, level, true
 }
 
 func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
-	ws, ok := s.loadWorkspace(w, r)
+	ws, level, ok := s.loadWorkspace(w, r, levelRead)
 	if !ok {
 		return
 	}
@@ -167,7 +202,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "list runs", err)
 		return
 	}
-	res, err := s.Store.Resources(ctx, "", ws.ID)
+	res, err := s.Store.Resources(ctx, storage.Viewer{Admin: true}, "", ws.ID) // access was checked above
 	if err != nil {
 		s.internalError(w, "workspace resources", err)
 		return
@@ -182,26 +217,27 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "outputs", err)
 		return
 	}
+	grants, err := s.Store.Grants(ctx, ws.ID)
+	if err != nil {
+		s.internalError(w, "workspace grants", err)
+		return
+	}
 	var active *storage.Run
 	if len(runs) > 0 && runs[0].Active() {
 		active = &runs[0]
 	}
 	s.render(w, r, http.StatusOK, "workspace.html", map[string]any{"W": ws, "Runs": runs, "Active": active,
-		"Resources": res, "Versions": versions, "Outputs": outputs, "Destroyed": destroyed,
-		"CanOperate": mayOperate(auth.FromContext(ctx), ws)})
+		"Resources": res, "Versions": versions, "Outputs": outputs, "Destroyed": destroyed, "Grants": grants,
+		"CanOperate": level == levelOperate, "Admin": auth.FromContext(ctx).Admin()})
 }
 
 // newRun queues a plan: action=apply (re-plan with the workspace's inputs) or action=destroy.
 func (s *Server) newRun(w http.ResponseWriter, r *http.Request) {
-	ws, ok := s.loadWorkspace(w, r)
+	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
 	if !ok {
 		return
 	}
 	u := auth.FromContext(r.Context())
-	if !mayOperate(u, ws) {
-		http.Error(w, "only the workspace's creator, or an admin, can start runs", http.StatusForbidden)
-		return
-	}
 	action := r.PostFormValue("action")
 	if action != "apply" && action != "destroy" {
 		http.Error(w, "action must be apply or destroy", http.StatusBadRequest)
@@ -221,12 +257,8 @@ func (s *Server) newRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) workspaceSettings(w http.ResponseWriter, r *http.Request) {
-	ws, ok := s.loadWorkspace(w, r)
+	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
 	if !ok {
-		return
-	}
-	if !mayOperate(auth.FromContext(r.Context()), ws) {
-		http.Error(w, "only the workspace's creator, or an admin, can change its settings", http.StatusForbidden)
 		return
 	}
 	if err := s.Store.SetAutoApply(r.Context(), ws.ID, r.PostFormValue("auto_apply") != ""); err != nil {
@@ -236,13 +268,79 @@ func (s *Server) workspaceSettings(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/workspaces/"+ws.Name, http.StatusSeeOther)
 }
 
+// renameWorkspace changes the name in URLs and lists; state, runs and grants stay (keyed by id).
+func (s *Server) renameWorkspace(w http.ResponseWriter, r *http.Request) {
+	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
+	if !ok {
+		return
+	}
+	name := strings.TrimSpace(r.PostFormValue("name"))
+	if !workspaceNameRe.MatchString(name) {
+		http.Error(w, "a workspace name is 2–63 lowercase letters, digits and dashes, starting with a letter or digit", http.StatusBadRequest)
+		return
+	}
+	if err := s.Store.RenameWorkspace(r.Context(), ws.ID, name); errors.Is(err, storage.ErrNameTaken) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	} else if err != nil {
+		s.internalError(w, "rename workspace", err)
+		return
+	}
+	s.Log.Info("workspace renamed", "from", ws.Name, "to", name, "user", auth.FromContext(r.Context()).Email)
+	http.Redirect(w, r, "/workspaces/"+name, http.StatusSeeOther)
+}
+
+// workspaceAccess grants an IdP group read or operate access to a workspace (level "" revokes).
+// Admins only (enforced by the route).
+func (s *Server) workspaceAccess(w http.ResponseWriter, r *http.Request) {
+	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
+	if !ok {
+		return
+	}
+	group, level := strings.TrimSpace(r.PostFormValue("group")), r.PostFormValue("level")
+	if group == "" || len(group) > 256 || (level != "" && level != levelRead && level != levelOperate) {
+		http.Error(w, "group is required, and level must be read, operate or empty (revoke)", http.StatusBadRequest)
+		return
+	}
+	if err := s.Store.SetGrant(r.Context(), ws.ID, group, level); err != nil {
+		s.internalError(w, "set grant", err)
+		return
+	}
+	s.Log.Info("workspace access", "workspace", ws.Name, "group", group, "level", level, "user", auth.FromContext(r.Context()).Email)
+	http.Redirect(w, r, "/workspaces/"+ws.Name, http.StatusSeeOther)
+}
+
 func (s *Server) run(w http.ResponseWriter, r *http.Request) {
-	ws, run, hist, ok := s.loadRun(w, r)
+	ws, run, hist, level, ok := s.loadRun(w, r, levelRead)
 	if !ok {
 		return
 	}
 	s.render(w, r, http.StatusOK, "run.html", map[string]any{"W": ws, "R": run, "History": hist,
-		"CanOperate": mayOperate(auth.FromContext(r.Context()), ws)})
+		"CanOperate": level == levelOperate})
+}
+
+// cancelRun cancels a queued run, asks a running one to stop (Terraform still saves state), or with
+// force=1 cuts off a runner that doesn't react.
+func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request) {
+	ws, run, _, _, ok := s.loadRun(w, r, levelOperate)
+	if !ok {
+		return
+	}
+	u := auth.FromContext(r.Context())
+	status, err := s.Store.CancelRun(r.Context(), run.ID, u.Email, r.PostFormValue("force") != "")
+	if errors.Is(err, storage.ErrNotCancelable) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if err != nil {
+		s.internalError(w, "cancel run", err)
+		return
+	}
+	if status == storage.Canceled {
+		s.deleteArtifacts(r, run.ID)
+	}
+	s.Log.Info("run cancel", "workspace", ws.Name, "run", run.ID, "status", status, "user", u.Email)
+	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID, http.StatusSeeOther)
 }
 
 func (s *Server) confirmRun(w http.ResponseWriter, r *http.Request) { s.decideRun(w, r, true) }
@@ -250,15 +348,11 @@ func (s *Server) discardRun(w http.ResponseWriter, r *http.Request) { s.decideRu
 
 // decideRun confirms (queues the apply of) or discards a plan that waits for confirmation.
 func (s *Server) decideRun(w http.ResponseWriter, r *http.Request, confirm bool) {
-	ws, run, _, ok := s.loadRun(w, r)
+	ws, run, _, _, ok := s.loadRun(w, r, levelOperate)
 	if !ok {
 		return
 	}
 	u := auth.FromContext(r.Context())
-	if !mayOperate(u, ws) {
-		http.Error(w, "only the workspace's creator, or an admin, can confirm or discard its plans", http.StatusForbidden)
-		return
-	}
 	var err error
 	if confirm {
 		err = s.Store.ConfirmRun(r.Context(), run.ID, u.ID, u.Email)
@@ -288,7 +382,7 @@ type typeCount struct {
 // resources lists everything Form2Stack manages: the resources in each workspace's current state.
 func (s *Server) resources(w http.ResponseWriter, r *http.Request) {
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
-	list, err := s.Store.Resources(r.Context(), q, "")
+	list, err := s.Store.Resources(r.Context(), viewer(r), q, "")
 	if err != nil {
 		s.internalError(w, "list resources", err)
 		return
@@ -307,7 +401,7 @@ func (s *Server) resources(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) logText(w http.ResponseWriter, r *http.Request) {
-	_, run, _, ok := s.loadRun(w, r)
+	_, run, _, _, ok := s.loadRun(w, r, levelRead)
 	if !ok {
 		return
 	}
@@ -334,7 +428,7 @@ func (s *Server) logText(w http.ResponseWriter, r *http.Request) {
 // status) once no runner works on the run any more: finished, or waiting for confirmation.
 // shortcut: polls Postgres every second; switch to LISTEN/NOTIFY if many viewers make that costly.
 func (s *Server) logStream(w http.ResponseWriter, r *http.Request) {
-	_, run, _, ok := s.loadRun(w, r)
+	_, run, _, _, ok := s.loadRun(w, r, levelRead)
 	if !ok {
 		return
 	}

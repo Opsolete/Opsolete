@@ -42,6 +42,10 @@
 
     <label for="module_ref">Approved module version / git ref <span class="req" aria-hidden="true">*</span></label>
     <input id="module_ref" name="module_ref" value="{{.T.Module.Ref}}" required>
+
+    <label for="identities">Cloud identities (runner pools)</label>
+    <input id="identities" name="identities" value="{{join .T.Identities ", "}}" placeholder="azure-sandbox, azure-prod">
+    <p class="hint">Comma-separated. A workspace of this template picks one, and its runs only go to runners of that pool. Empty: the default pool.</p>
   </div>
 
   <h2>Form fields</h2>

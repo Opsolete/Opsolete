@@ -37,7 +37,7 @@ func testStore(t *testing.T) *Store {
 func newWorkspace(t *testing.T, s *Store, autoApply bool) (Workspace, Run) {
 	ctx := context.Background()
 	name := "t-" + strings.ToLower(rand.Text()[:10]) // the test DB is reused
-	w, run, err := s.CreateWorkspace(ctx, name, "job-test", "git::x", "v1", map[string]any{"n": 1.0}, autoApply, "")
+	w, run, err := s.CreateWorkspace(ctx, name, "job-test", "git::x", "v1", map[string]any{"n": 1.0}, autoApply, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func newWorkspace(t *testing.T, s *Store, autoApply bool) (Workspace, Run) {
 
 func claim(t *testing.T, s *Store, phase string) Job {
 	t.Helper()
-	j, ok, err := s.ClaimJob(context.Background(), "r", time.Minute)
+	j, ok, err := s.ClaimJob(context.Background(), "r", "", time.Minute)
 	if err != nil || !ok || j.Phase != phase {
 		t.Fatalf("claim %s: %+v %v %v", phase, j, ok, err)
 	}
@@ -76,7 +76,7 @@ func TestRunLifecycle(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			j, ok, err := s.ClaimJob(ctx, "r", time.Minute)
+			j, ok, err := s.ClaimJob(ctx, "r", "", time.Minute)
 			if err != nil {
 				t.Error(err)
 			}
@@ -97,11 +97,11 @@ func TestRunLifecycle(t *testing.T) {
 		t.Fatalf("the planning run must hold the workspace's state: %q %v", working, err)
 	}
 
-	if err := s.Heartbeat(ctx, run.ID, "not-the-lease", time.Minute); !errors.Is(err, ErrLeaseLost) {
+	if _, err := s.Heartbeat(ctx, run.ID, "not-the-lease", time.Minute); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("foreign lease must be rejected, got %v", err)
 	}
 	for _, chunk := range []string{"0123456789", "abcdefghij", "dropped"} { // the 2nd crosses the limit
-		if err := s.AppendLog(ctx, run.ID, plan.LeaseID, chunk, time.Minute, 15); err != nil {
+		if _, err := s.AppendLog(ctx, run.ID, plan.LeaseID, chunk, time.Minute, 15); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -121,7 +121,7 @@ func TestRunLifecycle(t *testing.T) {
 	if st, err := s.FinishJob(ctx, run.ID, plan.LeaseID, "succeeded", "", nil, sum, nil); err != nil || st != NeedsConfirmation {
 		t.Fatalf("finish plan: %q %v", st, err)
 	}
-	if _, ok, _ := s.ClaimJob(ctx, "r", time.Minute); ok {
+	if _, ok, _ := s.ClaimJob(ctx, "r", "", time.Minute); ok {
 		t.Fatal("a plan waiting for confirmation must not be claimed")
 	}
 	if _, err := s.CreateRun(ctx, w.ID, "apply", ""); !errors.Is(err, ErrRunActive) {
@@ -139,7 +139,7 @@ func TestRunLifecycle(t *testing.T) {
 	if apply.RunID != run.ID || apply.LeaseID == plan.LeaseID {
 		t.Fatalf("apply job: %+v", apply)
 	}
-	if err := s.Heartbeat(ctx, run.ID, plan.LeaseID, time.Minute); !errors.Is(err, ErrLeaseLost) {
+	if _, err := s.Heartbeat(ctx, run.ID, plan.LeaseID, time.Minute); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("the plan phase's lease must be dead: %v", err)
 	}
 	res := []runnerapi.Resource{
@@ -165,10 +165,10 @@ func TestRunLifecycle(t *testing.T) {
 	if out, destroyed, err := s.CurrentOutputs(ctx, w.ID); err != nil || out["id"] != "abc" || destroyed {
 		t.Fatalf("workspace outputs: %v %v %v", out, destroyed, err)
 	}
-	if got, err := s.Resources(ctx, "", w.ID); err != nil || len(got) != 2 || got[1].Module != "module.net" || got[0].Workspace != w.Name || got[0].Serial != 3 {
+	if got, err := s.Resources(ctx, Viewer{Admin: true}, "", w.ID); err != nil || len(got) != 2 || got[1].Module != "module.net" || got[0].Workspace != w.Name || got[0].Serial != 3 {
 		t.Fatalf("inventory: %+v %v", got, err)
 	}
-	if got, _ := s.Resources(ctx, "SUBNET", w.ID); len(got) != 1 || got[0].Type != "azurerm_subnet" {
+	if got, _ := s.Resources(ctx, Viewer{Admin: true}, "SUBNET", w.ID); len(got) != 1 || got[0].Type != "azurerm_subnet" {
 		t.Fatalf("filter: %+v", got)
 	}
 
@@ -181,7 +181,7 @@ func TestRunLifecycle(t *testing.T) {
 	if st, err := s.FinishJob(ctx, again.ID, j.LeaseID, "succeeded", "", nil, nil, nil); err != nil || st != NoChanges {
 		t.Fatalf("no-op plan: %q %v", st, err)
 	}
-	if _, ok, _ := s.ClaimJob(ctx, "r", time.Minute); ok {
+	if _, ok, _ := s.ClaimJob(ctx, "r", "", time.Minute); ok {
 		t.Fatal("nothing should be left to claim")
 	}
 }
@@ -224,7 +224,7 @@ func TestExpiredLeaseIsErrored(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	w, run := newWorkspace(t, s, false)
-	j, ok, err := s.ClaimJob(ctx, "r", 10*time.Millisecond)
+	j, ok, err := s.ClaimJob(ctx, "r", "", 10*time.Millisecond)
 	if err != nil || !ok {
 		t.Fatalf("claim: %v %v", ok, err)
 	}
@@ -237,7 +237,7 @@ func TestExpiredLeaseIsErrored(t *testing.T) {
 		t.Fatalf("reap: %v %v", ids, err)
 	}
 	// The old runner is fenced off once its lease is gone.
-	if err := s.AppendLog(ctx, run.ID, j.LeaseID, "late", time.Minute, 1<<20); !errors.Is(err, ErrLeaseLost) {
+	if _, err := s.AppendLog(ctx, run.ID, j.LeaseID, "late", time.Minute, 1<<20); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("late write must be rejected, got %v", err)
 	}
 	// No force-unlock is ever needed: a vanished runner's state lock goes with its lease.
@@ -246,5 +246,139 @@ func TestExpiredLeaseIsErrored(t *testing.T) {
 	}
 	if st := status(t, s, run.ID); st != Errored {
 		t.Fatalf("status %s", st)
+	}
+}
+
+func TestRunnerPools(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	name := "t-" + strings.ToLower(rand.Text()[:10])
+	w, run, err := s.CreateWorkspace(ctx, name, "job-test", "git::x", "v1", nil, false, "azure-prod", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.DB.Exec(`DELETE FROM workspaces WHERE id=$1`, w.ID) })
+	for _, pool := range []string{"", "azure-sandbox"} {
+		if _, ok, _ := s.ClaimJob(ctx, "r", pool, time.Minute); ok {
+			t.Fatalf("pool %q must not get azure-prod's run", pool)
+		}
+	}
+	if j, ok, err := s.ClaimJob(ctx, "r", "azure-prod", time.Minute); err != nil || !ok || j.RunID != run.ID {
+		t.Fatalf("the workspace's pool must get it: %+v %v %v", j, ok, err)
+	}
+}
+
+func TestAccess(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	creator, _ := s.UpsertUser(ctx, "creator@example.com", "user", nil)
+	member, _ := s.UpsertUser(ctx, "member@example.com", "user", []string{"team-a", "team-b"})
+	outsider, _ := s.UpsertUser(ctx, "outsider@example.com", "user", []string{"team-c"})
+	name := "t-" + strings.ToLower(rand.Text()[:10])
+	w, _, err := s.CreateWorkspace(ctx, name, "job-test", "git::x", "v1", nil, false, "", creator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.DB.Exec(`DELETE FROM workspaces WHERE id=$1`, w.ID) })
+
+	sees := func(user string, admin bool) bool {
+		list, err := s.ListWorkspaces(ctx, Viewer{UserID: user, Admin: admin})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, x := range list {
+			if x.ID == w.ID {
+				return true
+			}
+		}
+		return false
+	}
+	level := func(user string) string {
+		l, err := s.Access(ctx, w.ID, user)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return l
+	}
+	if !sees(creator, false) || level(creator) != "operate" || sees(member, false) || level(member) != "" || !sees("", true) {
+		t.Fatal("before grants: only the creator and admins")
+	}
+	s.SetGrant(ctx, w.ID, "team-a", "read")
+	if !sees(member, false) || level(member) != "read" || sees(outsider, false) || level(outsider) != "" {
+		t.Fatalf("read grant: member %q", level(member))
+	}
+	s.SetGrant(ctx, w.ID, "team-b", "operate") // the strongest of the member's grants wins
+	if level(member) != "operate" {
+		t.Fatalf("operate grant: %q", level(member))
+	}
+	s.SetGrant(ctx, w.ID, "team-b", "")
+	s.SetGrant(ctx, w.ID, "team-a", "")
+	if sees(member, false) || level(member) != "" {
+		t.Fatal("revoked grants must hide the workspace again")
+	}
+	if g, _ := s.Grants(ctx, w.ID); len(g) != 0 {
+		t.Fatalf("grants: %+v", g)
+	}
+
+	other, _ := newWorkspace(t, s, false)
+	if err := s.RenameWorkspace(ctx, w.ID, other.Name); !errors.Is(err, ErrNameTaken) {
+		t.Fatalf("rename onto a taken name: %v", err)
+	}
+	if err := s.RenameWorkspace(ctx, w.ID, name+"-new"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.GetWorkspace(ctx, name+"-new"); err != nil || got.ID != w.ID {
+		t.Fatalf("renamed: %+v %v", got, err)
+	}
+}
+
+func TestCancel(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	// Queued: canceled at once, and the workspace is free again.
+	w, run := newWorkspace(t, s, false)
+	if st, err := s.CancelRun(ctx, run.ID, "a@b.c", false); err != nil || st != Canceled {
+		t.Fatalf("cancel queued: %q %v", st, err)
+	}
+	if _, err := s.CancelRun(ctx, run.ID, "a@b.c", false); !errors.Is(err, ErrNotCancelable) {
+		t.Fatalf("cancel twice: %v", err)
+	}
+
+	// Running: asked to stop; the runner keeps its lease (Terraform must still save state) and
+	// hears about it on its next heartbeat or log post.
+	run2, err := s.CreateRun(ctx, w.ID, "apply", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := claim(t, s, "plan")
+	if cancel, err := s.Heartbeat(ctx, run2.ID, j.LeaseID, time.Minute); err != nil || cancel {
+		t.Fatalf("no cancel yet: %v %v", cancel, err)
+	}
+	if st, err := s.CancelRun(ctx, run2.ID, "a@b.c", false); err != nil || st != Planning {
+		t.Fatalf("graceful cancel: %q %v", st, err)
+	}
+	if cancel, err := s.Heartbeat(ctx, run2.ID, j.LeaseID, time.Minute); err != nil || !cancel {
+		t.Fatalf("the runner must hear the cancel and keep its lease: %v %v", cancel, err)
+	}
+	if cancel, err := s.AppendLog(ctx, run2.ID, j.LeaseID, "interrupted\n", time.Minute, 1<<20); err != nil || !cancel {
+		t.Fatalf("log posts carry the cancel too: %v %v", cancel, err)
+	}
+	if st, _ := s.FinishJob(ctx, run2.ID, j.LeaseID, "canceled", "", nil, nil, nil); st != Canceled {
+		t.Fatalf("finish canceled: %q", st)
+	}
+
+	// Force: cut off right away; the runner's lease and state lock are gone.
+	run3, _ := s.CreateRun(ctx, w.ID, "apply", "")
+	j = claim(t, s, "plan")
+	s.LockState(ctx, w.ID, "l1", []byte(`{"ID":"l1"}`))
+	if st, err := s.CancelRun(ctx, run3.ID, "a@b.c", true); err != nil || st != Canceled {
+		t.Fatalf("force cancel: %q %v", st, err)
+	}
+	if _, err := s.Heartbeat(ctx, run3.ID, j.LeaseID, time.Minute); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("a force-canceled runner must be fenced off: %v", err)
+	}
+	if lock, _ := s.StateLockID(ctx, w.ID); lock != "" {
+		t.Fatalf("force cancel must release the state lock: %q", lock)
 	}
 }

@@ -23,6 +23,7 @@
 <div class="card">
   <dl class="kv">
     <dt>Module</dt><dd><code>{{$w.ModuleSource}}</code> <span class="tag">{{$w.ModuleRef}}</span></dd>
+    <dt>Runs as</dt><dd>{{with $w.Identity}}<span class="tag">{{.}}</span> runner pool{{else}}<span class="muted">default runner pool</span>{{end}}</dd>
     <dt>State</dt><dd>{{with .Versions}}{{with index . 0}}<span class="tag">v{{.Serial}}</span> saved {{.CreatedAt.Format "2006-01-02 15:04"}}{{end}}{{else}}<span class="muted">none yet</span>{{end}}</dd>
     <dt>Inputs</dt><dd>{{range $k, $v := $w.Inputs}}<code>{{$k}} = {{$v}}</code><br>{{else}}<span class="muted">none</span>{{end}}</dd>
     <dt>Apply method</dt><dd>
@@ -75,6 +76,37 @@
 </div>
 {{else}}
 <p class="muted">{{if not .Versions}}No state saved yet.{{else if not (index .Versions 0).Indexed}}The current state version isn't indexed (the run couldn't read it back).{{else}}The current state holds no resources.{{end}}</p>
+{{end}}
+
+{{if or .Admin .Grants}}
+<h2>Access</h2>
+<div class="card">
+  <p class="muted">Visible to its creator, admins and these IdP groups. <strong>operate</strong>: runs, confirm, destroy, settings, rename; <strong>read</strong>: view only.</p>
+  {{with .Grants}}
+  <table>
+  <tr><th>Group</th><th>Access</th>{{if $.Admin}}<th></th>{{end}}</tr>
+  {{range .}}<tr><td><code>{{.Group}}</code></td><td>{{.Level}}</td>
+    {{if $.Admin}}<td><form method="post" action="/workspaces/{{$w.Name}}/access"><input type="hidden" name="group" value="{{.Group}}">
+      <button type="submit" class="secondary small">Revoke</button></form></td>{{end}}</tr>{{end}}
+  </table>
+  {{end}}
+  {{if .Admin}}
+  <form method="post" action="/workspaces/{{$w.Name}}/access" class="inline" style="margin-top:1rem">
+    <input name="group" aria-label="group" placeholder="IdP group (e.g. Entra group object id)" required>
+    <select name="level" aria-label="access level" style="flex:0 0 9rem"><option>read</option><option>operate</option></select>
+    <button type="submit" class="secondary">Grant</button>
+  </form>
+  {{end}}
+</div>
+{{end}}
+
+{{if .CanOperate}}
+<h2>Settings</h2>
+<form method="post" action="/workspaces/{{$w.Name}}/rename" class="card inline">
+  <label for="rename" style="margin:0">Name</label>
+  <input id="rename" name="name" value="{{$w.Name}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}" style="max-width:24rem">
+  <button type="submit" class="secondary">Rename</button>
+</form>
 {{end}}
 
 {{with .Versions}}

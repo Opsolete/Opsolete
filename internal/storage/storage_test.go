@@ -17,10 +17,10 @@ func TestWorkspaceRoundTrip(t *testing.T) {
 	if w.StateKey != "form2stack/job-test/"+w.ID+".tfstate" || w.Inputs["n"] != 1.0 || run.Status != PlanQueued || run.Action != "apply" {
 		t.Fatalf("unexpected workspace/run: %+v %+v", w, run)
 	}
-	if _, _, err := s.CreateWorkspace(ctx, w.Name, "job-test", "git::x", "v1", nil, false, ""); !errors.Is(err, ErrNameTaken) {
+	if _, _, err := s.CreateWorkspace(ctx, w.Name, "job-test", "git::x", "v1", nil, false, "", ""); !errors.Is(err, ErrNameTaken) {
 		t.Fatalf("duplicate name: %v", err)
 	}
-	list, err := s.ListWorkspaces(ctx)
+	list, err := s.ListWorkspaces(ctx, Viewer{Admin: true})
 	if err != nil {
 		t.Fatal(err)
 	}

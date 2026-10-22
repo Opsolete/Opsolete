@@ -14,6 +14,12 @@
     placeholder="{{.T.ID}}-prod" aria-describedby="f2s-workspace-hint">
   <p class="hint" id="f2s-workspace-hint">Lowercase letters, digits and dashes. It holds this deployment's state and runs.</p>
   {{with index $e "f2s-workspace"}}<p class="err" role="alert">{{.}}</p>{{end}}
+  {{with .T.Identities}}
+  <label for="f2s-identity">Runs as (cloud identity) <span class="req" aria-hidden="true">*</span></label>
+  <select id="f2s-identity" name="f2s-identity">{{range .}}<option{{if eq . $.Identity}} selected{{end}}>{{.}}</option>{{end}}</select>
+  <p class="hint">The runner pool, and so the cloud permissions, this workspace's runs use.</p>
+  {{end}}
+  {{with index $e "f2s-identity"}}<p class="err" role="alert">{{.}}</p>{{end}}
   <label for="f2s-auto-apply"><input type="checkbox" id="f2s-auto-apply" name="f2s-auto-apply"{{if .AutoApply}} checked{{end}}>
     Auto-apply: apply plans without asking for confirmation</label>
   <hr style="border:0;border-top:1px solid var(--border);margin:1.4rem 0 .4rem">

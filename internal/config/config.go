@@ -25,6 +25,7 @@ type Config struct {
 	// Login: OIDC, or AuthDevUser (everyone is that user, local dev only). Checked by auth.New.
 	OIDCIssuer, OIDCClientID, OIDCClientSecret string
 	AuthDevUser                                string
+	AuthDevGroups                              []string
 	AdminEmails                                []string
 	// StateStore is where workspace state files are kept: a gocloud.dev/blob URL such as
 	// azblob://tfstate, s3://tfstate?region=eu-west-1, gs://tfstate or file:///var/lib/form2stack/state.
@@ -45,6 +46,7 @@ func Load() (Config, error) {
 		OIDCClientID:     os.Getenv("OIDC_CLIENT_ID"),
 		OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"),
 		AuthDevUser:      os.Getenv("AUTH_DEV_USER"),
+		AuthDevGroups:    strings.FieldsFunc(os.Getenv("AUTH_DEV_GROUPS"), func(r rune) bool { return r == ',' }),
 		StateStore:       os.Getenv("STATE_STORE"),
 		AdminEmails:      strings.Split(os.Getenv("ADMIN_EMAILS"), ","),
 	}

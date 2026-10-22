@@ -12,11 +12,16 @@ import (
 	"github.com/rudesome/form2stack/internal/auth/authtest"
 )
 
+var savedGroups []string // groups the last login recorded
+
 func newOIDC(t *testing.T, is *authtest.Issuer) *Auth {
 	pub, _ := url.Parse("https://f2s.example.com")
 	a, err := New(context.Background(), Config{Issuer: is.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret,
 		Admins: []string{" Boss@Example.com"}, PublicURL: pub}, []byte("k"),
-		func(_ context.Context, email, role string) (string, error) { return "id-" + email, nil })
+		func(_ context.Context, email, role string, groups []string) (string, error) {
+			savedGroups = groups
+			return "id-" + email, nil
+		})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,12 +71,16 @@ func TestOIDCLogin(t *testing.T) {
 	is := authtest.New(t)
 	a := newOIDC(t, is)
 
-	rec := login(t, a, is, "/deployments?x=1", false)
-	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/deployments?x=1" {
+	is.Claims["groups"] = []string{"grp-a", "grp-b"}
+	rec := login(t, a, is, "/workspaces?x=1", false)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/workspaces?x=1" {
 		t.Fatalf("callback: %d %s", rec.Code, rec.Body.String())
 	}
 	if u, ok := sessionUser(a, rec); !ok || u != (User{ID: "id-dev@example.com", Email: "dev@example.com", Role: "user"}) {
 		t.Fatalf("session: %+v %v", u, ok)
+	}
+	if strings.Join(savedGroups, ",") != "grp-a,grp-b" {
+		t.Fatalf("the IdP's groups must be recorded at login (for team access): %v", savedGroups)
 	}
 
 	is.Claims["email"] = "boss@example.com"

@@ -51,8 +51,8 @@ func newApp(t *testing.T, dir string, store *storage.Store, a *auth.Auth, f Feat
 	return New(store, tpls, testReg, a, memblob.OpenBucket(nil), f, slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
-func devAuth(t *testing.T, store *storage.Store, email string, admin bool) *auth.Auth {
-	save := func(context.Context, string, string) (string, error) { return "", nil }
+func devAuth(t *testing.T, store *storage.Store, email string, admin bool, groups ...string) *auth.Auth {
+	save := func(context.Context, string, string, []string) (string, error) { return "", nil }
 	if store != nil {
 		save = store.UpsertUser
 	}
@@ -60,7 +60,7 @@ func devAuth(t *testing.T, store *storage.Store, email string, admin bool) *auth
 	if admin {
 		admins = []string{email}
 	}
-	a, err := auth.New(context.Background(), auth.Config{DevUser: email, Admins: admins, PublicURL: testReg.PublicURL}, []byte("k"), save)
+	a, err := auth.New(context.Background(), auth.Config{DevUser: email, DevGroups: groups, Admins: admins, PublicURL: testReg.PublicURL}, []byte("k"), save)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +343,7 @@ data "terraform_remote_state" "net" {
 	if rec := get(h, base+"versions"); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("versions without token: %d", rec.Code)
 	}
-	token, err := store.CreateToken(ctx, "test", storage.ScopeRegistry)
+	token, err := store.CreateToken(ctx, "test", storage.ScopeRegistry, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,8 +427,8 @@ func TestWorkspaceFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runnerTok, _ := store.CreateToken(ctx, "r", storage.ScopeRunner)
-	registryTok, _ := store.CreateToken(ctx, "reg", storage.ScopeRegistry)
+	runnerTok, _ := store.CreateToken(ctx, "r", storage.ScopeRunner, "")
+	registryTok, _ := store.CreateToken(ctx, "reg", storage.ScopeRegistry, "")
 	call := func(method, token, path, lease, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, runnerapi.Prefix+path, strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -558,8 +558,8 @@ func TestWorkspaceFlow(t *testing.T) {
 	if page := get(other, runURL).Body.String(); strings.Contains(page, "Confirm &amp;") {
 		t.Fatal("confirm button shown to a user who may not confirm")
 	}
-	if rec := post(other, runURL+"/confirm", nil); rec.Code != http.StatusForbidden {
-		t.Fatalf("confirm by non-owner: %d", rec.Code)
+	if rec := post(other, runURL+"/confirm", nil); rec.Code != http.StatusNotFound { // no access: no workspace
+		t.Fatalf("confirm by a user without access: %d", rec.Code)
 	}
 	if rec := post(h, "/workspaces/"+name+"/runs", url.Values{"action": {"apply"}}); rec.Code != http.StatusConflict {
 		t.Fatalf("second run while one waits for confirmation: %d", rec.Code)
@@ -640,8 +640,8 @@ func TestWorkspaceFlow(t *testing.T) {
 	if page := get(other, "/workspaces/"+name).Body.String(); strings.Contains(page, "Destroy…") {
 		t.Fatal("destroy button shown to a user who may not destroy")
 	}
-	if rec := post(other, "/workspaces/"+name+"/runs", url.Values{"action": {"destroy"}}); rec.Code != http.StatusForbidden {
-		t.Fatalf("destroy by non-owner: %d", rec.Code)
+	if rec := post(other, "/workspaces/"+name+"/runs", url.Values{"action": {"destroy"}}); rec.Code != http.StatusNotFound {
+		t.Fatalf("destroy by a user without access: %d", rec.Code)
 	}
 	if rec := post(h, "/workspaces/"+name+"/settings", url.Values{"auto_apply": {"on"}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("settings: %d", rec.Code)
@@ -682,5 +682,134 @@ func TestWorkspaceFlow(t *testing.T) {
 	}
 	if !strings.HasSuffix(get(h, runURL+"/logs/stream").Body.String(), "event: done\ndata: applied\n\n") {
 		t.Fatal("log stream must end for finished runs")
+	}
+}
+
+// TestTeamsPoolsRenameCancel covers workspace access by IdP group, runner pools bound to tokens,
+// renaming and canceling, through the HTTP routes.
+func TestTeamsPoolsRenameCancel(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	claimWait = 100 * time.Millisecond
+	store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
+	dir := t.TempDir()
+	os.WriteFile(dir+"/pooled.json", []byte(`{"id":"pooled","name":"Pooled","module":{"source":"git::https://x//m","ref":"v1"},
+		"identities":["azure-sandbox","azure-prod"],"inputs":[]}`), 0o600)
+	admin := newServerAs(t, dir, false, store, devAuth(t, store, "admin@example.com", true))
+	owner := newServerAs(t, dir, false, store, devAuth(t, store, "owner@example.com", false))
+	reader := newServerAs(t, dir, false, store, devAuth(t, store, "reader@example.com", false, "grp-readers"))
+	operator := newServerAs(t, dir, false, store, devAuth(t, store, "op@example.com", false, "grp-ops"))
+	outsider := newServerAs(t, dir, false, store, devAuth(t, store, "out@example.com", false, "grp-other"))
+
+	name := "tp-" + strings.ToLower(newID()[:8])
+	t.Cleanup(func() { store.DB.Exec(`DELETE FROM workspaces WHERE name IN ($1, $2)`, name, name+"-renamed") })
+	form := url.Values{"f2s-workspace": {name}, "f2s-identity": {"azure-dev"}}
+	if rec := post(owner, "/templates/pooled", form); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "template&#39;s identities") {
+		t.Fatalf("an identity the template doesn't allow: %d", rec.Code)
+	}
+	form.Set("f2s-identity", "azure-prod")
+	rec := post(owner, "/templates/pooled", form)
+	runURL := rec.Header().Get("Location")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	wsURL := "/workspaces/" + name
+
+	// Visibility: owner and admin; groups only once granted, and read is read-only.
+	for who, h := range map[string]http.Handler{"reader": reader, "operator": operator, "outsider": outsider} {
+		if rec := get(h, wsURL); rec.Code != http.StatusNotFound || strings.Contains(get(h, "/workspaces").Body.String(), name) {
+			t.Fatalf("%s sees an ungranted workspace: %d", who, rec.Code)
+		}
+	}
+	if rec := post(owner, wsURL+"/access", url.Values{"group": {"grp-readers"}, "level": {"read"}}); rec.Code != http.StatusForbidden {
+		t.Fatalf("only admins grant access: %d", rec.Code)
+	}
+	for group, level := range map[string]string{"grp-readers": "read", "grp-ops": "operate"} {
+		if rec := post(admin, wsURL+"/access", url.Values{"group": {group}, "level": {level}}); rec.Code != http.StatusSeeOther {
+			t.Fatalf("grant %s: %d", group, rec.Code)
+		}
+	}
+	if !strings.Contains(get(reader, "/workspaces").Body.String(), name) || get(reader, runURL).Code != 200 {
+		t.Fatal("a read grant must show the workspace and its runs")
+	}
+	if rec := post(reader, wsURL+"/runs", url.Values{"action": {"destroy"}}); rec.Code != http.StatusForbidden {
+		t.Fatalf("read access must not start runs: %d", rec.Code)
+	}
+	if page := get(reader, runURL).Body.String(); strings.Contains(page, "Cancel run") {
+		t.Fatal("cancel button shown to a reader")
+	}
+	if get(outsider, wsURL).Code != http.StatusNotFound {
+		t.Fatal("other groups still see nothing")
+	}
+
+	// Runner pools: the token decides, not the runner.
+	claim := func(tok string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", runnerapi.Prefix+"/jobs/claim", strings.NewReader(`{"runner":"r"}`))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		return do(admin, req)
+	}
+	defaultTok, _ := store.CreateToken(ctx, "d", storage.ScopeRunner, "")
+	sandboxTok, _ := store.CreateToken(ctx, "s", storage.ScopeRunner, "azure-sandbox")
+	prodTok, _ := store.CreateToken(ctx, "p", storage.ScopeRunner, "azure-prod")
+	for _, tok := range []string{defaultTok, sandboxTok} {
+		if rec := claim(tok); rec.Code != http.StatusNoContent {
+			t.Fatalf("another pool's runner got azure-prod's run: %d", rec.Code)
+		}
+	}
+	rec = claim(prodTok)
+	var job runnerapi.Job
+	if json.Unmarshal(rec.Body.Bytes(), &job); rec.Code != 200 || !strings.HasSuffix(runURL, job.RunID) {
+		t.Fatalf("azure-prod's runner must get it: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// Cancel: an operator asks; the runner hears it on its next heartbeat and keeps its lease.
+	beat := func() int {
+		req := httptest.NewRequest("POST", runnerapi.Prefix+"/jobs/"+job.RunID+"/heartbeat", nil)
+		req.Header.Set("Authorization", "Bearer "+prodTok)
+		req.Header.Set(runnerapi.LeaseHeader, job.LeaseID)
+		return do(admin, req).Code
+	}
+	if c := beat(); c != http.StatusNoContent {
+		t.Fatalf("heartbeat before cancel: %d", c)
+	}
+	if !strings.Contains(get(operator, runURL).Body.String(), "Cancel run") {
+		t.Fatal("cancel button missing for an operator")
+	}
+	if rec := post(operator, runURL+"/cancel", nil); rec.Code != http.StatusSeeOther {
+		t.Fatalf("cancel: %d", rec.Code)
+	}
+	if c := beat(); c != runnerapi.StatusCancel {
+		t.Fatalf("the runner must be asked to cancel: %d", c)
+	}
+	if !strings.Contains(get(operator, runURL).Body.String(), "Force cancel") {
+		t.Fatal("force cancel must be offered once a cancel is pending")
+	}
+	if rec := post(operator, runURL+"/cancel", url.Values{"force": {"1"}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("force cancel: %d", rec.Code)
+	}
+	if c := beat(); c != http.StatusConflict {
+		t.Fatalf("a force-canceled runner must be cut off: %d", c)
+	}
+	if rec := post(operator, runURL+"/cancel", nil); rec.Code != http.StatusConflict {
+		t.Fatalf("canceling a finished run: %d", rec.Code)
+	}
+
+	// Rename: same workspace, new URL; the old one is gone; grants and runs stay.
+	if rec := post(reader, wsURL+"/rename", url.Values{"name": {name + "-renamed"}}); rec.Code != http.StatusForbidden {
+		t.Fatalf("a reader must not rename: %d", rec.Code)
+	}
+	if rec := post(operator, wsURL+"/rename", url.Values{"name": {"Not Valid"}}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid name: %d", rec.Code)
+	}
+	if rec := post(operator, wsURL+"/rename", url.Values{"name": {name + "-renamed"}}); rec.Code != http.StatusSeeOther ||
+		rec.Header().Get("Location") != wsURL+"-renamed" {
+		t.Fatalf("rename: %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	if get(owner, wsURL).Code != http.StatusNotFound {
+		t.Fatal("the old name must be free")
+	}
+	page := get(reader, wsURL+"-renamed").Body.String()
+	if !strings.Contains(page, "canceled") || !strings.Contains(page, "azure-prod") {
+		t.Fatalf("renamed workspace lost its runs or identity: %s", page)
 	}
 }

@@ -6,6 +6,10 @@ const (
 	StatePrefix = "/api/state/v1"      // Terraform http state backend: StatePrefix + "/<workspace id>"
 	LeaseHeader = "X-Form2Stack-Lease" // fencing token returned by claim; required on every job update
 
+	// StatusCancel answers a log post or heartbeat when a user canceled the run: interrupt
+	// Terraform (it may still save state), then finish as canceled. 409 means the lease is gone.
+	StatusCancel = 202
+
 	// Artifacts a plan phase uploads and the apply phase downloads: POST/GET Prefix/jobs/<run>/artifacts/<name>.
 	ArtifactPlan     = "tfplan"
 	ArtifactLockfile = "lockfile" // .terraform.lock.hcl, so the apply uses the providers the plan used
