@@ -4,6 +4,9 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 pg_opts := "-k $PGHOST -c listen_addresses="
 
+# Same as the dev shell sets; the fallback covers shells opened before STATE_STORE existed.
+export STATE_STORE := env("STATE_STORE", "file://" + env("PGHOST", justfile_directory() + "/.devdata") + "/state-store?create_dir=1&metadata=skip")
+
 # list recipes
 default:
     @just --list
