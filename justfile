@@ -43,15 +43,15 @@ psql: db-start
 run: db-start
     go run ./cmd/form2stack
 
-# create an API token, printed once: scope registry (TF_TOKEN_<host>) or runner (optionally of a pool)
-token name scope="registry" pool="": db-start
-    @go run ./cmd/form2stack token "{{name}}" "{{scope}}" {{pool}}
+# create an API token, printed once: scope registry (TF_TOKEN_<host>) or runner
+token name scope="registry": db-start
+    @go run ./cmd/form2stack token "{{name}}" "{{scope}}"
 
-# run a runner on this machine against `just run`; give a pool to run that identity's workspaces
-runner pool="": env
+# run a runner on this machine against `just run`
+runner: env
     #!/usr/bin/env bash
     set -euo pipefail
-    export F2S_RUNNER_TOKEN=$(go run ./cmd/form2stack token "local-$(hostname)" runner {{pool}})
+    export F2S_RUNNER_TOKEN=$(go run ./cmd/form2stack token "local-$(hostname)" runner)
     export F2S_SERVER_URL=${F2S_SERVER_URL:-http://127.0.0.1:8080}
     exec go run ./cmd/form2stack runner
 

@@ -160,24 +160,20 @@ const (
 	ScopeRunner   = "runner"
 )
 
-// CreateToken stores a new API token and returns it; it can't be retrieved again. identity binds
-// a runner token to a runner pool: its runners only get runs of workspaces with that identity.
-func (s *Store) CreateToken(ctx context.Context, name, scope, identity string) (string, error) {
+// CreateToken stores a new API token and returns it; it can't be retrieved again.
+func (s *Store) CreateToken(ctx context.Context, name, scope string) (string, error) {
 	token := "f2s_" + rand.Text()
 	h := sha256.Sum256([]byte(token))
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO api_tokens (name, token_hash, scope, identity) VALUES ($1, $2, $3, $4)`,
-		name, h[:], scope, identity)
+	_, err := s.DB.ExecContext(ctx, `INSERT INTO api_tokens (name, token_hash, scope) VALUES ($1, $2, $3)`, name, h[:], scope)
 	return token, err
 }
 
-// ValidToken reports whether token exists with the given scope, and the pool it belongs to.
-func (s *Store) ValidToken(ctx context.Context, token, scope string) (identity string, ok bool, err error) {
+// ValidToken reports whether token exists with the given scope.
+func (s *Store) ValidToken(ctx context.Context, token, scope string) (bool, error) {
 	h := sha256.Sum256([]byte(token))
-	err = s.DB.QueryRowContext(ctx, `SELECT identity FROM api_tokens WHERE token_hash=$1 AND scope=$2`, h[:], scope).Scan(&identity)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", false, nil
-	}
-	return identity, err == nil, err
+	var ok bool
+	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM api_tokens WHERE token_hash=$1 AND scope=$2)`, h[:], scope).Scan(&ok)
+	return ok, err
 }
 
 // SigningKey returns the registry's HMAC key, creating it on first use.

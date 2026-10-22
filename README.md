@@ -55,7 +55,7 @@ Then open http://localhost:8080. Migrations run on startup.
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | | Login via OpenID Connect, required unless `AUTH_DEV_USER` is set |
 | `ADMIN_EMAILS`  |           | Comma-separated emails that get the admin role at login |
 | `AUTH_DEV_USER` |           | **Local dev only:** skip login and treat every visitor as this email (set in the nix dev shell) |
-| `SECRET_KEY`    |           | At least 32 characters; encrypts VCS access tokens in Postgres. Set it (and keep it stable) to turn on [VCS providers](#vcs-providers-publish-modules-from-github-or-azure-devops) |
+| `SECRET_KEY`    |           | At least 32 characters; encrypts [variables](#variables-and-variable-sets) and VCS access tokens in Postgres. Set it (and keep it stable) to turn on variables and [VCS providers](#vcs-providers-publish-modules-from-github-or-azure-devops) |
 | `STATE_STORE`   | required with deployments | Where workspace state files live, as a [Go CDK blob URL](https://gocloud.dev/howto/blob/): `azblob://tfstate`, `s3://tfstate?region=eu-west-1` (add `&endpoint=…&use_path_style=true` for S3-compatible stores), `gs://tfstate`, `file:///path` (dev). Credentials come from the platform's usual env vars or workload identity |
 
 ## Login
@@ -87,7 +87,7 @@ Each workspace has exactly one Terraform state. Form2Stack is the state backend,
 - **Locking:** Terraform's `LOCK`/`UNLOCK` calls take a lock in Postgres, so the blob store needs no locking features of its own. A second locker gets `423` with the holder's lock info. When a run ends or its runner disappears, its lock is released.
 - **Credentials:** a run's state password is an HMAC of the workspace and the run. It works only for that workspace and only while that run is planning or applying, so not while a plan waits for confirmation, and never after the run ends. It's per run, not per phase, because Terraform stores the backend config in the saved plan. The server keeps no state passwords.
 - **Resources page:** `/resources` lists the resources (address, type, provider, module) in every workspace's **current state version**, with a filter. The index belongs to a state version, like HCP Terraform's. At the end of a run, the runner reads the state back (`terraform show -json`, parsed with HashiCorp's `terraform-json`) and sends names and types only. Attribute values never reach Postgres or the UI.
-- **Security:** state files contain secrets in plain text, and the server can read them. Give the server an identity that can only access the state container, and turn on encryption at rest in the store. The server never holds cloud credentials to change infrastructure.
+- **Security:** state files contain secrets in plain text, and the server can read them. Give the server an identity that can only access the state container, and turn on encryption at rest in the store. Cloud credentials in [variables](#variables-and-variable-sets) are encrypted with `SECRET_KEY` and only handed to the runner of a claimed job.
 
 ## Runners
 
@@ -111,7 +111,7 @@ Each workspace has exactly one Terraform state. Form2Stack is the state backend,
 | `F2S_JOB_TIMEOUT` | `1h` | Hard limit per run phase |
 | `F2S_RUNNER_NAME` | hostname | Shown on runs; the pod name in k8s |
 
-Provider credentials go to the runner as the usual env vars, for example `ARM_*` for azurerm (on AKS: `ARM_USE_AKS_WORKLOAD_IDENTITY=true`). Runners need no state storage credentials. Module code runs on the runner with the provider credentials, so scope them to what Form2Stack may deploy.
+Provider credentials come from the workspace's [variables](#variables-and-variable-sets), set as environment variables for Terraform on top of the runner's own environment. Runners are generic: give them no cloud credentials of their own, or every workspace without variables runs with them. Runners need no state storage credentials. Module code runs on the runner with the provider credentials, so scope them to what Form2Stack may deploy.
 
 **Containers**
 
@@ -125,50 +125,24 @@ docker run -e F2S_SERVER_URL=http://form2stack:8080 -e F2S_RUNNER_TOKEN=… -e A
 ```
 
 **On Kubernetes:**
-- Run two Deployments of the same images: the app, and one runner Deployment per [runner pool](#runner-pools-a-cloud-identity-per-workspace).
-- Pass the runner token as a Secret. Cloud credentials come from workload identity.
+- Run two Deployments of the same images: the app, and the runners.
+- Pass the runner token as a Secret. Cloud credentials come from [variables](#variables-and-variable-sets).
 - Scale runners with `replicas`, one job each at a time.
 - Point `F2S_SERVER_URL` at the app's Service, so registry downloads stay inside the cluster.
 - Optionally mount a volume at `TF_PLUGIN_CACHE_DIR` to keep providers between restarts.
 
-### Runner pools: a cloud identity per workspace
+### Variables and variable sets
 
-A template lists the identities its workspaces may run as (`"identities": ["azure-sandbox", "azure-prod"]`, also in the template builder), and a workspace picks one at creation. Each identity is a **runner pool**: runners whose token belongs to that pool, running with that identity's cloud credentials. A workspace's runs only go to its pool. Templates without identities use the default pool.
+Like HCP Terraform, a workspace's runs get **variables**: **env** (environment variables, e.g. cloud credentials) and **terraform** (Terraform input variables, passed as strings). Any runner runs any workspace; the server sends the variables with each claimed job.
 
-- **The pool is bound to the runner token**, not chosen by the runner: `form2stack token runner-prod runner azure-prod` (or `just runner azure-prod` locally). A sandbox runner can never claim a prod workspace's runs, which would carry prod variables and state.
-- **No secrets, no public endpoint on AKS:** each pool is a runner Deployment whose service account is federated with that identity's Entra managed identity (AKS workload identity). The azurerm provider then authenticates as it:
+- **Workspace variables:** the *Variables* section of a workspace page (operate access). A terraform variable can't share a name with one of the template's inputs: change those with *Configure*.
+- **Variable sets** (admins, **Variable sets** in the nav): a named group of variables that's **global** (every workspace) or attached to chosen workspaces. Use one per subscription or service principal, e.g. `azure-prod` with `ARM_TENANT_ID`, `ARM_SUBSCRIPTION_ID`, `ARM_CLIENT_ID` and a sensitive `ARM_CLIENT_SECRET`.
+- **Precedence** (same category and key): template inputs > workspace variables > attached sets > global sets. Between sets of the same kind, the first by name wins.
+- **Sensitive** variables are write-only: the UI never shows them again, you can only replace or delete them. All values are AES-GCM encrypted with `SECRET_KEY` in Postgres. If `SECRET_KEY` changes, runs that need the old values fail with "can't decrypt": set them again.
+- **Reserved env names:** `PATH`, `HOME`, `LD_*`, `DYLD_*`, `GIT_*`, `SSH_*`, `PYTHON*`, `F2S_*`, `TF_*` and a few more are refused, because they could run code on the runner or reconfigure Terraform. Use the terraform category instead of `TF_VAR_*`.
+- **Who can read them:** module code and providers see the variables during the run, as with HCP Terraform. Anyone with operate access can add env variables, so treat operate access as "may use this workspace's credentials".
 
-```yaml
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: f2s-runner-azure-prod
-  annotations:
-    azure.workload.identity/client-id: <managed identity client id>
----
-apiVersion: apps/v1
-kind: Deployment
-metadata: { name: f2s-runner-azure-prod }
-spec:
-  replicas: 2
-  selector: { matchLabels: { app: f2s-runner-azure-prod } }
-  template:
-    metadata:
-      labels: { app: f2s-runner-azure-prod, azure.workload.identity/use: "true" }
-    spec:
-      serviceAccountName: f2s-runner-azure-prod
-      terminationGracePeriodSeconds: 3600   # lets a running job finish on rollout
-      containers:
-        - name: runner
-          image: ghcr.io/rudesome/form2stack-runner:latest
-          env:
-            - { name: F2S_SERVER_URL, value: "http://form2stack:8080" }
-            - { name: F2S_RUNNER_TOKEN, valueFrom: { secretKeyRef: { name: f2s-runner-azure-prod, key: token } } }
-            - { name: ARM_USE_AKS_WORKLOAD_IDENTITY, value: "true" }
-            - { name: ARM_SUBSCRIPTION_ID, value: "<subscription id>" }
-```
-  Create the federated credential on the managed identity with issuer = your cluster's OIDC issuer URL and subject `system:serviceaccount:<namespace>:f2s-runner-azure-prod`. Give the identity only the Azure roles that pool's workspaces need.
-- A pool without running runners leaves its runs queued. The run page says which pool it is waiting for.
+Upgrading from runner pools: queued runs of workspaces that had a pool are errored by the migration. Move each pool's credentials into a variable set, attach it to those workspaces, remove the cloud identity from the runner Deployments, and start new runs.
 
 ## CI and releases
 
@@ -209,7 +183,7 @@ TEST_DATABASE_URL=$DATABASE_URL go test ./internal/storage   # database tests
 
 ## Templates
 
-Each `catalog/*.json` file describes one existing Terraform module pinned to an approved `ref`, plus its inputs (`string`, `number`, `bool`, `select`, with optional `required`, `pattern`, `options` and `default`) and optionally the `identities` (runner pools) its workspaces may run as. See `catalog/storage-account.json`.
+Each `catalog/*.json` file describes one existing Terraform module pinned to an approved `ref`, plus its inputs (`string`, `number`, `bool`, `select`, with optional `required`, `pattern`, `options` and `default`) See `catalog/storage-account.json`.
 
 ## Module registry
 

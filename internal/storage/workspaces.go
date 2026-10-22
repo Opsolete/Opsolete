@@ -40,7 +40,6 @@ type Workspace struct {
 	Inputs       map[string]any
 	StateKey     string // blob key prefix of its state versions
 	AutoApply    bool   // apply plans of apply runs without confirmation
-	Identity     string // runner pool (cloud identity) its runs execute in; "" is the default pool
 	CreatedBy    string // email; empty for workspaces from before login
 	CreatedAt    time.Time
 	Latest       *Run // most recent run
@@ -98,13 +97,13 @@ type StatusEntry struct {
 }
 
 const workspaceCols = `w.id, w.name, w.template_id, COALESCE(w.module_source, ''), w.module_ref, w.inputs, w.state_key,
-	w.auto_apply, w.identity, COALESCE((SELECT email FROM users u WHERE u.id = w.created_by), ''), w.created_at`
+	w.auto_apply, COALESCE((SELECT email FROM users u WHERE u.id = w.created_by), ''), w.created_at`
 
 func scanWorkspace(row interface{ Scan(...any) error }, extra ...any) (Workspace, error) {
 	var w Workspace
 	var raw []byte
 	dest := append([]any{&w.ID, &w.Name, &w.TemplateID, &w.ModuleSource, &w.ModuleRef, &raw, &w.StateKey,
-		&w.AutoApply, &w.Identity, &w.CreatedBy, &w.CreatedAt}, extra...)
+		&w.AutoApply, &w.CreatedBy, &w.CreatedAt}, extra...)
 	if err := row.Scan(dest...); err != nil {
 		return w, err
 	}
@@ -137,7 +136,7 @@ func scanRun(row interface{ Scan(...any) error }) (Run, error) {
 
 // CreateWorkspace creates a workspace and queues its first plan. createdBy is a user id, or empty.
 func (s *Store) CreateWorkspace(ctx context.Context, name, templateID, moduleSource, moduleRef string,
-	inputs map[string]any, autoApply bool, identity, createdBy string) (Workspace, Run, error) {
+	inputs map[string]any, autoApply bool, createdBy string) (Workspace, Run, error) {
 	raw, err := json.Marshal(inputs)
 	if err != nil {
 		return Workspace{}, Run{}, err
@@ -150,9 +149,9 @@ func (s *Store) CreateWorkspace(ctx context.Context, name, templateID, moduleSou
 	var id string
 	err = tx.QueryRowContext(ctx, `
 		WITH id AS (SELECT gen_random_uuid() AS v)
-		INSERT INTO workspaces (id, name, template_id, module_source, module_ref, inputs, state_key, auto_apply, identity, created_by)
-		SELECT v, $1, $2, $3, $4, $5, 'form2stack/' || $2 || '/' || v || '.tfstate', $6, $7, NULLIF($8, '')::uuid FROM id
-		RETURNING id`, name, templateID, moduleSource, moduleRef, raw, autoApply, identity, createdBy).Scan(&id)
+		INSERT INTO workspaces (id, name, template_id, module_source, module_ref, inputs, state_key, auto_apply, created_by)
+		SELECT v, $1, $2, $3, $4, $5, 'form2stack/' || $2 || '/' || v || '.tfstate', $6, NULLIF($7, '')::uuid FROM id
+		RETURNING id`, name, templateID, moduleSource, moduleRef, raw, autoApply, createdBy).Scan(&id)
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
 		return Workspace{}, Run{}, ErrNameTaken
 	}

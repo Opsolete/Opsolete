@@ -25,6 +25,7 @@ import (
 	"github.com/rudesome/form2stack/internal/runnerapi"
 	"github.com/rudesome/form2stack/internal/storage"
 	"github.com/rudesome/form2stack/internal/templates"
+	"github.com/rudesome/form2stack/internal/vcs"
 )
 
 var testReg = func() *registry.Registry {
@@ -48,7 +49,9 @@ func newApp(t *testing.T, dir string, store *storage.Store, a *auth.Auth, f Feat
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(store, tpls, testReg, a, memblob.OpenBucket(nil), f, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv := New(store, tpls, testReg, a, memblob.OpenBucket(nil), f, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv.SecretKey = vcs.Key("test-secret-key")
+	return srv
 }
 
 func devAuth(t *testing.T, store *storage.Store, email string, admin bool, groups ...string) *auth.Auth {
@@ -343,7 +346,7 @@ data "terraform_remote_state" "net" {
 	if rec := get(h, base+"versions"); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("versions without token: %d", rec.Code)
 	}
-	token, err := store.CreateToken(ctx, "test", storage.ScopeRegistry, "")
+	token, err := store.CreateToken(ctx, "test", storage.ScopeRegistry)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,8 +430,8 @@ func TestWorkspaceFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runnerTok, _ := store.CreateToken(ctx, "r", storage.ScopeRunner, "")
-	registryTok, _ := store.CreateToken(ctx, "reg", storage.ScopeRegistry, "")
+	runnerTok, _ := store.CreateToken(ctx, "r", storage.ScopeRunner)
+	registryTok, _ := store.CreateToken(ctx, "reg", storage.ScopeRegistry)
 	call := func(method, token, path, lease, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, runnerapi.Prefix+path, strings.NewReader(body))
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -685,16 +688,16 @@ func TestWorkspaceFlow(t *testing.T) {
 	}
 }
 
-// TestTeamsPoolsRenameCancel covers workspace access by IdP group, runner pools bound to tokens,
-// renaming and canceling, through the HTTP routes.
-func TestTeamsPoolsRenameCancel(t *testing.T) {
+// TestTeamsVariablesRenameCancel covers workspace access by IdP group, variables and variable
+// sets handed to runners, renaming and canceling, through the HTTP routes.
+func TestTeamsVariablesRenameCancel(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 	claimWait = 100 * time.Millisecond
 	store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
 	dir := t.TempDir()
-	os.WriteFile(dir+"/pooled.json", []byte(`{"id":"pooled","name":"Pooled","module":{"source":"git::https://x//m","ref":"v1"},
-		"identities":["azure-sandbox","azure-prod"],"inputs":[]}`), 0o600)
+	os.WriteFile(dir+"/vars.json", []byte(`{"id":"vars","name":"Vars","module":{"source":"git::https://x//m","ref":"v1"},
+		"inputs":[{"name":"location","type":"string","default":"westeurope"}]}`), 0o600)
 	admin := newServerAs(t, dir, false, store, devAuth(t, store, "admin@example.com", true))
 	owner := newServerAs(t, dir, false, store, devAuth(t, store, "owner@example.com", false))
 	reader := newServerAs(t, dir, false, store, devAuth(t, store, "reader@example.com", false, "grp-readers"))
@@ -703,12 +706,7 @@ func TestTeamsPoolsRenameCancel(t *testing.T) {
 
 	name := "tp-" + strings.ToLower(newID()[:8])
 	t.Cleanup(func() { store.DB.Exec(`DELETE FROM workspaces WHERE name IN ($1, $2)`, name, name+"-renamed") })
-	form := url.Values{"f2s-workspace": {name}, "f2s-identity": {"azure-dev"}}
-	if rec := post(owner, "/templates/pooled", form); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "template&#39;s identities") {
-		t.Fatalf("an identity the template doesn't allow: %d", rec.Code)
-	}
-	form.Set("f2s-identity", "azure-prod")
-	rec := post(owner, "/templates/pooled", form)
+	rec := post(owner, "/templates/vars", url.Values{"f2s-workspace": {name}, "location": {"westeurope"}})
 	runURL := rec.Header().Get("Location")
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
@@ -742,30 +740,82 @@ func TestTeamsPoolsRenameCancel(t *testing.T) {
 		t.Fatal("other groups still see nothing")
 	}
 
-	// Runner pools: the token decides, not the runner.
-	claim := func(tok string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest("POST", runnerapi.Prefix+"/jobs/claim", strings.NewReader(`{"runner":"r"}`))
-		req.Header.Set("Authorization", "Bearer "+tok)
-		return do(admin, req)
-	}
-	defaultTok, _ := store.CreateToken(ctx, "d", storage.ScopeRunner, "")
-	sandboxTok, _ := store.CreateToken(ctx, "s", storage.ScopeRunner, "azure-sandbox")
-	prodTok, _ := store.CreateToken(ctx, "p", storage.ScopeRunner, "azure-prod")
-	for _, tok := range []string{defaultTok, sandboxTok} {
-		if rec := claim(tok); rec.Code != http.StatusNoContent {
-			t.Fatalf("another pool's runner got azure-prod's run: %d", rec.Code)
+	// Variables: workspace ones by operators, sets by admins; sensitive values never shown again.
+	setName := name + "-set"
+	t.Cleanup(func() { store.DB.Exec(`DELETE FROM variable_sets WHERE name = $1`, setName) })
+	for _, v := range []url.Values{
+		{"category": {"env"}, "key": {"ARM_CLIENT_SECRET"}, "value": {"s3cret-ws"}, "sensitive": {"on"}},
+		{"category": {"env"}, "key": {"ARM_CLIENT_ID"}, "value": {"client-ws"}},
+		{"category": {"terraform"}, "key": {"tags"}, "value": {"from-ws"}},
+	} {
+		if rec := post(operator, wsURL+"/variables", v); rec.Code != http.StatusSeeOther {
+			t.Fatalf("set %v: %d %s", v, rec.Code, rec.Body.String())
 		}
 	}
-	rec = claim(prodTok)
+	for _, v := range []url.Values{
+		{"category": {"env"}, "key": {"PATH"}, "value": {"/tmp"}},
+		{"category": {"env"}, "key": {"TF_CLI_ARGS"}, "value": {"-x"}},
+		{"category": {"env"}, "key": {"TF_VAR_tags"}, "value": {"x"}},
+		{"category": {"env"}, "key": {"GIT_SSH_COMMAND"}, "value": {"sh"}},
+		{"category": {"terraform"}, "key": {"location"}, "value": {"x"}}, // a template input
+		{"category": {"nope"}, "key": {"A"}},
+	} {
+		if rec := post(operator, wsURL+"/variables", v); rec.Code != http.StatusBadRequest {
+			t.Fatalf("%v must be rejected: %d", v, rec.Code)
+		}
+	}
+	if rec := post(reader, wsURL+"/variables", url.Values{"category": {"env"}, "key": {"A"}}); rec.Code != http.StatusForbidden {
+		t.Fatalf("a reader must not set variables: %d", rec.Code)
+	}
+	if rec := post(operator, "/variable-sets", url.Values{"name": {setName}}); rec.Code != http.StatusForbidden {
+		t.Fatalf("only admins manage variable sets: %d", rec.Code)
+	}
+	for _, step := range []struct {
+		path string
+		form url.Values
+	}{
+		{"/variable-sets", url.Values{"name": {setName}}},
+		{"/variable-sets/" + setName + "/variables", url.Values{"category": {"env"}, "key": {"ARM_TENANT_ID"}, "value": {"tenant-set"}}},
+		{"/variable-sets/" + setName + "/workspaces", url.Values{"workspace": {name}}},
+	} {
+		if rec := post(admin, step.path, step.form); rec.Code != http.StatusSeeOther {
+			t.Fatalf("%s: %d %s", step.path, rec.Code, rec.Body.String())
+		}
+	}
+	// A second set entry with the workspace's key: the workspace's own variable wins.
+	post(admin, "/variable-sets/"+setName+"/variables", url.Values{"category": {"env"}, "key": {"ARM_CLIENT_ID"}, "value": {"client-set"}})
+	if rec := post(admin, "/variable-sets/"+setName+"/workspaces", url.Values{"workspace": {"no-such-ws"}}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("attach to an unknown workspace: %d", rec.Code)
+	}
+	page := get(reader, wsURL).Body.String()
+	if strings.Contains(page, "s3cret-ws") || !strings.Contains(page, "client-ws") || !strings.Contains(page, setName) {
+		t.Fatalf("workspace page must show non-sensitive values and applied sets, never sensitive ones: %s", page)
+	}
+	if p := get(admin, "/variable-sets/"+setName).Body.String(); strings.Contains(p, "s3cret") || !strings.Contains(p, "tenant-set") {
+		t.Fatalf("set page must show non-sensitive values only: %s", p)
+	}
+	if p := get(admin, "/variable-sets").Body.String(); !strings.Contains(p, setName) || !strings.Contains(p, "</html>") {
+		t.Fatalf("variable sets list: %s", p)
+	}
+
+	// Any runner gets the run, with the variables.
+	runnerTok, _ := store.CreateToken(ctx, "r", storage.ScopeRunner)
+	req := httptest.NewRequest("POST", runnerapi.Prefix+"/jobs/claim", strings.NewReader(`{"runner":"r"}`))
+	req.Header.Set("Authorization", "Bearer "+runnerTok)
+	rec = do(admin, req)
 	var job runnerapi.Job
 	if json.Unmarshal(rec.Body.Bytes(), &job); rec.Code != 200 || !strings.HasSuffix(runURL, job.RunID) {
-		t.Fatalf("azure-prod's runner must get it: %d %s", rec.Code, rec.Body.String())
+		t.Fatalf("claim: %d %s", rec.Code, rec.Body.String())
+	}
+	if job.Env["ARM_CLIENT_SECRET"] != "s3cret-ws" || job.Env["ARM_CLIENT_ID"] != "client-ws" || job.Env["ARM_TENANT_ID"] != "tenant-set" ||
+		job.Vars["tags"] != "from-ws" || job.Vars["location"] != "westeurope" {
+		t.Fatalf("job variables: env %v vars %v", job.Env, job.Vars)
 	}
 
 	// Cancel: an operator asks; the runner hears it on its next heartbeat and keeps its lease.
 	beat := func() int {
 		req := httptest.NewRequest("POST", runnerapi.Prefix+"/jobs/"+job.RunID+"/heartbeat", nil)
-		req.Header.Set("Authorization", "Bearer "+prodTok)
+		req.Header.Set("Authorization", "Bearer "+runnerTok)
 		req.Header.Set(runnerapi.LeaseHeader, job.LeaseID)
 		return do(admin, req).Code
 	}
@@ -808,8 +858,8 @@ func TestTeamsPoolsRenameCancel(t *testing.T) {
 	if get(owner, wsURL).Code != http.StatusNotFound {
 		t.Fatal("the old name must be free")
 	}
-	page := get(reader, wsURL+"-renamed").Body.String()
-	if !strings.Contains(page, "canceled") || !strings.Contains(page, "azure-prod") {
-		t.Fatalf("renamed workspace lost its runs or identity: %s", page)
+	page = get(reader, wsURL+"-renamed").Body.String()
+	if !strings.Contains(page, "canceled") || !strings.Contains(page, "client-ws") || !strings.Contains(page, setName) {
+		t.Fatalf("renamed workspace lost its runs or variables: %s", page)
 	}
 }

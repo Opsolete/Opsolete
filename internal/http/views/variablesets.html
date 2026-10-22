@@ -1,0 +1,34 @@
+{{template "top"}}
+<div class="page-head">
+  <div>
+    <h1>Variable sets</h1>
+    <p class="muted">Variables shared by many workspaces, such as a subscription's credentials. A set applies to every workspace (global)
+      or to the workspaces it's attached to. A workspace's own variables override sets, and attached sets override global ones.</p>
+  </div>
+</div>
+
+<div class="card flush">
+<table>
+<tr><th>Name</th><th>Description</th><th>Applies to</th></tr>
+{{range .}}
+<tr>
+  <td><a href="/variable-sets/{{.Name}}"><strong>{{.Name}}</strong></a></td>
+  <td>{{.Description}}</td>
+  <td>{{if .Global}}<span class="tag">global</span> all workspaces{{else}}{{len .Workspaces}} workspace(s){{end}}</td>
+</tr>
+{{else}}
+<tr><td colspan="3" class="empty">No variable sets yet.</td></tr>
+{{end}}
+</table>
+</div>
+
+<h2>Create a variable set</h2>
+<form method="post" class="card">
+  <label for="name">Name <span class="req" aria-hidden="true">*</span></label>
+  <input id="name" name="name" required pattern="[a-z0-9][a-z0-9\-]{1,62}" placeholder="azure-prod">
+  <label for="description">Description</label>
+  <input id="description" name="description" class="wide" maxlength="500">
+  <label for="global"><input type="checkbox" id="global" name="global"> Global: apply to every workspace</label>
+  <div class="actions"><button type="submit">Create</button></div>
+</form>
+{{template "bottom"}}

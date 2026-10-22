@@ -1,7 +1,6 @@
 package httpserver
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -35,17 +34,13 @@ func (s *Server) registryRoutes(mux *http.ServeMux) {
 	}
 }
 
-type poolKey struct{}
-
-// requireToken checks a bearer token of the given scope (Terraform sends TF_TOKEN_<host> as one)
-// and puts the token's runner pool on the request.
+// requireToken checks a bearer token of the given scope (Terraform sends TF_TOKEN_<host> as one).
 func (s *Server) requireToken(scope string, next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var pool string
 		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if ok {
 			var err error
-			if pool, ok, err = s.Store.ValidToken(r.Context(), token, scope); err != nil {
+			if ok, err = s.Store.ValidToken(r.Context(), token, scope); err != nil {
 				s.Log.Error("check token", "err", err)
 				writeErrors(w, http.StatusInternalServerError, "internal error")
 				return
@@ -55,7 +50,7 @@ func (s *Server) requireToken(scope string, next http.HandlerFunc) http.Handler 
 			writeErrors(w, http.StatusUnauthorized, "missing or invalid API token")
 			return
 		}
-		next(w, r.WithContext(context.WithValue(r.Context(), poolKey{}, pool)))
+		next(w, r)
 	})
 }
 

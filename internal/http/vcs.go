@@ -70,7 +70,7 @@ func (s *Server) addConnection(w http.ResponseWriter, r *http.Request) {
 		fail("connection check failed: " + err.Error())
 		return
 	}
-	sealed, err := vcs.Seal(s.VCSKey, token)
+	sealed, err := vcs.Seal(s.SecretKey, token)
 	if err != nil {
 		s.internalError(w, "seal vcs token", err)
 		return
@@ -121,7 +121,7 @@ func (s *Server) renderPublish(w http.ResponseWriter, r *http.Request, status in
 		return
 	}
 	p := publishPage{Conn: sc, Host: s.Registry.PublicURL.Host, Error: errMsg, Form: form}
-	if c, err := vcs.ConnFor(s.VCSKey, sc); err != nil {
+	if c, err := vcs.ConnFor(s.SecretKey, sc); err != nil {
 		p.Error = err.Error()
 	} else if p.Repos, err = c.Repos(r.Context()); err != nil && p.Error == "" {
 		p.Error = "could not list repositories: " + err.Error()
@@ -191,7 +191,7 @@ func (s *Server) syncModule(w http.ResponseWriter, r *http.Request) {
 
 // syncAndRedirect goes to the newest version it published, else to the registry, which shows sync errors.
 func (s *Server) syncAndRedirect(w http.ResponseWriter, r *http.Request, m storage.VCSModule) {
-	added, err := vcs.Sync(r.Context(), s.Store, s.VCSKey, m)
+	added, err := vcs.Sync(r.Context(), s.Store, s.SecretKey, m)
 	if err != nil {
 		s.Log.Warn("vcs sync", "module", m.Namespace+"/"+m.Name+"/"+m.System, "err", err)
 	}

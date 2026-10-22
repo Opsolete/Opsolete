@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -150,6 +151,18 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	}
 	tf.SetStdout(w)
 	tf.SetStderr(w)
+	if len(job.Env) > 0 {
+		env := map[string]string{}
+		for _, kv := range os.Environ() {
+			k, v, _ := strings.Cut(kv, "=")
+			env[k] = v
+		}
+		maps.Copy(env, job.Env)
+		// CleanEnv drops the few variables terraform-exec sets itself (TF_LOG, TF_INPUT, ...).
+		if err := tf.SetEnv(tfexec.CleanEnv(env)); err != nil {
+			return fail("set environment", err)
+		}
+	}
 
 	fmt.Fprintf(w, "==> runner %s: %s phase of %s run %s\n==> terraform init (fetch module)\n", r.Name, job.Phase, job.Action, job.RunID)
 	if err := tf.Init(ctx, tfexec.FromModule(src), tfexec.Backend(false)); err != nil {

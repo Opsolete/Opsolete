@@ -34,7 +34,7 @@ type Config struct {
 	// PublicURL is how Terraform clients reach this app; its host is the module registry hostname
 	// (Terraform requires a dot in it and HTTPS for registry clients).
 	PublicURL *url.URL
-	// SecretKey encrypts VCS access tokens in Postgres. Empty: VCS connections are off.
+	// SecretKey encrypts VCS access tokens and variables in Postgres. Empty: both are off.
 	SecretKey string
 }
 

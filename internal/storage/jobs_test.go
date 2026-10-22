@@ -3,7 +3,9 @@ package storage
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"errors"
+	"maps"
 	"os"
 	"strings"
 	"sync"
@@ -37,7 +39,7 @@ func testStore(t *testing.T) *Store {
 func newWorkspace(t *testing.T, s *Store, autoApply bool) (Workspace, Run) {
 	ctx := context.Background()
 	name := "t-" + strings.ToLower(rand.Text()[:10]) // the test DB is reused
-	w, run, err := s.CreateWorkspace(ctx, name, "job-test", "git::x", "v1", map[string]any{"n": 1.0}, autoApply, "", "")
+	w, run, err := s.CreateWorkspace(ctx, name, "job-test", "git::x", "v1", map[string]any{"n": 1.0}, autoApply, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +49,7 @@ func newWorkspace(t *testing.T, s *Store, autoApply bool) (Workspace, Run) {
 
 func claim(t *testing.T, s *Store, phase string) Job {
 	t.Helper()
-	j, ok, err := s.ClaimJob(context.Background(), "r", "", time.Minute)
+	j, ok, err := s.ClaimJob(context.Background(), "r", time.Minute)
 	if err != nil || !ok || j.Phase != phase {
 		t.Fatalf("claim %s: %+v %v %v", phase, j, ok, err)
 	}
@@ -76,7 +78,7 @@ func TestRunLifecycle(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			j, ok, err := s.ClaimJob(ctx, "r", "", time.Minute)
+			j, ok, err := s.ClaimJob(ctx, "r", time.Minute)
 			if err != nil {
 				t.Error(err)
 			}
@@ -121,7 +123,7 @@ func TestRunLifecycle(t *testing.T) {
 	if st, err := s.FinishJob(ctx, run.ID, plan.LeaseID, "succeeded", "", nil, sum, nil); err != nil || st != NeedsConfirmation {
 		t.Fatalf("finish plan: %q %v", st, err)
 	}
-	if _, ok, _ := s.ClaimJob(ctx, "r", "", time.Minute); ok {
+	if _, ok, _ := s.ClaimJob(ctx, "r", time.Minute); ok {
 		t.Fatal("a plan waiting for confirmation must not be claimed")
 	}
 	if _, err := s.CreateRun(ctx, w.ID, "apply", ""); !errors.Is(err, ErrRunActive) {
@@ -181,7 +183,7 @@ func TestRunLifecycle(t *testing.T) {
 	if st, err := s.FinishJob(ctx, again.ID, j.LeaseID, "succeeded", "", nil, nil, nil); err != nil || st != NoChanges {
 		t.Fatalf("no-op plan: %q %v", st, err)
 	}
-	if _, ok, _ := s.ClaimJob(ctx, "r", "", time.Minute); ok {
+	if _, ok, _ := s.ClaimJob(ctx, "r", time.Minute); ok {
 		t.Fatal("nothing should be left to claim")
 	}
 }
@@ -224,7 +226,7 @@ func TestExpiredLeaseIsErrored(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	w, run := newWorkspace(t, s, false)
-	j, ok, err := s.ClaimJob(ctx, "r", "", 10*time.Millisecond)
+	j, ok, err := s.ClaimJob(ctx, "r", 10*time.Millisecond)
 	if err != nil || !ok {
 		t.Fatalf("claim: %v %v", ok, err)
 	}
@@ -249,22 +251,86 @@ func TestExpiredLeaseIsErrored(t *testing.T) {
 	}
 }
 
-func TestRunnerPools(t *testing.T) {
+// TestRunVariables: a workspace's own variables win over attached sets, attached sets over
+// global ones, and between sets of one kind the first by name.
+func TestRunVariables(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	name := "t-" + strings.ToLower(rand.Text()[:10])
-	w, run, err := s.CreateWorkspace(ctx, name, "job-test", "git::x", "v1", nil, false, "azure-prod", "")
+	w, _, err := s.CreateWorkspace(ctx, name, "job-test", "git::x", "v1", nil, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.DB.Exec(`DELETE FROM workspaces WHERE id=$1`, w.ID) })
-	for _, pool := range []string{"", "azure-sandbox"} {
-		if _, ok, _ := s.ClaimJob(ctx, "r", pool, time.Minute); ok {
-			t.Fatalf("pool %q must not get azure-prod's run", pool)
+	other, _, err := s.CreateWorkspace(ctx, name+"-other", "job-test", "git::x", "v1", nil, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		s.DB.Exec(`DELETE FROM workspaces WHERE id IN ($1, $2)`, w.ID, other.ID)
+		s.DB.Exec(`DELETE FROM variable_sets WHERE name LIKE $1`, name+"%")
+	})
+	set := func(o VarOwner, cat, key, val string) {
+		if err := s.SetVariable(ctx, o, Variable{Category: cat, Key: key, Value: []byte(val)}); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if j, ok, err := s.ClaimJob(ctx, "r", "azure-prod", time.Minute); err != nil || !ok || j.RunID != run.ID {
-		t.Fatalf("the workspace's pool must get it: %+v %v %v", j, ok, err)
+	sets := map[string]string{}
+	for _, n := range []string{"a-global", "b-attached", "c-attached"} {
+		if err := s.CreateVariableSet(ctx, name+n, "", n == "a-global"); err != nil {
+			t.Fatal(err)
+		}
+		vs, err := s.GetVariableSet(ctx, name+n)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sets[n] = vs.ID
+	}
+	if err := s.CreateVariableSet(ctx, name+"a-global", "", false); !errors.Is(err, ErrExists) {
+		t.Fatalf("duplicate set name: %v", err)
+	}
+	for _, n := range []string{"b-attached", "c-attached"} {
+		if err := s.AttachVariableSet(ctx, sets[n], w.Name, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.AttachVariableSet(ctx, sets["b-attached"], "no-such-workspace", true); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("attach to an unknown workspace: %v", err)
+	}
+	k := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
+	set(VarOwner{SetID: sets["a-global"]}, "env", k+"_G", "global")
+	set(VarOwner{SetID: sets["a-global"]}, "env", k+"_X", "global")
+	set(VarOwner{SetID: sets["c-attached"]}, "env", k+"_X", "c")
+	set(VarOwner{SetID: sets["b-attached"]}, "env", k+"_X", "b")
+	set(VarOwner{SetID: sets["b-attached"]}, "env", k+"_W", "b")
+	set(VarOwner{WorkspaceID: w.ID}, "env", k+"_W", "old")
+	set(VarOwner{WorkspaceID: w.ID}, "env", k+"_W", "workspace") // replaces
+	set(VarOwner{WorkspaceID: w.ID}, "terraform", k+"_W", "tf")  // other category, no clash
+
+	got := func(id string) map[string]string {
+		vars, err := s.RunVariables(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := map[string]string{}
+		for _, v := range vars {
+			if strings.HasPrefix(v.Key, k) {
+				m[v.Category+":"+v.Key] = string(v.Value)
+			}
+		}
+		return m
+	}
+	want := map[string]string{"env:" + k + "_G": "global", "env:" + k + "_X": "b", "env:" + k + "_W": "workspace", "terraform:" + k + "_W": "tf"}
+	if m := got(w.ID); !maps.Equal(m, want) {
+		t.Fatalf("got %v, want %v", m, want)
+	}
+	if m := got(other.ID); !maps.Equal(m, map[string]string{"env:" + k + "_G": "global", "env:" + k + "_X": "global"}) {
+		t.Fatalf("a workspace without attachments gets only global sets: %v", m)
+	}
+	if err := s.AttachVariableSet(ctx, sets["b-attached"], w.Name, false); err != nil {
+		t.Fatal(err)
+	}
+	if m := got(w.ID); m["env:"+k+"_X"] != "c" {
+		t.Fatalf("after detaching b, c must win: %v", m)
 	}
 }
 
@@ -275,7 +341,7 @@ func TestAccess(t *testing.T) {
 	member, _ := s.UpsertUser(ctx, "member@example.com", "user", []string{"team-a", "team-b"})
 	outsider, _ := s.UpsertUser(ctx, "outsider@example.com", "user", []string{"team-c"})
 	name := "t-" + strings.ToLower(rand.Text()[:10])
-	w, _, err := s.CreateWorkspace(ctx, name, "job-test", "git::x", "v1", nil, false, "", creator)
+	w, _, err := s.CreateWorkspace(ctx, name, "job-test", "git::x", "v1", nil, false, creator)
 	if err != nil {
 		t.Fatal(err)
 	}

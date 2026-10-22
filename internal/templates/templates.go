@@ -19,9 +19,6 @@ type Template struct {
 	Description string  `json:"description"`
 	Module      Module  `json:"module"`
 	Inputs      []Input `json:"inputs"`
-	// Identities are the runner pools (cloud identities) a workspace of this template may run as;
-	// the workspace picks one. Empty: the default pool.
-	Identities []string `json:"identities,omitempty"`
 }
 
 // Module points at an existing Terraform module at an approved revision.
@@ -150,11 +147,6 @@ func (t Template) check() error {
 	}
 	if t.Module.Source == "" || t.Module.Ref == "" {
 		return fmt.Errorf("module.source and module.ref are required")
-	}
-	for _, id := range t.Identities {
-		if !idRe.MatchString(id) {
-			return fmt.Errorf("invalid identity %q (lowercase letters, digits and dashes)", id)
-		}
 	}
 	seen := map[string]bool{}
 	for _, in := range t.Inputs {

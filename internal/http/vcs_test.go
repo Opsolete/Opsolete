@@ -67,7 +67,7 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 	b, _ := json.Marshal(tpl)
 	os.WriteFile(filepath.Join(dir, tplID+".json"), b, 0o644)
 	app := newApp(t, dir, store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true, Registry: true, VCS: true})
-	app.VCSKey = vcs.Key("test-secret-key")
+	app.SecretKey = vcs.Key("test-secret-key")
 	h := app.Handler()
 
 	// Connect: a bad token is rejected by the connection check; the good one is stored sealed.

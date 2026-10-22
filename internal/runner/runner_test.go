@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -338,5 +339,22 @@ resource "terraform_data" "slow" {
 	// the run reports it, so nothing is orphaned.
 	if !strings.Contains(string(f.states["ws1"]), "terraform_data") || len(res.Resources) != 1 || f.locks["ws1"] != "" {
 		t.Fatalf("a graceful cancel must save state: resources %+v, state %q, lock %q", res.Resources, f.states["ws1"], f.locks["ws1"])
+	}
+}
+
+// TestJobEnv: a job's environment variables reach Terraform, on top of the runner's own.
+func TestJobEnv(t *testing.T) {
+	f := &fakeServer{}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	r := testRunner(t, srv)
+	j := job("env1", "plan", "apply", f.module(t, helloModule), map[string]any{"greeting": "hi"})
+	data := filepath.Join(t.TempDir(), "tfdata")
+	j.Env = map[string]string{"TF_DATA_DIR": data}
+	if res, logs := f.do(t, r, j); res.Status != "succeeded" {
+		t.Fatalf("plan: %+v\n%s", res, logs)
+	}
+	if _, err := os.Stat(data); err != nil {
+		t.Fatalf("TF_DATA_DIR from the job env not used: %v", err)
 	}
 }

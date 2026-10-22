@@ -33,7 +33,6 @@
 <div class="card">
   <dl class="kv">
     <dt>Module</dt><dd><code>{{$w.ModuleSource}}</code> <span class="tag">{{$w.ModuleRef}}</span></dd>
-    <dt>Runs as</dt><dd>{{with $w.Identity}}<span class="tag">{{.}}</span> runner pool{{else}}<span class="muted">default runner pool</span>{{end}}</dd>
     <dt>State</dt><dd>{{with .Versions}}{{with index . 0}}<span class="tag">v{{.Serial}}</span> saved {{.CreatedAt.Format "2006-01-02 15:04"}}{{end}}{{else}}<span class="muted">none yet</span>{{end}}</dd>
     <dt>Inputs</dt><dd>{{range $k, $v := $w.Inputs}}<code>{{$k}} = {{$v}}</code><br>{{else}}<span class="muted">none</span>{{end}}</dd>
     <dt>Apply method</dt><dd>
@@ -87,6 +86,13 @@
 {{else}}
 <p class="muted">{{if not .Versions}}No state saved yet.{{else if not (index .Versions 0).Indexed}}The current state version isn't indexed (the run couldn't read it back).{{else}}The current state holds no resources.{{end}}</p>
 {{end}}
+
+<h2 id="variables">Variables</h2>
+<p class="muted">Environment variables (cloud credentials such as <code>ARM_CLIENT_ID</code>, <code>ARM_CLIENT_SECRET</code>) and Terraform variables for this workspace's runs.
+  They override variable sets; the template's inputs override Terraform variables.</p>
+{{template "variables" .Variables}}
+{{with .Sets}}<p class="muted">Variable sets applied:
+  {{range $i, $s := .}}{{if $i}}, {{end}}{{if $.Admin}}<a href="/variable-sets/{{.Name}}">{{.Name}}</a>{{else}}{{.Name}}{{end}}{{if .Global}} <span class="tag">global</span>{{end}}{{end}}</p>{{end}}
 
 {{if or .Admin .Grants}}
 <h2>Access</h2>

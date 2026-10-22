@@ -67,8 +67,8 @@ Decision (October 2026): deployments run on **Form2Stack's own runners**. The ea
 - Runners pull jobs over HTTPS with a runner-scoped token, so they need no database access and no inbound connectivity. Each claim returns a lease id (fencing token) that every later write must present. Leases expire without heartbeats, and the server then fails the job instead of retrying it.
 - Runners execute Terraform through `terraform-exec` (init → plan → apply → output), one job at a time, in a throwaway working directory, as a non-root user.
 - Runners stream output to the server, which stores it and serves it to the browser via Server-Sent Events. Sensitive outputs never leave the runner.
-- Runners own cloud credentials, not the server. A **workspace** holds one Terraform state; every change to it is a **run** (HCP-style): a plan phase, a human confirmation (or per-workspace auto-apply; destroys always ask), then an apply phase that applies the saved plan. Each phase is a separate job; the plan file and lock file travel between them via the state store. One active run per workspace. Runs can be canceled gracefully (runner interrupts Terraform, which still saves state) or forced.
-- Decision (October 2026): cloud identity per workspace = **runner pools**. A runner token belongs to a pool (identity); a workspace picks an identity its template allows, and only that pool's runners claim its runs. On AKS each pool uses workload identity, so Form2Stack issues no tokens and needs no public endpoint.
+- A **workspace** holds one Terraform state; every change to it is a **run** (HCP-style): a plan phase, a human confirmation (or per-workspace auto-apply; destroys always ask), then an apply phase that applies the saved plan. Each phase is a separate job; the plan file and lock file travel between them via the state store. One active run per workspace. Runs can be canceled gracefully (runner interrupts Terraform, which still saves state) or forced.
+- Decision (October 2026, replaces runner pools): cloud credentials are **variables**, HCP-style. Env and Terraform variables live on a workspace or in variable sets (global or attached to workspaces), AES-GCM sealed with `SECRET_KEY` in PostgreSQL, and are handed to the runner with each claimed job. Runners are generic and hold no cloud credentials of their own.
 - Team access = IdP `groups` claim (recorded per user at login). Admins grant groups read/operate per workspace; without access a workspace is a 404.
 - Decision (October 2026): Form2Stack is the state backend, HCP-style. Runners use Terraform's `http` backend against the server with a per-run credential (HMAC of workspace + run, valid only while the run is planning or applying). The server stores immutable state versions in blob storage via Go CDK (`STATE_STORE`: azblob, s3, gs, file) and locks in PostgreSQL. A resource index (names/types only) is stored per state version.
 - The target platform is Kubernetes: runners scale as replicas, and the first SIGTERM drains (finishes the current job) while a second interrupts it.
@@ -121,7 +121,7 @@ Then implement JSON templates, dynamic forms, authentication, and the execution 
 The division of responsibility:
 
 - **Form2Stack server:** authentication · JSON forms · module registry · PostgreSQL · job queue · log storage and streaming · Terraform state backend (versions in blob storage, locks in PostgreSQL).
-- **Form2Stack runners:** pull jobs, run the approved module with Terraform via `terraform-exec`, and hold the cloud credentials.
+- **Form2Stack runners:** pull jobs and run the approved module with Terraform via `terraform-exec`, with the credentials the job's variables carry.
 - **Terraform + existing modules:** plan · apply · outputs, with state in the Form2Stack `http` backend, one state per workspace.
 
-Runners never touch the database or the state store directly. The server holds read/write access to the state store only, never cloud credentials to change infrastructure.
+Runners never touch the database or the state store directly. The server holds read/write access to the state store, and cloud credentials only as sealed variables it never uses itself.

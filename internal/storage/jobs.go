@@ -26,10 +26,10 @@ type Job struct {
 	Inputs       map[string]any
 }
 
-// ClaimJob hands the longest-waiting queued phase (plan or confirmed apply) of a workspace in the
-// runner's pool (identity) to runner, or returns ok=false if there is none. SKIP LOCKED lets any
-// number of runners claim without handing out a job twice.
-func (s *Store) ClaimJob(ctx context.Context, runner, identity string, lease time.Duration) (Job, bool, error) {
+// ClaimJob hands the longest-waiting queued phase (plan or confirmed apply) to runner, or returns
+// ok=false if there is none. SKIP LOCKED lets any number of runners claim without handing out a
+// job twice.
+func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration) (Job, bool, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return Job{}, false, err
@@ -40,11 +40,10 @@ func (s *Store) ClaimJob(ctx context.Context, runner, identity string, lease tim
 	err = tx.QueryRowContext(ctx, `
 		UPDATE runs SET status = CASE status WHEN 'plan_queued' THEN 'planning' ELSE 'applying' END,
 			runner = $1, lease_id = $2, lease_until = now() + make_interval(secs => $3), updated_at = now()
-		WHERE id = (SELECT r.id FROM runs r JOIN workspaces w ON w.id = r.workspace_id
-			WHERE r.status IN ('plan_queued', 'apply_queued') AND w.identity = $4
-			ORDER BY r.updated_at FOR UPDATE OF r SKIP LOCKED LIMIT 1)
+		WHERE id = (SELECT id FROM runs WHERE status IN ('plan_queued', 'apply_queued')
+			ORDER BY updated_at FOR UPDATE SKIP LOCKED LIMIT 1)
 		RETURNING id, workspace_id, action, status`,
-		runner, j.LeaseID, lease.Seconds(), identity).Scan(&j.RunID, &j.WorkspaceID, &j.Action, &status)
+		runner, j.LeaseID, lease.Seconds()).Scan(&j.RunID, &j.WorkspaceID, &j.Action, &status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, false, nil
 	}

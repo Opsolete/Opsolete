@@ -36,7 +36,7 @@ type Server struct {
 	// StateStore holds the workspaces' Terraform state files (any gocloud.dev/blob URL).
 	StateStore *blob.Bucket
 	Features   Features
-	VCSKey     []byte // encrypts VCS tokens; set when Features.VCS
+	SecretKey  []byte // encrypts VCS tokens and variables; nil without SECRET_KEY
 	Log        *slog.Logger
 	pages      *template.Template
 }
@@ -101,6 +101,7 @@ func (s *Server) Handler() http.Handler {
 	s.runnerRoutes(mux)
 	s.stateRoutes(mux)
 	s.workspaceRoutes(mux)
+	s.variableRoutes(mux)
 	// CrossOriginProtection rejects cross-site browser POSTs (CSRF); token clients send no Origin and pass.
 	return s.logRequests(http.NewCrossOriginProtection().Handler(s.requireLogin(mux)))
 }
@@ -306,11 +307,6 @@ func templateFromForm(r *http.Request) templates.Template {
 	t := templates.Template{
 		Name: get("name"), Description: get("description"),
 		Module: templates.Module{Source: get("module_source"), Ref: get("module_ref")},
-	}
-	for _, id := range strings.Split(get("identities"), ",") {
-		if id = strings.TrimSpace(id); id != "" {
-			t.Identities = append(t.Identities, id)
-		}
 	}
 	at := func(key string, i int) string {
 		if v := f[key]; i < len(v) {

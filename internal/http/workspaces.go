@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -22,7 +21,6 @@ import (
 const (
 	fieldWorkspace = "f2s-workspace"
 	fieldAutoApply = "f2s-auto-apply"
-	fieldIdentity  = "f2s-identity"
 )
 
 var workspaceNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`)
@@ -71,7 +69,6 @@ type formPage struct {
 	Errors    map[string]string
 	Workspace string
 	AutoApply bool
-	Identity  string
 	Configure *storage.Workspace // set: change this workspace's inputs and module version instead of creating one
 	Error     string
 }
@@ -112,18 +109,14 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !workspaceNameRe.MatchString(name) {
 		errs[fieldWorkspace] = "2–63 lowercase letters, digits and dashes, starting with a letter or digit"
 	}
-	identity := r.PostForm.Get(fieldIdentity)
-	if (len(t.Identities) == 0 && identity != "") || (len(t.Identities) > 0 && !slices.Contains(t.Identities, identity)) {
-		errs[fieldIdentity] = "choose one of the template's identities"
-	}
 	page := formPage{T: t, Editor: s.canEdit(r), Values: raw, Errors: errs, Workspace: name,
-		AutoApply: r.PostForm.Get(fieldAutoApply) != "", Identity: identity}
+		AutoApply: r.PostForm.Get(fieldAutoApply) != ""}
 	if len(errs) > 0 {
 		s.render(w, r, http.StatusUnprocessableEntity, "form.html", page)
 		return
 	}
 	u := auth.FromContext(r.Context())
-	ws, run, err := s.Store.CreateWorkspace(r.Context(), name, t.ID, t.Module.Source, t.Module.Ref, vals, page.AutoApply, identity, u.ID)
+	ws, run, err := s.Store.CreateWorkspace(r.Context(), name, t.ID, t.Module.Source, t.Module.Ref, vals, page.AutoApply, u.ID)
 	if errors.Is(err, storage.ErrNameTaken) {
 		errs[fieldWorkspace] = err.Error()
 		s.render(w, r, http.StatusUnprocessableEntity, "form.html", page)
@@ -226,6 +219,16 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "workspace grants", err)
 		return
 	}
+	vars, err := s.varsBlock(ctx, storage.VarOwner{WorkspaceID: ws.ID}, "/workspaces/"+ws.Name, level == levelOperate)
+	if err != nil {
+		s.internalError(w, "workspace variables", err)
+		return
+	}
+	sets, err := s.Store.WorkspaceVariableSets(ctx, ws.ID)
+	if err != nil {
+		s.internalError(w, "workspace variable sets", err)
+		return
+	}
 	var active *storage.Run
 	if len(runs) > 0 && runs[0].Active() {
 		active = &runs[0]
@@ -239,6 +242,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, http.StatusOK, "workspace.html", map[string]any{"W": ws, "Runs": runs, "Active": active,
 		"Update": update, "HasTemplate": hasTemplate,
 		"Resources": res, "Versions": versions, "Outputs": outputs, "Destroyed": destroyed, "Grants": grants,
+		"Variables": vars, "Sets": sets,
 		"CanOperate": level == levelOperate, "Admin": auth.FromContext(ctx).Admin()})
 }
 

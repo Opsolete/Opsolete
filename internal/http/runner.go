@@ -48,19 +48,26 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	for {
-		// The pool comes from the token, never from the request: a runner can't ask for another identity's runs.
-		pool, _ := r.Context().Value(poolKey{}).(string)
-		j, ok, err := s.Store.ClaimJob(r.Context(), req.Runner, pool, leaseTTL)
+		j, ok, err := s.Store.ClaimJob(r.Context(), req.Runner, leaseTTL)
 		if err != nil {
 			s.Log.Error("claim job", "err", err)
 			writeErrors(w, http.StatusInternalServerError, "internal error")
 			return
 		}
 		if ok {
+			env, vars, err := s.runVariables(r.Context(), j.WorkspaceID, j.Inputs)
+			if err != nil {
+				// The job is claimed: fail it rather than leave it to the lease reaper.
+				s.Log.Error("job variables", "run", j.RunID, "err", err)
+				if _, ferr := s.Store.FinishJob(r.Context(), j.RunID, j.LeaseID, "failed", err.Error(), nil, nil, nil); ferr != nil {
+					s.Log.Error("fail job", "run", j.RunID, "err", ferr)
+				}
+				continue
+			}
 			s.Log.Info("job claimed", "run", j.RunID, "phase", j.Phase, "action", j.Action, "runner", req.Runner)
 			writeJSON(w, runnerapi.Job{
 				RunID: j.RunID, WorkspaceID: j.WorkspaceID, Phase: j.Phase, Action: j.Action, LeaseID: j.LeaseID,
-				LeaseSeconds: int(leaseTTL.Seconds()), StateToken: s.stateToken(j.WorkspaceID, j.RunID), Vars: j.Inputs,
+				LeaseSeconds: int(leaseTTL.Seconds()), StateToken: s.stateToken(j.WorkspaceID, j.RunID), Vars: vars, Env: env,
 				ModuleSource: s.Registry.RunnerSource(templates.Module{Source: j.ModuleSource, Ref: j.ModuleRef}, runnerSrcTTL),
 			})
 			return

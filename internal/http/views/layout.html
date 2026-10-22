@@ -169,6 +169,7 @@
     <a href="/workspaces"{{if eq $s "workspaces"}} aria-current="page"{{end}}>Workspaces</a>
     <a href="/resources"{{if eq $s "resources"}} aria-current="page"{{end}}>Resources</a>
     {{end}}
+    {{if and .Deployments (user).Admin}}<a href="/variable-sets"{{if eq $s "variable-sets"}} aria-current="page"{{end}}>Variable sets</a>{{end}}
     {{if .Registry}}<a href="/registry"{{if eq $s "registry"}} aria-current="page"{{end}}>Registry</a>{{end}}
     {{if and .VCS (user).Admin}}<a href="/vcs"{{if eq $s "vcs"}} aria-current="page"{{end}}>VCS providers</a>{{end}}
     {{end}}
