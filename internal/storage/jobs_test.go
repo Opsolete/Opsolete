@@ -148,7 +148,7 @@ func TestRunLifecycle(t *testing.T) {
 		{Address: "azurerm_storage_account.this", Type: "azurerm_storage_account", Name: "this", Provider: "registry.terraform.io/hashicorp/azurerm"},
 		{Address: "module.net.azurerm_subnet.a[0]", Type: "azurerm_subnet", Name: "a", Provider: "registry.terraform.io/hashicorp/azurerm", Module: "module.net"},
 	}
-	if err := s.AddStateVersion(ctx, w.ID, StateVersion{Serial: 3, Lineage: "lin", BlobKey: "k/" + w.ID, MD5: "m", Size: 1}); err != nil {
+	if err := s.AddStateVersion(ctx, w.ID, StateVersion{Serial: 3, Lineage: "lin", BlobKey: "k/" + w.ID, MD5: "m", Size: 1, Outputs: map[string]any{"id": "abc"}}); err != nil {
 		t.Fatal(err)
 	}
 	if st, err := s.FinishJob(ctx, run.ID, apply.LeaseID, "succeeded", "", map[string]any{"id": "abc"}, nil, res); err != nil || st != Applied {

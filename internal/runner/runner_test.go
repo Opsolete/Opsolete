@@ -358,3 +358,42 @@ func TestJobEnv(t *testing.T) {
 		t.Fatalf("TF_DATA_DIR from the job env not used: %v", err)
 	}
 }
+
+// TestAddedTemplates: templates added to a workspace become module blocks, with or without a root
+// module, their outputs root outputs, and form values stay values.
+func TestAddedTemplates(t *testing.T) {
+	f := &fakeServer{}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	r := testRunner(t, srv)
+	src := f.module(t, helloModule)
+	evil := `${file("/etc/passwd")}`
+	mods := []runnerapi.Module{
+		{Name: "a", Source: src, Inputs: map[string]any{"greeting": evil}},
+		{Name: "b-2", Source: src, Inputs: map[string]any{"greeting": "hi"}},
+	}
+	j := job("m1", "plan", "apply", "", nil)
+	j.Modules = mods
+	res, logs := f.do(t, r, j)
+	if res.Status != "succeeded" || res.Plan == nil || res.Plan.Add != 2 {
+		t.Fatalf("plan: %+v\n%s", res, logs)
+	}
+	j.Phase = "apply"
+	res, logs = f.do(t, r, j)
+	if res.Status != "succeeded" || res.Outputs["a__msg"] != evil || res.Outputs["b-2__msg"] != "hi" || res.Outputs["a__secret"] != "(sensitive)" {
+		t.Fatalf("apply: %+v\n%s", res, logs)
+	}
+	if len(res.Resources) != 2 || res.Resources[0].Address != "module.a.terraform_data.this" {
+		t.Fatalf("resources: %+v", res.Resources)
+	}
+	if strings.Contains(logs, "secret-signature") || strings.Contains(logs, "hunter2") {
+		t.Fatalf("leaked into the logs:\n%s", logs)
+	}
+
+	// Next to a root module, and with one template removed: its resources are destroyed.
+	root := job("m2", "plan", "apply", src, map[string]any{"greeting": "root"})
+	root.Modules = mods[:1]
+	if res, logs = f.do(t, r, root); res.Status != "succeeded" || res.Plan == nil || res.Plan.Add != 1 || res.Plan.Destroy != 1 {
+		t.Fatalf("plan with root module: %+v\n%s", res, logs)
+	}
+}

@@ -7,10 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/rudesome/form2stack/internal/auth"
@@ -18,7 +18,7 @@ import (
 	"github.com/rudesome/form2stack/internal/vcs"
 )
 
-// Workspaces without a template, HCP style: empty, or holding only variables or an uploaded state,
+// Workspaces without a template, HCP style: empty, or holding only variables,
 // or taking their configuration from a VCS branch. Runs need configuration (a template or a branch).
 
 var branchRe = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,255}$`)
@@ -120,7 +120,7 @@ func (s *Server) renderNewWorkspace(w http.ResponseWriter, r *http.Request, stat
 }
 
 // createEmptyWorkspace creates a workspace without a template, optionally linked to a branch.
-// It queues no run: the next step is usually variables or a state upload.
+// It queues no run: the next step is usually variables or a branch.
 func (s *Server) createEmptyWorkspace(w http.ResponseWriter, r *http.Request) {
 	form := vcsFormValues(r)
 	fail := func(msg string) { s.renderNewWorkspace(w, r, http.StatusUnprocessableEntity, form, msg) }
@@ -273,23 +273,17 @@ func (s *Server) vcsArchive(w http.ResponseWriter, r *http.Request) {
 	w.Write(b)
 }
 
-// uploadState makes an uploaded state file the workspace's current state, e.g. to migrate a
-// workspace into Form2Stack. It holds the state lock while saving, so no run writes at the same time.
-func (s *Server) uploadState(w http.ResponseWriter, r *http.Request) {
+// rollbackState makes a copy of an older state version the workspace's current state, HCP style:
+// same content, serial one above the current one. It holds the state lock, so no run writes meanwhile.
+func (s *Server) rollbackState(w http.ResponseWriter, r *http.Request) {
 	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
 	if !ok {
 		return
 	}
 	ctx := r.Context()
-	f, _, err := r.FormFile("state")
+	from, err := strconv.ParseInt(r.PathValue("version"), 10, 64)
 	if err != nil {
-		http.Error(w, "choose a state file", http.StatusBadRequest)
-		return
-	}
-	defer f.Close()
-	body, err := io.ReadAll(io.LimitReader(f, maxStateSize+1))
-	if err != nil || len(body) > maxStateSize {
-		http.Error(w, fmt.Sprintf("state files are limited to %d MB", maxStateSize>>20), http.StatusRequestEntityTooLarge)
+		http.NotFound(w, r)
 		return
 	}
 	runs, err := s.Store.Runs(ctx, ws.ID, 1)
@@ -303,7 +297,7 @@ func (s *Server) uploadState(w http.ResponseWriter, r *http.Request) {
 	}
 	u := auth.FromContext(ctx)
 	lockID := rand.Text()
-	info, _ := json.Marshal(map[string]string{"ID": lockID, "Operation": "OperationTypeUpload", "Who": u.Email})
+	info, _ := json.Marshal(map[string]string{"ID": lockID, "Operation": "OperationTypeRollback", "Who": u.Email})
 	if _, ok, err := s.Store.LockState(ctx, ws.ID, lockID, info); err != nil {
 		s.internalError(w, "lock state", err)
 		return
@@ -316,10 +310,47 @@ func (s *Server) uploadState(w http.ResponseWriter, r *http.Request) {
 			s.Log.Error("unlock state", "workspace", ws.Name, "err", err)
 		}
 	}()
-	if code, msg := s.saveState(ctx, ws.ID, body); code != http.StatusOK {
-		http.Error(w, msg, code)
+	key, err := s.Store.StateVersionBlob(ctx, ws.ID, from)
+	if errors.Is(err, sql.ErrNoRows) {
+		http.NotFound(w, r)
 		return
 	}
-	s.Log.Info("state uploaded", "workspace", ws.Name, "bytes", len(body), "user", u.Email)
+	if err != nil {
+		s.internalError(w, "state version", err)
+		return
+	}
+	cur, err := s.Store.StateVersions(ctx, ws.ID, 1)
+	if err != nil {
+		s.internalError(w, "list state versions", err)
+		return
+	}
+	if cur[0].ID == from {
+		http.Error(w, "this is already the current state version", http.StatusConflict)
+		return
+	}
+	old, err := s.StateStore.ReadAll(ctx, key)
+	if err != nil {
+		s.internalError(w, "read state", err)
+		return
+	}
+	var state map[string]json.RawMessage
+	if err := json.Unmarshal(old, &state); err != nil {
+		s.internalError(w, "parse state", err)
+		return
+	}
+	state["serial"] = json.RawMessage(strconv.FormatInt(cur[0].Serial+1, 10))
+	body, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		s.internalError(w, "encode state", err)
+		return
+	}
+	if code, msg := s.saveState(ctx, ws.ID, body); code != http.StatusOK {
+		http.Error(w, msg, code) // e.g. a version of another lineage
+		return
+	}
+	if err := s.Store.CopyStateIndex(ctx, ws.ID, from); err != nil {
+		s.Log.Error("copy state index", "workspace", ws.Name, "err", err) // the next apply indexes it
+	}
+	s.Log.Info("state rolled back", "workspace", ws.Name, "version", from, "user", u.Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name, http.StatusSeeOther)
 }

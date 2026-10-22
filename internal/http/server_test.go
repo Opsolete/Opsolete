@@ -504,6 +504,7 @@ func TestWorkspaceFlow(t *testing.T) {
 		{"POST", "?ID=l1", job.StateToken, v1, http.StatusOK},
 		{"POST", "?ID=l1", job.StateToken, v1, http.StatusOK},                          // unchanged: no new version
 		{"POST", "?ID=l1", job.StateToken, state(0, "lin", ""), http.StatusConflict},   // older serial
+		{"POST", "?ID=l1", job.StateToken, state(1, "lin", ""), http.StatusConflict},   // same serial, other content
 		{"POST", "?ID=l1", job.StateToken, state(2, "other", ""), http.StatusConflict}, // other lineage
 		{"UNLOCK", "", job.StateToken, `{"ID":"l1"}`, http.StatusOK},
 	} {
@@ -587,7 +588,9 @@ func TestWorkspaceFlow(t *testing.T) {
 	if rec := call("GET", runnerTok, planPath, job.LeaseID, ""); rec.Code != http.StatusOK || rec.Body.String() != "PLANBYTES" {
 		t.Fatalf("download plan: %d %q", rec.Code, rec.Body.String())
 	}
-	saveState(state(2, "lin", `{"mode":"managed","type":"azurerm_storage_account","name":"this"}`))
+	v2 := strings.Replace(state(2, "lin", `{"mode":"managed","type":"azurerm_storage_account","name":"this"}`), "{",
+		`{"outputs":{"id":{"value":"abc","type":"string"},"key":{"value":"s3cret","type":"string","sensitive":true}},`, 1)
+	saveState(v2)
 	finish(`{"status":"succeeded","outputs":{"id":"abc"},
 		"resources":[{"address":"azurerm_storage_account.this","type":"azurerm_storage_account","name":"this","provider":"registry.terraform.io/hashicorp/azurerm"}]}`)
 	if ok, _ := app.StateStore.Exists(ctx, artifactKey(runID, runnerapi.ArtifactPlan)); ok {
@@ -622,10 +625,13 @@ func TestWorkspaceFlow(t *testing.T) {
 
 	// Workspace page, with its resources.
 	page = get(h, "/workspaces/"+name).Body.String()
-	for _, want := range []string{"<code>&#34;abc&#34;</code>", "<code>azurerm_storage_account.this</code>", "v2", "applied", "New run"} {
+	for _, want := range []string{"<code>&#34;abc&#34;</code>", "<code>&#34;(sensitive)&#34;</code>", "<code>azurerm_storage_account.this</code>", "v2", "applied", "New run"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("workspace page lacks %q", want)
 		}
+	}
+	if strings.Contains(page, "s3cret") {
+		t.Fatal("sensitive output shown")
 	}
 	if !strings.Contains(get(h, "/workspaces").Body.String(), `href="/workspaces/`+name+`"`) {
 		t.Fatal("workspace not listed")
@@ -680,6 +686,37 @@ func TestWorkspaceFlow(t *testing.T) {
 	}
 	if !strings.HasSuffix(get(h, runURL+"/logs/stream").Body.String(), "event: done\ndata: applied\n\n") {
 		t.Fatal("log stream must end for finished runs")
+	}
+
+	// Rollback: a copy of v2 becomes v4, with v2's outputs and resource index.
+	vs, _ := store.StateVersions(ctx, ws.ID, 10)
+	rollback := func(id int64) int {
+		return post(h, fmt.Sprintf("/workspaces/%s/state-versions/%d/rollback", name, id), nil).Code
+	}
+	if code := rollback(vs[0].ID); code != http.StatusConflict {
+		t.Fatalf("rollback to the current version: %d", code)
+	}
+	if code := rollback(vs[0].ID + 1000); code != http.StatusNotFound {
+		t.Fatalf("rollback to an unknown version: %d", code)
+	}
+	if code := post(other, fmt.Sprintf("/workspaces/%s/state-versions/%d/rollback", name, vs[1].ID), nil).Code; code != http.StatusNotFound {
+		t.Fatalf("rollback by a user without access: %d", code)
+	}
+	if code := rollback(vs[1].ID); code != http.StatusSeeOther {
+		t.Fatalf("rollback: %d", code)
+	}
+	vs, _ = store.StateVersions(ctx, ws.ID, 10)
+	if vs[0].Serial != 4 || !vs[0].Indexed || vs[0].Resources != 1 {
+		t.Fatalf("rolled back version: %+v", vs[0])
+	}
+	if out, _, _ := store.CurrentOutputs(ctx, ws.ID); out["id"] != "abc" {
+		t.Fatalf("rolled back outputs: %v", out)
+	}
+	if b, _ := app.StateStore.ReadAll(ctx, vs[0].BlobKey); !strings.Contains(string(b), `"serial": 4`) || !strings.Contains(string(b), "azurerm_storage_account") {
+		t.Fatalf("rolled back state: %s", b)
+	}
+	if lock, _ := store.StateLockID(ctx, ws.ID); lock != "" {
+		t.Fatal("rollback must release the state lock")
 	}
 }
 

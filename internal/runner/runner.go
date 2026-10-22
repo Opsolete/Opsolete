@@ -16,11 +16,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/hashicorp/terraform-config-inspect/tfconfig"
 	"github.com/hashicorp/terraform-exec/tfexec"
 	tfjson "github.com/hashicorp/terraform-json"
 
@@ -97,16 +99,32 @@ func (r *Runner) Execute(hard context.Context, job runnerapi.Job) {
 	ctx, cancel := context.WithTimeout(hard, r.JobTimeout)
 	defer cancel()
 
-	src := job.ModuleSource
-	if strings.HasPrefix(src, "/") { // this server's registry: a short-lived signed archive URL
+	var signed []string // resolved signed URLs, kept out of the log
+	resolve := func(src string) (string, error) {
+		if !strings.HasPrefix(src, "/") {
+			return src, nil
+		}
+		// This server's registry: a short-lived signed archive URL.
 		rel, err := url.Parse(src)
 		if err != nil {
-			r.finish(log, job, runnerapi.FinishRequest{Status: "failed", Message: "invalid module source from server"})
-			return
+			return "", err
 		}
-		src = r.ServerURL.ResolveReference(rel).String()
+		abs := r.ServerURL.ResolveReference(rel).String()
+		signed = append(signed, abs)
+		return abs, nil
 	}
-	ship := newShipper(r, job, cancel, src)
+	src, err := resolve(job.ModuleSource)
+	job.Modules = slices.Clone(job.Modules)
+	for i := range job.Modules {
+		if err == nil {
+			job.Modules[i].Source, err = resolve(job.Modules[i].Source)
+		}
+	}
+	if err != nil {
+		r.finish(log, job, runnerapi.FinishRequest{Status: "failed", Message: "invalid module source from server"})
+		return
+	}
+	ship := newShipper(r, job, cancel, signed)
 	res := r.terraform(ctx, job, src, ship)
 	ship.Close()
 	if ship.lost.Load() {
@@ -125,8 +143,10 @@ func (r *Runner) Execute(hard context.Context, job runnerapi.Job) {
 }
 
 const (
-	planFile = "form2stack.tfplan"
-	lockFile = ".terraform.lock.hcl"
+	planFile    = "form2stack.tfplan"
+	lockFile    = ".terraform.lock.hcl"
+	modulesFile = "form2stack_templates.tf.json" // module blocks of the workspace's added templates
+	outputsFile = "form2stack_outputs.tf.json"   // their outputs, as root outputs
 )
 
 // terraform runs one phase in a throwaway directory. plan: save a plan, summarize it and upload
@@ -164,9 +184,17 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 		}
 	}
 
-	fmt.Fprintf(w, "==> runner %s: %s phase of %s run %s\n==> terraform init (fetch module)\n", r.Name, job.Phase, job.Action, job.RunID)
-	if err := tf.Init(ctx, tfexec.FromModule(src), tfexec.Backend(false)); err != nil {
-		return fail("fetch module", err)
+	fmt.Fprintf(w, "==> runner %s: %s phase of %s run %s\n", r.Name, job.Phase, job.Action, job.RunID)
+	if src != "" {
+		fmt.Fprintln(w, "==> terraform init (fetch module)")
+		if err := tf.Init(ctx, tfexec.FromModule(src), tfexec.Backend(false)); err != nil {
+			return fail("fetch module", err)
+		}
+	}
+	if len(job.Modules) > 0 {
+		if err := writeModules(dir, job.Modules); err != nil {
+			return fail("write templates", err)
+		}
 	}
 	backend := "terraform {\n  backend \"http\" {}\n}\n"
 	if err := os.WriteFile(filepath.Join(dir, "form2stack_backend.tf"), []byte(backend), 0o600); err != nil {
@@ -194,6 +222,11 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	fmt.Fprintln(w, "\n==> terraform init (Form2Stack state)")
 	if err := tf.Init(ctx, append(r.backendOptions(job), tfexec.Reconfigure(true))...); err != nil {
 		return fail("init", err)
+	}
+	if len(job.Modules) > 0 { // after init: it reads the installed modules
+		if err := writeOutputs(dir, job.Modules); err != nil {
+			return fail("write template outputs", err)
+		}
 	}
 	if job.Phase == "plan" {
 		return r.plan(ctx, tf, dir, job, w, fail)
@@ -230,6 +263,66 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	}
 	fmt.Fprintln(w, "\n==> done")
 	return runnerapi.FinishRequest{Status: "succeeded", Outputs: outputs}
+}
+
+// templateEscape keeps an input a value: strings in .tf.json are templates, so "${...}" in a form
+// value would otherwise be evaluated (e.g. reading the runner's files or credentials).
+var templateEscape = strings.NewReplacer("${", "$${", "%{", "%%{")
+
+// writeModules writes a module block per added template, inputs as literal arguments.
+// shortcut: escapes top-level strings only, as templates produce only string/number/bool inputs;
+// escape nested values too if inputs ever get list or object types.
+func writeModules(dir string, mods []runnerapi.Module) error {
+	blocks := map[string]map[string]any{}
+	for _, m := range mods {
+		b := map[string]any{"source": m.Source}
+		for k, v := range m.Inputs {
+			if s, ok := v.(string); ok {
+				v = templateEscape.Replace(s)
+			}
+			b[k] = v
+		}
+		blocks[m.Name] = b
+	}
+	j, err := json.Marshal(map[string]any{"module": blocks})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, modulesFile), j, 0o600)
+}
+
+// writeOutputs exposes every output of the added templates as root output <name>__<output>, with
+// the module's sensitivity (Terraform requires it), so the run reports them like root outputs.
+func writeOutputs(dir string, mods []runnerapi.Module) error {
+	var manifest struct{ Modules []struct{ Key, Dir string } }
+	b, err := os.ReadFile(filepath.Join(dir, ".terraform", "modules", "modules.json"))
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(b, &manifest); err != nil {
+		return err
+	}
+	outs := map[string]any{}
+	for _, m := range manifest.Modules {
+		if !slices.ContainsFunc(mods, func(a runnerapi.Module) bool { return a.Name == m.Key }) {
+			continue
+		}
+		mod, diags := tfconfig.LoadModule(filepath.Join(dir, m.Dir))
+		if diags.HasErrors() {
+			return diags.Err()
+		}
+		for name, o := range mod.Outputs {
+			outs[m.Key+"__"+name] = map[string]any{"value": "${module." + m.Key + "." + name + "}", "sensitive": o.Sensitive}
+		}
+	}
+	if len(outs) == 0 {
+		return nil
+	}
+	j, err := json.Marshal(map[string]any{"output": outs})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, outputsFile), j, 0o600)
 }
 
 // plan saves a plan; with changes it reports a summary and uploads the plan and the lock file
@@ -460,12 +553,14 @@ type shipper struct {
 
 const maxBuffered = 8 << 20 // if the server is unreachable for long, drop output rather than memory
 
-func newShipper(r *Runner, job runnerapi.Job, cancel context.CancelFunc, src string) *shipper {
-	redacted := src
-	if i := strings.Index(src, "?"); i >= 0 && strings.HasPrefix(job.ModuleSource, "/") {
-		redacted = src[:i] + "?<signed>"
+func newShipper(r *Runner, job runnerapi.Job, cancel context.CancelFunc, signed []string) *shipper {
+	var pairs []string
+	for _, u := range signed {
+		if i := strings.Index(u, "?"); i >= 0 {
+			pairs = append(pairs, u[i:], "?<signed>")
+		}
 	}
-	s := &shipper{r: r, job: job, cancel: cancel, redact: strings.NewReplacer(src, redacted),
+	s := &shipper{r: r, job: job, cancel: cancel, redact: strings.NewReplacer(pairs...),
 		stop: make(chan struct{}), stopped: make(chan struct{})}
 	go s.loop()
 	return s

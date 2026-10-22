@@ -25,6 +25,7 @@ type Job struct {
 	ModuleRef    string
 	VCS          bool // configuration comes from the workspace's VCS branch
 	Inputs       map[string]any
+	Modules      []WorkspaceTemplate // templates added to the workspace
 }
 
 // ClaimJob hands the longest-waiting queued phase (plan or confirmed apply) to runner, or returns
@@ -62,6 +63,9 @@ func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration
 		return Job{}, false, err
 	}
 	if err := json.Unmarshal(raw, &j.Inputs); err != nil {
+		return Job{}, false, err
+	}
+	if j.Modules, err = workspaceTemplates(ctx, tx, j.WorkspaceID); err != nil {
 		return Job{}, false, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO run_status_history (run_id, status, message)

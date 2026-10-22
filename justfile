@@ -64,13 +64,11 @@ seed: db-start
     req /variable-sets/example-azure/variables -d category=env -d key=ARM_TENANT_ID -d value=00000000-0000-0000-0000-000000000001
     req /variable-sets/example-azure/variables -d category=env -d key=ARM_CLIENT_SECRET -d value=not-a-real-secret -d sensitive=on
 
-    echo "workspaces: greeting-dev (auto-apply), greeting-prod (waits for confirmation), empty, imported, credentials-only"
+    echo "workspaces: greeting-dev (auto-apply), greeting-prod (waits for confirmation), empty, credentials-only"
     req /templates/greeting -d f2s-workspace=greeting-dev -d f2s-auto-apply=on -d greeting=hello -d name=world
     req /templates/greeting -d f2s-workspace=greeting-prod -d greeting=hi -d "name=Form2Stack team"
     req /variable-sets/example-azure/workspaces -d workspace=greeting-prod
     req /workspaces/new -d name=empty
-    req /workspaces/new -d name=imported
-    req /workspaces/imported/state -F state=@examples/state/imported.tfstate
     req /workspaces/new -d name=credentials-only
     req /workspaces/credentials-only/variables -d category=env -d key=ARM_SUBSCRIPTION_ID -d value=00000000-0000-0000-0000-000000000002
     req /workspaces/credentials-only/variables -d category=env -d key=ARM_CLIENT_SECRET -d value=not-a-real-secret -d sensitive=on

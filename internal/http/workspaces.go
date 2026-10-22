@@ -21,6 +21,7 @@ import (
 const (
 	fieldWorkspace = "f2s-workspace"
 	fieldAutoApply = "f2s-auto-apply"
+	fieldModule    = "f2s-module" // name of a template added to a workspace
 )
 
 var workspaceNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`)
@@ -38,7 +39,7 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /workspaces/new", s.createEmptyWorkspace)
 	mux.HandleFunc("GET /workspaces/{name}/vcs", s.workspaceVCSPage)
 	mux.HandleFunc("POST /workspaces/{name}/vcs", s.linkWorkspaceVCS)
-	mux.HandleFunc("POST /workspaces/{name}/state", s.uploadState)
+	mux.HandleFunc("POST /workspaces/{name}/state-versions/{version}/rollback", s.rollbackState)
 	mux.HandleFunc("GET /v1/vcs-archives/{file}", s.vcsArchive)
 	mux.HandleFunc("GET /workspaces/{name}", s.workspace)
 	mux.HandleFunc("POST /workspaces/{name}/runs", s.newRun)
@@ -46,6 +47,11 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /workspaces/{name}/configure", s.configureForm)
 	mux.HandleFunc("POST /workspaces/{name}/configure", s.configureWorkspace)
 	mux.HandleFunc("POST /workspaces/{name}/rename", s.renameWorkspace)
+	mux.HandleFunc("GET /workspaces/{name}/templates/new", s.workspaceTemplateForm)
+	mux.HandleFunc("POST /workspaces/{name}/templates/new", s.saveWorkspaceTemplate)
+	mux.HandleFunc("GET /workspaces/{name}/templates/{module}", s.workspaceTemplateForm)
+	mux.HandleFunc("POST /workspaces/{name}/templates/{module}", s.saveWorkspaceTemplate)
+	mux.HandleFunc("POST /workspaces/{name}/templates/{module}/remove", s.removeWorkspaceTemplate)
 	mux.HandleFunc("POST /workspaces/{name}/access", s.admin(s.workspaceAccess))
 	mux.HandleFunc("GET /workspaces/{name}/runs/{run}", s.run)
 	mux.HandleFunc("POST /workspaces/{name}/runs/{run}/confirm", s.confirmRun)
@@ -80,6 +86,9 @@ type formPage struct {
 	Workspace string
 	AutoApply bool
 	Configure *storage.Workspace // set: change this workspace's inputs and module version instead of creating one
+	Module    string             // with Configure: the added template to change (or add, with Adding)
+	Adding    bool
+	Cur       templates.Module // with Configure: the module version it runs now
 	Error     string
 }
 
@@ -256,8 +265,19 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 	if hasTemplate && (t.Module.Source != ws.ModuleSource || t.Module.Ref != ws.ModuleRef) {
 		update = &t.Module
 	}
+	added, err := s.Store.WorkspaceTemplates(ctx, ws.ID)
+	if err != nil {
+		s.internalError(w, "workspace templates", err)
+		return
+	}
+	updates := map[string]string{} // added template name -> module version its template pins now
+	for _, a := range added {
+		if t, ok := s.Templates.Get(a.TemplateID); ok && (t.Module.Source != a.ModuleSource || t.Module.Ref != a.ModuleRef) {
+			updates[a.Name] = t.Module.Ref
+		}
+	}
 	s.render(w, r, http.StatusOK, "workspace.html", map[string]any{"W": ws, "Runs": runs, "Active": active,
-		"Update": update, "HasTemplate": hasTemplate,
+		"Update": update, "HasTemplate": hasTemplate, "Added": added, "Updates": updates, "Catalog": s.Templates.List(),
 		"Resources": res, "Versions": versions, "Outputs": outputs, "Destroyed": destroyed, "Grants": grants,
 		"Variables": vars, "Sets": sets, "Groups": groups,
 		"CanOperate": level == levelOperate, "Admin": auth.FromContext(ctx).Admin()})
@@ -306,7 +326,8 @@ func (s *Server) configureForm(w http.ResponseWriter, r *http.Request) {
 			vals[in.Name] = fmt.Sprint(v)
 		}
 	}
-	s.render(w, r, http.StatusOK, "form.html", formPage{T: t, Values: vals, Configure: &ws})
+	s.render(w, r, http.StatusOK, "form.html", formPage{T: t, Values: vals, Configure: &ws,
+		Cur: templates.Module{Source: ws.ModuleSource, Ref: ws.ModuleRef}})
 }
 
 // configureWorkspace saves new inputs and the template's module version, and starts a plan.
@@ -324,7 +345,7 @@ func (s *Server) configureWorkspace(w http.ResponseWriter, r *http.Request) {
 		raw[in.Name] = r.PostForm.Get(in.Name)
 	}
 	vals, errs := t.Validate(raw)
-	page := formPage{T: t, Values: raw, Errors: errs, Configure: &ws}
+	page := formPage{T: t, Values: raw, Errors: errs, Configure: &ws, Cur: templates.Module{Source: ws.ModuleSource, Ref: ws.ModuleRef}}
 	if len(errs) > 0 {
 		s.render(w, r, http.StatusUnprocessableEntity, "form.html", page)
 		return

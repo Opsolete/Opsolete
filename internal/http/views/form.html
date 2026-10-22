@@ -3,12 +3,17 @@
 <a class="back" href="/workspaces/{{.Name}}">← {{.Name}}</a>
 <div class="page-head">
   <div>
-    <h1>Configure {{.Name}}</h1>
-    <p class="muted">Change the inputs{{if or (ne .ModuleRef $.T.Module.Ref) (ne .ModuleSource $.T.Module.Source)}} and move to the template's module version{{end}}, then plan the change.</p>
+    {{if $.Adding}}
+    <h1>Add {{$.T.Name}} to {{.Name}}</h1>
+    <p class="muted">The template becomes the module <code>module.&lt;name&gt;</code> in this workspace's configuration and state; adding it starts a plan.</p>
+    {{else}}
+    <h1>Configure {{with $.Module}}{{.}} in {{end}}{{.Name}}</h1>
+    <p class="muted">Change the inputs{{if or (ne $.Cur.Ref $.T.Module.Ref) (ne $.Cur.Source $.T.Module.Source)}} and move to the template's module version{{end}}, then plan the change.</p>
+    {{end}}
   </div>
 </div>
-{{if or (ne .ModuleRef $.T.Module.Ref) (ne .ModuleSource $.T.Module.Source)}}
-<div class="alert warn" role="status">Module update: <code>{{.ModuleRef}}</code> → <code>{{$.T.Module.Ref}}</code>{{if ne .ModuleSource $.T.Module.Source}} (source <code>{{$.T.Module.Source}}</code>){{end}}. Fill in any new inputs below.</div>
+{{if and (not $.Adding) (or (ne $.Cur.Ref $.T.Module.Ref) (ne $.Cur.Source $.T.Module.Source))}}
+<div class="alert warn" role="status">Module update: <code>{{$.Cur.Ref}}</code> → <code>{{$.T.Module.Ref}}</code>{{if ne $.Cur.Source $.T.Module.Source}} (source <code>{{$.T.Module.Source}}</code>){{end}}. Fill in any new inputs below.</div>
 {{end}}
 {{with $.Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
 {{else}}
@@ -23,6 +28,13 @@
 {{end}}
 <form method="post" class="card">
 {{$v := .Values}}{{$e := .Errors}}
+{{if .Adding}}
+  <label for="f2s-module">Name in the workspace <span class="req" aria-hidden="true">*</span></label>
+  <input id="f2s-module" name="f2s-module" value="{{.Module}}" required pattern="[a-z][a-z0-9_\-]{0,62}" aria-describedby="f2s-module-hint">
+  <p class="hint" id="f2s-module-hint">Lowercase letters, digits, dashes and underscores, starting with a letter. Add a template more than once under different names.</p>
+  {{with index $e "f2s-module"}}<p class="err" role="alert">{{.}}</p>{{end}}
+  <hr style="border:0;border-top:1px solid var(--border);margin:1.4rem 0 .4rem">
+{{end}}
 {{if not .Configure}}
   <label for="f2s-workspace">Workspace name <span class="req" aria-hidden="true">*</span></label>
   <input id="f2s-workspace" name="f2s-workspace" value="{{.Workspace}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}"
@@ -54,7 +66,7 @@
   <p class="hint">Deploys <code>{{.T.Module.Source}}</code> at <code>{{.T.Module.Ref}}</code>.</p>
   <div class="actions">
     {{with .Configure}}
-    <button type="submit">Save configuration &amp; start plan</button>
+    <button type="submit">{{if $.Adding}}Add template{{else}}Save configuration{{end}} &amp; start plan</button>
     <a class="btn secondary" href="/workspaces/{{.Name}}">Cancel</a>
     {{else}}
     <button type="submit">Create workspace &amp; plan</button>

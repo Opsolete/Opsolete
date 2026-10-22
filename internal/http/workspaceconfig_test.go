@@ -1,13 +1,11 @@
 package httpserver
 
 import (
-	"bytes"
 	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -22,7 +20,7 @@ import (
 	"github.com/rudesome/form2stack/internal/vcs"
 )
 
-// Workspaces without a template: blank, with an uploaded state, or planning a VCS branch.
+// Workspaces without a template: blank, or planning a VCS branch.
 func TestBlankAndVCSWorkspaces(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
@@ -86,38 +84,6 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	}
 	if rec := post(h, "/workspaces/"+blank+"/runs", url.Values{"action": {"apply"}}); rec.Code != http.StatusConflict {
 		t.Fatalf("a blank workspace has nothing to plan: %d", rec.Code)
-	}
-
-	// Upload a state: it must continue the current one.
-	upload := func(body string) int {
-		var buf bytes.Buffer
-		mw := multipart.NewWriter(&buf)
-		f, _ := mw.CreateFormFile("state", "terraform.tfstate")
-		f.Write([]byte(body))
-		mw.Close()
-		req := httptest.NewRequest("POST", "/workspaces/"+blank+"/state", &buf)
-		req.Header.Set("Content-Type", mw.FormDataContentType())
-		return do(h, req).Code
-	}
-	for _, c := range []struct {
-		body string
-		want int
-	}{
-		{`{"version":4,"serial":3,"lineage":"L1","resources":[]}`, http.StatusSeeOther},
-		{`{"version":4,"serial":4,"lineage":"L2","resources":[]}`, http.StatusConflict},
-		{`{"version":4,"serial":2,"lineage":"L1","resources":[]}`, http.StatusConflict},
-		{`not json`, http.StatusBadRequest},
-	} {
-		if got := upload(c.body); got != c.want {
-			t.Fatalf("upload %s: %d, want %d", c.body, got, c.want)
-		}
-	}
-	ws, _ := store.GetWorkspace(ctx, blank)
-	if vs, _ := store.StateVersions(ctx, ws.ID, 5); len(vs) != 1 || vs[0].Serial != 3 {
-		t.Fatalf("state versions: %+v", vs)
-	}
-	if lock, _ := store.StateLockID(ctx, ws.ID); lock != "" {
-		t.Fatal("upload must release the state lock")
 	}
 
 	// VCS: the branch is checked on link; runs plan its head and apply the same commit.

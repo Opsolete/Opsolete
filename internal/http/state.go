@@ -123,15 +123,26 @@ func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
 // current one. The caller holds the state lock. It returns 200, or an error status and message.
 func (s *Server) saveState(ctx context.Context, id string, body []byte) (int, string) {
 	sum := md5.Sum(body)
-	// Only the header fields needed to version the file; the state itself is Terraform's business.
+	// Only the fields needed to version the file and show its outputs; the rest is Terraform's business.
 	var head struct {
 		Serial  *int64 `json:"serial"`
 		Lineage string `json:"lineage"`
+		Outputs map[string]struct {
+			Value     any  `json:"value"`
+			Sensitive bool `json:"sensitive"`
+		} `json:"outputs"`
 	}
 	if err := json.Unmarshal(body, &head); err != nil || head.Serial == nil || head.Lineage == "" {
 		return http.StatusBadRequest, "not a Terraform state file"
 	}
-	v := storage.StateVersion{Serial: *head.Serial, Lineage: head.Lineage, MD5: hex.EncodeToString(sum[:]), Size: int64(len(body))}
+	v := storage.StateVersion{Serial: *head.Serial, Lineage: head.Lineage, MD5: hex.EncodeToString(sum[:]), Size: int64(len(body)),
+		Outputs: map[string]any{}}
+	for k, o := range head.Outputs {
+		v.Outputs[k] = o.Value
+		if o.Sensitive { // sensitive values never leave the state file
+			v.Outputs[k] = "(sensitive)"
+		}
+	}
 	cur, err := s.Store.StateVersions(ctx, id, 1)
 	if err != nil {
 		return s.stateFailure("list state versions", err)
@@ -144,6 +155,8 @@ func (s *Server) saveState(ctx context.Context, id string, body []byte) (int, st
 			return http.StatusConflict, "state serial is older than the workspace's state"
 		case v.MD5 == cur[0].MD5:
 			return http.StatusOK, "" // unchanged: no new version
+		case v.Serial == cur[0].Serial: // Terraform bumps the serial on every change: same serial, other content is a fork
+			return http.StatusConflict, "state serial equals the workspace's state, but its content differs"
 		}
 	}
 	ws, err := s.Store.GetWorkspaceByID(ctx, id)

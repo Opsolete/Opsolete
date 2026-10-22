@@ -9,7 +9,7 @@
 {{with .VCS.Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
 <form method="post" class="card">
   <h3>Blank workspace</h3>
-  <p class="muted">Empty, or with just variables or an uploaded state; link a repository now or later to run it.</p>
+  <p class="muted">Empty, or with just variables; link a repository now or later to run it.</p>
   <label for="name">Workspace name <span class="req" aria-hidden="true">*</span></label>
   <input id="name" name="name" value="{{index .VCS.Form "name"}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}" placeholder="network-prod">
   <p class="hint">Lowercase letters, digits and dashes.</p>

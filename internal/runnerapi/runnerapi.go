@@ -28,12 +28,21 @@ type Job struct {
 	Action       string         `json:"action"` // apply | destroy
 	LeaseID      string         `json:"lease_id"`
 	LeaseSeconds int            `json:"lease_seconds"`
-	ModuleSource string         `json:"module_source"` // go-getter address; a leading "/" is relative to the server URL
-	StateToken   string         `json:"state_token"`   // state backend password; valid while this run is planning or applying
+	ModuleSource string         `json:"module_source"` // go-getter address; a leading "/" is relative to the server URL; "" = none
+	Modules      []Module       `json:"modules,omitempty"`
+	StateToken   string         `json:"state_token"` // state backend password; valid while this run is planning or applying
 	Vars         map[string]any `json:"vars"`
 	// Env is set for Terraform on top of the runner's own environment: the workspace's
 	// environment variables, typically cloud credentials (ARM_CLIENT_SECRET, ...).
 	Env map[string]string `json:"env,omitempty"`
+}
+
+// Module is a template added to the workspace: the runner adds it as module.<Name> next to the
+// root configuration, and exposes each of its outputs as the root output <Name>__<output>.
+type Module struct {
+	Name   string         `json:"name"`
+	Source string         `json:"source"` // like ModuleSource
+	Inputs map[string]any `json:"inputs"`
 }
 
 type FinishRequest struct {

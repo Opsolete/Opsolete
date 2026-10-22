@@ -19,7 +19,8 @@ type StateVersion struct {
 	MD5       string
 	Size      int64
 	Indexed   bool
-	Resources int // index size
+	Resources int            // index size
+	Outputs   map[string]any // from the state file, sensitive values masked (not read by StateVersions)
 	CreatedAt time.Time
 }
 
@@ -54,8 +55,36 @@ func (s *Store) StateVersions(ctx context.Context, workspaceID string, limit int
 
 // AddStateVersion records a state file written to blob storage as the workspace's current state.
 func (s *Store) AddStateVersion(ctx context.Context, id string, v StateVersion) error {
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO state_versions (workspace_id, serial, lineage, blob_key, md5, size)
-		VALUES ($1::uuid, $2, $3, $4, $5, $6)`, id, v.Serial, v.Lineage, v.BlobKey, v.MD5, v.Size)
+	var out []byte
+	if v.Outputs != nil {
+		var err error
+		if out, err = json.Marshal(v.Outputs); err != nil {
+			return err
+		}
+	}
+	_, err := s.DB.ExecContext(ctx, `INSERT INTO state_versions (workspace_id, serial, lineage, blob_key, md5, size, outputs)
+		VALUES ($1::uuid, $2, $3, $4, $5, $6, $7::jsonb)`, id, v.Serial, v.Lineage, v.BlobKey, v.MD5, v.Size, nullJSON(out))
+	return err
+}
+
+// StateVersionBlob returns the blob key of one of a workspace's state versions; sql.ErrNoRows if unknown.
+func (s *Store) StateVersionBlob(ctx context.Context, workspaceID string, id int64) (string, error) {
+	var key string
+	err := s.DB.QueryRowContext(ctx, `SELECT blob_key FROM state_versions WHERE workspace_id::text = $1 AND id = $2`,
+		workspaceID, id).Scan(&key)
+	return key, err
+}
+
+// CopyStateIndex gives the workspace's current state version the resource index of version from,
+// for a rollback: the current version is a copy of it.
+func (s *Store) CopyStateIndex(ctx context.Context, workspaceID string, from int64) error {
+	_, err := s.DB.ExecContext(ctx, `
+		WITH cur AS (SELECT id FROM state_versions WHERE workspace_id::text = $1 ORDER BY id DESC LIMIT 1),
+		ins AS (INSERT INTO state_version_resources (state_version_id, address, type, name, provider, module)
+			SELECT cur.id, r.address, r.type, r.name, r.provider, r.module FROM cur, state_version_resources r
+			WHERE r.state_version_id = $2 ON CONFLICT DO NOTHING)
+		UPDATE state_versions SET indexed = (SELECT indexed FROM state_versions WHERE id = $2)
+		WHERE id = (SELECT id FROM cur)`, workspaceID, from)
 	return err
 }
 

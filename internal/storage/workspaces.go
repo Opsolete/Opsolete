@@ -32,7 +32,7 @@ const visible = `($2 OR w.created_by = NULLIF($1, '')::uuid OR EXISTS (SELECT 1 
 
 // Workspace is a long-lived home for one Terraform state. Its configuration comes from a template
 // (TemplateID, ModuleSource, ModuleRef, Inputs), from a VCS branch (VCS*), or from nowhere yet: an
-// empty workspace may hold just variables or an uploaded state.
+// empty workspace may hold just variables.
 type Workspace struct {
 	ID              string
 	Name            string
@@ -44,6 +44,7 @@ type Workspace struct {
 	VCSRepo         string
 	VCSBranch       string
 	StateKey        string // blob key prefix of its state versions
+	Templates       int    // how many templates were added (see WorkspaceTemplates)
 	AutoApply       bool   // apply plans of apply runs without confirmation
 	CreatedBy       string // email; empty for workspaces from before login
 	CreatedAt       time.Time
@@ -51,7 +52,9 @@ type Workspace struct {
 }
 
 // HasConfig: there is Terraform configuration to plan, so runs can start.
-func (w Workspace) HasConfig() bool { return w.ModuleSource != "" || w.VCSConnectionID != "" }
+func (w Workspace) HasConfig() bool {
+	return w.ModuleSource != "" || w.VCSConnectionID != "" || w.Templates > 0
+}
 
 // Run statuses. A workspace has at most one active run (enforced by runs_one_active_idx).
 const (
@@ -106,13 +109,14 @@ type StatusEntry struct {
 }
 
 const workspaceCols = `w.id, w.name, COALESCE(w.template_id, ''), COALESCE(w.module_source, ''), COALESCE(w.module_ref, ''),
-	w.inputs, COALESCE(w.vcs_connection_id::text, ''), COALESCE(w.vcs_repo, ''), COALESCE(w.vcs_branch, ''), w.state_key, w.auto_apply, COALESCE((SELECT email FROM users u WHERE u.id = w.created_by), ''), w.created_at`
+	w.inputs, COALESCE(w.vcs_connection_id::text, ''), COALESCE(w.vcs_repo, ''), COALESCE(w.vcs_branch, ''), w.state_key,
+	(SELECT count(*) FROM workspace_templates t WHERE t.workspace_id = w.id), w.auto_apply, COALESCE((SELECT email FROM users u WHERE u.id = w.created_by), ''), w.created_at`
 
 func scanWorkspace(row interface{ Scan(...any) error }, extra ...any) (Workspace, error) {
 	var w Workspace
 	var raw []byte
 	dest := append([]any{&w.ID, &w.Name, &w.TemplateID, &w.ModuleSource, &w.ModuleRef, &raw,
-		&w.VCSConnectionID, &w.VCSRepo, &w.VCSBranch, &w.StateKey,
+		&w.VCSConnectionID, &w.VCSRepo, &w.VCSBranch, &w.StateKey, &w.Templates,
 		&w.AutoApply, &w.CreatedBy, &w.CreatedAt}, extra...)
 	if err := row.Scan(dest...); err != nil {
 		return w, err
@@ -379,20 +383,18 @@ func (s *Store) Runs(ctx context.Context, workspaceID string, limit int) ([]Run,
 	return out, rows.Err()
 }
 
-// CurrentOutputs returns the outputs of the workspace's last successful apply. destroyed is true
+// CurrentOutputs returns the outputs of the workspace's current state version. destroyed is true
 // when the last successful run was a destroy.
 func (s *Store) CurrentOutputs(ctx context.Context, workspaceID string) (outputs map[string]any, destroyed bool, err error) {
-	var action string
 	var raw []byte
-	err = s.DB.QueryRowContext(ctx, `SELECT action, outputs FROM runs WHERE workspace_id::text = $1 AND status = $2
-		ORDER BY created_at DESC LIMIT 1`, workspaceID, Applied).Scan(&action, &raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, false, nil
-	}
+	err = s.DB.QueryRowContext(ctx, `SELECT
+		(SELECT outputs FROM state_versions WHERE workspace_id::text = $1 ORDER BY id DESC LIMIT 1),
+		COALESCE((SELECT action = 'destroy' FROM runs WHERE workspace_id::text = $1 AND status = $2
+			ORDER BY created_at DESC LIMIT 1), false)`, workspaceID, Applied).Scan(&raw, &destroyed)
 	if err != nil || raw == nil {
-		return nil, action == "destroy", err
+		return nil, destroyed, err
 	}
-	return outputs, action == "destroy", json.Unmarshal(raw, &outputs)
+	return outputs, destroyed, json.Unmarshal(raw, &outputs)
 }
 
 // GetRun returns a run and its status history; sql.ErrNoRows if the id is unknown or not a uuid.
