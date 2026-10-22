@@ -110,7 +110,9 @@
   {{end}}
   {{if .Admin}}
   <form method="post" action="/workspaces/{{$w.Name}}/access" class="inline" style="margin-top:1rem">
-    <input name="group" aria-label="group" placeholder="IdP group (e.g. Entra group object id)" required>
+    <!-- datalist, not select: a group may be granted before any of its members has logged in -->
+    <input name="group" list="known-groups" aria-label="group" placeholder="IdP group (e.g. Entra group object id)" required>
+    <datalist id="known-groups">{{range .Groups}}<option value="{{.}}">{{end}}</datalist>
     <select name="level" aria-label="access level" style="flex:0 0 9rem"><option>read</option><option>operate</option></select>
     <button type="submit" class="secondary">Grant</button>
   </form>

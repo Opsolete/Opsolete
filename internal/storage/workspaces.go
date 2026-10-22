@@ -309,6 +309,24 @@ func (s *Store) Grants(ctx context.Context, workspaceID string) ([]Grant, error)
 	return out, rows.Err()
 }
 
+// KnownGroups lists the IdP groups of everyone who has logged in, for picking a grant.
+func (s *Store) KnownGroups(ctx context.Context) ([]string, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT DISTINCT g FROM users, unnest(groups) g ORDER BY g`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var g string
+		if err := rows.Scan(&g); err != nil {
+			return nil, err
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
 // SetGrant gives a group read or operate access to a workspace; level "" removes the grant.
 func (s *Store) SetGrant(ctx context.Context, workspaceID, group, level string) error {
 	if level == "" {

@@ -34,10 +34,15 @@
   {{else}}
   <p class="muted">Not attached to any workspace.</p>
   {{end}}
+  {{with .Attachable}}
   <form method="post" action="/variable-sets/{{$v.Name}}/workspaces" class="inline" style="margin-top:1rem">
-    <input name="workspace" aria-label="workspace name" placeholder="workspace name" required>
+    <select name="workspace" aria-label="workspace" required>
+      <option value="">choose a workspace…</option>
+      {{range .}}<option>{{.}}</option>{{end}}
+    </select>
     <button type="submit" class="secondary">Attach</button>
   </form>
+  {{end}}
 </div>
 {{end}}
 {{template "bottom"}}

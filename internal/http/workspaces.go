@@ -53,7 +53,6 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /workspaces/{name}/runs/{run}/cancel", s.cancelRun)
 	mux.HandleFunc("GET /workspaces/{name}/runs/{run}/logs", s.logText)
 	mux.HandleFunc("GET /workspaces/{name}/runs/{run}/logs/stream", s.logStream)
-	mux.HandleFunc("GET /resources", s.resources)
 }
 
 func viewer(r *http.Request) storage.Viewer {
@@ -210,7 +209,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "list runs", err)
 		return
 	}
-	res, err := s.Store.Resources(ctx, storage.Viewer{Admin: true}, "", ws.ID) // access was checked above
+	res, err := s.Store.Resources(ctx, ws.ID)
 	if err != nil {
 		s.internalError(w, "workspace resources", err)
 		return
@@ -240,6 +239,13 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "workspace variable sets", err)
 		return
 	}
+	var groups []string
+	if auth.FromContext(ctx).Admin() {
+		if groups, err = s.Store.KnownGroups(ctx); err != nil {
+			s.internalError(w, "known groups", err)
+			return
+		}
+	}
 	var active *storage.Run
 	if len(runs) > 0 && runs[0].Active() {
 		active = &runs[0]
@@ -253,7 +259,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, http.StatusOK, "workspace.html", map[string]any{"W": ws, "Runs": runs, "Active": active,
 		"Update": update, "HasTemplate": hasTemplate,
 		"Resources": res, "Versions": versions, "Outputs": outputs, "Destroyed": destroyed, "Grants": grants,
-		"Variables": vars, "Sets": sets,
+		"Variables": vars, "Sets": sets, "Groups": groups,
 		"CanOperate": level == levelOperate, "Admin": auth.FromContext(ctx).Admin()})
 }
 
@@ -466,32 +472,6 @@ func (s *Server) decideRun(w http.ResponseWriter, r *http.Request, confirm bool)
 	}
 	s.Log.Info("run decided", "workspace", ws.Name, "run", run.ID, "confirmed", confirm, "user", u.Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID, http.StatusSeeOther)
-}
-
-type typeCount struct {
-	Type  string
-	Count int
-}
-
-// resources lists everything Form2Stack manages: the resources in each workspace's current state.
-func (s *Server) resources(w http.ResponseWriter, r *http.Request) {
-	q := strings.TrimSpace(r.URL.Query().Get("q"))
-	list, err := s.Store.Resources(r.Context(), viewer(r), q, "")
-	if err != nil {
-		s.internalError(w, "list resources", err)
-		return
-	}
-	var types []typeCount // list is ordered by type
-	workspaces := map[string]bool{}
-	for _, res := range list {
-		if n := len(types); n == 0 || types[n-1].Type != res.Type {
-			types = append(types, typeCount{Type: res.Type})
-		}
-		types[len(types)-1].Count++
-		workspaces[res.Workspace] = true
-	}
-	s.render(w, r, http.StatusOK, "resources.html", map[string]any{"Resources": list, "Types": types,
-		"Workspaces": len(workspaces), "Q": q})
 }
 
 func (s *Server) logText(w http.ResponseWriter, r *http.Request) {

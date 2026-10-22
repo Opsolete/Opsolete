@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/rudesome/form2stack/internal/auth"
@@ -214,7 +215,19 @@ func (s *Server) variableSet(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "list variables", err)
 		return
 	}
-	s.render(w, r, http.StatusOK, "variableset.html", map[string]any{"Set": set, "Variables": vars})
+	// shortcut: offers the 200 most recently active workspaces; add search if there are more.
+	all, err := s.Store.ListWorkspaces(r.Context(), storage.Viewer{Admin: true}) // admin-only page
+	if err != nil {
+		s.internalError(w, "list workspaces", err)
+		return
+	}
+	var attachable []string
+	for _, ws := range all {
+		if !slices.Contains(set.Workspaces, ws.Name) {
+			attachable = append(attachable, ws.Name)
+		}
+	}
+	s.render(w, r, http.StatusOK, "variableset.html", map[string]any{"Set": set, "Variables": vars, "Attachable": attachable})
 }
 
 func (s *Server) updateVariableSet(w http.ResponseWriter, r *http.Request) {

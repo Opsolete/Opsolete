@@ -17,12 +17,12 @@
 
 <div class="card flush">
 <table>
-<tr><th>Module</th><th>Version</th><th>Variables</th><th>Uploaded</th>{{if .Editor}}<th></th>{{end}}</tr>
+<tr><th>Module</th><th>Latest version</th><th>Variables</th><th>Uploaded</th>{{if .Editor}}<th></th>{{end}}</tr>
 {{$editor := .Editor}}{{$host := .Host}}
 {{range .Modules}}
 <tr>
   <td><a href="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}"><code>{{$host}}/{{.Namespace}}/{{.Name}}/{{.System}}</code></a></td>
-  <td><span class="tag">{{.Version}}</span></td>
+  <td><span class="tag">{{.Version}}</span>{{with .Older}} <small class="muted">+{{.}} older</small>{{end}}</td>
   <td>{{len .Variables}}</td>
   <td class="nowrap">{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
   {{if $editor}}<td class="nowrap"><a href="/templates/new?module={{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}">Create template</a></td>{{end}}

@@ -201,7 +201,7 @@ func TestFeatureSwitches(t *testing.T) {
 	if rec := get(registryOnly, "/"); rec.Code != http.StatusFound || rec.Header().Get("Location") != "/registry" {
 		t.Fatalf("deployments off, GET /: %d %q", rec.Code, rec.Header().Get("Location"))
 	}
-	for _, path := range []string{"/workspaces", "/resources", "/templates/storage-account", "/templates/new"} {
+	for _, path := range []string{"/workspaces", "/templates/storage-account", "/templates/new"} {
 		if rec := get(registryOnly, path); rec.Code != http.StatusNotFound {
 			t.Errorf("deployments off, GET %s: %d", path, rec.Code)
 		}
@@ -620,7 +620,7 @@ func TestWorkspaceFlow(t *testing.T) {
 		t.Fatalf("unknown run: %d", rec.Code)
 	}
 
-	// Workspace and resources pages.
+	// Workspace page, with its resources.
 	page = get(h, "/workspaces/"+name).Body.String()
 	for _, want := range []string{"<code>&#34;abc&#34;</code>", "<code>azurerm_storage_account.this</code>", "v2", "applied", "New run"} {
 		if !strings.Contains(page, want) {
@@ -630,13 +630,8 @@ func TestWorkspaceFlow(t *testing.T) {
 	if !strings.Contains(get(h, "/workspaces").Body.String(), `href="/workspaces/`+name+`"`) {
 		t.Fatal("workspace not listed")
 	}
-	inventory := func(q string) string { return get(h, "/resources?q="+url.QueryEscape(q)).Body.String() }
-	if page := inventory("storage_ACCOUNT"); !strings.Contains(page, "<code>azurerm_storage_account.this</code>") ||
-		!strings.Contains(page, `href="/workspaces/`+name+`"`) || !strings.Contains(page, "hashicorp/azurerm") {
-		t.Fatalf("resources page: %s", page)
-	}
-	if page := inventory("no-such-type"); strings.Contains(page, "azurerm_storage_account.this") {
-		t.Fatal("filter ignored")
+	if rec := get(h, "/resources"); rec.Code != http.StatusNotFound {
+		t.Fatalf("the global resources page is gone: %d", rec.Code)
 	}
 
 	// Destroy: a plan that always asks; discarding it frees the workspace; confirming destroys.
@@ -730,6 +725,9 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 	if !strings.Contains(get(reader, "/workspaces").Body.String(), name) || get(reader, runURL).Code != 200 {
 		t.Fatal("a read grant must show the workspace and its runs")
 	}
+	if !strings.Contains(get(admin, wsURL).Body.String(), `<option value="grp-ops">`) {
+		t.Fatal("grant form must offer the groups seen at login")
+	}
 	if rec := get(owner, "/workspaces/new?template=vars"); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/templates/vars" ||
 		!strings.Contains(get(owner, "/workspaces/new").Body.String(), `<option value="vars">`) {
 		t.Fatalf("new workspace can start from a template: %d", rec.Code)
@@ -794,6 +792,9 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 	page := get(reader, wsURL).Body.String()
 	if strings.Contains(page, "s3cret-ws") || !strings.Contains(page, "client-ws") || !strings.Contains(page, setName) {
 		t.Fatalf("workspace page must show non-sensitive values and applied sets, never sensitive ones: %s", page)
+	}
+	if p := get(admin, "/variable-sets/"+setName).Body.String(); strings.Contains(p, "<option>"+name+"</option>") {
+		t.Fatal("an attached workspace must not be offered again")
 	}
 	if p := get(admin, "/variable-sets/"+setName).Body.String(); strings.Contains(p, "s3cret") || !strings.Contains(p, "tenant-set") {
 		t.Fatalf("set page must show non-sensitive values only: %s", p)

@@ -113,7 +113,7 @@ func (s *Server) moduleArchive(w http.ResponseWriter, r *http.Request) {
 }
 
 type registryPage struct {
-	Modules     []storage.Module
+	Modules     []latestModule
 	Editor      bool
 	VCS         bool // VCS publishing is on and the user is an admin
 	Connections []storage.VCSConnection
@@ -121,6 +121,31 @@ type registryPage struct {
 	Host        string
 	Error       string
 	Form        map[string]string
+}
+
+// latestModule is a module's newest version and how many older ones it has.
+type latestModule struct {
+	storage.Module
+	Older int
+}
+
+// latestVersions keeps each module's highest semver version (not the latest upload: a backport
+// isn't the newest version). mods is ordered by module.
+func latestVersions(mods []storage.Module) []latestModule {
+	var out []latestModule
+	for _, m := range mods {
+		n := len(out)
+		if n == 0 || out[n-1].Namespace != m.Namespace || out[n-1].Name != m.Name || out[n-1].System != m.System {
+			out = append(out, latestModule{Module: m})
+			continue
+		}
+		out[n-1].Older++
+		vs := []string{out[n-1].Version, m.Version}
+		if registry.SortVersions(vs); vs[0] == m.Version {
+			out[n-1].Module = m
+		}
+	}
+	return out
 }
 
 func (s *Server) registryPage(w http.ResponseWriter, r *http.Request) {
@@ -134,7 +159,7 @@ func (s *Server) renderRegistry(w http.ResponseWriter, r *http.Request, status i
 		http.Error(w, "could not load modules", http.StatusInternalServerError)
 		return
 	}
-	p := registryPage{Modules: mods, Editor: s.canEdit(r), Host: s.Registry.PublicURL.Host, Error: errMsg, Form: form,
+	p := registryPage{Modules: latestVersions(mods), Editor: s.canEdit(r), Host: s.Registry.PublicURL.Host, Error: errMsg, Form: form,
 		VCS: s.Features.VCS && auth.FromContext(r.Context()).Admin()}
 	if p.VCS {
 		if p.Connections, err = s.Store.VCSConnections(r.Context()); err == nil {

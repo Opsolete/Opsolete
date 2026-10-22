@@ -167,11 +167,8 @@ func TestRunLifecycle(t *testing.T) {
 	if out, destroyed, err := s.CurrentOutputs(ctx, w.ID); err != nil || out["id"] != "abc" || destroyed {
 		t.Fatalf("workspace outputs: %v %v %v", out, destroyed, err)
 	}
-	if got, err := s.Resources(ctx, Viewer{Admin: true}, "", w.ID); err != nil || len(got) != 2 || got[1].Module != "module.net" || got[0].Workspace != w.Name || got[0].Serial != 3 {
+	if got, err := s.Resources(ctx, w.ID); err != nil || len(got) != 2 || got[1].Module != "module.net" || got[0].Workspace != w.Name || got[0].Serial != 3 {
 		t.Fatalf("inventory: %+v %v", got, err)
-	}
-	if got, _ := s.Resources(ctx, Viewer{Admin: true}, "SUBNET", w.ID); len(got) != 1 || got[0].Type != "azurerm_subnet" {
-		t.Fatalf("filter: %+v", got)
 	}
 
 	// A plan without changes ends the run right away.
