@@ -134,6 +134,9 @@ func TestExpiredLeaseIsFailed(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("claim: %v %v", ok, err)
 	}
+	if _, ok, err := s.LockState(ctx, d.ID, "l1", []byte(`{"ID":"l1"}`)); !ok || err != nil {
+		t.Fatalf("lock: %v %v", ok, err)
+	}
 	time.Sleep(50 * time.Millisecond)
 	ids, err := s.ReapExpiredLeases(ctx)
 	if err != nil || len(ids) != 1 || ids[0] != d.ID {
@@ -142,6 +145,10 @@ func TestExpiredLeaseIsFailed(t *testing.T) {
 	// The old runner is fenced off once its lease is gone.
 	if err := s.AppendLog(ctx, d.ID, j.LeaseID, "late", time.Minute, 1<<20); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("late write must be rejected, got %v", err)
+	}
+	// No force-unlock is ever needed: a vanished runner's state lock goes with its lease.
+	if lock, _ := s.StateLockID(ctx, d.ID); lock != "" {
+		t.Fatalf("lock of a lost runner survived: %q", lock)
 	}
 	got, _, _ := s.GetDeployment(ctx, d.ID)
 	if got.Status != "failed" {
