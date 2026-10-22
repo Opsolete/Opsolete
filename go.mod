@@ -3,16 +3,19 @@ module github.com/rudesome/form2stack
 go 1.26.8
 
 require (
+	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/hashicorp/go-version v1.9.0
 	github.com/hashicorp/terraform-config-inspect v0.0.0-20260904064934-75d64de68c31
 	github.com/hashicorp/terraform-exec v0.25.3
 	github.com/hashicorp/terraform-registry-address v0.5.0
 	github.com/jackc/pgx/v5 v5.11.0
+	golang.org/x/oauth2 v0.37.0
 )
 
 require (
 	github.com/agext/levenshtein v1.2.2 // indirect
 	github.com/apparentlymart/go-textseg/v15 v15.0.0 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/hashicorp/hcl v0.0.0-20170504190234-a4b07c25de5f // indirect
 	github.com/hashicorp/hcl/v2 v2.20.1 // indirect

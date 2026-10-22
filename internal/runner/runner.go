@@ -1,5 +1,5 @@
 // Package runner executes Form2Stack deployments with Terraform. It pulls jobs from the
-// server's runner API, runs init/plan/apply via terraform-exec in a throwaway directory,
+// server's runner API, runs init/plan/apply (or a destroy plan) via terraform-exec in a throwaway directory,
 // ships output back as it happens and reports the result with the terraform outputs.
 package runner
 
@@ -168,8 +168,13 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	if err := tf.Init(ctx, append(opts, tfexec.Reconfigure(true))...); err != nil {
 		return fail("init", err)
 	}
-	fmt.Fprintln(w, "\n==> terraform plan")
-	changes, err := tf.Plan(ctx, tfexec.Out("form2stack.tfplan"))
+	destroy := job.Action == "destroy"
+	step := "plan"
+	if destroy {
+		step = "plan -destroy"
+	}
+	fmt.Fprintf(w, "\n==> terraform %s\n", step)
+	changes, err := tf.Plan(ctx, tfexec.Out("form2stack.tfplan"), tfexec.Destroy(destroy))
 	if err != nil {
 		return fail("plan", err)
 	}
@@ -180,6 +185,10 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 		}
 	} else {
 		fmt.Fprintln(w, "\n==> no changes, skipping apply")
+	}
+	if destroy {
+		fmt.Fprintln(w, "\n==> done")
+		return "succeeded", "", nil
 	}
 	// `output -json` prints sensitive values in clear text: keep it out of the streamed log.
 	tf.SetStdout(io.Discard)

@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rudesome/form2stack/internal/auth"
 	"github.com/rudesome/form2stack/internal/config"
 	httpserver "github.com/rudesome/form2stack/internal/http"
 	"github.com/rudesome/form2stack/internal/registry"
@@ -124,6 +125,16 @@ func serve(log *slog.Logger) error {
 	}
 	reg := &registry.Registry{PublicURL: cfg.PublicURL, Key: key}
 
+	// Same key as the registry: cookie MACs are domain-separated from signed archive URLs.
+	authn, err := auth.New(ctx, auth.Config{Issuer: cfg.OIDCIssuer, ClientID: cfg.OIDCClientID, ClientSecret: cfg.OIDCClientSecret,
+		DevUser: cfg.AuthDevUser, Admins: cfg.AdminEmails, PublicURL: cfg.PublicURL}, key, store.UpsertUser)
+	if err != nil {
+		return err
+	}
+	if authn.Dev() {
+		log.Warn("AUTH_DEV_USER is set: every visitor is logged in as that user; never use this in a shared environment", "user", cfg.AuthDevUser)
+	}
+
 	tpls, err := templates.Open(cfg.TemplatesDir)
 	if err != nil {
 		return err
@@ -132,7 +143,7 @@ func serve(log *slog.Logger) error {
 
 	go reapLostRunners(ctx, store, log)
 
-	srv := &http.Server{Addr: cfg.Addr, Handler: httpserver.New(store, tpls, reg, cfg.TemplateEditor, log).Handler(),
+	srv := &http.Server{Addr: cfg.Addr, Handler: httpserver.New(store, tpls, reg, authn, cfg.TemplateEditor, log).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		// Shutdown doesn't cancel requests; this ends log streams and runner long-polls on SIGTERM.
 		BaseContext: func(net.Listener) context.Context { return ctx }}

@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rudesome/form2stack/internal/auth"
+	"github.com/rudesome/form2stack/internal/auth/authtest"
 	"github.com/rudesome/form2stack/internal/registry"
 	"github.com/rudesome/form2stack/internal/registry/registrytest"
 	"github.com/rudesome/form2stack/internal/runnerapi"
@@ -29,12 +31,33 @@ var testReg = func() *registry.Registry {
 
 func newTestServer(t *testing.T) http.Handler { return newServer(t, "../../catalog", false, nil) }
 
+// newServer is logged in as an admin dev user.
 func newServer(t *testing.T, dir string, editor bool, store *storage.Store) http.Handler {
+	return newServerAs(t, dir, editor, store, devAuth(t, store, "admin@example.com", true))
+}
+
+func newServerAs(t *testing.T, dir string, editor bool, store *storage.Store, a *auth.Auth) http.Handler {
 	tpls, err := templates.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(store, tpls, testReg, editor, slog.New(slog.NewTextHandler(io.Discard, nil))).Handler()
+	return New(store, tpls, testReg, a, editor, slog.New(slog.NewTextHandler(io.Discard, nil))).Handler()
+}
+
+func devAuth(t *testing.T, store *storage.Store, email string, admin bool) *auth.Auth {
+	save := func(context.Context, string, string) (string, error) { return "", nil }
+	if store != nil {
+		save = store.UpsertUser
+	}
+	var admins []string
+	if admin {
+		admins = []string{email}
+	}
+	a, err := auth.New(context.Background(), auth.Config{DevUser: email, Admins: admins, PublicURL: testReg.PublicURL}, []byte("k"), save)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
 }
 
 // testStore returns a migrated store, or skips without TEST_DATABASE_URL.
@@ -82,6 +105,54 @@ func TestPagesWithoutDB(t *testing.T) {
 		if rec.Code != 200 || !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("GET %s: %d, missing %q", path, rec.Code, want)
 		}
+	}
+}
+
+func TestLoginRequired(t *testing.T) {
+	is := authtest.New(t)
+	a, err := auth.New(context.Background(), auth.Config{Issuer: is.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret,
+		PublicURL: testReg.PublicURL}, []byte("k"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newServerAs(t, "../../catalog", true, nil, a)
+	if rec := get(h, "/deployments?x=1"); rec.Code != http.StatusFound || rec.Header().Get("Location") != "/auth/login?next=%2Fdeployments%3Fx%3D1" {
+		t.Fatalf("anonymous page view: %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	for _, path := range []string{"/templates/storage-account", "/templates/new", "/registry", "/deployments/x/destroy"} {
+		if rec := post(h, path, url.Values{"name": {"abc"}}); rec.Code != http.StatusUnauthorized {
+			t.Errorf("anonymous POST %s: %d", path, rec.Code)
+		}
+	}
+	for _, path := range []string{"/healthz", "/.well-known/terraform.json"} {
+		if rec := get(h, path); rec.Code != http.StatusOK {
+			t.Errorf("public %s: %d", path, rec.Code)
+		}
+	}
+	if rec := get(h, "/auth/login"); rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), is.URL) {
+		t.Fatalf("login must redirect to the issuer: %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
+func TestCrossSitePostRejected(t *testing.T) {
+	req := httptest.NewRequest("POST", "/templates/storage-account", strings.NewReader("name=abc"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	if rec := do(newTestServer(t), req); rec.Code != http.StatusForbidden {
+		t.Fatalf("cross-site POST: %d", rec.Code)
+	}
+}
+
+func TestEditorIsAdminOnly(t *testing.T) {
+	h := newServerAs(t, t.TempDir(), true, nil, devAuth(t, nil, "someone@example.com", false))
+	if rec := get(h, "/templates/new"); rec.Code != http.StatusForbidden {
+		t.Fatalf("builder for non-admin: %d", rec.Code)
+	}
+	if rec := upload(h, map[string]string{"namespace": "x"}, nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("upload for non-admin: %d", rec.Code)
+	}
+	if page := get(h, "/").Body.String(); strings.Contains(page, "New template") || !strings.Contains(page, "someone@example.com") {
+		t.Fatalf("index for non-admin: %s", page)
 	}
 }
 
@@ -277,7 +348,7 @@ func TestRunnerAPI(t *testing.T) {
 	store.DB.Exec(`UPDATE deployments SET status = 'failed' WHERE status IN ('queued', 'running')`)
 	h := newServer(t, "../../catalog", false, store)
 
-	d, err := store.CreateDeployment(ctx, "storage-account", "f2s.example.com/acme/storage/azurerm", "1.0.0", map[string]any{"name": "x"})
+	d, err := store.CreateDeployment(ctx, "storage-account", "f2s.example.com/acme/storage/azurerm", "1.0.0", map[string]any{"name": "x"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,5 +417,44 @@ func TestRunnerAPI(t *testing.T) {
 	}
 	if page := get(h, "/deployments/"+d.ID).Body.String(); !strings.Contains(page, "<code>&#34;abc&#34;</code>") || !strings.Contains(page, "r1") {
 		t.Fatalf("detail page lacks outputs/runner: %s", page)
+	}
+
+	if job.Action != "apply" {
+		t.Fatalf("first run must apply: %q", job.Action)
+	}
+
+	// Destroy: not by another plain user, then by an admin; the same row is re-queued.
+	other := newServerAs(t, "../../catalog", false, store, devAuth(t, store, "other@example.com", false))
+	if page := get(other, "/deployments/"+d.ID).Body.String(); strings.Contains(page, "Destroy resources") {
+		t.Fatal("destroy button shown to a user who may not destroy")
+	}
+	if rec := post(other, "/deployments/"+d.ID+"/destroy", nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("destroy by non-owner: %d", rec.Code)
+	}
+	if !strings.Contains(get(h, "/deployments/"+d.ID).Body.String(), "Destroy resources") {
+		t.Fatal("destroy button missing for admin")
+	}
+	if rec := post(h, "/deployments/"+d.ID+"/destroy", nil); rec.Code != http.StatusSeeOther {
+		t.Fatalf("destroy: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := post(h, "/deployments/"+d.ID+"/destroy", nil); rec.Code != http.StatusConflict {
+		t.Fatalf("destroy while queued: %d", rec.Code)
+	}
+	rec = call(runnerTok, "/jobs/claim", "", `{"runner":"r1"}`)
+	if json.Unmarshal(rec.Body.Bytes(), &job); rec.Code != 200 || job.DeploymentID != d.ID || job.Action != "destroy" {
+		t.Fatalf("destroy claim: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := call(runnerTok, jobPath+"/finish", job.LeaseID, `{"status":"succeeded"}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("finish destroy: %d", rec.Code)
+	}
+	got, hist, _ := store.GetDeployment(ctx, d.ID)
+	if got.Status != "destroyed" || got.Outputs != nil || hist[len(hist)-1].Status != "destroyed" {
+		t.Fatalf("after destroy: %+v %+v", got, hist)
+	}
+	if !strings.HasSuffix(get(h, "/deployments/"+d.ID+"/logs/stream").Body.String(), "event: done\ndata: destroyed\n\n") {
+		t.Fatal("log stream must end for destroyed deployments")
+	}
+	if rec := post(h, "/deployments/"+d.ID+"/destroy", nil); rec.Code != http.StatusConflict {
+		t.Fatalf("destroy twice: %d", rec.Code)
 	}
 }

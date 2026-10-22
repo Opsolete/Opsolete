@@ -25,7 +25,7 @@ func TestDeploymentRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	d, err := s.CreateDeployment(ctx, "test-tpl", "git::x", "v1.0.0", map[string]any{"name": "abc"})
+	d, err := s.CreateDeployment(ctx, "test-tpl", "git::x", "v1.0.0", map[string]any{"name": "abc"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

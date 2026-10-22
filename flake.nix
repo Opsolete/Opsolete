@@ -17,7 +17,7 @@
         pname = "form2stack";
         version = "0.1.0";
         src = self;
-        vendorHash = "sha256-MMf/KPaietxftLauiKbcthql2jgYrlGaHdraQJTDF24="; # update after go.mod changes
+        vendorHash = "sha256-WLdwhugaw3jMoNI1D3mUS0WMrDWwu+HF11ERG+mhC54="; # update after go.mod changes
         subPackages = ["cmd/form2stack"];
         nativeBuildInputs = [pkgs.makeWrapper];
         # DB tests skip themselves without TEST_DATABASE_URL; the rest need the catalog from src.
@@ -47,6 +47,7 @@
           export DATABASE_URL="postgres:///form2stack?host=$PGHOST"
           export TEST_DATABASE_URL="postgres:///form2stack_test?host=$PGHOST"
           export TEMPLATE_EDITOR=1 # dev only; see internal/config
+          export AUTH_DEV_USER=dev@localhost ADMIN_EMAILS=dev@localhost # dev only: no OIDC login locally
           export PUBLIC_URL=http://form2stack.localhost:8080 # registry host needs a dot
           echo "form2stack: run 'just' to list tasks ('just run', 'just check')"
         '';

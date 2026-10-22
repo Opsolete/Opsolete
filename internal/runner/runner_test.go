@@ -128,6 +128,14 @@ output "secret" {
 	if f.finish.Status != "succeeded" || !strings.Contains(f.logs.String(), "no changes") {
 		t.Fatalf("second run should be a no-op:\n%s", f.logs.String())
 	}
+
+	// Destroy tears down what's in the deployment's state.
+	f.logs.Reset()
+	job.Action = "destroy"
+	r.Execute(context.Background(), job)
+	if f.finish.Status != "succeeded" || f.finish.Outputs != nil || !strings.Contains(f.logs.String(), "Apply complete! Resources: 0 added, 0 changed, 1 destroyed") {
+		t.Fatalf("destroy: %+v\n%s", f.finish, f.logs.String())
+	}
 }
 
 func TestExecuteReportsFailure(t *testing.T) {

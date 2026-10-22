@@ -16,9 +16,13 @@ type Config struct {
 	Addr         string // HTTP listen address
 	DatabaseURL  string // PostgreSQL connection string
 	TemplatesDir string // directory with JSON template definitions (a Git checkout)
-	// TemplateEditor enables the web template builder, which writes into TemplatesDir.
-	// Off by default: there is no login yet, and a template decides which module the runners execute.
+	// TemplateEditor enables the web template builder (admins only), which writes into TemplatesDir.
+	// Off by default: a template decides which module the runners execute.
 	TemplateEditor bool
+	// Login: OIDC, or AuthDevUser (everyone is that user, local dev only). Checked by auth.New.
+	OIDCIssuer, OIDCClientID, OIDCClientSecret string
+	AuthDevUser                                string
+	AdminEmails                                []string
 	// PublicURL is how Terraform clients reach this app; its host is the module registry hostname
 	// (Terraform requires a dot in it and HTTPS for registry clients).
 	PublicURL *url.URL
@@ -26,10 +30,15 @@ type Config struct {
 
 func Load() (Config, error) {
 	c := Config{
-		Addr:           getenv("ADDR", ":8080"),
-		DatabaseURL:    os.Getenv("DATABASE_URL"),
-		TemplatesDir:   getenv("TEMPLATES_DIR", "catalog"),
-		TemplateEditor: os.Getenv("TEMPLATE_EDITOR") == "1",
+		Addr:             getenv("ADDR", ":8080"),
+		DatabaseURL:      os.Getenv("DATABASE_URL"),
+		TemplatesDir:     getenv("TEMPLATES_DIR", "catalog"),
+		TemplateEditor:   os.Getenv("TEMPLATE_EDITOR") == "1",
+		OIDCIssuer:       os.Getenv("OIDC_ISSUER"),
+		OIDCClientID:     os.Getenv("OIDC_CLIENT_ID"),
+		OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"),
+		AuthDevUser:      os.Getenv("AUTH_DEV_USER"),
+		AdminEmails:      strings.Split(os.Getenv("ADMIN_EMAILS"), ","),
 	}
 	if c.DatabaseURL == "" {
 		return c, errors.New("DATABASE_URL is required")

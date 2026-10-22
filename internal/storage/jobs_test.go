@@ -32,7 +32,7 @@ func testStore(t *testing.T) *Store {
 
 func queued(t *testing.T, s *Store) Deployment {
 	ctx := context.Background()
-	d, err := s.CreateDeployment(ctx, "job-test", "git::x", "v1", map[string]any{"n": 1.0})
+	d, err := s.CreateDeployment(ctx, "job-test", "git::x", "v1", map[string]any{"n": 1.0}, "")
 	if err != nil {
 		t.Fatal(err)
 	}

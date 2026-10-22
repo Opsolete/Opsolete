@@ -16,11 +16,16 @@
   .status.running, .status.queued { background: #fff3cd; }
   .status.succeeded { background: #d1f2d9; }
   .status.failed, .status.canceled { background: #f8d7da; }
+  .status.destroyed { background: #e2e3e5; }
+  nav form { display: inline; float: right; }
+  nav form button { margin: 0; padding: .1rem .6rem; }
+  button.danger { background: #b00020; color: #fff; border: 0; border-radius: 4px; }
   pre.log { background: #111; color: #ddd; max-height: 32rem; overflow: auto; white-space: pre-wrap; font-size: .8rem; }
   button { margin-top: 1.5rem; padding: .5rem 1.2rem; }
 </style>
 </head>
 <body>
-<nav><strong>Form2Stack</strong> &nbsp; <a href="/">Templates</a><a href="/deployments">Deployments</a><a href="/registry">Registry</a></nav>
+<nav><strong>Form2Stack</strong> &nbsp; <a href="/">Templates</a><a href="/deployments">Deployments</a><a href="/registry">Registry</a>
+{{with user}}{{if .Email}}<form method="post" action="/auth/logout">{{.Email}}{{if .Admin}} (admin){{end}} <button type="submit">Log out</button></form>{{end}}{{end}}</nav>
 {{end}}
 {{define "bottom"}}</body></html>{{end}}

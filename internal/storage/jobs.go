@@ -19,6 +19,7 @@ type Job struct {
 	ModuleSource string
 	ModuleRef    string
 	StateKey     string
+	Action       string // apply | destroy
 	Inputs       map[string]any
 }
 
@@ -37,8 +38,8 @@ func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration
 			lease_until = now() + make_interval(secs => $3), updated_at = now()
 		WHERE id = (SELECT id FROM deployments WHERE status = 'queued'
 			ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1)
-		RETURNING id, COALESCE(module_source, ''), module_ref, state_key, inputs`,
-		runner, j.LeaseID, lease.Seconds()).Scan(&j.DeploymentID, &j.ModuleSource, &j.ModuleRef, &j.StateKey, &raw)
+		RETURNING id, COALESCE(module_source, ''), module_ref, state_key, action, inputs`,
+		runner, j.LeaseID, lease.Seconds()).Scan(&j.DeploymentID, &j.ModuleSource, &j.ModuleRef, &j.StateKey, &j.Action, &raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, false, nil
 	}
@@ -49,7 +50,7 @@ func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration
 		return Job{}, false, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO deployment_status_history (deployment_id, status, message)
-		VALUES ($1, 'running', 'claimed by runner ' || $2)`, j.DeploymentID, runner); err != nil {
+		VALUES ($1, 'running', $3 || ' claimed by runner ' || $2)`, j.DeploymentID, runner, j.Action); err != nil {
 		return Job{}, false, err
 	}
 	return j, true, tx.Commit()
@@ -94,7 +95,7 @@ func (s *Store) AppendLog(ctx context.Context, id, lease, chunk string, ttl time
 	return tx.Commit()
 }
 
-// FinishJob records the result of a job and releases its lease.
+// FinishJob records the result of a job and releases its lease. A successful destroy ends as 'destroyed'.
 func (s *Store) FinishJob(ctx context.Context, id, lease, status, message string, outputs map[string]any) error {
 	out, err := json.Marshal(outputs)
 	if err != nil {
@@ -105,13 +106,20 @@ func (s *Store) FinishJob(ctx context.Context, id, lease, status, message string
 		return err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE deployments SET status = $3, outputs = $4, lease_id = NULL, lease_until = NULL,
-		updated_at = now() WHERE id::text = $1 AND lease_id = $2 AND status = 'running'`, id, lease, status, out)
-	if err := leaseResult(res, err); err != nil {
+	var final string
+	err = tx.QueryRowContext(ctx, `UPDATE deployments SET
+		status = CASE WHEN action = 'destroy' AND $3 = 'succeeded' THEN 'destroyed' ELSE $3 END,
+		outputs = CASE WHEN action = 'apply' THEN $4::jsonb WHEN $3 = 'succeeded' THEN NULL ELSE outputs END,
+		lease_id = NULL, lease_until = NULL, updated_at = now()
+		WHERE id::text = $1 AND lease_id = $2 AND status = 'running' RETURNING status`, id, lease, status, out).Scan(&final)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrLeaseLost
+	}
+	if err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO deployment_status_history (deployment_id, status, message)
-		VALUES ($1, $2, NULLIF($3, ''))`, id, status, message); err != nil {
+		VALUES ($1::uuid, $2, NULLIF($3, ''))`, id, final, message); err != nil {
 		return err
 	}
 	return tx.Commit()

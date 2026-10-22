@@ -11,11 +11,14 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/rudesome/form2stack/internal/auth"
 	"github.com/rudesome/form2stack/internal/registry"
+	"github.com/rudesome/form2stack/internal/runnerapi"
 	"github.com/rudesome/form2stack/internal/storage"
 	"github.com/rudesome/form2stack/internal/templates"
 )
@@ -27,14 +30,16 @@ type Server struct {
 	Store     *storage.Store
 	Templates *templates.Catalog
 	Registry  *registry.Registry
-	Editor    bool // enables the template builder and module uploads
+	Auth      *auth.Auth
+	Editor    bool // enables the template builder and module uploads (for admins)
 	Log       *slog.Logger
 	pages     *template.Template
 }
 
-func New(store *storage.Store, tpls *templates.Catalog, reg *registry.Registry, editor bool, log *slog.Logger) *Server {
-	pages := template.Must(template.New("").Funcs(template.FuncMap{"join": strings.Join, "json": toJSON}).ParseFS(views, "views/*.html"))
-	return &Server{Store: store, Templates: tpls, Registry: reg, Editor: editor, Log: log, pages: pages}
+func New(store *storage.Store, tpls *templates.Catalog, reg *registry.Registry, a *auth.Auth, editor bool, log *slog.Logger) *Server {
+	pages := template.Must(template.New("").Funcs(template.FuncMap{"join": strings.Join, "json": toJSON,
+		"user": func() auth.User { return auth.User{} }}).ParseFS(views, "views/*.html"))
+	return &Server{Store: store, Templates: tpls, Registry: reg, Auth: a, Editor: editor, Log: log, pages: pages}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -45,16 +50,60 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /templates/{id}", s.form)
 	mux.HandleFunc("POST /templates/{id}", s.deploy)
 	if s.Editor {
-		mux.HandleFunc("GET /templates/new", s.builder)
-		mux.HandleFunc("POST /templates/new", s.saveTemplate)
-		mux.HandleFunc("GET /templates/{id}/edit", s.builder)
-		mux.HandleFunc("POST /templates/{id}/edit", s.saveTemplate)
+		mux.HandleFunc("GET /templates/new", s.admin(s.builder))
+		mux.HandleFunc("POST /templates/new", s.admin(s.saveTemplate))
+		mux.HandleFunc("GET /templates/{id}/edit", s.admin(s.builder))
+		mux.HandleFunc("POST /templates/{id}/edit", s.admin(s.saveTemplate))
 	}
 	s.registryRoutes(mux)
 	s.runnerRoutes(mux)
+	s.Auth.Routes(mux)
 	mux.HandleFunc("GET /deployments", s.deployments)
 	mux.HandleFunc("GET /deployments/{id}", s.deployment)
-	return s.logRequests(mux)
+	mux.HandleFunc("POST /deployments/{id}/destroy", s.destroy)
+	// CrossOriginProtection rejects cross-site browser POSTs (CSRF); token clients send no Origin and pass.
+	return s.logRequests(http.NewCrossOriginProtection().Handler(s.requireLogin(mux)))
+}
+
+// public paths authenticate themselves (API tokens, signed URLs) or must work without login.
+func public(path string) bool {
+	return path == "/healthz" || path == "/readyz" || path == "/.well-known/terraform.json" ||
+		strings.HasPrefix(path, "/v1/") || strings.HasPrefix(path, runnerapi.Prefix+"/") || strings.HasPrefix(path, "/auth/")
+}
+
+// requireLogin puts the signed-in user on the request; everything not public needs one.
+func (s *Server) requireLogin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if public(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		u, ok := s.Auth.User(r)
+		if !ok {
+			if r.Method == http.MethodGet || r.Method == http.MethodHead {
+				http.Redirect(w, r, "/auth/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
+				return
+			}
+			http.Error(w, "login required", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(auth.WithUser(r.Context(), u)))
+	})
+}
+
+func (s *Server) admin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !auth.FromContext(r.Context()).Admin() {
+			http.Error(w, "admins only", http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// canEdit: the builder and module uploads are on and the user is an admin.
+func (s *Server) canEdit(r *http.Request) bool {
+	return s.Editor && auth.FromContext(r.Context()).Admin()
 }
 
 func (s *Server) logRequests(next http.Handler) http.Handler {
@@ -75,7 +124,7 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
-	s.render(w, http.StatusOK, "index.html", map[string]any{"Templates": s.Templates.List(), "Editor": s.Editor})
+	s.render(w, r, http.StatusOK, "index.html", map[string]any{"Templates": s.Templates.List(), "Editor": s.canEdit(r)})
 }
 
 type formPage struct {
@@ -95,7 +144,7 @@ func (s *Server) form(w http.ResponseWriter, r *http.Request) {
 	for _, in := range t.Inputs {
 		vals[in.Name] = in.Default
 	}
-	s.render(w, http.StatusOK, "form.html", formPage{T: t, Editor: s.Editor, Values: vals})
+	s.render(w, r, http.StatusOK, "form.html", formPage{T: t, Editor: s.canEdit(r), Values: vals})
 }
 
 func (s *Server) deploy(w http.ResponseWriter, r *http.Request) {
@@ -114,16 +163,17 @@ func (s *Server) deploy(w http.ResponseWriter, r *http.Request) {
 	}
 	vals, errs := t.Validate(raw)
 	if len(errs) > 0 {
-		s.render(w, http.StatusUnprocessableEntity, "form.html", formPage{T: t, Editor: s.Editor, Values: raw, Errors: errs})
+		s.render(w, r, http.StatusUnprocessableEntity, "form.html", formPage{T: t, Editor: s.canEdit(r), Values: raw, Errors: errs})
 		return
 	}
-	d, err := s.Store.CreateDeployment(r.Context(), t.ID, t.Module.Source, t.Module.Ref, vals)
+	u := auth.FromContext(r.Context())
+	d, err := s.Store.CreateDeployment(r.Context(), t.ID, t.Module.Source, t.Module.Ref, vals, u.ID)
 	if err != nil {
 		s.Log.Error("create deployment", "err", err)
 		http.Error(w, "could not create deployment", http.StatusInternalServerError)
 		return
 	}
-	s.Log.Info("deployment created", "id", d.ID, "template", t.ID, "status", d.Status)
+	s.Log.Info("deployment created", "id", d.ID, "template", t.ID, "status", d.Status, "user", u.Email)
 	http.Redirect(w, r, "/deployments/"+d.ID, http.StatusSeeOther)
 }
 
@@ -134,7 +184,7 @@ func (s *Server) deployments(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not load deployments", http.StatusInternalServerError)
 		return
 	}
-	s.render(w, http.StatusOK, "deployments.html", list)
+	s.render(w, r, http.StatusOK, "deployments.html", list)
 }
 
 func (s *Server) deployment(w http.ResponseWriter, r *http.Request) {
@@ -149,7 +199,41 @@ func (s *Server) deployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	active := d.Status == "queued" || d.Status == "running"
-	s.render(w, http.StatusOK, "deployment.html", map[string]any{"D": d, "History": hist, "Active": active})
+	canDestroy := !active && d.Status != "destroyed" && mayDestroy(auth.FromContext(r.Context()), d)
+	s.render(w, r, http.StatusOK, "deployment.html", map[string]any{"D": d, "History": hist, "Active": active, "CanDestroy": canDestroy})
+}
+
+// mayDestroy: the user who deployed it, or an admin.
+func mayDestroy(u auth.User, d storage.Deployment) bool {
+	return u.Admin() || (d.CreatedBy != "" && d.CreatedBy == u.Email)
+}
+
+func (s *Server) destroy(w http.ResponseWriter, r *http.Request) {
+	u := auth.FromContext(r.Context())
+	d, _, err := s.Store.GetDeployment(r.Context(), r.PathValue("id"))
+	if errors.Is(err, sql.ErrNoRows) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		s.Log.Error("get deployment", "err", err)
+		http.Error(w, "could not load deployment", http.StatusInternalServerError)
+		return
+	}
+	if !mayDestroy(u, d) {
+		http.Error(w, "only the user who deployed this, or an admin, can destroy it", http.StatusForbidden)
+		return
+	}
+	if err := s.Store.RequestDestroy(r.Context(), d.ID, u.Email); errors.Is(err, storage.ErrNotDestroyable) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	} else if err != nil {
+		s.Log.Error("request destroy", "err", err)
+		http.Error(w, "could not queue destroy", http.StatusInternalServerError)
+		return
+	}
+	s.Log.Info("destroy queued", "id", d.ID, "user", u.Email)
+	http.Redirect(w, r, "/deployments/"+d.ID, http.StatusSeeOther)
 }
 
 type builderPage struct {
@@ -171,7 +255,7 @@ func (s *Server) renderBuilder(w http.ResponseWriter, r *http.Request, status in
 	}
 	p.Modules = mods
 	p.Rows = append(slices.Clone(p.T.Inputs), make([]templates.Input, 3)...)
-	s.render(w, status, "builder.html", p)
+	s.render(w, r, status, "builder.html", p)
 }
 
 func (s *Server) builder(w http.ResponseWriter, r *http.Request) {
@@ -306,10 +390,17 @@ func templateFromForm(r *http.Request) templates.Template {
 	return t
 }
 
-func (s *Server) render(w http.ResponseWriter, status int, name string, data any) {
+func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, name string, data any) {
+	u := auth.FromContext(r.Context())
+	pages, err := s.pages.Clone() // per request, so the layout can show the signed-in user
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	pages.Funcs(template.FuncMap{"user": func() auth.User { return u }})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	if err := s.pages.ExecuteTemplate(w, name, data); err != nil {
+	if err := pages.ExecuteTemplate(w, name, data); err != nil {
 		s.Log.Error("render", "page", name, "err", err)
 	}
 }

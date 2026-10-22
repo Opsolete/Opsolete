@@ -1,11 +1,12 @@
 {{template "top"}}
 {{with .D}}
-<h1>{{.TemplateID}} <span class="status {{.Status}}" id="status">{{.Status}}</span></h1>
+<h1>{{.TemplateID}} <span class="status {{.Status}}" id="status">{{.Status}}{{if eq .Action "destroy"}}{{if ne .Status "destroyed"}} (destroy){{end}}{{end}}</span></h1>
 <div class="card">
   <table>
     <tr><th>ID</th><td><code>{{.ID}}</code></td></tr>
     <tr><th>Module</th><td><code>{{.ModuleSource}}</code> {{.ModuleRef}}</td></tr>
     <tr><th>State key</th><td><code>{{.StateKey}}</code></td></tr>
+    {{with .CreatedBy}}<tr><th>Deployed by</th><td>{{.}}</td></tr>{{end}}
     {{with .Runner}}<tr><th>Runner</th><td>{{.}}</td></tr>{{end}}
     <tr><th>Inputs</th><td>{{range $k, $v := .Inputs}}{{$k}} = {{$v}}<br>{{end}}</td></tr>
   </table>
@@ -17,6 +18,13 @@
 <tr><th>Name</th><th>Value</th></tr>
 {{range $k, $v := .}}<tr><td><code>{{$k}}</code></td><td><code>{{json $v}}</code></td></tr>{{end}}
 </table>
+{{end}}
+
+{{if $.CanDestroy}}
+<form method="post" action="/deployments/{{.ID}}/destroy"
+  onsubmit="return confirm('Destroy all resources of this deployment? This runs terraform destroy and cannot be undone.')">
+  <button type="submit" class="danger">Destroy resources</button>
+</form>
 {{end}}
 
 <h2>Log <small><a href="/deployments/{{.ID}}/logs">raw</a></small></h2>

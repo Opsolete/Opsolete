@@ -54,9 +54,9 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if ok {
-			s.Log.Info("job claimed", "id", j.DeploymentID, "runner", req.Runner)
+			s.Log.Info("job claimed", "id", j.DeploymentID, "action", j.Action, "runner", req.Runner)
 			writeJSON(w, runnerapi.Job{
-				DeploymentID: j.DeploymentID, LeaseID: j.LeaseID, StateKey: j.StateKey, Vars: j.Inputs,
+				DeploymentID: j.DeploymentID, LeaseID: j.LeaseID, StateKey: j.StateKey, Action: j.Action, Vars: j.Inputs,
 				LeaseSeconds: int(leaseTTL.Seconds()),
 				ModuleSource: s.Registry.RunnerSource(templates.Module{Source: j.ModuleSource, Ref: j.ModuleRef}, runnerSrcTTL),
 			})
@@ -186,7 +186,7 @@ func (s *Server) logStream(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return
 			}
-			if d.Status == "succeeded" || d.Status == "failed" || d.Status == "canceled" {
+			if d.Status != "queued" && d.Status != "running" {
 				fmt.Fprintf(w, "event: done\ndata: %s\n\n", d.Status)
 				rc.Flush()
 				return

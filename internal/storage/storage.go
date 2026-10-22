@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"sort"
@@ -80,9 +81,11 @@ type Deployment struct {
 	ModuleRef    string
 	Inputs       map[string]any
 	Status       string
+	Action       string // apply | destroy: what the current/last run does
 	StateKey     string
 	Runner       *string
 	Outputs      map[string]any // non-sensitive terraform outputs; sensitive ones are redacted by the runner
+	CreatedBy    string         // email; empty for deployments from before login
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 }
@@ -93,14 +96,14 @@ type StatusEntry struct {
 	CreatedAt time.Time
 }
 
-const deploymentCols = `id, template_id, COALESCE(module_source, ''), module_ref, inputs, status, state_key,
-	runner, outputs, created_at, updated_at`
+const deploymentCols = `id, template_id, COALESCE(module_source, ''), module_ref, inputs, status, action, state_key,
+	runner, outputs, COALESCE((SELECT email FROM users u WHERE u.id = created_by), ''), created_at, updated_at`
 
 func scanDeployment(row interface{ Scan(...any) error }) (Deployment, error) {
 	var d Deployment
 	var raw, outputs []byte
-	if err := row.Scan(&d.ID, &d.TemplateID, &d.ModuleSource, &d.ModuleRef, &raw, &d.Status, &d.StateKey,
-		&d.Runner, &outputs, &d.CreatedAt, &d.UpdatedAt); err != nil {
+	if err := row.Scan(&d.ID, &d.TemplateID, &d.ModuleSource, &d.ModuleRef, &raw, &d.Status, &d.Action, &d.StateKey,
+		&d.Runner, &outputs, &d.CreatedBy, &d.CreatedAt, &d.UpdatedAt); err != nil {
 		return d, err
 	}
 	if outputs != nil {
@@ -112,7 +115,8 @@ func scanDeployment(row interface{ Scan(...any) error }) (Deployment, error) {
 }
 
 // CreateDeployment queues a deployment for the runners and records it in the status history.
-func (s *Store) CreateDeployment(ctx context.Context, templateID, moduleSource, moduleRef string, inputs map[string]any) (Deployment, error) {
+// createdBy is a user id, or empty.
+func (s *Store) CreateDeployment(ctx context.Context, templateID, moduleSource, moduleRef string, inputs map[string]any, createdBy string) (Deployment, error) {
 	raw, err := json.Marshal(inputs)
 	if err != nil {
 		return Deployment{}, err
@@ -123,13 +127,13 @@ func (s *Store) CreateDeployment(ctx context.Context, templateID, moduleSource, 
 	}
 	defer tx.Rollback()
 
-	d := Deployment{TemplateID: templateID, ModuleSource: moduleSource, ModuleRef: moduleRef, Inputs: inputs}
+	d := Deployment{TemplateID: templateID, ModuleSource: moduleSource, ModuleRef: moduleRef, Inputs: inputs, Action: "apply"}
 	err = tx.QueryRowContext(ctx, `
 		WITH id AS (SELECT gen_random_uuid() AS v)
-		INSERT INTO deployments (id, template_id, module_source, module_ref, inputs, state_key, status)
-		SELECT v, $1, $2, $3, $4, 'form2stack/' || $1 || '/' || v || '.tfstate', 'queued' FROM id
+		INSERT INTO deployments (id, template_id, module_source, module_ref, inputs, state_key, status, created_by)
+		SELECT v, $1, $2, $3, $4, 'form2stack/' || $1 || '/' || v || '.tfstate', 'queued', NULLIF($5, '')::uuid FROM id
 		RETURNING id, status, state_key, created_at`,
-		templateID, moduleSource, moduleRef, raw).Scan(&d.ID, &d.Status, &d.StateKey, &d.CreatedAt)
+		templateID, moduleSource, moduleRef, raw, createdBy).Scan(&d.ID, &d.Status, &d.StateKey, &d.CreatedAt)
 	if err != nil {
 		return Deployment{}, err
 	}
@@ -138,6 +142,41 @@ func (s *Store) CreateDeployment(ctx context.Context, templateID, moduleSource, 
 		return Deployment{}, err
 	}
 	return d, tx.Commit()
+}
+
+// ErrNotDestroyable means the deployment is queued, running or already destroyed.
+var ErrNotDestroyable = errors.New("deployment can't be destroyed in its current state")
+
+// RequestDestroy re-queues a finished deployment to tear down its resources (same state key).
+func (s *Store) RequestDestroy(ctx context.Context, id, by string) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE deployments SET status = 'queued', action = 'destroy', updated_at = now()
+		WHERE id::text = $1 AND status IN ('succeeded', 'failed', 'canceled')`, id)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return ErrNotDestroyable
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO deployment_status_history (deployment_id, status, message)
+		VALUES ($1::uuid, 'queued', 'destroy requested by ' || $2)`, id, by); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// UpsertUser records a login; the role follows ADMIN_EMAILS on every login.
+func (s *Store) UpsertUser(ctx context.Context, email, role string) (string, error) {
+	var id string
+	err := s.DB.QueryRowContext(ctx, `INSERT INTO users (email, role) VALUES ($1, $2)
+		ON CONFLICT (email) DO UPDATE SET role = EXCLUDED.role RETURNING id`, email, role).Scan(&id)
+	return id, err
 }
 
 func (s *Store) ListDeployments(ctx context.Context) ([]Deployment, error) {

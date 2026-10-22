@@ -28,7 +28,7 @@ func (s *Server) registryRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /registry/{ns}/{name}/{system}/{version}", s.moduleDocs)
 	mux.HandleFunc("GET /registry/{ns}/{name}/{system}/{version}/docs.md", s.moduleDocs)
 	if s.Editor {
-		mux.HandleFunc("POST /registry", s.uploadModule)
+		mux.HandleFunc("POST /registry", s.admin(s.uploadModule))
 	}
 }
 
@@ -130,7 +130,7 @@ func (s *Server) renderRegistry(w http.ResponseWriter, r *http.Request, status i
 		http.Error(w, "could not load modules", http.StatusInternalServerError)
 		return
 	}
-	s.render(w, status, "registry.html", registryPage{Modules: mods, Editor: s.Editor,
+	s.render(w, r, status, "registry.html", registryPage{Modules: mods, Editor: s.canEdit(r),
 		Host: s.Registry.PublicURL.Host, Error: errMsg, Form: form})
 }
 
@@ -229,9 +229,9 @@ func (s *Server) moduleDocs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.render(w, http.StatusOK, "module.html", map[string]any{
+	s.render(w, r, http.StatusOK, "module.html", map[string]any{
 		"Namespace": ns, "Name": name, "System": sys, "Version": ver, "Versions": versions,
-		"Source": source, "Docs": docs, "Editor": s.Editor,
+		"Source": source, "Docs": docs, "Editor": s.canEdit(r),
 	})
 }
 

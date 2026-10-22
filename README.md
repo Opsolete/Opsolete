@@ -5,6 +5,8 @@ Pick a template and fill in a form generated from JSON. Form2Stack records the d
 
 Lifecycle: `queued` (waiting for a runner) → `running` → `succeeded` | `failed` | `canceled`. Every change lands in the deployment's status history.
 
+**Destroy:** on a finished deployment, **Destroy resources** re-queues it as a destroy run (`terraform plan -destroy`, then apply) against the same state key. When that succeeds, the deployment is `destroyed`. Only the user who deployed it, or an admin, can destroy it. A failed destroy can be retried.
+
 ## Run locally with Nix (recommended)
 
 ```sh
@@ -29,6 +31,7 @@ Requirements: Go 1.26+, PostgreSQL 13+ (it needs `gen_random_uuid()`).
 ```sh
 docker compose up -d            # or use any local PostgreSQL
 export DATABASE_URL=postgres://form2stack:form2stack@localhost:5432/form2stack
+export AUTH_DEV_USER=dev@localhost ADMIN_EMAILS=dev@localhost   # local only, see Login
 go run ./cmd/form2stack
 ```
 
@@ -39,10 +42,22 @@ Then open http://localhost:8080. Migrations run on startup.
 | `DATABASE_URL`  | required  | PostgreSQL connection string           |
 | `ADDR`          | `:8080`   | HTTP listen address                    |
 | `TEMPLATES_DIR` | `catalog` | Directory of JSON template definitions |
-| `TEMPLATE_EDITOR` | off    | `1` enables the template builder and module uploads (on in the nix dev shell) |
-| `PUBLIC_URL`    | `http://form2stack.localhost:8080` | How Terraform clients reach the app; its host is the registry hostname |
+| `TEMPLATE_EDITOR` | off    | `1` enables the template builder and module uploads for admins (on in the nix dev shell) |
+| `PUBLIC_URL`    | `http://form2stack.localhost:8080` | How browsers and Terraform clients reach the app. Its host is the registry hostname, and the OIDC callback is `PUBLIC_URL/auth/callback` |
+| `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | | Login via OpenID Connect, required unless `AUTH_DEV_USER` is set |
+| `ADMIN_EMAILS`  |           | Comma-separated emails that get the admin role at login |
+| `AUTH_DEV_USER` |           | **Local dev only:** skip login and treat every visitor as this email (set in the nix dev shell) |
 
-Endpoints: `/healthz` (liveness), `/readyz` (checks the DB), `/` (templates), `/templates/{id}` (form), `/deployments`, `/deployments/{id}` (detail, history, live log, outputs), `/deployments/{id}/logs` (raw log), `/registry`, `/v1/modules/…` (registry protocol), `/api/runner/v1/…` (runner API).
+## Login
+
+All pages require login. Health checks, the registry protocol (`/v1/…`, which uses API tokens and signed URLs) and the runner API (runner tokens) don't.
+
+- **OIDC:** authorization code flow with PKCE, using `coreos/go-oidc` and `x/oauth2`. It works with Entra ID, Google, Keycloak, Dex and similar. Register `PUBLIC_URL/auth/callback` as the redirect URI. The user is identified by the `email` claim, falling back to `preferred_username` (Entra ID). An explicit `email_verified: false` is rejected.
+- **Roles:** emails listed in `ADMIN_EMAILS` are `admin`, everyone else is `user`. The role is recorded at every login, so editing `ADMIN_EMAILS` takes effect at the next login. Sessions are HMAC-signed cookies that last 12 hours. Logging out ends the Form2Stack session, not the IdP session.
+- **Users** can deploy templates, see deployments and destroy their own deployments. **Admins** can also destroy anyone's deployment and, with `TEMPLATE_EDITOR=1`, use the template builder and upload modules.
+- Cross-site form posts are rejected (`http.CrossOriginProtection`). If a proxy rewrites the `Host` header, keep it equal to the browser's origin.
+
+Endpoints: `/healthz` (liveness), `/readyz` (checks the DB), `/` (templates), `/templates/{id}` (form), `/deployments`, `/deployments/{id}` (detail, history, live log, outputs), `/deployments/{id}/logs` (raw log), `POST /deployments/{id}/destroy`, `/auth/login|callback|logout`, `/registry`, `/v1/modules/…` (registry protocol), `/api/runner/v1/…` (runner API).
 
 ## Runners
 
@@ -74,7 +89,8 @@ Provider credentials go to the runner as the usual env vars, for example `ARM_*`
 
 ```sh
 just image app && just image runner
-docker run -e DATABASE_URL=… -e PUBLIC_URL=https://form2stack.example.com -p 8080:8080 form2stack-app
+docker run -e DATABASE_URL=… -e PUBLIC_URL=https://form2stack.example.com -e OIDC_ISSUER=… -e OIDC_CLIENT_ID=… \
+  -e OIDC_CLIENT_SECRET=… -e ADMIN_EMAILS=you@example.com -p 8080:8080 form2stack-app
 docker run --rm -e DATABASE_URL=… form2stack-app token runner-1 runner        # prints the runner token
 docker run -e F2S_SERVER_URL=http://form2stack:8080 -e F2S_RUNNER_TOKEN=… \
   -e F2S_BACKEND=azurerm -e F2S_BACKEND_CONFIG_RESOURCE_GROUP_NAME=… -e F2S_BACKEND_CONFIG_STORAGE_ACCOUNT_NAME=… \
@@ -140,4 +156,4 @@ Form2Stack is a private Terraform module registry, built on the standard [module
 
 ## Template builder
 
-With `TEMPLATE_EDITOR=1`, open **+ New template** (`/templates/new`) or **edit** on any template. Choose **Start from a registry module** and the module source, version and one form field per variable are filled in for you. Complex variable types (list, map, object) are flagged, not generated. You can also type a `git::` source and ref by hand, then add one row per form field (variable name, label, type, required, pattern, dropdown options, default). Each new template gets a random UUID as its id. Saving runs the same validation as startup, checks that a referenced registry version exists, writes `catalog/<id>.json` and shows the generated deploy form right away. Review and commit the file like any other change. Keep the builder off in shared environments until there's login: a template decides which module the runners execute.
+With `TEMPLATE_EDITOR=1`, open **+ New template** (`/templates/new`) or **edit** on any template. Choose **Start from a registry module** and the module source, version and one form field per variable are filled in for you. Complex variable types (list, map, object) are flagged, not generated. You can also type a `git::` source and ref by hand, then add one row per form field (variable name, label, type, required, pattern, dropdown options, default). Each new template gets a random UUID as its id. Saving runs the same validation as startup, checks that a referenced registry version exists, writes `catalog/<id>.json` and shows the generated deploy form right away. Review and commit the file like any other change. Only admins can use the builder, because a template decides which module the runners execute.
