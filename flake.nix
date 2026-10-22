@@ -17,7 +17,7 @@
         pname = "form2stack";
         version = "0.1.0";
         src = self;
-        vendorHash = "sha256-5pcBgmNt7gr9D0IkkhBBtCsudJgAXiAsV2vD+Q5CoAA="; # update after go.mod changes
+        vendorHash = "sha256-bszrgomqpcKvJO9JgTbP1KTEeMluyErAkNoXhf30n/Q="; # update after go.mod changes
         subPackages = ["cmd/form2stack"];
         nativeBuildInputs = [pkgs.makeWrapper];
         # DB tests skip themselves without TEST_DATABASE_URL; the rest need the catalog from src.
