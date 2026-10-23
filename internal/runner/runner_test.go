@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -375,6 +376,15 @@ func TestJobEnv(t *testing.T) {
 
 // TestAddedTemplates: templates added to a workspace become module blocks, with or without a root
 // module, their outputs root outputs, and form values stay values.
+// TestEscapeValue: nested strings and object keys are escaped too, so list/object inputs can't inject.
+func TestEscapeValue(t *testing.T) {
+	got := escapeValue(map[string]any{"${k}": []any{"%{x}", 1, map[string]any{"a": "${file(\"/etc/passwd\")}"}}})
+	want := map[string]any{"$${k}": []any{"%%{x}", 1, map[string]any{"a": "$${file(\"/etc/passwd\")}"}}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v", got)
+	}
+}
+
 func TestAddedTemplates(t *testing.T) {
 	f := &fakeServer{}
 	srv := httptest.NewServer(f)

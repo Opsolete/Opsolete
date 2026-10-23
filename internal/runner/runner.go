@@ -286,18 +286,35 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 // value would otherwise be evaluated (e.g. reading the runner's files or credentials).
 var templateEscape = strings.NewReplacer("${", "$${", "%{", "%%{")
 
+// escapeValue applies templateEscape to every string in v, nested ones and object keys included
+// (HCL JSON evaluates property names as templates too).
+func escapeValue(v any) any {
+	switch v := v.(type) {
+	case string:
+		return templateEscape.Replace(v)
+	case []any:
+		out := make([]any, len(v))
+		for i, e := range v {
+			out[i] = escapeValue(e)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for k, e := range v {
+			out[templateEscape.Replace(k)] = escapeValue(e)
+		}
+		return out
+	}
+	return v
+}
+
 // writeModules writes a module block per added template, inputs as literal arguments.
-// shortcut: escapes top-level strings only, as templates produce only string/number/bool inputs;
-// escape nested values too if inputs ever get list or object types.
 func writeModules(dir string, mods []runnerapi.Module) error {
 	blocks := map[string]map[string]any{}
 	for _, m := range mods {
 		b := map[string]any{"source": m.Source}
 		for k, v := range m.Inputs {
-			if s, ok := v.(string); ok {
-				v = templateEscape.Replace(s)
-			}
-			b[k] = v
+			b[k] = escapeValue(v)
 		}
 		blocks[m.Name] = b
 	}

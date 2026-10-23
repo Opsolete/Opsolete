@@ -169,6 +169,8 @@ func serve(log *slog.Logger) error {
 	app.Organization = cfg.Organization
 	if cfg.SecretKey != "" {
 		app.SecretKey = vcs.Key(cfg.SecretKey)
+	} else if cfg.Deployments {
+		log.Warn("SECRET_KEY is not set: state files and run artifacts are stored unencrypted in STATE_STORE")
 	}
 	if vcsOn {
 		go vcs.Poll(ctx, store, app.SecretKey, 5*time.Minute, log)
