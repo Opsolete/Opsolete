@@ -12,6 +12,8 @@
   <div class="inline">
     {{if .Active}}
     <a class="btn secondary" href="/workspaces/{{$w.Name}}/runs/{{.Active.ID}}">Current run: {{status .Active.Status}} →</a>
+    {{else if eq $w.ExecutionMode "local"}}
+    <span class="muted">Local execution: run Terraform with the cloud block</span>
     {{else if $w.HasConfig}}
     <button type="button" onclick="document.getElementById('new-run').showModal()">New run</button>
     <dialog id="new-run" aria-labelledby="new-run-title">
@@ -93,7 +95,7 @@
 
 {{if eq $show "resources"}}
 {{with .Resources}}
-{{$replace := and $.CanOperate (not $.Active) $w.HasConfig}}
+{{$replace := and $.CanOperate (not $.Active) $w.HasConfig (eq $w.ExecutionMode "remote")}}
 <input type="search" placeholder="Filter resources" aria-label="filter resources" style="max-width:20rem;margin-bottom:.75rem"
   oninput="const q=this.value.toLowerCase();document.querySelectorAll('#resources tr[data-row]').forEach(tr=>tr.hidden=!tr.textContent.toLowerCase().includes(q))">
 <form method="post" action="/workspaces/{{$w.Name}}/runs"><input type="hidden" name="action" value="apply">
@@ -150,6 +152,7 @@
     {{if $w.ModuleSource}}<li>Module: <code>{{$w.ModuleSource}}</code> <span class="tag">{{$w.ModuleRef}}</span></li>{{end}}
     {{if not $w.TemplateID}}<li>Repository: {{if $w.VCSConnectionID}}<code>{{$w.VCSRepo}}</code> <span class="tag">{{$w.VCSBranch}}</span>{{else}}<span class="muted">none{{with $w.VCSRepo}} (was {{.}}; its VCS connection was deleted){{end}}</span>{{end}}
       {{if and .CanOperate (features).VCS}} · <a href="/workspaces/{{$w.Name}}/vcs">{{if $w.VCSConnectionID}}Change{{else}}Link{{end}}…</a>{{end}}</li>{{end}}
+    <li>Execution mode: <a href="/workspaces/{{$w.Name}}/settings">{{if eq $w.ExecutionMode "local"}}Local{{else}}Remote{{end}}</a></li>
     <li>Auto-apply: <a href="/workspaces/{{$w.Name}}/settings">{{if $w.AutoApply}}On{{else}}Off{{end}}</a></li>
     <li>Drift detection: <a href="/workspaces/{{$w.Name}}/settings/health">{{if $w.DriftDetection}}On{{else}}Off{{end}}</a></li>
     <li>Last drift check: {{with .Assessment}}<a href="/workspaces/{{$w.Name}}/runs/{{.ID}}"><span class="status {{.Status}}">{{status .Status}}</span></a> {{.UpdatedAt.Format "2006-01-02 15:04"}}{{else}}<span class="muted">never</span>{{end}}</li>
@@ -190,11 +193,30 @@
 
 {{if eq $tab "variables"}}
 <h2 id="variables">Variables</h2>
-<p class="muted">Environment variables (cloud credentials such as <code>ARM_CLIENT_ID</code>, <code>ARM_CLIENT_SECRET</code>) and Terraform variables for this workspace's runs.
-  They override variable sets; the template's inputs override Terraform variables.</p>
+<p class="muted">Runs of this workspace get all its Terraform variables and environment variables (cloud credentials such as <code>ARM_CLIENT_ID</code>, <code>ARM_CLIENT_SECRET</code>).
+  The template's inputs override Terraform variables.</p>
+
+<h3>Sensitive variables</h3>
+<p class="muted">Sensitive variables are never shown again in the UI and can't be read back. To change one, save it again or delete and replace it.</p>
+
+<h3>Workspace variables <span class="tag">{{len .Variables.Vars}}</span></h3>
+<p class="muted">Variables defined within a workspace always override variables from variable sets with the same category and key.</p>
 {{template "variables" .Variables}}
-{{with .Sets}}<p class="muted">Variable sets applied:
-  {{range $i, $s := .}}{{if $i}}, {{end}}{{if $.Admin}}<a href="/variable-sets/{{.Name}}">{{.Name}}</a>{{else}}{{.Name}}{{end}}{{if .Global}} <span class="tag">global</span>{{end}}{{end}}</p>{{end}}
+
+<h3>Variable sets <span class="tag">{{len .Sets}}</span></h3>
+<p class="muted">Variable sets let admins reuse variables across workspaces. Between sets, attached sets win over global ones, then the first by name.</p>
+{{range .Sets}}
+<div class="card">
+  <div class="section-head"><h3 style="margin:0">{{if $.Admin}}<a href="/variable-sets/{{.Name}}">{{.Name}}</a>{{else}}{{.Name}}{{end}}</h3>
+    {{if $.Admin}}<a class="btn secondary small" href="/variable-sets/{{.Name}}">Edit…</a>{{end}}</div>
+  {{with .Description}}<p class="muted">{{.}}</p>{{end}}
+  <p class="meta">{{if .Global}}<span>Global: applies to all workspaces</span>{{else}}<span>{{len .Workspaces}} workspace{{if ne (len .Workspaces) 1}}s{{end}}</span>{{end}}
+    <span>{{len .Vars.Vars}} variable{{if ne (len .Vars.Vars) 1}}s{{end}}</span><span>Created {{.CreatedAt.Format "2006-01-02 15:04"}}</span></p>
+</div>
+{{template "variables" .Vars}}
+{{else}}
+<p class="muted">No variable sets apply to this workspace.</p>
+{{end}}
 
 {{end}}
 
@@ -211,6 +233,14 @@
   {{if $w.DriftDetection}}<input type="hidden" name="drift_detection" value="on">{{end}}
   <label for="name">Name</label>
   <input id="name" name="name" value="{{$w.Name}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}">
+  <fieldset>
+    <legend>Execution mode</legend>
+    <p class="hint">Changing the execution mode doesn't stop a run or a CLI lock already under way; it only refuses new ones.</p>
+    <label class="check"><input type="radio" name="execution_mode" value="remote"{{if ne $w.ExecutionMode "local"}} checked{{end}}>
+      <span>Remote<small>Your plans and applies run on Form2Stack's runners, and your team can review and collaborate on runs directly in the app.</small></span></label>
+    <label class="check"><input type="radio" name="execution_mode" value="local"{{if eq $w.ExecutionMode "local"}} checked{{end}}>
+      <span>Local<small>Your plans and applies run on your own machines with Terraform's cloud block. Form2Stack only stores and synchronizes state.</small></span></label>
+  </fieldset>
   <fieldset>
     <legend>Auto-apply</legend>
     <p class="hint">Sets this workspace to automatically apply changes for successful runs. If disabled, runs require operator approval.</p>
@@ -270,6 +300,7 @@
 </form>
 {{else}}
 <div class="field">Name</div><p>{{$w.Name}}</p>
+<div class="field">Execution mode</div><p>{{if eq $w.ExecutionMode "local"}}Local: Terraform runs on your own machines{{else}}Remote: runs on Form2Stack's runners{{end}}</p>
 <div class="field">Auto-apply</div><p>{{if $w.AutoApply}}On{{else}}Off: runs require operator approval{{end}}</p>
 <div class="field">Remote state sharing</div><p>{{if $w.GlobalRemoteState}}Shared with all workspaces{{else}}Shared with specific workspaces, if any{{end}}</p>
 {{end}}
@@ -350,10 +381,21 @@
 </ul>
 {{end}}
 </div>
-<form method="post" action="/workspaces/{{$w.Name}}/delete"
-  onsubmit="return confirm('Delete {{$w.Name}} with its runs, variables and state history? This cannot be undone.')">
-  <button type="submit" class="danger"{{if or .Active .Resources}} disabled{{end}}>Delete workspace</button>
-</form>
+<button type="button" class="danger"{{if or .Active .Resources}} disabled{{end}} onclick="document.getElementById('delete-workspace').showModal()">Delete workspace</button>
+<dialog id="delete-workspace" class="danger-dialog" aria-labelledby="delete-workspace-title">
+  <form method="post" action="/workspaces/{{$w.Name}}/delete">
+    <header><h3 id="delete-workspace-title">⚠ Delete workspace</h3>
+      <button type="button" class="secondary small" aria-label="close" onclick="this.closest('dialog').close()">✕</button></header>
+    <fieldset>
+      <p style="margin-top:0">Deleting <strong>{{$w.Name}}</strong> workspace will permanently remove its variables, settings, run history and Terraform state.<br>
+        This workspace has no run in progress and is not managing any resources.</p>
+      <label for="delete-confirm">To confirm deletion, enter "delete"</label>
+      <input id="delete-confirm" required pattern="delete" autocomplete="off">
+    </fieldset>
+    <footer><button type="submit" class="danger">Delete</button>
+      <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancel</button></footer>
+  </form>
+</dialog>
 {{else}}<p class="muted">Destroying or deleting this workspace needs operate access.</p>
 {{end}}
 {{end}}

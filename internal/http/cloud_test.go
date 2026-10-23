@@ -6,12 +6,15 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/rudesome/form2stack/internal/storage"
 )
 
 func TestCloudLoginAndState(t *testing.T) {
@@ -108,6 +111,17 @@ func TestCloudLoginAndState(t *testing.T) {
 	}
 	if out := api("GET", "/workspaces/"+id+"/current-state-version-outputs", "").Body.String(); !strings.Contains(out, `"name":"pw"`) || strings.Contains(out, `"x"`) {
 		t.Fatalf("outputs must list names, not values: %s", out)
+	}
+
+	// Local execution starts no runs; remote execution gives the CLI no lock.
+	if _, err := store.CreateRun(t.Context(), id, "apply", "", nil); !errors.Is(err, storage.ErrLocalExecution) {
+		t.Fatalf("run on a local workspace: %v", err)
+	}
+	if err := store.SetExecutionMode(t.Context(), id, "remote"); err != nil {
+		t.Fatal(err)
+	}
+	if rec := api("POST", "/workspaces/"+id+"/actions/lock", ""); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "remote execution") {
+		t.Fatalf("lock of a remote workspace: %d %s", rec.Code, rec.Body)
 	}
 
 	// Another (non-admin) user's workspace is invisible.

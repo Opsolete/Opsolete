@@ -152,9 +152,10 @@ func (s *Server) writeWorkspace(w http.ResponseWriter, r *http.Request, status i
 		s.cloudError(w, "state lock", err)
 		return
 	}
+	// Terraform runs locally whatever the mode (entitlements: no operations); remote mode refuses it the lock.
 	// "latest" tells Terraform not to compare versions; any CLI version may use the state.
 	writeAPI(w, status, apiObject{"workspaces", ws.ID, map[string]any{"name": ws.Name, "locked": lock != "",
-		"execution-mode": "local", "operations": false, "terraform-version": "latest"}})
+		"execution-mode": ws.ExecutionMode, "operations": false, "terraform-version": "latest"}})
 }
 
 func (s *Server) cloudGetWorkspace(w http.ResponseWriter, r *http.Request) {
@@ -168,7 +169,7 @@ func (s *Server) cloudGetWorkspace(w http.ResponseWriter, r *http.Request) {
 }
 
 // cloudCreateWorkspace: terraform init creates the cloud block's workspace if it doesn't exist,
-// as a blank workspace of the token's user.
+// as a blank workspace of the token's user, with local execution.
 func (s *Server) cloudCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Data struct {
@@ -196,6 +197,11 @@ func (s *Server) cloudCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		s.cloudError(w, "create workspace", err)
 		return
 	}
+	if err := s.Store.SetExecutionMode(r.Context(), ws.ID, "local"); err != nil {
+		s.cloudError(w, "execution mode", err)
+		return
+	}
+	ws.ExecutionMode = "local"
 	s.Log.Info("workspace created", "workspace", ws.Name, "via", "terraform cloud block", "user", u.Email)
 	s.writeWorkspace(w, r, http.StatusCreated, ws)
 }
@@ -211,6 +217,11 @@ func (s *Server) cloudLock(w http.ResponseWriter, r *http.Request) {
 	ctx, u := r.Context(), auth.FromContext(r.Context())
 	switch r.PathValue("action") {
 	case "lock":
+		if ws.ExecutionMode != "local" {
+			writeErrors(w, http.StatusConflict, "workspace "+ws.Name+" uses remote execution: Form2Stack runners plan and apply it. "+
+				"Set its execution mode to local in the workspace's settings to run Terraform on your machine")
+			return
+		}
 		lockID := storage.CloudLockPrefix + rand.Text()
 		info, _ := json.Marshal(map[string]string{"ID": lockID, "Operation": "terraform (cloud block)", "Who": u.Email,
 			"UserID": u.ID, "Created": time.Now().UTC().Format(time.RFC3339)})

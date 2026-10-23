@@ -108,7 +108,7 @@ func (s *Server) saveWorkspaceTemplate(w http.ResponseWriter, r *http.Request) {
 		page.Errors[fieldModule] = "this workspace already has a template named " + page.Module
 		s.render(w, r, http.StatusUnprocessableEntity, "form.html", page)
 		return
-	case errors.Is(err, storage.ErrRunActive):
+	case errors.Is(err, storage.ErrRunActive), errors.Is(err, storage.ErrLocalExecution):
 		page.Error = err.Error()
 		s.render(w, r, http.StatusConflict, "form.html", page)
 		return
@@ -136,7 +136,7 @@ func (s *Server) removeWorkspaceTemplate(w http.ResponseWriter, r *http.Request)
 	case errors.Is(err, sql.ErrNoRows):
 		http.NotFound(w, r)
 		return
-	case errors.Is(err, storage.ErrRunActive), errors.Is(err, storage.ErrLastConfig):
+	case errors.Is(err, storage.ErrRunActive), errors.Is(err, storage.ErrLastConfig), errors.Is(err, storage.ErrLocalExecution):
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	case err != nil:

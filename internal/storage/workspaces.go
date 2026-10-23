@@ -18,6 +18,7 @@ var (
 	ErrNotConfirmable = errors.New("the run isn't waiting for confirmation")
 	ErrNotCancelable  = errors.New("the run can't be canceled: it isn't queued or running")
 	ErrHasResources   = errors.New("the workspace's state still manages resources: destroy them first")
+	ErrLocalExecution = errors.New("the workspace uses local execution: Terraform runs on your machine, so runs can't start here (change it in the workspace's settings)")
 )
 
 // Viewer is who asks: admins see everything, others their own workspaces and those granted to
@@ -49,6 +50,7 @@ type Workspace struct {
 	AutoApply         bool   // apply plans of apply runs without confirmation
 	DriftDetection    bool   // queue an assess run (refresh-only plan, never applied) daily
 	GlobalRemoteState bool   // every workspace's runs may read this state; else only RemoteStateConsumers
+	ExecutionMode     string // remote: runs on Form2Stack runners; local: the CLI (cloud block) runs Terraform, no runs
 	Drifted           bool   // the latest assessment found drift and nothing was applied since
 	CreatedBy         string // email; empty for workspaces from before login
 	CreatedAt         time.Time
@@ -116,7 +118,7 @@ type StatusEntry struct {
 
 const workspaceCols = `w.id, w.name, COALESCE(w.template_id, ''), COALESCE(w.module_source, ''), COALESCE(w.module_ref, ''),
 	w.inputs, COALESCE(w.vcs_connection_id::text, ''), COALESCE(w.vcs_repo, ''), COALESCE(w.vcs_branch, ''), w.state_key,
-	(SELECT count(*) FROM workspace_templates t WHERE t.workspace_id = w.id), w.auto_apply, w.drift_detection, w.global_remote_state,
+	(SELECT count(*) FROM workspace_templates t WHERE t.workspace_id = w.id), w.auto_apply, w.drift_detection, w.global_remote_state, w.execution_mode,
 	COALESCE((SELECT a.status = 'drifted' AND NOT EXISTS (SELECT 1 FROM runs x WHERE x.workspace_id = w.id
 		AND x.status = 'applied' AND x.updated_at > a.updated_at) FROM runs a
 		WHERE a.workspace_id = w.id AND a.action = 'assess' AND a.status IN ('no_changes', 'drifted')
@@ -127,7 +129,7 @@ func scanWorkspace(row interface{ Scan(...any) error }, extra ...any) (Workspace
 	var raw []byte
 	dest := append([]any{&w.ID, &w.Name, &w.TemplateID, &w.ModuleSource, &w.ModuleRef, &raw,
 		&w.VCSConnectionID, &w.VCSRepo, &w.VCSBranch, &w.StateKey, &w.Templates,
-		&w.AutoApply, &w.DriftDetection, &w.GlobalRemoteState, &w.Drifted, &w.CreatedBy, &w.CreatedAt}, extra...)
+		&w.AutoApply, &w.DriftDetection, &w.GlobalRemoteState, &w.ExecutionMode, &w.Drifted, &w.CreatedBy, &w.CreatedAt}, extra...)
 	if err := row.Scan(dest...); err != nil {
 		return w, err
 	}
@@ -240,8 +242,12 @@ func (s *Store) CreateRun(ctx context.Context, workspaceID, action, createdBy st
 func createRun(ctx context.Context, tx *sql.Tx, workspaceID, action, createdBy string) (Run, error) {
 	r := Run{WorkspaceID: workspaceID, Action: action, Status: PlanQueued}
 	err := tx.QueryRowContext(ctx, `INSERT INTO runs (workspace_id, action, status, created_by)
-		VALUES ($1::uuid, $2, $3, NULLIF($4, '')::uuid) RETURNING id, created_at`,
+		SELECT id, $2, $3, NULLIF($4, '')::uuid FROM workspaces WHERE id = $1::uuid AND execution_mode = 'remote'
+		RETURNING id, created_at`,
 		workspaceID, action, PlanQueued, createdBy).Scan(&r.ID, &r.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) { // or deleted meanwhile; then the caller's update found nothing first
+		return Run{}, ErrLocalExecution
+	}
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
 		return Run{}, ErrRunActive
 	}
@@ -474,6 +480,13 @@ func (s *Store) SetSettings(ctx context.Context, workspaceID string, autoApply, 
 	return err
 }
 
+// SetExecutionMode sets a workspace's execution mode, "remote" or "local". Runs and CLI locks
+// already under way finish; the mode only refuses new ones.
+func (s *Store) SetExecutionMode(ctx context.Context, workspaceID, mode string) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET execution_mode = $2, updated_at = now() WHERE id::text = $1`, workspaceID, mode)
+	return err
+}
+
 // RemoteStateConsumers lists the workspaces explicitly allowed to read a workspace's state, by name.
 func (s *Store) RemoteStateConsumers(ctx context.Context, workspaceID string) ([]Workspace, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT w.id, w.name FROM remote_state_consumers c JOIN workspaces w ON w.id = c.consumer_id
@@ -531,7 +544,7 @@ func (s *Store) QueueAssessments(ctx context.Context, every time.Duration) (int,
 	res, err := s.DB.ExecContext(ctx, `
 		WITH due AS (
 			SELECT w.id FROM workspaces w
-			WHERE w.drift_detection
+			WHERE w.drift_detection AND w.execution_mode = 'remote'
 				AND (w.module_source IS NOT NULL OR w.vcs_connection_id IS NOT NULL
 					OR EXISTS (SELECT 1 FROM workspace_templates t WHERE t.workspace_id = w.id))
 				AND EXISTS (SELECT 1 FROM state_version_resources r WHERE r.state_version_id =

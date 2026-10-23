@@ -267,6 +267,18 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "workspace variable sets", err)
 		return
 	}
+	// Variables page: each applied set with its variables, read-only (sets are edited by admins on their page)
+	var setVars []setView
+	if strings.HasSuffix(r.URL.Path, "/variables") {
+		for _, set := range sets {
+			b, err := s.varsBlock(ctx, storage.VarOwner{SetID: set.ID}, "", false)
+			if err != nil {
+				s.internalError(w, "variable set variables", err)
+				return
+			}
+			setVars = append(setVars, setView{set, b})
+		}
+	}
 	var groups []string
 	if auth.FromContext(ctx).Admin() {
 		if groups, err = s.Store.KnownGroups(ctx); err != nil {
@@ -362,7 +374,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		"LatestPlan": latestPlan, "LatestApply": latestApply, "Metrics": metrics, "Show": r.URL.Query().Get("show"), "Page": page,
 		"Update": update, "HasTemplate": hasTemplate, "Added": added, "Updates": updates, "Catalog": s.Templates.List(),
 		"Resources": res, "Versions": versions, "Outputs": outputs, "Destroyed": destroyed, "Grants": grants,
-		"Variables": vars, "Sets": sets, "Groups": groups, "Assessment": assessment, "StateConsumers": stateConsumers, "StateShared": stateShared,
+		"Variables": vars, "Sets": setVars, "Groups": groups, "Assessment": assessment, "StateConsumers": stateConsumers, "StateShared": stateShared,
 		"StateAddress": s.Registry.PublicURL.JoinPath(runnerapi.StatePrefix, ws.ID).String(),
 		"CanOperate":   level == levelOperate, "Admin": auth.FromContext(ctx).Admin()})
 }
@@ -410,7 +422,7 @@ func (s *Server) newRun(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	run, err := s.Store.CreateRun(r.Context(), ws.ID, action, u.ID, replace)
-	if errors.Is(err, storage.ErrRunActive) {
+	if errors.Is(err, storage.ErrRunActive) || errors.Is(err, storage.ErrLocalExecution) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
@@ -462,7 +474,7 @@ func (s *Server) configureWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	u := auth.FromContext(r.Context())
 	run, err := s.Store.ConfigureWorkspace(r.Context(), ws.ID, t.Module.Source, t.Module.Ref, vals, u.ID)
-	if errors.Is(err, storage.ErrRunActive) {
+	if errors.Is(err, storage.ErrRunActive) || errors.Is(err, storage.ErrLocalExecution) {
 		page.Error = err.Error()
 		s.render(w, r, http.StatusConflict, "form.html", page)
 		return
@@ -487,7 +499,7 @@ func (s *Server) loadConfigure(w http.ResponseWriter, r *http.Request) (storage.
 	return ws, t, ok
 }
 
-// workspaceSettings saves the General (name, auto-apply, remote state sharing) and Health pages. A new name changes
+// workspaceSettings saves the General (name, execution mode, auto-apply, remote state sharing) and Health pages. A new name changes
 // the URL; state, runs and grants stay (keyed by id).
 func (s *Server) workspaceSettings(w http.ResponseWriter, r *http.Request) {
 	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
@@ -511,6 +523,17 @@ func (s *Server) workspaceSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.Store.SetSettings(r.Context(), ws.ID, r.PostFormValue("auto_apply") != "", r.PostFormValue("drift_detection") != ""); err != nil {
 		s.internalError(w, "workspace settings", err)
+		return
+	}
+	switch mode := r.PostFormValue("execution_mode"); mode { // General page only
+	case "":
+	case "remote", "local":
+		if err := s.Store.SetExecutionMode(r.Context(), ws.ID, mode); err != nil {
+			s.internalError(w, "execution mode", err)
+			return
+		}
+	default:
+		http.Error(w, "execution mode is remote or local", http.StatusBadRequest)
 		return
 	}
 	if mode := r.PostFormValue("remote_state"); mode != "" { // General page only

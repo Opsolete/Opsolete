@@ -541,6 +541,20 @@ func TestWorkspaceFlow(t *testing.T) {
 			t.Fatalf("%s %s: %d, want %d", c.method, c.path, rec.Code, c.want)
 		}
 	}
+	lockPath := "/jobs/" + runID + "/artifacts/" + runnerapi.ArtifactLockfile
+	if rec := call("POST", runnerTok, lockPath, job.LeaseID, "LOCKBYTES"); rec.Code != http.StatusNoContent {
+		t.Fatalf("upload lock file: %d", rec.Code)
+	}
+	// bucket read access alone must not reveal what the runner uploaded
+	assertSealed := func(key, secret string) {
+		t.Helper()
+		raw, err := app.StateStore.ReadAll(ctx, key)
+		if err != nil || !bytes.HasPrefix(raw, []byte(sealedPrefix)) || bytes.Contains(raw, []byte(secret)) {
+			t.Fatalf("%s not sealed: %q %v", key, raw, err)
+		}
+	}
+	assertSealed(artifactKey(runID, runnerapi.ArtifactPlan), "PLANBYTES")
+	assertSealed(artifactKey(runID, runnerapi.ArtifactLockfile), "LOCKBYTES")
 	for _, chunk := range []string{"line one\n", "line two\n\nend\n"} {
 		if rec := call("POST", runnerTok, "/jobs/"+runID+"/logs", job.LeaseID, chunk); rec.Code != http.StatusNoContent {
 			t.Fatalf("logs: %d %s", rec.Code, rec.Body.String())
@@ -591,20 +605,27 @@ func TestWorkspaceFlow(t *testing.T) {
 	if rec := call("GET", runnerTok, planPath, job.LeaseID, ""); rec.Code != http.StatusOK || rec.Body.String() != "PLANBYTES" {
 		t.Fatalf("download plan: %d %q", rec.Code, rec.Body.String())
 	}
+	if rec := call("GET", runnerTok, lockPath, job.LeaseID, ""); rec.Code != http.StatusOK || rec.Body.String() != "LOCKBYTES" {
+		t.Fatalf("download lock file: %d %q", rec.Code, rec.Body.String())
+	}
 	v2 := strings.Replace(state(2, "lin", `{"mode":"managed","type":"azurerm_storage_account","name":"this"}`), "{",
 		`{"outputs":{"id":{"value":"abc","type":"string"},"key":{"value":"s3cret","type":"string","sensitive":true}},`, 1)
 	saveState(v2)
 	finish(`{"status":"succeeded","outputs":{"id":"abc"},
 		"resources":[{"address":"azurerm_storage_account.this","type":"azurerm_storage_account","name":"this","provider":"registry.terraform.io/hashicorp/azurerm"}]}`)
-	if ok, _ := app.StateStore.Exists(ctx, artifactKey(runID, runnerapi.ArtifactPlan)); ok {
-		t.Fatal("the saved plan must be deleted once applied")
+	for _, name := range []string{runnerapi.ArtifactPlan, runnerapi.ArtifactLockfile} {
+		if ok, _ := app.StateStore.Exists(ctx, artifactKey(runID, name)); ok {
+			t.Fatalf("%s must be deleted once applied", name)
+		}
 	}
 	if rec := stateCall("GET", "", job.StateToken, ""); rec.Code != http.StatusForbidden {
 		t.Fatalf("state access after the run: %d", rec.Code)
 	}
-	if vs, _ := store.StateVersions(ctx, ws.ID, 10); vs[0].Serial != 2 || !vs[0].Indexed || vs[0].Resources != 1 {
+	vs, _ := store.StateVersions(ctx, ws.ID, 10)
+	if vs[0].Serial != 2 || !vs[0].Indexed || vs[0].Resources != 1 {
 		t.Fatalf("the apply must index the current state version: %+v", vs)
 	}
+	assertSealed(vs[0].BlobKey, "s3cret") // indexing read it back, so sealed state still works
 
 	// Raw log and SSE stream: the stream replays everything, then ends with "done".
 	if rec := get(h, runURL+"/logs"); rec.Body.String() != "line one\nline two\n\nend\n" {
@@ -748,7 +769,7 @@ func TestWorkspaceFlow(t *testing.T) {
 	}
 
 	// Rollback: a copy of v2 becomes v4, with v2's outputs and resource index.
-	vs, _ := store.StateVersions(ctx, ws.ID, 10)
+	vs, _ = store.StateVersions(ctx, ws.ID, 10)
 	rollback := func(id int64) int {
 		return post(h, fmt.Sprintf("/workspaces/%s/state-versions/%d/rollback", name, id), nil).Code
 	}
@@ -889,7 +910,8 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 		t.Fatalf("attach to an unknown workspace: %d", rec.Code)
 	}
 	page := get(reader, wsURL+"/variables").Body.String()
-	if strings.Contains(page, "s3cret-ws") || !strings.Contains(page, "client-ws") || !strings.Contains(page, setName) {
+	if strings.Contains(page, "s3cret-ws") || !strings.Contains(page, "client-ws") || !strings.Contains(page, setName) ||
+		!strings.Contains(page, "tenant-set") {
 		t.Fatalf("workspace page must show non-sensitive values and applied sets, never sensitive ones: %s", page)
 	}
 	if p := get(admin, "/variable-sets/"+setName).Body.String(); strings.Contains(p, "<option>"+name+"</option>") {

@@ -87,6 +87,12 @@ type varsBlock struct {
 	NoKey   bool
 }
 
+// setView is a variable set applied to a workspace, with its variables.
+type setView struct {
+	storage.VariableSet
+	Vars varsBlock
+}
+
 type varView struct {
 	ID, Category, Key, Value string
 	Sensitive                bool
