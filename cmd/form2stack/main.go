@@ -166,6 +166,7 @@ func serve(log *slog.Logger) error {
 	vcsOn := cfg.Registry && cfg.SecretKey != ""
 	app := httpserver.New(store, tpls, reg, authn, state, httpserver.Features{
 		Deployments: cfg.Deployments, Registry: cfg.Registry, Editor: cfg.TemplateEditor, VCS: vcsOn}, log)
+	app.Organization = cfg.Organization
 	if cfg.SecretKey != "" {
 		app.SecretKey = vcs.Key(cfg.SecretKey)
 	}

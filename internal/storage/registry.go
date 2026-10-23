@@ -154,10 +154,12 @@ func (s *Store) ModuleArchive(ctx context.Context, namespace, name, system, vers
 	return b, err
 }
 
-// Token scopes: registry tokens are for Terraform clients, runner tokens for execution runners.
+// Token scopes: registry tokens are for Terraform clients, runner tokens for execution runners,
+// user tokens (terraform login) act as a user and also work for the registry.
 const (
 	ScopeRegistry = "registry"
 	ScopeRunner   = "runner"
+	ScopeUser     = "user"
 )
 
 // CreateToken stores a new API token and returns it; it can't be retrieved again.
@@ -168,12 +170,32 @@ func (s *Store) CreateToken(ctx context.Context, name, scope string) (string, er
 	return token, err
 }
 
-// ValidToken reports whether token exists with the given scope.
+// ValidToken reports whether token exists with the given scope; an unexpired user token also
+// passes as a registry token, since `terraform login` stores one token per host.
 func (s *Store) ValidToken(ctx context.Context, token, scope string) (bool, error) {
 	h := sha256.Sum256([]byte(token))
 	var ok bool
-	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM api_tokens WHERE token_hash=$1 AND scope=$2)`, h[:], scope).Scan(&ok)
+	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM api_tokens WHERE token_hash=$1
+		AND (scope=$2 OR ($2 = 'registry' AND scope = 'user' AND expires_at > now())))`, h[:], scope).Scan(&ok)
 	return ok, err
+}
+
+// CreateUserToken stores a new token that acts as the user until it expires, and returns it.
+func (s *Store) CreateUserToken(ctx context.Context, userID, name string, ttl time.Duration) (string, error) {
+	token := "f2s_" + rand.Text()
+	h := sha256.Sum256([]byte(token))
+	_, err := s.DB.ExecContext(ctx, `INSERT INTO api_tokens (name, token_hash, scope, user_id, expires_at)
+		VALUES ($1, $2, 'user', $3::uuid, now() + $4 * interval '1 second')`, name, h[:], userID, int64(ttl.Seconds()))
+	return token, err
+}
+
+// TokenUser returns the id, email and role of an unexpired user token's user; sql.ErrNoRows if
+// the token is unknown, expired or not a user token.
+func (s *Store) TokenUser(ctx context.Context, token string) (id, email, role string, err error) {
+	h := sha256.Sum256([]byte(token))
+	err = s.DB.QueryRowContext(ctx, `SELECT u.id, u.email, u.role FROM api_tokens t JOIN users u ON u.id = t.user_id
+		WHERE t.token_hash = $1 AND t.scope = 'user' AND t.expires_at > now()`, h[:]).Scan(&id, &email, &role)
+	return id, email, role, err
 }
 
 // SigningKey returns the registry's HMAC key, creating it on first use.

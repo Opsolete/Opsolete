@@ -191,6 +191,9 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 		env[k] = v
 	}
 	maps.Copy(env, job.Env)
+	// the http backend's defaults: a terraform_remote_state "http" data source needs only the address
+	// of a workspace that shares its state with this one
+	env["TF_HTTP_USERNAME"], env["TF_HTTP_PASSWORD"] = job.WorkspaceID, job.StateToken
 	env["HOME"] = home
 	delete(env, "XDG_DATA_HOME") // Terraform's other implied provider mirror; defaults to under HOME
 	// CleanEnv drops the few variables terraform-exec sets itself (TF_LOG, TF_INPUT, ...).
@@ -443,27 +446,13 @@ func inventory(ctx context.Context, tf *tfexec.Terraform) []runnerapi.Resource {
 	if err != nil {
 		return nil
 	}
-	out := []runnerapi.Resource{}
-	var walk func(m *tfjson.StateModule)
-	walk = func(m *tfjson.StateModule) {
-		for _, r := range m.Resources {
-			if r.Mode == tfjson.ManagedResourceMode {
-				out = append(out, runnerapi.Resource{Address: r.Address, Type: r.Type, Name: r.Name, Provider: r.ProviderName, Module: m.Address})
-			}
-		}
-		for _, c := range m.ChildModules {
-			walk(c)
-		}
-	}
-	if st.Values != nil && st.Values.RootModule != nil {
-		walk(st.Values.RootModule)
-	}
-	return out
+	return runnerapi.Inventory(st)
 }
 
 // backendOptions points Terraform's http backend at the workspace's state on the server. The
 // password only works while this run is planning or applying. Terraform keeps it in .terraform/ and
-// in the saved plan (module code could read it during the run): it only reaches this workspace's state.
+// in the saved plan (module code could read it during the run): it only reaches this workspace's state
+// and, read-only, the states shared with it.
 func (r *Runner) backendOptions(job runnerapi.Job) []tfexec.InitOption {
 	addr := r.ServerURL.JoinPath(runnerapi.StatePrefix, job.WorkspaceID).String()
 	return []tfexec.InitOption{

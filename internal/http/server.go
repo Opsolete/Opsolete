@@ -37,8 +37,10 @@ type Server struct {
 	StateStore *blob.Bucket
 	Features   Features
 	SecretKey  []byte // encrypts VCS tokens, variables and state store files; nil without SECRET_KEY
-	Log        *slog.Logger
-	pages      *template.Template
+	// Organization is the one organization of the cloud API (Terraform's cloud block).
+	Organization string
+	Log          *slog.Logger
+	pages        *template.Template
 }
 
 // Features are the components this instance serves; a disabled one has no routes at all.
@@ -82,6 +84,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 	mux.HandleFunc("GET /readyz", s.ready)
 	s.Auth.Routes(mux)
+	mux.HandleFunc("GET /.well-known/terraform.json", s.discovery)
 	if s.Features.Registry {
 		s.registryRoutes(mux)
 	}
@@ -101,6 +104,7 @@ func (s *Server) Handler() http.Handler {
 	}
 	s.runnerRoutes(mux)
 	s.stateRoutes(mux)
+	s.cloudRoutes(mux)
 	s.workspaceRoutes(mux)
 	s.variableRoutes(mux)
 	// CrossOriginProtection rejects cross-site browser POSTs (CSRF); token clients send no Origin and pass.
@@ -111,7 +115,8 @@ func (s *Server) Handler() http.Handler {
 func public(path string) bool {
 	return path == "/healthz" || path == "/readyz" || path == "/.well-known/terraform.json" ||
 		strings.HasPrefix(path, "/v1/") || strings.HasPrefix(path, runnerapi.Prefix+"/") ||
-		strings.HasPrefix(path, runnerapi.StatePrefix+"/") || strings.HasPrefix(path, "/auth/")
+		strings.HasPrefix(path, runnerapi.StatePrefix+"/") || strings.HasPrefix(path, "/auth/") ||
+		strings.HasPrefix(path, cloudPrefix+"/") || path == "/oauth/token"
 }
 
 // requireLogin puts the signed-in user on the request; everything not public needs one.

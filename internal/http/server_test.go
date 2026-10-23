@@ -169,10 +169,13 @@ func TestEditorIsAdminOnly(t *testing.T) {
 func TestFeatureSwitches(t *testing.T) {
 	a := devAuth(t, nil, "admin@example.com", true)
 	noRegistry := newApp(t, "../../catalog", nil, a, Features{Deployments: true, Editor: true}).Handler()
-	for _, path := range []string{"/registry", "/.well-known/terraform.json", "/v1/modules/a/b/c/versions"} {
+	for _, path := range []string{"/registry", "/v1/modules/a/b/c/versions"} {
 		if rec := get(noRegistry, path); rec.Code != http.StatusNotFound {
 			t.Errorf("registry off, GET %s: %d", path, rec.Code)
 		}
+	}
+	if d := get(noRegistry, "/.well-known/terraform.json").Body.String(); strings.Contains(d, "modules.v1") || !strings.Contains(d, `"tfe.v2":"/api/v2/"`) {
+		t.Errorf("registry off, discovery: %s", d)
 	}
 	if page := get(noRegistry, "/").Body.String(); strings.Contains(page, `href="/registry"`) || !strings.Contains(page, `href="/workspaces"`) {
 		t.Fatalf("nav with registry off: %s", page)
@@ -209,8 +212,8 @@ func TestFeatureSwitches(t *testing.T) {
 	if rec := post(registryOnly, runnerapi.Prefix+"/jobs/claim", nil); rec.Code != http.StatusNotFound {
 		t.Fatalf("runner API must be off with deployments: %d", rec.Code)
 	}
-	if rec := get(registryOnly, "/.well-known/terraform.json"); rec.Code != http.StatusOK {
-		t.Fatalf("registry protocol must stay on: %d", rec.Code)
+	if rec := get(registryOnly, "/.well-known/terraform.json"); rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "tfe.v2") {
+		t.Fatalf("registry protocol must stay on, the cloud API off: %d %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -694,7 +697,7 @@ func TestWorkspaceFlow(t *testing.T) {
 		}
 	}
 	if !strings.Contains(get(h, "/workspaces/"+name+"/settings/health").Body.String(), "Drift detection:") ||
-		!strings.Contains(get(h, "/workspaces/"+name+"/settings").Body.String(), "Rename") {
+		!strings.Contains(get(h, "/workspaces/"+name+"/settings").Body.String(), "Save settings") {
 		t.Fatal("settings General and Health pages")
 	}
 	if get(h, "/workspaces/"+name+"/settings/nope").Code != http.StatusNotFound {
@@ -946,13 +949,13 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 	}
 
 	// Rename: same workspace, new URL; the old one is gone; grants and runs stay.
-	if rec := post(reader, wsURL+"/rename", url.Values{"name": {name + "-renamed"}}); rec.Code != http.StatusForbidden {
+	if rec := post(reader, wsURL+"/settings", url.Values{"name": {name + "-renamed"}}); rec.Code != http.StatusForbidden {
 		t.Fatalf("a reader must not rename: %d", rec.Code)
 	}
-	if rec := post(operator, wsURL+"/rename", url.Values{"name": {"Not Valid"}}); rec.Code != http.StatusBadRequest {
+	if rec := post(operator, wsURL+"/settings", url.Values{"name": {"Not Valid"}}); rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid name: %d", rec.Code)
 	}
-	if rec := post(operator, wsURL+"/rename", url.Values{"name": {name + "-renamed"}}); rec.Code != http.StatusSeeOther ||
+	if rec := post(operator, wsURL+"/settings", url.Values{"name": {name + "-renamed"}}); rec.Code != http.StatusSeeOther ||
 		rec.Header().Get("Location") != wsURL+"-renamed/settings" {
 		t.Fatalf("rename: %d %q", rec.Code, rec.Header().Get("Location"))
 	}
@@ -984,5 +987,74 @@ func TestBlobEncryption(t *testing.T) {
 	}
 	if _, err := (&Server{StateStore: s.StateStore, SecretKey: vcs.Key("other")}).readBlob(ctx, "a"); err == nil {
 		t.Fatal("a wrong key must fail")
+	}
+}
+
+// Remote state sharing: a run of another workspace may read (never write or lock) a state that is
+// shared with it, all workspaces or by name.
+func TestRemoteStateSharing(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	app := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true})
+	h := app.Handler()
+	suffix := strings.ToLower(newID()[:8])
+	src, err := store.CreateEmptyWorkspace(ctx, "rs-src-"+suffix, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cons, err := store.CreateEmptyWorkspace(ctx, "rs-cons-"+suffix, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.DB.Exec(`DELETE FROM workspaces WHERE id::text IN ($1, $2)`, src.ID, cons.ID) })
+	run, err := store.CreateRun(ctx, cons.ID, "apply", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// as if a runner claimed it: the consumer's run is working, so its state credentials are valid
+	if _, err := store.DB.Exec(`UPDATE runs SET status = 'planning', lease_id = 'l' WHERE id::text = $1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	state := func(method, token string) int {
+		req := httptest.NewRequest(method, runnerapi.StatePrefix+"/"+src.ID, strings.NewReader(`{"ID":"x"}`))
+		req.SetBasicAuth(cons.ID, token)
+		return do(h, req).Code
+	}
+	share := func(mode string, consumers ...string) {
+		t.Helper()
+		if rec := post(h, "/workspaces/"+src.Name+"/settings", url.Values{"remote_state": {mode}, "remote_state_consumers": consumers}); rec.Code != http.StatusSeeOther {
+			t.Fatalf("share %s: %d %s", mode, rec.Code, rec.Body.String())
+		}
+	}
+	token := app.stateToken(cons.ID, run.ID)
+	if c := state("GET", token); c != http.StatusForbidden {
+		t.Fatalf("not shared by default: %d", c)
+	}
+	share("specific", cons.ID, "not-a-uuid", src.ID) // unknown ids and itself are ignored
+	if c := state("GET", token); c != http.StatusNoContent {
+		t.Fatalf("shared with the consumer: %d", c)
+	}
+	if c := state("GET", "forged"); c != http.StatusForbidden {
+		t.Fatalf("forged consumer credentials: %d", c)
+	}
+	if c := state("LOCK", token); c != http.StatusForbidden {
+		t.Fatalf("a consumer must not lock: %d", c)
+	}
+	if body := get(h, "/workspaces/"+src.Name+"/settings").Body.String(); !strings.Contains(body, `value="`+cons.ID+`" checked>`) {
+		t.Fatal("General settings must show the consumer selected")
+	}
+	share("all")
+	if c := state("GET", token); c != http.StatusNoContent {
+		t.Fatalf("shared with all: %d", c)
+	}
+	share("specific")
+	if c := state("GET", token); c != http.StatusForbidden {
+		t.Fatalf("sharing turned off: %d", c)
+	}
+	// the Health page's form leaves sharing alone
+	share("all")
+	post(h, "/workspaces/"+src.Name+"/settings", url.Values{"page": {"health"}})
+	if c := state("GET", token); c != http.StatusNoContent {
+		t.Fatalf("Health save changed sharing: %d", c)
 	}
 }

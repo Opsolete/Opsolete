@@ -98,7 +98,7 @@
     padding: .45rem .65rem; width: 100%; max-width: 34rem; }
   input:hover, select:hover { border-color: var(--muted); }
   input:focus, select:focus { outline: 3px solid #5990ff; outline-offset: 0; border-color: var(--brand); }
-  input[type="checkbox"] { width: 1rem; height: 1rem; accent-color: var(--brand); vertical-align: middle; }
+  input[type="checkbox"], input[type="radio"] { width: 1rem; padding: 0; height: 1rem; accent-color: var(--brand); vertical-align: middle; }
   input[type="file"] { padding: .35rem; }
   .wide { max-width: none; }
   .hint { font-size: .8rem; color: var(--muted); margin: .3rem 0 0; }
@@ -113,6 +113,39 @@
   .chips a { font-size: .8rem; padding: .15rem .6rem; border-radius: 5px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
   .chips a:hover { border-color: var(--brand); text-decoration: none; }
   .chips a[aria-current="true"] { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
+
+  /* settings pages: one narrow column of fields, one save button */
+  .settings { max-width: 32rem; }
+  .settings input:not([type="checkbox"], [type="radio"]) { max-width: none; }
+  .settings .field { font-weight: 600; font-size: .875rem; margin: 1.1rem 0 .3rem; }
+  .settings .field:first-child { margin-top: 0; }
+  .settings fieldset { border: 0; margin: 1.75rem 0 0; padding: 0; min-width: 0; } /* else the snippet widens it */
+  .settings legend { font-weight: 600; font-size: .875rem; padding: 0; margin-bottom: .2rem; }
+  .check { display: flex; gap: .6rem; align-items: flex-start; font-weight: normal; margin: .75rem 0 0; }
+  .check input { margin-top: .2rem; flex: none; }
+  .check small { display: block; margin-top: .15rem; font-size: .8rem; }
+  .indent { margin-left: 1.6rem; }
+  .picker { margin-top: .75rem; }
+  .picker summary span { color: var(--muted); }
+  .picker-panel { position: absolute; z-index: 1; top: calc(100% + .3rem); left: 0; right: 0; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 8px 24px rgb(12 12 14 / 30%); }
+  .picker-panel input[type="search"] { display: block; margin: .6rem; width: calc(100% - 1.2rem); padding-left: 2rem;
+    background: var(--surface) no-repeat .6rem center / 1rem
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23a1a5ae' stroke-width='1.6'%3E%3Ccircle cx='7' cy='7' r='5'/%3E%3Cpath d='m11 11 3.5 3.5'/%3E%3C/svg%3E"); }
+  .picker-list { max-height: 15rem; overflow-y: auto; padding-bottom: .3rem; }
+  .picker-list .check { margin: 0; padding: .45rem .9rem; align-items: center; border-left: 3px solid transparent; cursor: pointer; }
+  .picker-list .check:hover, .picker-list .check:has(:focus-visible) { background: var(--code); border-left-color: var(--brand); }
+  .picker-list .check input { margin: 0; }
+  .picker-list [hidden] { display: none; }
+  .picker-list .hint { margin: .4rem .9rem .7rem; }
+  .picker-panel footer { display: flex; justify-content: space-between; align-items: center; padding: .6rem; border-top: 1px solid var(--border); }
+  .picker-panel [aria-pressed="true"] { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
+  .settings pre.code { margin-top: .3rem; padding: .75rem 1rem; }
+  .settings pre.code code { background: none; padding: 0; }
+  .id { display: flex; align-items: center; gap: .3rem; margin: 0 0 1.75rem; }
+  .id code { background: none; padding: 0 .3rem; font-size: .8rem; }
+  .copy { background: none; border: 0; box-shadow: none; color: var(--brand); padding: .1rem .35rem; }
+  .copy:hover { background: var(--code); color: var(--brand-hover); }
 
   /* modal (native <dialog>) */
   dialog { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 0;

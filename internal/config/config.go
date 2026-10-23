@@ -37,6 +37,8 @@ type Config struct {
 	// SecretKey encrypts VCS access tokens and variables in Postgres, and state files and saved plans
 	// in STATE_STORE. Empty: tokens and variables are off, state files are stored in plaintext.
 	SecretKey string
+	// Organization is the one organization Terraform's cloud block may name.
+	Organization string
 }
 
 func Load() (Config, error) {
@@ -53,6 +55,7 @@ func Load() (Config, error) {
 		StateStore:       os.Getenv("STATE_STORE"),
 		AdminEmails:      strings.Split(os.Getenv("ADMIN_EMAILS"), ","),
 		SecretKey:        os.Getenv("SECRET_KEY"),
+		Organization:     getenv("ORGANIZATION", "form2stack"),
 	}
 	if c.DatabaseURL == "" {
 		return c, errors.New("DATABASE_URL is required")

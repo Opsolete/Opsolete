@@ -35,23 +35,24 @@ const visible = `($2 OR w.created_by = NULLIF($1, '')::uuid OR EXISTS (SELECT 1 
 // (TemplateID, ModuleSource, ModuleRef, Inputs), from a VCS branch (VCS*), or from nowhere yet: an
 // empty workspace may hold just variables.
 type Workspace struct {
-	ID              string
-	Name            string
-	TemplateID      string // "" if not created from a template
-	ModuleSource    string
-	ModuleRef       string
-	Inputs          map[string]any
-	VCSConnectionID string // "" if not linked to a repository
-	VCSRepo         string
-	VCSBranch       string
-	StateKey        string // blob key prefix of its state versions
-	Templates       int    // how many templates were added (see WorkspaceTemplates)
-	AutoApply       bool   // apply plans of apply runs without confirmation
-	DriftDetection  bool   // queue an assess run (refresh-only plan, never applied) daily
-	Drifted         bool   // the latest assessment found drift and nothing was applied since
-	CreatedBy       string // email; empty for workspaces from before login
-	CreatedAt       time.Time
-	Latest          *Run // most recent run
+	ID                string
+	Name              string
+	TemplateID        string // "" if not created from a template
+	ModuleSource      string
+	ModuleRef         string
+	Inputs            map[string]any
+	VCSConnectionID   string // "" if not linked to a repository
+	VCSRepo           string
+	VCSBranch         string
+	StateKey          string // blob key prefix of its state versions
+	Templates         int    // how many templates were added (see WorkspaceTemplates)
+	AutoApply         bool   // apply plans of apply runs without confirmation
+	DriftDetection    bool   // queue an assess run (refresh-only plan, never applied) daily
+	GlobalRemoteState bool   // every workspace's runs may read this state; else only RemoteStateConsumers
+	Drifted           bool   // the latest assessment found drift and nothing was applied since
+	CreatedBy         string // email; empty for workspaces from before login
+	CreatedAt         time.Time
+	Latest            *Run // most recent run
 }
 
 // HasConfig: there is Terraform configuration to plan, so runs can start.
@@ -115,7 +116,7 @@ type StatusEntry struct {
 
 const workspaceCols = `w.id, w.name, COALESCE(w.template_id, ''), COALESCE(w.module_source, ''), COALESCE(w.module_ref, ''),
 	w.inputs, COALESCE(w.vcs_connection_id::text, ''), COALESCE(w.vcs_repo, ''), COALESCE(w.vcs_branch, ''), w.state_key,
-	(SELECT count(*) FROM workspace_templates t WHERE t.workspace_id = w.id), w.auto_apply, w.drift_detection,
+	(SELECT count(*) FROM workspace_templates t WHERE t.workspace_id = w.id), w.auto_apply, w.drift_detection, w.global_remote_state,
 	COALESCE((SELECT a.status = 'drifted' AND NOT EXISTS (SELECT 1 FROM runs x WHERE x.workspace_id = w.id
 		AND x.status = 'applied' AND x.updated_at > a.updated_at) FROM runs a
 		WHERE a.workspace_id = w.id AND a.action = 'assess' AND a.status IN ('no_changes', 'drifted')
@@ -126,7 +127,7 @@ func scanWorkspace(row interface{ Scan(...any) error }, extra ...any) (Workspace
 	var raw []byte
 	dest := append([]any{&w.ID, &w.Name, &w.TemplateID, &w.ModuleSource, &w.ModuleRef, &raw,
 		&w.VCSConnectionID, &w.VCSRepo, &w.VCSBranch, &w.StateKey, &w.Templates,
-		&w.AutoApply, &w.DriftDetection, &w.Drifted, &w.CreatedBy, &w.CreatedAt}, extra...)
+		&w.AutoApply, &w.DriftDetection, &w.GlobalRemoteState, &w.Drifted, &w.CreatedBy, &w.CreatedAt}, extra...)
 	if err := row.Scan(dest...); err != nil {
 		return w, err
 	}
@@ -471,6 +472,56 @@ func (s *Store) SetSettings(ctx context.Context, workspaceID string, autoApply, 
 	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET auto_apply = $2, drift_detection = $3, updated_at = now()
 		WHERE id::text = $1`, workspaceID, autoApply, driftDetection)
 	return err
+}
+
+// RemoteStateConsumers lists the workspaces explicitly allowed to read a workspace's state, by name.
+func (s *Store) RemoteStateConsumers(ctx context.Context, workspaceID string) ([]Workspace, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT w.id, w.name FROM remote_state_consumers c JOIN workspaces w ON w.id = c.consumer_id
+		WHERE c.workspace_id::text = $1 ORDER BY w.name`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Workspace
+	for rows.Next() {
+		var w Workspace
+		if err := rows.Scan(&w.ID, &w.Name); err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+// SetRemoteStateSharing shares a workspace's state with all workspaces (global) or with the
+// consumers (workspace ids; unknown ids and the workspace itself are ignored).
+func (s *Store) SetRemoteStateSharing(ctx context.Context, workspaceID string, global bool, consumers []string) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE workspaces SET global_remote_state = $2, updated_at = now() WHERE id::text = $1`,
+		workspaceID, global); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM remote_state_consumers WHERE workspace_id::text = $1`, workspaceID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO remote_state_consumers (workspace_id, consumer_id)
+		SELECT $1::uuid, id FROM workspaces WHERE id::text = ANY($2::text[]) AND id <> $1::uuid`, workspaceID, consumers); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// SharesState reports whether consumerID's runs may read workspaceID's state.
+func (s *Store) SharesState(ctx context.Context, workspaceID, consumerID string) (bool, error) {
+	var ok bool
+	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM workspaces w WHERE w.id::text = $1 AND w.id::text <> $2
+		AND (w.global_remote_state OR EXISTS (SELECT 1 FROM remote_state_consumers c WHERE c.workspace_id = w.id AND c.consumer_id::text = $2)))`,
+		workspaceID, consumerID).Scan(&ok)
+	return ok, err
 }
 
 // QueueAssessments queues an assess run (a refresh-only plan that is never applied) on every

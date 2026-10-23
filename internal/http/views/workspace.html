@@ -201,23 +201,79 @@
 {{if eq $tab "settings"}}
 {{if eq $p ""}}
 <h1>General settings</h1>
-<p class="muted">The workspace's name and how its runs apply.</p>
+<div class="settings">
+<div class="field">ID</div>
+<p class="id"><code>{{$w.ID}}</code>
+  <button type="button" class="copy" aria-label="Copy ID" title="Copy ID" onclick="navigator.clipboard.writeText('{{$w.ID}}')">⧉</button></p>
 {{if .CanOperate}}
-<h2>Name</h2>
-<form method="post" action="/workspaces/{{$w.Name}}/rename" class="card inline">
-  <label for="rename" style="margin:0">Name</label>
-  <input id="rename" name="name" value="{{$w.Name}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}" style="max-width:24rem">
-  <button type="submit" class="secondary">Rename</button>
-</form>
-<h2>Apply method</h2>
-<form method="post" action="/workspaces/{{$w.Name}}/settings" class="card">
+<form method="post" action="/workspaces/{{$w.Name}}/settings">
   <!-- one settings endpoint: keep the Health page's value -->
   {{if $w.DriftDetection}}<input type="hidden" name="drift_detection" value="on">{{end}}
-  <label style="margin:0;font-weight:normal"><input type="checkbox" name="auto_apply"{{if $w.AutoApply}} checked{{end}}>
-    Auto-apply: apply plans without confirmation (destroys and refresh-only runs always ask)</label>
-  <div class="actions" style="margin-top:1rem"><button type="submit" class="secondary">Save</button></div>
+  <label for="name">Name</label>
+  <input id="name" name="name" value="{{$w.Name}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}">
+  <fieldset>
+    <legend>Auto-apply</legend>
+    <p class="hint">Sets this workspace to automatically apply changes for successful runs. If disabled, runs require operator approval.</p>
+    <label class="check"><input type="checkbox" name="auto_apply"{{if $w.AutoApply}} checked{{end}}>
+      <span>Auto-apply runs<small>Automatically apply changes when a plan is successful. Destroy and refresh-only runs always ask for confirmation.</small></span></label>
+  </fieldset>
+  <fieldset>
+    <legend>Remote state sharing</legend>
+    <p class="hint">Choose whether this workspace should share state with all workspaces, or only with specific approved workspaces.
+      Their runs read it with the <code>terraform_remote_state</code> data source.</p>
+    <label class="check"><input type="radio" name="remote_state" value="all"{{if $w.GlobalRemoteState}} checked{{end}}>
+      <span>Share with all workspaces</span></label>
+    <label class="check"><input type="radio" name="remote_state" value="specific"{{if not $w.GlobalRemoteState}} checked{{end}}>
+      <span>Share with specific workspaces</span></label>
+    <!-- searchable multi-select: checkboxes in a dropdown; closed <details> still submit their boxes -->
+    <details class="menu picker indent">
+      <summary><span>{{with .StateShared}}{{.}} selected{{else}}Select workspaces{{end}}</span></summary>
+      <div class="picker-panel">
+        <input type="search" placeholder="Search" aria-label="Search workspaces" autocomplete="off"
+          oninput="filterPicker(this)" onkeydown="if(event.key==='Enter')event.preventDefault()">
+        <div class="picker-list" role="group" aria-label="Workspaces to share the state with" onchange="filterPicker(this)">
+          {{range .StateConsumers}}<label class="check"><input type="checkbox" name="remote_state_consumers" value="{{.ID}}"{{if .Selected}} checked{{end}}><span>{{.Name}}</span></label>
+          {{else}}<p class="hint">There are no other workspaces.</p>{{end}}
+        </div>
+        <footer><button type="button" class="secondary small" aria-pressed="false"
+          onclick="this.setAttribute('aria-pressed',this.ariaPressed!=='true');filterPicker(this)">Show selected</button>
+          <span class="muted">{{len .StateConsumers}} total</span></footer>
+      </div>
+    </details>
+    <p class="hint indent">None selected: the state isn't shared.</p>
+<script>
+  // filters the picker by the search text and "Show selected", and shows the count in its summary
+  function filterPicker(el) {
+    const d = el.closest('details'), q = d.querySelector('input[type=search]').value.toLowerCase();
+    const only = d.querySelector('[aria-pressed]').ariaPressed === 'true';
+    let n = 0;
+    for (const l of d.querySelectorAll('.picker-list label')) {
+      const box = l.querySelector('input');
+      l.hidden = !l.textContent.toLowerCase().includes(q) || (only && !box.checked);
+      n += box.checked;
+    }
+    d.querySelector('summary span').textContent = n ? n + ' selected' : 'Select workspaces';
+  }
+  document.addEventListener('click', e => { // a click outside closes it, like a select
+    for (const d of document.querySelectorAll('details.picker[open]')) if (!d.contains(e.target)) d.open = false;
+  });
+</script>
+    <p class="hint">In the other workspace's configuration:</p>
+<pre class="code"><code>data "terraform_remote_state" "shared" {
+  backend = "http"
+  config = {
+    address = "{{.StateAddress}}"
+  }
+}</code></pre>
+  </fieldset>
+  <div class="actions"><button type="submit">Save settings</button></div>
 </form>
-{{else}}<p>{{if $w.AutoApply}}Auto-apply{{else}}Manual apply{{end}}</p>{{end}}
+{{else}}
+<div class="field">Name</div><p>{{$w.Name}}</p>
+<div class="field">Auto-apply</div><p>{{if $w.AutoApply}}On{{else}}Off: runs require operator approval{{end}}</p>
+<div class="field">Remote state sharing</div><p>{{if $w.GlobalRemoteState}}Shared with all workspaces{{else}}Shared with specific workspaces, if any{{end}}</p>
+{{end}}
+</div>
 
 {{else if eq $p "health"}}
 <h1>Health</h1>

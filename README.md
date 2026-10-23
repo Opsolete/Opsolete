@@ -64,10 +64,11 @@ Then open http://localhost:8080. Migrations run on startup.
 | `AUTH_DEV_USER` |           | **Local dev only:** skip login and treat every visitor as this email (set in the nix dev shell) |
 | `SECRET_KEY`    |           | At least 32 characters; encrypts [variables](#variables-and-variable-sets) and VCS access tokens in Postgres, and [state files and saved plans](#workspaces-and-state) in `STATE_STORE`. Set it (and keep it stable) to turn on variables and [VCS providers](#vcs-providers-publish-modules-from-github-or-azure-devops). **Back it up outside the deployment** (see [Backing up `SECRET_KEY`](#backing-up-secret_key)): without it, encrypted state can't be recovered |
 | `STATE_STORE`   | required with deployments | Where workspace state files live, as a [Go CDK blob URL](https://gocloud.dev/howto/blob/): `azblob://tfstate`, `s3://tfstate?region=eu-west-1` (add `&endpoint=…&use_path_style=true` for S3-compatible stores), `gs://tfstate`, `file:///path` (dev). Credentials come from the platform's usual env vars or workload identity |
+| `ORGANIZATION`  | `form2stack` | The one organization Terraform's [`cloud` block](#terraform-cli-cloud-block-and-terraform-login) may name |
 
 ## Login
 
-All pages require login. Health checks, the registry protocol (`/v1/…`, which uses API tokens and signed URLs) and the runner API (runner tokens) don't.
+All pages require login. Health checks, the registry protocol (`/v1/…`, which uses API tokens and signed URLs), the runner API (runner tokens) and the cloud API (`/api/v2/…`, user tokens from `terraform login`) don't.
 
 - **OIDC:** authorization code flow with PKCE, using `coreos/go-oidc` and `x/oauth2`. It works with Entra ID, Google, Keycloak, Dex and similar. Register `PUBLIC_URL/auth/callback` as the redirect URI. The user is identified by the `email` claim, falling back to `preferred_username` (Entra ID). An explicit `email_verified: false` is rejected.
 - **Roles:** emails listed in `ADMIN_EMAILS` are `admin`, everyone else is `user`. The role is recorded at every login, so editing `ADMIN_EMAILS` takes effect at the next login. Sessions are HMAC-signed cookies that last 12 hours. Logging out ends the Form2Stack session, not the IdP session.
@@ -84,7 +85,41 @@ Teams are your IdP's groups. At every login Form2Stack records the ID token's `g
 - Group membership changes take effect at the user's next login. Grants and revokes take effect immediately.
 - Local dev: `AUTH_DEV_GROUPS=grp-a,grp-b` gives the dev user groups.
 
-Endpoints: `/healthz` (liveness), `/readyz` (checks the DB), `/` (templates), `/templates/{id}` (form, creates a workspace), `/workspaces`, `/workspaces/new` (blank, VCS-linked or from a template), `GET|POST /workspaces/{name}/vcs`, `POST /workspaces/{name}/state-versions/{id}/rollback`, `/v1/vcs-archives/…` (signed, for runners), `/workspaces/{name}` (overview, runs, outputs, resources, state versions), `POST /workspaces/{name}/runs` (`action=apply|destroy|refresh|assess`, `replace=<address>` for apply), `POST …/rename`, `POST …/delete`, `POST …/access` (admins), `/workspaces/{name}/runs/{id}` (plan, confirm/discard/cancel, live log, history) and its `/logs`, `/auth/login|callback|logout`, `/registry`, `/registry/publish`, `/vcs` and `POST /vcs/{id}/workspace-repos` (admins), `GET|POST /workspaces/{name}/configure`, `GET|POST /workspaces/{name}/templates/new?template={id}` and `/workspaces/{name}/templates/{module}` (add or configure an added template), `POST …/templates/{module}/remove`, `/v1/modules/…` (registry protocol), `/api/runner/v1/…` (runner API), `/api/state/v1/{id}` (Terraform state backend).
+Endpoints: `/healthz` (liveness), `/readyz` (checks the DB), `/` (templates), `/templates/{id}` (form, creates a workspace), `/workspaces`, `/workspaces/new` (blank, VCS-linked or from a template), `GET|POST /workspaces/{name}/vcs`, `POST /workspaces/{name}/state-versions/{id}/rollback`, `/v1/vcs-archives/…` (signed, for runners), `/workspaces/{name}` (overview, runs, outputs, resources, state versions), `POST /workspaces/{name}/runs` (`action=apply|destroy|refresh|assess`, `replace=<address>` for apply), `POST …/settings` (name, auto-apply, drift detection), `POST …/delete`, `POST …/access` (admins), `/workspaces/{name}/runs/{id}` (plan, confirm/discard/cancel, live log, history) and its `/logs`, `/auth/login|callback|logout`, `/registry`, `/registry/publish`, `/vcs` and `POST /vcs/{id}/workspace-repos` (admins), `GET|POST /workspaces/{name}/configure`, `GET|POST /workspaces/{name}/templates/new?template={id}` and `/workspaces/{name}/templates/{module}` (add or configure an added template), `POST …/templates/{module}/remove`, `/v1/modules/…` (registry protocol), `/api/runner/v1/…` (runner API), `/api/state/v1/{id}` (Terraform state backend), `/api/v2/…` (cloud block API, user tokens), `/oauth/authorization|token` (`terraform login`).
+
+## Terraform CLI: `cloud` block and `terraform login`
+
+Run Terraform on your own machine with Form2Stack as the state backend, using Terraform's [`cloud` block](https://developer.hashicorp.com/terraform/cli/cloud/settings) as for HCP Terraform:
+
+```sh
+terraform login form2stack.example.com     # browser: confirm "Authorize Terraform CLI"; the token is saved in ~/.terraform.d
+```
+
+```hcl
+terraform {
+  cloud {
+    hostname     = "form2stack.example.com"
+    organization = "form2stack"            # ORGANIZATION on the server
+    workspaces { name = "network-dev" }
+  }
+}
+```
+
+- **Local execution only.** `terraform plan` and `apply` run on your machine with your credentials; Form2Stack doesn't run them on its runners. Workspace variables and variable sets aren't used.
+- **Workspaces:** `terraform init` creates the named workspace if it doesn't exist, as a blank workspace owned by you. An existing one needs **operate** access (read access is a 404 for the state, which holds secrets). Only `workspaces { name = … }` works: tags and projects aren't supported.
+- **State** works like a run's: every save is a state version with outputs (sensitive ones masked) and a resource list, rollback works, and the CLI takes the same state lock as runs, so a run and a CLI never write at the same time. `terraform force-unlock` only releases locks held by a CLI, not by a run.
+- **Tokens** from `terraform login` act as you (your role and groups from your last browser login) and expire after 30 days: run `terraform login` again. They also work for the [module registry](#module-registry) on the same host. There's no page to revoke them yet: `DELETE FROM api_tokens WHERE scope = 'user'` revokes them all.
+- Like the registry, Terraform only uses HTTPS on a hostname with a dot. For local dev over HTTP, override discovery in a CLI config file (`~/.terraformrc`):
+
+  ```hcl
+  host "form2stack.localhost:8080" {
+    services = {
+      "tfe.v2"   = "http://form2stack.localhost:8080/api/v2/"
+      "login.v1" = { client = "terraform-cli", grant_types = ["authz_code"], ports = [10000, 10010],
+                     authz = "http://form2stack.localhost:8080/oauth/authorization", token = "http://form2stack.localhost:8080/oauth/token" }
+    }
+  }
+  ```
 
 ## Workspaces and state
 
@@ -94,7 +129,8 @@ Each workspace has exactly one Terraform state. Form2Stack is the state backend:
 - **Outputs** belong to a state version: they are read from the state file when it's saved, sensitive ones stored as `(sensitive)`. The workspace page shows the current version's.
 - **Rollback:** on a workspace page, *Roll back* next to an older state version saves a copy of it as the new current version (serial one above the current, marked "rollback to vN"), with its outputs and resource index; newer versions are kept. It changes no infrastructure: review the next plan, since resources created or deleted after that version no longer match the state. It takes the state lock and refuses while a run is active.
 - **Locking:** Terraform's `LOCK`/`UNLOCK` calls take a lock in Postgres, so the blob store needs no locking features of its own. A second locker gets `423` with the holder's lock info. When a run ends or its runner disappears, its lock is released.
-- **Credentials:** a run's state password is an HMAC of the workspace and the run. It works only for that workspace and only while that run is planning or applying, so not while a plan waits for confirmation, and never after the run ends. It's per run, not per phase, because Terraform stores the backend config in the saved plan. The server keeps no state passwords.
+- **Credentials:** a run's state password is an HMAC of the workspace and the run. It works only for that workspace (and for reading the states shared with it) and only while that run is planning or applying, so not while a plan waits for confirmation, and never after the run ends. It's per run, not per phase, because Terraform stores the backend config in the saved plan. The server keeps no state passwords.
+- **Remote state sharing** (as in HCP Terraform): under *Settings › General*, a workspace shares its state with all workspaces or with specific ones (default: none). A run of a workspace it is shared with reads it with `data "terraform_remote_state" "x" { backend = "http", config = { address = "<PUBLIC_URL>/api/state/v1/<workspace id>" } }`. The runner sets `TF_HTTP_USERNAME`/`TF_HTTP_PASSWORD` to the run's own state credentials, so the config needs no secrets. Such a run can only read the state: it can't write or lock it. It gets the whole state file, sensitive values included, just like in HCP.
 - **Resources:** a workspace page lists the resources (address, type, provider, module) in its **current state version**. The index belongs to a state version. At the end of a run, the runner reads the state back (`terraform show -json`, parsed with HashiCorp's `terraform-json`) and sends names and types only. Attribute values never reach Postgres or the UI.
 - **Security:** state files contain secrets in plain text, and the server can read them. With `SECRET_KEY` set, the server encrypts every state file and saved plan (AES-256-GCM) before it uploads them, so read access to the bucket alone exposes nothing; files written before `SECRET_KEY` was set stay plaintext until the workspace saves state again. Still give the server an identity that can only access the state container, and turn on encryption at rest in the store. Cloud credentials in [variables](#variables-and-variable-sets) are encrypted with `SECRET_KEY` and only handed to the runner of a claimed job.
 

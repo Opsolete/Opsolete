@@ -15,6 +15,7 @@ import (
 	"gocloud.dev/gcerrors"
 
 	"github.com/rudesome/form2stack/internal/auth"
+	"github.com/rudesome/form2stack/internal/runnerapi"
 	"github.com/rudesome/form2stack/internal/storage"
 	"github.com/rudesome/form2stack/internal/templates"
 )
@@ -54,7 +55,6 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /workspaces/{name}/settings", s.workspaceSettings)
 	mux.HandleFunc("GET /workspaces/{name}/configure", s.configureForm)
 	mux.HandleFunc("POST /workspaces/{name}/configure", s.configureWorkspace)
-	mux.HandleFunc("POST /workspaces/{name}/rename", s.renameWorkspace)
 	mux.HandleFunc("POST /workspaces/{name}/delete", s.deleteWorkspace)
 	mux.HandleFunc("GET /workspaces/{name}/templates/new", s.workspaceTemplateForm)
 	mux.HandleFunc("POST /workspaces/{name}/templates/new", s.saveWorkspaceTemplate)
@@ -179,13 +179,9 @@ func (s *Server) loadWorkspace(w http.ResponseWriter, r *http.Request, need stri
 		s.internalError(w, "get workspace", err)
 		return ws, "", false
 	}
-	u := auth.FromContext(r.Context())
-	level = levelOperate
-	if !u.Admin() {
-		if level, err = s.Store.Access(r.Context(), ws.ID, u.ID); err != nil {
-			s.internalError(w, "workspace access", err)
-			return ws, "", false
-		}
+	if level, err = s.accessLevel(r, ws); err != nil {
+		s.internalError(w, "workspace access", err)
+		return ws, "", false
 	}
 	switch {
 	case level == "":
@@ -196,6 +192,14 @@ func (s *Server) loadWorkspace(w http.ResponseWriter, r *http.Request, need stri
 		return ws, level, false
 	}
 	return ws, level, true
+}
+
+// accessLevel is what the request's user may do in ws: levelOperate, levelRead or "" (nothing).
+func (s *Server) accessLevel(r *http.Request, ws storage.Workspace) (string, error) {
+	if u := auth.FromContext(r.Context()); !u.Admin() {
+		return s.Store.Access(r.Context(), ws.ID, u.ID)
+	}
+	return levelOperate, nil
 }
 
 // loadRun loads the {run} of the {name} workspace; a run of another workspace is a 404.
@@ -321,6 +325,33 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		}
 		latestPlan, latestApply = runPhases(runs[0], hist)
 	}
+	// General settings: workspaces to share the state with, the ones it already does first: they stay
+	// selected even if this user can't see them
+	var stateConsumers []stateConsumer
+	stateShared := 0
+	if strings.HasSuffix(r.URL.Path, "/settings") && level == levelOperate {
+		cur, err := s.Store.RemoteStateConsumers(ctx, ws.ID)
+		if err != nil {
+			s.internalError(w, "remote state consumers", err)
+			return
+		}
+		all, err := s.Store.ListWorkspaces(ctx, viewer(r))
+		if err != nil {
+			s.internalError(w, "list workspaces", err)
+			return
+		}
+		seen := map[string]bool{ws.ID: true}
+		for _, c := range cur {
+			seen[c.ID] = true
+			stateConsumers = append(stateConsumers, stateConsumer{c.ID, c.Name, true})
+			stateShared++
+		}
+		for _, o := range all {
+			if !seen[o.ID] {
+				stateConsumers = append(stateConsumers, stateConsumer{o.ID, o.Name, false})
+			}
+		}
+	}
 	metrics, err := s.Store.RunMetrics(ctx, ws.ID)
 	if err != nil {
 		s.internalError(w, "run metrics", err)
@@ -331,8 +362,14 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		"LatestPlan": latestPlan, "LatestApply": latestApply, "Metrics": metrics, "Show": r.URL.Query().Get("show"), "Page": page,
 		"Update": update, "HasTemplate": hasTemplate, "Added": added, "Updates": updates, "Catalog": s.Templates.List(),
 		"Resources": res, "Versions": versions, "Outputs": outputs, "Destroyed": destroyed, "Grants": grants,
-		"Variables": vars, "Sets": sets, "Groups": groups, "Assessment": assessment,
-		"CanOperate": level == levelOperate, "Admin": auth.FromContext(ctx).Admin()})
+		"Variables": vars, "Sets": sets, "Groups": groups, "Assessment": assessment, "StateConsumers": stateConsumers, "StateShared": stateShared,
+		"StateAddress": s.Registry.PublicURL.JoinPath(runnerapi.StatePrefix, ws.ID).String(),
+		"CanOperate":   level == levelOperate, "Admin": auth.FromContext(ctx).Admin()})
+}
+
+type stateConsumer struct {
+	ID, Name string
+	Selected bool
 }
 
 // newRun queues a plan: action=apply (re-plan with the workspace's inputs; replace=<address> any
@@ -450,42 +487,43 @@ func (s *Server) loadConfigure(w http.ResponseWriter, r *http.Request) (storage.
 	return ws, t, ok
 }
 
+// workspaceSettings saves the General (name, auto-apply, remote state sharing) and Health pages. A new name changes
+// the URL; state, runs and grants stay (keyed by id).
 func (s *Server) workspaceSettings(w http.ResponseWriter, r *http.Request) {
 	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
 	if !ok {
 		return
 	}
+	if name := strings.TrimSpace(r.PostFormValue("name")); name != "" && name != ws.Name {
+		if !validWorkspaceName(name) {
+			http.Error(w, "a workspace name is "+workspaceNameRule, http.StatusBadRequest)
+			return
+		}
+		if err := s.Store.RenameWorkspace(r.Context(), ws.ID, name); errors.Is(err, storage.ErrNameTaken) {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		} else if err != nil {
+			s.internalError(w, "rename workspace", err)
+			return
+		}
+		s.Log.Info("workspace renamed", "from", ws.Name, "to", name, "user", auth.FromContext(r.Context()).Email)
+		ws.Name = name
+	}
 	if err := s.Store.SetSettings(r.Context(), ws.ID, r.PostFormValue("auto_apply") != "", r.PostFormValue("drift_detection") != ""); err != nil {
 		s.internalError(w, "workspace settings", err)
 		return
+	}
+	if mode := r.PostFormValue("remote_state"); mode != "" { // General page only
+		if err := s.Store.SetRemoteStateSharing(r.Context(), ws.ID, mode == "all", r.PostForm["remote_state_consumers"]); err != nil {
+			s.internalError(w, "remote state sharing", err)
+			return
+		}
 	}
 	back := "/workspaces/" + ws.Name + "/settings"
 	if r.PostFormValue("page") == "health" {
 		back += "/health"
 	}
 	http.Redirect(w, r, back, http.StatusSeeOther)
-}
-
-// renameWorkspace changes the name in URLs and lists; state, runs and grants stay (keyed by id).
-func (s *Server) renameWorkspace(w http.ResponseWriter, r *http.Request) {
-	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
-	if !ok {
-		return
-	}
-	name := strings.TrimSpace(r.PostFormValue("name"))
-	if !validWorkspaceName(name) {
-		http.Error(w, "a workspace name is "+workspaceNameRule, http.StatusBadRequest)
-		return
-	}
-	if err := s.Store.RenameWorkspace(r.Context(), ws.ID, name); errors.Is(err, storage.ErrNameTaken) {
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	} else if err != nil {
-		s.internalError(w, "rename workspace", err)
-		return
-	}
-	s.Log.Info("workspace renamed", "from", ws.Name, "to", name, "user", auth.FromContext(r.Context()).Email)
-	http.Redirect(w, r, "/workspaces/"+name+"/settings", http.StatusSeeOther)
 }
 
 // deleteWorkspace deletes a workspace that manages no resources, with its state files.

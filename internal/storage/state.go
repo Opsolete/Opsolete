@@ -117,6 +117,39 @@ func (s *Store) StateLockID(ctx context.Context, id string) (string, error) {
 	return lock.String, err
 }
 
+// CloudLockPrefix starts the ID of state locks taken through the cloud API (terraform with a cloud
+// block); their lock info also carries the UserID of whoever took them.
+const CloudLockPrefix = "cloud-"
+
+// UnlockCloudState releases a lock taken through the cloud API by userID, or by anyone if userID
+// is "" (force unlock). Locks of runs and rollbacks are never released here.
+func (s *Store) UnlockCloudState(ctx context.Context, id, userID string) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET state_lock = NULL WHERE id::text = $1
+		AND starts_with(state_lock->>'ID', $3) AND ($2 = '' OR state_lock->>'UserID' = $2)`, id, userID, CloudLockPrefix)
+	return err
+}
+
+// CloudLocked reports whether userID holds the workspace's state lock through the cloud API.
+func (s *Store) CloudLocked(ctx context.Context, id, userID string) (bool, error) {
+	var ok bool
+	err := s.DB.QueryRowContext(ctx, `SELECT COALESCE(starts_with(state_lock->>'ID', $3) AND state_lock->>'UserID' = $2, false)
+		FROM workspaces WHERE id::text = $1`, id, userID, CloudLockPrefix).Scan(&ok)
+	return ok, err
+}
+
+// IndexState stores resources as the index of the workspace's current state version.
+func (s *Store) IndexState(ctx context.Context, id string, resources []runnerapi.Resource) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := indexState(ctx, tx, id, resources); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // indexState stores resources as the index of the workspace's current state version, which is
 // what the runner read them from at the end of its run.
 func indexState(ctx context.Context, tx *sql.Tx, id string, resources []runnerapi.Resource) error {

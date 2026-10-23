@@ -30,7 +30,8 @@ const maxStateSize = 64 << 20
 // https://developer.hashicorp.com/terraform/language/backend/http
 // Runners authenticate with per-run credentials (username = workspace id, password = stateToken),
 // so only the run a runner is working on can read or write the workspace's state, and only while it
-// is planning or applying.
+// is planning or applying. A run of another workspace may read it (terraform_remote_state, its own
+// credentials) if the workspace shares its state with that one.
 func (s *Server) stateRoutes(mux *http.ServeMux) {
 	p := runnerapi.StatePrefix + "/{id}"
 	mux.HandleFunc("GET "+p, s.stateAuth(s.getState))
@@ -51,11 +52,16 @@ func (s *Server) stateAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.PathValue("id")
 		user, pass, ok := r.BasicAuth()
-		if !ok || user != id {
+		if !ok {
 			http.Error(w, "state credentials required", http.StatusUnauthorized)
 			return
 		}
-		run, err := s.Store.WorkingRun(r.Context(), id)
+		// terraform_remote_state: another workspace's run reads this state, never writes or locks it
+		if user != id && r.Method != http.MethodGet {
+			http.Error(w, "only this workspace's runs may change its state", http.StatusForbidden)
+			return
+		}
+		run, err := s.Store.WorkingRun(r.Context(), user)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "no run is working on this workspace", http.StatusForbidden)
 			return
@@ -65,9 +71,20 @@ func (s *Server) stateAuth(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		if !hmac.Equal([]byte(pass), []byte(s.stateToken(id, run))) {
+		if !hmac.Equal([]byte(pass), []byte(s.stateToken(user, run))) {
 			http.Error(w, "invalid state credentials", http.StatusForbidden)
 			return
+		}
+		if user != id {
+			shared, err := s.Store.SharesState(r.Context(), id, user)
+			if err != nil {
+				s.stateError(w, "remote state sharing", err)
+				return
+			}
+			if !shared {
+				http.Error(w, "this workspace does not share its state with yours (Settings > General > Remote state sharing)", http.StatusForbidden)
+				return
+			}
 		}
 		next(w, r)
 	}

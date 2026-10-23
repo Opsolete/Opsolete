@@ -1,6 +1,8 @@
 // Package runnerapi defines the wire format between Form2Stack and its runners.
 package runnerapi
 
+import tfjson "github.com/hashicorp/terraform-json"
+
 const (
 	Prefix      = "/api/runner/v1"
 	StatePrefix = "/api/state/v1"      // Terraform http state backend: StatePrefix + "/<workspace id>"
@@ -80,4 +82,24 @@ type Resource struct {
 	Name     string `json:"name"`     // e.g. this
 	Provider string `json:"provider"` // e.g. registry.terraform.io/hashicorp/azurerm
 	Module   string `json:"module"`   // e.g. module.net; empty for the root module
+}
+
+// Inventory lists the managed resources in a state (terraform show -json): names only, never values.
+func Inventory(st *tfjson.State) []Resource {
+	out := []Resource{}
+	var walk func(m *tfjson.StateModule)
+	walk = func(m *tfjson.StateModule) {
+		for _, r := range m.Resources {
+			if r.Mode == tfjson.ManagedResourceMode {
+				out = append(out, Resource{Address: r.Address, Type: r.Type, Name: r.Name, Provider: r.ProviderName, Module: m.Address})
+			}
+		}
+		for _, c := range m.ChildModules {
+			walk(c)
+		}
+	}
+	if st.Values != nil && st.Values.RootModule != nil {
+		walk(st.Values.RootModule)
+	}
+	return out
 }
