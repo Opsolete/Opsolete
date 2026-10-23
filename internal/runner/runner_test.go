@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -408,5 +409,22 @@ func TestAddedTemplates(t *testing.T) {
 	root.Modules = mods[:1]
 	if res, logs = f.do(t, r, root); res.Status != "succeeded" || res.Plan == nil || res.Plan.Add != 1 || res.Plan.Destroy != 1 {
 		t.Fatalf("plan with root module: %+v\n%s", res, logs)
+	}
+}
+
+// TestJobHome: Terraform gets a HOME of the job's own, so a job can't leave a
+// .terraformrc or provider mirror behind for the next one.
+func TestJobHome(t *testing.T) {
+	f := &fakeServer{}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	r := testRunner(t, srv)
+	j := job("home1", "plan", "apply", f.module(t, `output "home" { value = pathexpand("~") }`), nil)
+	res, logs := f.do(t, r, j)
+	if res.Status != "succeeded" {
+		t.Fatalf("plan: %+v\n%s", res, logs)
+	}
+	if !regexp.MustCompile(`home\s*=\s*"[^"]*/f2s-home-[^"/]*"`).MatchString(logs) {
+		t.Fatalf("HOME must be the job's own:\n%s", logs)
 	}
 }

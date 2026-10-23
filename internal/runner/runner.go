@@ -46,7 +46,13 @@ func New(c config.Runner, log *slog.Logger) *Runner {
 // claiming but lets the current job finish; cancelling hard interrupts terraform (SIGINT,
 // so it can release its state lock).
 func (r *Runner) Run(ctx, hard context.Context) error {
+	if err := hardenProcess(); err != nil {
+		return fmt.Errorf("harden runner process: %w", err)
+	}
 	r.Log.Info("runner started", "name", r.Name, "server", r.ServerURL.String())
+	if os.Getpid() != 1 {
+		r.Log.Warn("not running as a container's PID 1: processes a job leaves behind are not killed, so jobs aren't isolated from each other")
+	}
 	backoff := time.Second
 	for ctx.Err() == nil {
 		job, ok, err := r.claim(ctx)
@@ -126,6 +132,7 @@ func (r *Runner) Execute(hard context.Context, job runnerapi.Job) {
 	}
 	ship := newShipper(r, job, cancel, signed)
 	res := r.terraform(ctx, job, src, ship)
+	killJobProcesses()
 	ship.Close()
 	if ship.lost.Load() {
 		log.Warn("lease lost; result not reported")
@@ -171,17 +178,24 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	}
 	tf.SetStdout(w)
 	tf.SetStderr(w)
-	if len(job.Env) > 0 {
-		env := map[string]string{}
-		for _, kv := range os.Environ() {
-			k, v, _ := strings.Cut(kv, "=")
-			env[k] = v
-		}
-		maps.Copy(env, job.Env)
-		// CleanEnv drops the few variables terraform-exec sets itself (TF_LOG, TF_INPUT, ...).
-		if err := tf.SetEnv(tfexec.CleanEnv(env)); err != nil {
-			return fail("set environment", err)
-		}
+	// A throwaway HOME (outside dir: init -from-module needs it empty): a job must not leave a
+	// .terraformrc, .gitconfig or provider mirror (~/.terraform.d/plugins) behind for the next job.
+	home, err := os.MkdirTemp("", "f2s-home-*")
+	if err != nil {
+		return fail("prepare workdir", err)
+	}
+	defer os.RemoveAll(home)
+	env := map[string]string{}
+	for _, kv := range os.Environ() {
+		k, v, _ := strings.Cut(kv, "=")
+		env[k] = v
+	}
+	maps.Copy(env, job.Env)
+	env["HOME"] = home
+	delete(env, "XDG_DATA_HOME") // Terraform's other implied provider mirror; defaults to under HOME
+	// CleanEnv drops the few variables terraform-exec sets itself (TF_LOG, TF_INPUT, ...).
+	if err := tf.SetEnv(tfexec.CleanEnv(env)); err != nil {
+		return fail("set environment", err)
 	}
 
 	fmt.Fprintf(w, "==> runner %s: %s phase of %s run %s\n", r.Name, job.Phase, job.Action, job.RunID)

@@ -425,11 +425,37 @@ func (s *Store) SetGrant(ctx context.Context, workspaceID, group, level string) 
 }
 
 // SetWorkspaceVCS links a workspace without a template to a repository branch; connID "" unlinks it.
+// A changed link detaches the workspace's variable sets: an admin must attach them again.
 func (s *Store) SetWorkspaceVCS(ctx context.Context, workspaceID, connID, repo, branch string) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET vcs_connection_id = NULLIF($2, '')::uuid,
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var changed bool
+	err = tx.QueryRowContext(ctx, `SELECT (vcs_connection_id, vcs_repo, vcs_branch) IS DISTINCT FROM
+		(NULLIF($2, '')::uuid, NULLIF($3, ''), NULLIF($4, '')) FROM workspaces WHERE id::text = $1 AND template_id IS NULL
+		FOR UPDATE`,
+		workspaceID, connID, repo, branch).Scan(&changed)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil // deleted meanwhile, or a template workspace: nothing to link
+	}
+	if err != nil {
+		return err
+	}
+	if !changed {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE workspaces SET vcs_connection_id = NULLIF($2, '')::uuid,
 		vcs_repo = NULLIF($3, ''), vcs_branch = NULLIF($4, ''), updated_at = now()
-		WHERE id::text = $1 AND template_id IS NULL`, workspaceID, connID, repo, branch)
-	return err
+		WHERE id::text = $1 AND template_id IS NULL`, workspaceID, connID, repo, branch); err != nil {
+		return err
+	}
+	// The admin who attached sets vouched for the old repository and branch, not for the new one.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM variable_set_workspaces WHERE workspace_id::text = $1`, workspaceID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // PinVCSCommit records the commit a run plans, unless one is recorded already, and returns the

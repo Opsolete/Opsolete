@@ -76,12 +76,20 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 		t.Fatalf("bad token: %d", rec.Code)
 	}
 	conn.Set("token", "secret-pat")
+	conn.Set("workspace_repos", "acme")
+	if rec := post(h, "/vcs", conn); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "not a repository pattern") {
+		t.Fatalf("bad workspace repos pattern: %d", rec.Code)
+	}
+	conn.Set("workspace_repos", " acme/infra-* \r\n acme/app ")
 	if rec := post(h, "/vcs", conn); rec.Code != http.StatusSeeOther {
 		t.Fatalf("connect: %d %s", rec.Code, rec.Body.String())
 	}
-	var connID string
+	var connID, repos string
 	var sealed []byte
-	store.DB.QueryRow(`SELECT id, token FROM vcs_connections WHERE name = $1`, connName).Scan(&connID, &sealed)
+	store.DB.QueryRow(`SELECT id, token, workspace_repos FROM vcs_connections WHERE name = $1`, connName).Scan(&connID, &sealed, &repos)
+	if repos != "acme/infra-*\nacme/app" {
+		t.Fatalf("workspace repos stored as %q", repos)
+	}
 	if strings.Contains(string(sealed), "secret-pat") || strings.Contains(get(h, "/vcs").Body.String(), "secret-pat") {
 		t.Fatal("token stored or shown in plain text")
 	}
@@ -155,7 +163,9 @@ func TestVCSAdminOnly(t *testing.T) {
 			t.Errorf("GET %s for non-admin: %d", p, rec.Code)
 		}
 	}
-	if rec := post(h, "/vcs", url.Values{"name": {"x"}}); rec.Code != http.StatusForbidden {
-		t.Errorf("POST /vcs for non-admin: %d", rec.Code)
+	for _, p := range []string{"/vcs", "/vcs/x/workspace-repos"} {
+		if rec := post(h, p, url.Values{"name": {"x"}, "workspace_repos": {"*/*"}}); rec.Code != http.StatusForbidden {
+			t.Errorf("POST %s for non-admin: %d", p, rec.Code)
+		}
 	}
 }

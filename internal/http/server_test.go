@@ -771,7 +771,7 @@ func TestWorkspaceFlow(t *testing.T) {
 	if page := get(h, "/workspaces/"+name+"/states").Body.String(); !strings.Contains(page, "rollback to v2") {
 		t.Fatalf("version list must show the rollback: %s", page)
 	}
-	if b, _ := app.StateStore.ReadAll(ctx, vs[0].BlobKey); !strings.Contains(string(b), `"serial": 4`) || !strings.Contains(string(b), "azurerm_storage_account") {
+	if b, _ := app.readBlob(ctx, vs[0].BlobKey); !strings.Contains(string(b), `"serial": 4`) || !strings.Contains(string(b), "azurerm_storage_account") {
 		t.Fatalf("rolled back state: %s", b)
 	}
 	if lock, _ := store.StateLockID(ctx, ws.ID); lock != "" {
@@ -962,5 +962,27 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 	page = get(reader, wsURL+"-renamed/runs").Body.String() + get(reader, wsURL+"-renamed/variables").Body.String()
 	if !strings.Contains(page, "canceled") || !strings.Contains(page, "client-ws") || !strings.Contains(page, setName) {
 		t.Fatalf("renamed workspace lost its runs or variables: %s", page)
+	}
+}
+
+// TestBlobEncryption: state store files are sealed with SECRET_KEY; plaintext ones from before still read.
+func TestBlobEncryption(t *testing.T) {
+	ctx := context.Background()
+	s := &Server{StateStore: memblob.OpenBucket(nil), SecretKey: vcs.Key("test-secret-key")}
+	if err := s.writeBlob(ctx, "a", []byte(`{"password":"hunter2"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := s.StateStore.ReadAll(ctx, "a"); bytes.Contains(raw, []byte("hunter2")) {
+		t.Fatalf("stored in plaintext: %s", raw)
+	}
+	if b, err := s.readBlob(ctx, "a"); err != nil || string(b) != `{"password":"hunter2"}` {
+		t.Fatalf("read back: %s %v", b, err)
+	}
+	s.StateStore.WriteAll(ctx, "legacy", []byte(`{"serial":1}`), nil)
+	if b, err := s.readBlob(ctx, "legacy"); err != nil || string(b) != `{"serial":1}` {
+		t.Fatalf("legacy plaintext: %s %v", b, err)
+	}
+	if _, err := (&Server{StateStore: s.StateStore, SecretKey: vcs.Key("other")}).readBlob(ctx, "a"); err == nil {
+		t.Fatal("a wrong key must fail")
 	}
 }

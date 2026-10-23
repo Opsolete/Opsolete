@@ -67,14 +67,19 @@ func (s *Store) DeleteVariable(ctx context.Context, o VarOwner, id string) error
 	return err
 }
 
+// globalApplies: global sets apply to workspace $1 unless it's linked to a repository. That code
+// is whatever a user chose to link, so only an admin attaching a set may give it credentials.
+const globalApplies = `(vs.global AND NOT EXISTS (SELECT 1 FROM workspaces gw
+	WHERE gw.id = $1::uuid AND gw.vcs_connection_id IS NOT NULL))`
+
 // RunVariables returns the variables a workspace's runs get, one per category and key. The
-// workspace's own win over attached sets, attached sets over global ones, and
-// between sets of one kind the first by name wins.
+// workspace's own win over attached sets, attached sets over global ones (not for VCS-linked
+// workspaces, see globalApplies), and between sets of one kind the first by name wins.
 func (s *Store) RunVariables(ctx context.Context, workspaceID string) ([]Variable, error) {
 	return scanVariables(s.DB.QueryContext(ctx, `SELECT DISTINCT ON (v.category, v.key) v.id, v.category, v.key, v.value,
 			v.sensitive, v.updated_at
 		FROM variables v LEFT JOIN variable_sets vs ON vs.id = v.set_id
-		WHERE v.workspace_id = $1::uuid OR vs.global
+		WHERE v.workspace_id = $1::uuid OR `+globalApplies+`
 			OR v.set_id IN (SELECT set_id FROM variable_set_workspaces WHERE workspace_id = $1::uuid)
 		ORDER BY v.category, v.key, v.workspace_id IS NULL, vs.global, vs.name`, workspaceID))
 }
@@ -122,9 +127,9 @@ func (s *Store) VariableSets(ctx context.Context) ([]VariableSet, error) {
 	return scanSets(s.DB.QueryContext(ctx, `SELECT `+setCols+` FROM variable_sets vs ORDER BY vs.name`))
 }
 
-// WorkspaceVariableSets lists the sets that apply to a workspace: global and attached ones.
+// WorkspaceVariableSets lists the sets that apply to a workspace: global (see globalApplies) and attached ones.
 func (s *Store) WorkspaceVariableSets(ctx context.Context, workspaceID string) ([]VariableSet, error) {
-	return scanSets(s.DB.QueryContext(ctx, `SELECT `+setCols+` FROM variable_sets vs WHERE vs.global
+	return scanSets(s.DB.QueryContext(ctx, `SELECT `+setCols+` FROM variable_sets vs WHERE `+globalApplies+`
 		OR vs.id IN (SELECT set_id FROM variable_set_workspaces WHERE workspace_id = $1::uuid) ORDER BY vs.name`, workspaceID))
 }
 

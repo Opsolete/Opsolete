@@ -41,13 +41,20 @@ func (s *Server) loadVCSForm(ctx context.Context, form map[string]string, errMsg
 	if err != nil {
 		return f, err
 	}
-	f.Conns = conns
 	for _, sc := range conns {
+		if sc.WorkspaceRepos == "" { // only publishes modules
+			continue
+		}
+		f.Conns = append(f.Conns, sc)
 		c, err := vcs.ConnFor(s.SecretKey, sc)
 		if err == nil {
 			var repos []string
 			if repos, err = c.Repos(ctx); err == nil {
-				f.Repos = append(f.Repos, repos...)
+				for _, repo := range repos {
+					if vcs.RepoAllowed(sc.WorkspaceRepos, repo) {
+						f.Repos = append(f.Repos, repo)
+					}
+				}
 			}
 		}
 		if err != nil { // typing the repo still works
@@ -83,6 +90,9 @@ func (s *Server) vcsLink(ctx context.Context, form map[string]string) (connID, r
 	c, err := s.vcsConn(ctx, connID)
 	if err != nil {
 		return "", "", "", err
+	}
+	if !vcs.RepoAllowed(c.WorkspaceRepos, repo) {
+		return "", "", "", fmt.Errorf("workspaces may not link %q through this connection: ask an admin", repo)
 	}
 	if _, err := c.Head(ctx, repo, branch); err != nil {
 		return "", "", "", fmt.Errorf("can't read branch %s of %q: %w", branch, repo, err)
@@ -225,6 +235,9 @@ func (s *Server) pinCommit(ctx context.Context, j storage.Job) error {
 	if err != nil {
 		return err
 	}
+	if !vcs.RepoAllowed(c.WorkspaceRepos, ws.VCSRepo) { // the admin narrowed the connection since the link
+		return fmt.Errorf("vcs: workspaces may no longer link %q through this connection", ws.VCSRepo)
+	}
 	head, err := c.Head(ctx, ws.VCSRepo, ws.VCSBranch)
 	if err != nil {
 		return fmt.Errorf("vcs: %w", err)
@@ -331,7 +344,7 @@ func (s *Server) rollbackState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "this is already the current state version", http.StatusConflict)
 		return
 	}
-	old, err := s.StateStore.ReadAll(ctx, key)
+	old, err := s.readBlob(ctx, key)
 	if err != nil {
 		s.internalError(w, "read state", err)
 		return

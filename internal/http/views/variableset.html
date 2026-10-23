@@ -14,7 +14,7 @@
 <form method="post" action="/variable-sets/{{$v.Name}}" class="card">
   <label for="description">Description</label>
   <input id="description" name="description" value="{{$v.Description}}" class="wide" maxlength="500">
-  <label for="global"><input type="checkbox" id="global" name="global"{{if $v.Global}} checked{{end}}> Global: apply to every workspace</label>
+  <label for="global"><input type="checkbox" id="global" name="global"{{if $v.Global}} checked{{end}}> Global: apply to every workspace not linked to a repository</label>
   <div class="actions"><button type="submit" class="secondary">Save</button></div>
 </form>
 

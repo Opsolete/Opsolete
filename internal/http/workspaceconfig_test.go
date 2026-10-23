@@ -69,6 +69,21 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 		}
 	}
 
+	// A new connection only publishes modules until an admin allows repositories for workspaces.
+	if page := get(h, "/workspaces/new").Body.String(); strings.Contains(page, `<option value="acme/infra">`) || strings.Contains(page, connName) {
+		t.Fatalf("a modules-only connection must not be offered: %s", page)
+	}
+	refused := url.Values{"name": {linked}, "vcs_connection": {connID}, "vcs_repo": {"acme/infra"}, "vcs_branch": {"main"}}
+	if rec := post(h, "/workspaces/new", refused); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "may not link") {
+		t.Fatalf("linking a repository the connection doesn't allow: %d", rec.Code)
+	}
+	if rec := post(h, "/vcs/"+connID+"/workspace-repos", url.Values{"workspace_repos": {"*"}}); rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("a bad pattern: %d", rec.Code)
+	}
+	if rec := post(h, "/vcs/"+connID+"/workspace-repos", url.Values{"workspace_repos": {"acme/infra*"}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("allow repos: %d %s", rec.Code, rec.Body.String())
+	}
+
 	// Blank: no template, no run, nothing to plan.
 	if page := get(h, "/workspaces/new").Body.String(); !strings.Contains(page, `<option value="acme/infra">`) || !strings.Contains(page, connName) {
 		t.Fatalf("new workspace page must offer connections and repos: %s", page)
@@ -129,6 +144,21 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 		t.Fatalf("relinking during a run: %d", rec.Code)
 	}
 	store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE id = $1`, job.RunID)
+
+	// The admin narrows the connection: the linked workspace's next run fails instead of planning.
+	if rec := post(h, "/vcs/"+connID+"/workspace-repos", url.Values{"workspace_repos": {"acme/other"}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("narrow repos: %d", rec.Code)
+	}
+	if rec := post(h, "/workspaces/"+linked+"/runs", url.Values{"action": {"apply"}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("start run: %d %s", rec.Code, rec.Body.String())
+	}
+	req = httptest.NewRequest("POST", runnerapi.Prefix+"/jobs/claim", strings.NewReader(`{"runner":"r1"}`))
+	req.Header.Set("Authorization", "Bearer "+runnerTok)
+	do(h, req)
+	lw, _ := store.GetWorkspace(ctx, linked)
+	if runs, _ := store.Runs(ctx, lw.ID, 1); len(runs) == 0 || runs[0].Status != storage.Errored {
+		t.Fatalf("a run of a repository no longer allowed must fail: %+v", runs)
+	}
 	if rec := post(h, "/workspaces/"+linked+"/vcs", url.Values{}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("unlink: %d %s", rec.Code, rec.Body.String())
 	}

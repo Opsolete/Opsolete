@@ -8,12 +8,18 @@
 
 <div class="card flush">
 <table>
-<tr><th>Name</th><th>Provider</th><th>API URL</th><th>Added</th><th></th></tr>
+<tr><th>Name</th><th>Provider</th><th>API URL</th><th>Workspace repositories</th><th>Added</th><th></th></tr>
 {{range .Connections}}
 <tr>
   <td><strong>{{.Name}}</strong></td>
   <td>{{.Provider}}</td>
   <td><code>{{.BaseURL}}</code></td>
+  <td>
+    <form method="post" action="/vcs/{{.ID}}/workspace-repos">
+      <textarea name="workspace_repos" aria-label="Repositories workspaces may link through {{.Name}}" rows="2" placeholder="none: modules only">{{.WorkspaceRepos}}</textarea>
+      <button type="submit" class="secondary small">Save</button>
+    </form>
+  </td>
   <td class="nowrap">{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
   <td class="nowrap">
     <a class="btn secondary small" href="/registry/publish?connection={{.ID}}">Publish module</a>
@@ -23,7 +29,7 @@
   </td>
 </tr>
 {{else}}
-<tr><td colspan="5" class="empty">No VCS providers connected yet.</td></tr>
+<tr><td colspan="6" class="empty">No VCS providers connected yet.</td></tr>
 {{end}}
 </table>
 </div>
@@ -48,8 +54,14 @@
 
   <label for="token">Access token <span class="req" aria-hidden="true">*</span></label>
   <input id="token" name="token" type="password" required autocomplete="off" aria-describedby="token-hint">
-  <p class="hint" id="token-hint">Read-only is enough. GitHub: a fine-grained token with <em>Contents: read</em> on the module repos.
+  <p class="hint" id="token-hint">Read-only is enough. GitHub: a fine-grained token with <em>Contents: read</em> on <em>selected</em> repositories only (the module and workspace repos).
     Azure DevOps: a PAT with <em>Code (Read)</em>. It's checked now, stored encrypted, and never shown again.</p>
+
+  <label for="workspace_repos">Workspace repositories</label>
+  <textarea id="workspace_repos" name="workspace_repos" rows="3" aria-describedby="workspace_repos-hint"
+    placeholder="acme/infra-*">{{index .Form "workspace_repos"}}</textarea>
+  <p class="hint" id="workspace_repos-hint">Repositories users may link workspaces to, one pattern per line (<code>acme/infra-*</code>, <code>*/*</code> for all).
+    Empty: none, the connection only publishes modules. Anyone who can push to a linked branch runs code with the workspace's credentials: protect those branches.</p>
 
   <div class="actions"><button type="submit">Connect</button></div>
 </form>

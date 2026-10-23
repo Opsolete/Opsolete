@@ -172,7 +172,7 @@ func (s *Server) putArtifact(w http.ResponseWriter, r *http.Request) {
 		writeErrors(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("artifacts are limited to %d MB", maxArtifactSize>>20))
 		return
 	}
-	if err := s.StateStore.WriteAll(r.Context(), artifactKey(id, name), body, nil); err != nil {
+	if err := s.writeBlob(r.Context(), artifactKey(id, name), body); err != nil {
 		s.Log.Error("write artifact", "err", err)
 		writeErrors(w, http.StatusInternalServerError, "internal error")
 		return
@@ -185,7 +185,7 @@ func (s *Server) getArtifact(w http.ResponseWriter, r *http.Request) {
 	if !s.artifactAccess(w, r, storage.Applying) {
 		return
 	}
-	b, err := s.StateStore.ReadAll(r.Context(), artifactKey(r.PathValue("id"), r.PathValue("name")))
+	b, err := s.readBlob(r.Context(), artifactKey(r.PathValue("id"), r.PathValue("name")))
 	if gcerrors.Code(err) == gcerrors.NotFound {
 		writeErrors(w, http.StatusNotFound, "no such artifact")
 		return

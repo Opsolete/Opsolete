@@ -14,12 +14,13 @@ import (
 type VCSConnection struct {
 	ID, Name, Provider, BaseURL string
 	Token                       []byte
+	WorkspaceRepos              string // repositories workspaces may link (see vcs.RepoAllowed)
 	CreatedAt                   time.Time
 }
 
 func (s *Store) CreateVCSConnection(ctx context.Context, c VCSConnection) error {
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO vcs_connections (name, provider, base_url, token) VALUES ($1, $2, $3, $4)`,
-		c.Name, c.Provider, c.BaseURL, c.Token)
+	_, err := s.DB.ExecContext(ctx, `INSERT INTO vcs_connections (name, provider, base_url, token, workspace_repos)
+		VALUES ($1, $2, $3, $4, $5)`, c.Name, c.Provider, c.BaseURL, c.Token, c.WorkspaceRepos)
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
 		return ErrExists
 	}
@@ -27,7 +28,7 @@ func (s *Store) CreateVCSConnection(ctx context.Context, c VCSConnection) error 
 }
 
 func (s *Store) VCSConnections(ctx context.Context) ([]VCSConnection, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT id, name, provider, base_url, token, created_at FROM vcs_connections ORDER BY name`)
+	rows, err := s.DB.QueryContext(ctx, `SELECT id, name, provider, base_url, token, workspace_repos, created_at FROM vcs_connections ORDER BY name`)
 	if err != nil {
 		return nil, err
 	}
@@ -35,7 +36,7 @@ func (s *Store) VCSConnections(ctx context.Context) ([]VCSConnection, error) {
 	var out []VCSConnection
 	for rows.Next() {
 		var c VCSConnection
-		if err := rows.Scan(&c.ID, &c.Name, &c.Provider, &c.BaseURL, &c.Token, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Provider, &c.BaseURL, &c.Token, &c.WorkspaceRepos, &c.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -46,9 +47,15 @@ func (s *Store) VCSConnections(ctx context.Context) ([]VCSConnection, error) {
 // GetVCSConnection returns sql.ErrNoRows if the id is unknown or not a uuid.
 func (s *Store) GetVCSConnection(ctx context.Context, id string) (VCSConnection, error) {
 	var c VCSConnection
-	err := s.DB.QueryRowContext(ctx, `SELECT id, name, provider, base_url, token, created_at FROM vcs_connections WHERE id::text = $1`,
-		id).Scan(&c.ID, &c.Name, &c.Provider, &c.BaseURL, &c.Token, &c.CreatedAt)
+	err := s.DB.QueryRowContext(ctx, `SELECT id, name, provider, base_url, token, workspace_repos, created_at FROM vcs_connections WHERE id::text = $1`,
+		id).Scan(&c.ID, &c.Name, &c.Provider, &c.BaseURL, &c.Token, &c.WorkspaceRepos, &c.CreatedAt)
 	return c, err
+}
+
+// SetVCSWorkspaceRepos changes the repositories workspaces may link through a connection.
+func (s *Store) SetVCSWorkspaceRepos(ctx context.Context, id, patterns string) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE vcs_connections SET workspace_repos = $2 WHERE id::text = $1`, id, patterns)
+	return err
 }
 
 // DeleteVCSConnection also unlinks its modules (their published versions stay).

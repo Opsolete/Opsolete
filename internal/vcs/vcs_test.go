@@ -92,10 +92,10 @@ func TestProviders(t *testing.T) {
 		wantDenied bool
 		head       string
 	}{
-		{Conn{GitHub, srv.URL + "/gh", "gh-token"}, "acme/terraform-azurerm-storage", "v1.1.0", []string{"README.md", "main.tf"}, false, "abc123"},
-		{Conn{AzureDevOps, srv.URL + "/org", "az-pat"}, "Platform Team/storage", "2.0.0", []string{"main.tf", "sub/x.tf"}, false, "def456"},
-		{Conn{GitHub, srv.URL + "/gh", "wrong"}, "", "", nil, true, ""},
-		{Conn{AzureDevOps, srv.URL + "/org", "wrong"}, "", "", nil, true, ""},
+		{Conn{Provider: GitHub, BaseURL: srv.URL + "/gh", Token: "gh-token"}, "acme/terraform-azurerm-storage", "v1.1.0", []string{"README.md", "main.tf"}, false, "abc123"},
+		{Conn{Provider: AzureDevOps, BaseURL: srv.URL + "/org", Token: "az-pat"}, "Platform Team/storage", "2.0.0", []string{"main.tf", "sub/x.tf"}, false, "def456"},
+		{Conn{Provider: GitHub, BaseURL: srv.URL + "/gh", Token: "wrong"}, "", "", nil, true, ""},
+		{Conn{Provider: AzureDevOps, BaseURL: srv.URL + "/org", Token: "wrong"}, "", "", nil, true, ""},
 	} {
 		repos, err := tc.conn.Repos(ctx)
 		if tc.wantDenied {
@@ -156,6 +156,35 @@ func TestSealAndValidation(t *testing.T) {
 	for _, bad := range []string{"repo", "a/b/c", "../x", "a/.."} {
 		if _, _, err := splitRepo(bad); err == nil || !strings.Contains(err.Error(), "repository") {
 			t.Errorf("accepted repo %q", bad)
+		}
+	}
+}
+
+// TestRepoAllowed: workspace repository patterns match case-insensitively; none means none.
+func TestRepoAllowed(t *testing.T) {
+	for _, c := range []struct {
+		patterns, repo string
+		want           bool
+	}{
+		{"", "acme/infra", false},
+		{"acme/infra-*", "acme/infra-prod", true},
+		{"acme/infra-*", "ACME/Infra-Prod", true},
+		{"acme/infra-*", "acme/app", false},
+		{"acme/infra-*\nacme/app", "acme/app", true},
+		{"Platform Team/*", "platform team/storage", true}, // Azure DevOps projects have spaces
+		{"*/*", "anyone/anything", true},
+		{"acme/*", "evil/acme", false},
+	} {
+		if got := RepoAllowed(c.patterns, c.repo); got != c.want {
+			t.Errorf("RepoAllowed(%q, %q) = %v", c.patterns, c.repo, got)
+		}
+	}
+	if got, err := CheckRepoPatterns(" acme/a-* \r\n\n Platform Team/b\n"); err != nil || got != "acme/a-*\nPlatform Team/b" {
+		t.Errorf("CheckRepoPatterns: %q %v", got, err)
+	}
+	for _, bad := range []string{"*", "acme", "a/b/c", "acme/[x"} {
+		if _, err := CheckRepoPatterns(bad); err == nil {
+			t.Errorf("CheckRepoPatterns(%q) must fail", bad)
 		}
 	}
 }

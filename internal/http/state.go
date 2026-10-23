@@ -21,6 +21,7 @@ import (
 
 	"github.com/rudesome/form2stack/internal/runnerapi"
 	"github.com/rudesome/form2stack/internal/storage"
+	"github.com/rudesome/form2stack/internal/vcs"
 )
 
 const maxStateSize = 64 << 20
@@ -82,7 +83,7 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent) // new workspace: no state yet
 		return
 	}
-	b, err := s.StateStore.ReadAll(r.Context(), vs[0].BlobKey)
+	b, err := s.readBlob(r.Context(), vs[0].BlobKey)
 	if err != nil {
 		s.stateError(w, "read state", err)
 		return
@@ -164,14 +165,51 @@ func (s *Server) saveState(ctx context.Context, id string, body []byte) (int, st
 		return s.stateFailure("get workspace", err)
 	}
 	v.BlobKey = fmt.Sprintf("%s/%d-%s.tfstate", strings.TrimSuffix(ws.StateKey, ".tfstate"), v.Serial, rand.Text())
-	if err := s.StateStore.WriteAll(ctx, v.BlobKey, body, &blob.WriterOptions{ContentType: "application/json"}); err != nil {
+	if err := s.writeBlob(ctx, v.BlobKey, body); err != nil {
 		return s.stateFailure("write state", err)
 	}
 	if err := s.Store.AddStateVersion(ctx, id, v); err != nil {
-		return s.stateFailure("record state version", err) // the blob is orphaned, which is harmless
+		// WithoutCancel: a dropped request must not stop the cleanup and leave the file behind.
+		if derr := s.StateStore.Delete(context.WithoutCancel(ctx), v.BlobKey); derr != nil {
+			s.Log.Warn("delete unrecorded state file", "key", v.BlobKey, "err", derr)
+		}
+		return s.stateFailure("record state version", err)
 	}
 	s.Log.Info("state saved", "workspace", id, "serial", v.Serial, "bytes", v.Size)
 	return http.StatusOK, ""
+}
+
+// sealedPrefix marks state store files encrypted with SECRET_KEY; files without it are plaintext
+// (written before SECRET_KEY was set) and are still read as is.
+const sealedPrefix = "form2stack-sealed-v1\n"
+
+// writeBlob stores a state file or run artifact, encrypted (AES-256-GCM) when SECRET_KEY is set:
+// they hold secrets, so bucket read access alone must not expose them.
+func (s *Server) writeBlob(ctx context.Context, key string, body []byte) error {
+	if s.SecretKey != nil {
+		sealed, err := vcs.Seal(s.SecretKey, string(body))
+		if err != nil {
+			return err
+		}
+		body = append([]byte(sealedPrefix), sealed...)
+	}
+	return s.StateStore.WriteAll(ctx, key, body, &blob.WriterOptions{ContentType: "application/octet-stream"})
+}
+
+// readBlob reads a file written by writeBlob, decrypting it if it was sealed.
+func (s *Server) readBlob(ctx context.Context, key string) ([]byte, error) {
+	b, err := s.StateStore.ReadAll(ctx, key)
+	if err != nil || !bytes.HasPrefix(b, []byte(sealedPrefix)) {
+		return b, err
+	}
+	if s.SecretKey == nil {
+		return nil, fmt.Errorf("%s is encrypted, but SECRET_KEY is not set", key)
+	}
+	plain, err := vcs.Open(s.SecretKey, b[len(sealedPrefix):])
+	if err != nil {
+		return nil, fmt.Errorf("decrypt %s: SECRET_KEY changed?", key)
+	}
+	return []byte(plain), nil
 }
 
 func (s *Server) stateFailure(what string, err error) (int, string) {

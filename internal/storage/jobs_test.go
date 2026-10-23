@@ -7,6 +7,7 @@ import (
 	"errors"
 	"maps"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -462,4 +463,82 @@ func TestRunMetrics(t *testing.T) {
 	if err != nil || m.Runs != 1 || m.Failed != 1 || m.AvgPlan != 90*time.Second || m.AvgApply != 0 {
 		t.Fatalf("metrics: %+v %v", m, err)
 	}
+}
+
+// TestVCSWorkspaceVariableSets: a workspace linked to a repository gets no global sets, and a
+// changed link detaches its sets, since the code they'd reach is chosen by the workspace's users.
+func TestVCSWorkspaceVariableSets(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	name := "t-" + strings.ToLower(rand.Text()[:10])
+	w, err := s.CreateEmptyWorkspace(ctx, name, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateVCSConnection(ctx, VCSConnection{Name: name, Provider: "github", Token: []byte("x")}); err != nil {
+		t.Fatal(err)
+	}
+	var conn string
+	s.DB.QueryRow(`SELECT id FROM vcs_connections WHERE name = $1`, name).Scan(&conn)
+	t.Cleanup(func() {
+		s.DB.Exec(`DELETE FROM workspaces WHERE id = $1`, w.ID)
+		s.DB.Exec(`DELETE FROM variable_sets WHERE name LIKE $1`, name+"%")
+		s.DB.Exec(`DELETE FROM vcs_connections WHERE id = $1`, conn)
+	})
+	k := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
+	for _, n := range []string{"global", "attached"} {
+		if err := s.CreateVariableSet(ctx, name+n, "", n == "global"); err != nil {
+			t.Fatal(err)
+		}
+		vs, _ := s.GetVariableSet(ctx, name+n)
+		if err := s.SetVariable(ctx, VarOwner{SetID: vs.ID}, Variable{Category: "env", Key: k + "_" + strings.ToUpper(n), Value: []byte(n)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	attach := func() {
+		vs, _ := s.GetVariableSet(ctx, name+"attached")
+		if err := s.AttachVariableSet(ctx, vs.ID, name, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(want ...string) {
+		t.Helper()
+		vars, err := s.RunVariables(ctx, w.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got []string
+		for _, v := range vars {
+			if strings.HasPrefix(v.Key, k) {
+				got = append(got, string(v.Value))
+			}
+		}
+		sets, err := s.WorkspaceVariableSets(ctx, w.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var shown []string
+		for _, vs := range sets {
+			shown = append(shown, strings.TrimPrefix(vs.Name, name))
+		}
+		if !slices.Equal(got, want) || !slices.Equal(shown, want) {
+			t.Fatalf("variables from %v, sets shown %v, want %v", got, shown, want)
+		}
+	}
+	attach()
+	check("attached", "global")
+	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main"); err != nil {
+		t.Fatal(err)
+	}
+	check() // linking detached the set, and global sets don't reach a linked workspace
+	attach()
+	check("attached")
+	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main"); err != nil {
+		t.Fatal(err)
+	}
+	check("attached") // same link: the admin's attachment stands
+	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "other"); err != nil {
+		t.Fatal(err)
+	}
+	check()
 }

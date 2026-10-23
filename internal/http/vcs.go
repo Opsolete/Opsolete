@@ -23,6 +23,7 @@ func (s *Server) vcsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /vcs", s.admin(s.vcsPage))
 	mux.HandleFunc("POST /vcs", s.admin(s.addConnection))
 	mux.HandleFunc("POST /vcs/{id}/delete", s.admin(s.deleteConnection))
+	mux.HandleFunc("POST /vcs/{id}/workspace-repos", s.admin(s.setWorkspaceRepos))
 	mux.HandleFunc("GET /registry/publish", s.admin(s.publishPage))
 	mux.HandleFunc("POST /registry/publish", s.admin(s.publishModule))
 	mux.HandleFunc("POST /registry/{ns}/{name}/{system}/sync", s.admin(s.syncModule))
@@ -50,10 +51,15 @@ func (s *Server) renderVCS(w http.ResponseWriter, r *http.Request, status int, e
 // addConnection checks the token against the provider (by listing repos) before storing it sealed.
 func (s *Server) addConnection(w http.ResponseWriter, r *http.Request) {
 	form := map[string]string{}
-	for _, k := range []string{"name", "provider", "base_url"} {
+	for _, k := range []string{"name", "provider", "base_url", "workspace_repos"} {
 		form[k] = strings.TrimSpace(r.PostFormValue(k))
 	}
 	fail := func(msg string) { s.renderVCS(w, r, http.StatusUnprocessableEntity, msg, form) }
+	repos, err := vcs.CheckRepoPatterns(form["workspace_repos"])
+	if err != nil {
+		fail(err.Error())
+		return
+	}
 	token := strings.TrimSpace(r.PostFormValue("token"))
 	if form["name"] == "" || len(form["name"]) > 64 || token == "" {
 		fail("name (up to 64 characters) and access token are required")
@@ -75,7 +81,8 @@ func (s *Server) addConnection(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "seal vcs token", err)
 		return
 	}
-	err = s.Store.CreateVCSConnection(r.Context(), storage.VCSConnection{Name: form["name"], Provider: form["provider"], BaseURL: baseURL, Token: sealed})
+	err = s.Store.CreateVCSConnection(r.Context(), storage.VCSConnection{Name: form["name"], Provider: form["provider"], BaseURL: baseURL, Token: sealed,
+		WorkspaceRepos: repos})
 	if errors.Is(err, storage.ErrExists) {
 		fail("a connection with this name already exists")
 		return
@@ -85,6 +92,22 @@ func (s *Server) addConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Log.Info("vcs connection added", "name", form["name"], "provider", form["provider"], "url", baseURL, "user", auth.FromContext(r.Context()).Email)
+	http.Redirect(w, r, "/vcs", http.StatusSeeOther)
+}
+
+// setWorkspaceRepos changes which repositories workspaces may link through a connection; runs of
+// workspaces linked to a repository no longer allowed fail when they start.
+func (s *Server) setWorkspaceRepos(w http.ResponseWriter, r *http.Request) {
+	repos, err := vcs.CheckRepoPatterns(r.PostFormValue("workspace_repos"))
+	if err != nil {
+		s.renderVCS(w, r, http.StatusUnprocessableEntity, err.Error(), map[string]string{"provider": vcs.GitHub})
+		return
+	}
+	if err := s.Store.SetVCSWorkspaceRepos(r.Context(), r.PathValue("id"), repos); err != nil {
+		s.internalError(w, "set workspace repos", err)
+		return
+	}
+	s.Log.Info("vcs workspace repos", "id", r.PathValue("id"), "repos", repos, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/vcs", http.StatusSeeOther)
 }
 
