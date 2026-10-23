@@ -267,9 +267,21 @@
   It is equivalent to running <code>terraform plan -destroy -out=destroy.tfplan</code> followed by <code>terraform apply destroy.tfplan</code> locally;
   the plan always asks for confirmation before it is applied.</p>
 {{if .Active}}<p class="muted">A run is in progress: wait for it to finish.</p>{{else if not $w.HasConfig}}<p class="muted">This workspace has no configuration to plan.</p>{{end}}
-<form method="post" action="/workspaces/{{$w.Name}}/runs"><input type="hidden" name="action" value="destroy">
-  <button type="submit" class="danger"{{if or .Active (not $w.HasConfig)}} disabled{{end}}>Queue destroy plan</button>
-</form>
+<button type="button" class="danger"{{if or .Active (not $w.HasConfig)}} disabled{{end}} onclick="document.getElementById('queue-destroy').showModal()">Queue destroy plan</button>
+<dialog id="queue-destroy" class="danger-dialog" aria-labelledby="queue-destroy-title">
+  <form method="post" action="/workspaces/{{$w.Name}}/runs"><input type="hidden" name="action" value="destroy">
+    <header><h3 id="queue-destroy-title">⚠ Queue destroy plan for workspace</h3>
+      <button type="button" class="secondary small" aria-label="close" onclick="this.closest('dialog').close()">✕</button></header>
+    <fieldset>
+      <p style="margin-top:0">Please proceed with caution. Selecting "Queue destroy plan" below will immediately create a new plan that will destroy all of the infrastructure managed by <strong>{{$w.Name}}</strong>.</p>
+      <!-- typed confirmation guards against a slip; the destroy plan still asks before it is applied -->
+      <label for="destroy-confirm">To confirm, type "delete"</label>
+      <input id="destroy-confirm" required pattern="delete" autocomplete="off">
+    </fieldset>
+    <footer><button type="submit" class="danger">Queue destroy plan</button>
+      <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancel</button></footer>
+  </form>
+</dialog>
 
 <hr style="border:0;border-top:1px solid var(--border);margin:2rem 0 0;max-width:60rem">
 <h2>Delete workspace</h2>
