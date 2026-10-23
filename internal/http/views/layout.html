@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Form2Stack</title>
 <style>
-  /* HCP Terraform look: dark side nav, Helios-like tokens, flat bordered surfaces. */
+  /* dark side nav, design tokens, flat bordered surfaces. */
   :root {
     --bg: #fff; --surface: #fff; --text: #0c0c0e; --muted: #656a76; --border: #dedfe3;
     --brand: #1060ff; --brand-hover: #0c56e9; --brand-soft: #f2f8ff; --btn: #1060ff; --btn-hover: #0c56e9;
@@ -54,6 +54,7 @@
   .topbar nav a { color: var(--nav-text); padding: .45rem .75rem; border-radius: 5px; font-weight: 500; }
   .topbar nav a:hover { color: #fff; background: var(--nav-hover); text-decoration: none; }
   .topbar nav a[aria-current="page"] { color: #fff; background: var(--nav-hover); box-shadow: inset 3px 0 0 #a067da; }
+  .nav-head { color: #fff; font-weight: 600; padding: .9rem .75rem .3rem; overflow-wrap: anywhere; }
   .who { margin-top: auto; display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; font-size: .8rem; color: var(--nav-text);
     border-top: 1px solid var(--nav-hover); padding: .9rem .5rem 0; }
   .who > span:first-child { overflow-wrap: anywhere; flex-basis: 100%; }
@@ -112,6 +113,34 @@
   .chips a:hover { border-color: var(--brand); text-decoration: none; }
   .chips a[aria-current="true"] { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
 
+  /* modal (native <dialog>) */
+  dialog { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 0;
+    width: min(36rem, calc(100% - 2rem)); box-shadow: 0 8px 28px rgb(12 12 14 / 30%); }
+  dialog::backdrop { background: rgb(12 12 14 / 60%); }
+  dialog header, dialog footer { display: flex; align-items: center; gap: .5rem; padding: 1rem 1.25rem; }
+  dialog header { justify-content: space-between; border-bottom: 1px solid var(--border); }
+  dialog header h3 { margin: 0; font-size: 1.1rem; }
+  dialog footer { border-top: 1px solid var(--border); }
+  dialog fieldset { border: 0; margin: 0; padding: 1.25rem; }
+  dialog legend { font-weight: 600; font-size: .875rem; margin-bottom: .5rem; padding: 0; }
+  dialog:modal { overflow: visible; } /* else the run-type menu is clipped */
+  .menu { position: relative; }
+  .menu summary { list-style: none; cursor: pointer; padding: .55rem .8rem; border: 1px solid #8c909c; border-radius: 5px;
+    display: flex; gap: .5rem; align-items: center; }
+  .menu summary::-webkit-details-marker { display: none; }
+  .menu summary::after { content: "⌄"; margin-left: auto; color: var(--muted); }
+  .menu[open] summary::after { content: "⌃"; }
+  .menu [role="radiogroup"] { position: absolute; z-index: 1; top: calc(100% + .3rem); left: 0; width: min(28rem, 100%);
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: .35rem 0;
+    box-shadow: 0 8px 24px rgb(12 12 14 / 30%); }
+  .choice { display: flex; gap: .7rem; margin: 0; padding: .6rem 1rem; font-weight: normal; cursor: pointer; }
+  .choice:hover, .choice:has(:focus-visible) { background: var(--code); }
+  /* radio hidden but focusable; the checked option gets a check mark */
+  .choice input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .choice span { flex: 1; }
+  .choice:has(input:checked)::after { content: "✓"; color: var(--brand); font-weight: 700; }
+  .choice small { display: block; }
+
   /* buttons */
   button, .btn { display: inline-flex; align-items: center; gap: .4rem; font: inherit; font-weight: 500; font-size: .875rem; cursor: pointer;
     padding: .45rem .9rem; border-radius: 5px; border: 1px solid var(--btn-hover); background: var(--btn); color: #fff; white-space: nowrap;
@@ -133,13 +162,13 @@
   tr:hover td { background: color-mix(in srgb, var(--code) 60%, transparent); }
   td.nowrap { white-space: nowrap; }
 
-  /* run status badges, colored like HCP Terraform's */
+  /* run status badges */
   .status { display: inline-flex; align-items: center; gap: .35rem; padding: .1rem .5rem; border-radius: 5px; font-size: .8rem;
     font-weight: 500; white-space: nowrap; background: var(--code); color: var(--muted); vertical-align: middle; text-transform: capitalize; }
   .status::before { content: ""; width: .5rem; height: .5rem; border-radius: 50%; background: currentColor; }
   h1 .status { font-size: .85rem; }
   .status.queued, .status.plan_queued, .status.apply_queued { background: var(--code); color: var(--muted); }
-  .status.needs_confirmation { background: var(--warn-soft); color: var(--warn); }
+  .status.needs_confirmation, .status.drifted { background: var(--warn-soft); color: var(--warn); }
   .status.running, .status.planning, .status.applying { background: var(--brand-soft); color: var(--brand); }
   .status.running::before, .status.planning::before, .status.applying::before { animation: pulse 1.2s ease-in-out infinite; }
   .status.succeeded, .status.applied { background: var(--ok-soft); color: var(--ok); }
@@ -152,7 +181,53 @@
   .change.update { color: var(--warn); }
   .change.delete, .change.replace { color: var(--danger); }
   @keyframes pulse { 50% { opacity: .2; } }
-  @media (prefers-reduced-motion: reduce) { .status::before { animation: none !important; } .tile { transition: none; } }
+  @media (prefers-reduced-motion: reduce) { .status::before { animation: none !important; } .tile, .section > summary::before { transition: none; } }
+
+  /* run page: title, stats strip and collapsible plan/apply sections */
+  .run-title { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem; }
+  .run-title h2 { margin: 0; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: 1rem; margin: 0 0 1.25rem; padding: 0 1rem; }
+  .stats dt { font-size: .75rem; color: var(--muted); }
+  .stats dd { margin: .2rem 0 0; }
+  .section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: .75rem; }
+  .section > summary { display: flex; align-items: center; gap: .75rem; padding: .75rem 1rem; cursor: pointer; list-style: none; }
+  .section > summary::-webkit-details-marker { display: none; }
+  .section > summary::before { content: "›"; display: inline-block; width: .8rem; color: var(--muted); transition: transform .15s; }
+  .section[open] > summary::before { transform: rotate(90deg); }
+  .section > summary .end { margin-left: auto; font-size: .85rem; }
+  .section .body { border-top: 1px solid var(--border); padding: 1rem; }
+  .section.skipped { padding: .75rem 1rem; font-weight: 600; color: var(--muted); }
+  .steps { font-size: .8rem; color: var(--muted); padding-bottom: .75rem; border-bottom: 1px solid var(--border); }
+  .steps strong { color: var(--text); }
+  table.changes { margin-bottom: 1rem; }
+  .log-bar { display: flex; gap: .5rem; justify-content: flex-end; margin: 1rem 0 .5rem; }
+  .log-bar .btn:first-child { margin-right: auto; }
+
+
+  .runlist { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); margin-bottom: 1rem; }
+  .runrow { display: flex; gap: 1rem; align-items: center; padding: .75rem 1rem; color: var(--text); border-bottom: 1px solid var(--border);
+    border-left: 3px solid transparent; }
+  .runrow:last-child { border-bottom: 0; }
+  .runrow:hover { background: var(--code); text-decoration: none; color: var(--text); }
+  .runrow.current { border-left-color: var(--brand); }
+  .runrow > span:first-child { flex: 1; min-width: 0; }
+  .runrow small { display: block; margin-top: .15rem; }
+  .runrow .end { text-align: right; }
+
+  .overview { display: grid; grid-template-columns: minmax(0, 1fr) 18rem; gap: 2rem; }
+  @media (max-width: 70rem) { .overview { grid-template-columns: 1fr; } }
+  .section-head { display: flex; justify-content: space-between; align-items: baseline; }
+  .section-head h2, .overview > div > h2:first-child { margin-top: 0; }
+  .latest-foot { display: flex; align-items: flex-end; gap: 1rem; }
+  .latest-foot .stats { flex: 1; margin: 0; padding: 0; }
+  .tabs-row { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin: 1.5rem 0 .75rem; }
+  .tabs-row .chips { margin: 0; }
+  .side h3 { margin: 1.5rem 0 .5rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+  .facts { list-style: none; margin: 0; padding: 0; display: grid; gap: .45rem; font-size: .875rem; }
+  .metrics { display: grid; grid-template-columns: 1fr auto; gap: .45rem 1rem; margin: 0; font-size: .875rem; }
+  .metrics dt { font-weight: 600; }
+  .metrics dd { margin: 0; text-align: right; }
+  .meta { display: flex; flex-wrap: wrap; gap: 1.25rem; margin-top: .6rem !important; font-size: .85rem; color: var(--muted); }
 
   /* live log */
   pre.log { background: #0c0c0e; color: #dedfe3; border-radius: var(--radius); padding: 1rem 1.2rem; max-height: 34rem;
@@ -162,6 +237,17 @@
 <body>
 <header class="topbar"><div class="wrap">
   <a class="brand" href="/"><span class="logo" aria-hidden="true">F2S</span>Form2Stack</a>
+  {{with workspace}}{{$t := tab}}
+  <nav aria-label="Workspace">
+    <a href="/workspaces">‹ Workspaces</a>
+    <span class="nav-head">{{.}}</span>
+    <a href="/workspaces/{{.}}"{{if eq $t "overview"}} aria-current="page"{{end}}>Overview</a>
+    <a href="/workspaces/{{.}}/runs"{{if eq $t "runs"}} aria-current="page"{{end}}>Runs</a>
+    <a href="/workspaces/{{.}}/states"{{if eq $t "states"}} aria-current="page"{{end}}>States</a>
+    <a href="/workspaces/{{.}}/variables"{{if eq $t "variables"}} aria-current="page"{{end}}>Variables</a>
+    <a href="/workspaces/{{.}}/settings"{{if eq $t "settings"}} aria-current="page"{{end}}>Settings</a>
+  </nav>
+  {{else}}
   <nav aria-label="Main">
     {{$s := section}}{{with features}}
     {{if .Deployments}}
@@ -173,6 +259,7 @@
     {{if and .VCS (user).Admin}}<a href="/vcs"{{if eq $s "vcs"}} aria-current="page"{{end}}>VCS providers</a>{{end}}
     {{end}}
   </nav>
+  {{end}}
   {{with user}}{{if .Email}}
   <form class="who" method="post" action="/auth/logout">
     <span>{{.Email}}</span>{{if .Admin}}<span class="tag">admin</span>{{end}}

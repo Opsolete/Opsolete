@@ -67,8 +67,8 @@ func (s *Store) DeleteVariable(ctx context.Context, o VarOwner, id string) error
 	return err
 }
 
-// RunVariables returns the variables a workspace's runs get, one per category and key. Like HCP
-// Terraform: the workspace's own win over attached sets, attached sets over global ones, and
+// RunVariables returns the variables a workspace's runs get, one per category and key. The
+// workspace's own win over attached sets, attached sets over global ones, and
 // between sets of one kind the first by name wins.
 func (s *Store) RunVariables(ctx context.Context, workspaceID string) ([]Variable, error) {
 	return scanVariables(s.DB.QueryContext(ctx, `SELECT DISTINCT ON (v.category, v.key) v.id, v.category, v.key, v.value,

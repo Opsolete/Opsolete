@@ -76,7 +76,7 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 			}
 			s.Log.Info("job claimed", "run", j.RunID, "phase", j.Phase, "action", j.Action, "runner", req.Runner)
 			writeJSON(w, runnerapi.Job{
-				RunID: j.RunID, WorkspaceID: j.WorkspaceID, Phase: j.Phase, Action: j.Action, LeaseID: j.LeaseID,
+				RunID: j.RunID, WorkspaceID: j.WorkspaceID, Phase: j.Phase, Action: j.Action, Replace: j.Replace, LeaseID: j.LeaseID,
 				LeaseSeconds: int(leaseTTL.Seconds()), StateToken: s.stateToken(j.WorkspaceID, j.RunID), Vars: vars, Env: env,
 				ModuleSource: src, Modules: mods,
 			})

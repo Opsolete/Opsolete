@@ -1,4 +1,4 @@
--- Outputs belong to a state version (as in HCP Terraform), extracted from the state file when it is
+-- Outputs belong to a state version, extracted from the state file when it is
 -- saved; sensitive values are stored as "(sensitive)".
 ALTER TABLE state_versions ADD COLUMN outputs jsonb;
 -- Existing workspaces: the current version gets the outputs of the last successful apply.

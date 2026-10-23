@@ -126,7 +126,7 @@ func TestRunLifecycle(t *testing.T) {
 	if _, ok, _ := s.ClaimJob(ctx, "r", time.Minute); ok {
 		t.Fatal("a plan waiting for confirmation must not be claimed")
 	}
-	if _, err := s.CreateRun(ctx, w.ID, "apply", ""); !errors.Is(err, ErrRunActive) {
+	if _, err := s.CreateRun(ctx, w.ID, "apply", "", nil); !errors.Is(err, ErrRunActive) {
 		t.Fatalf("second run while one is active: %v", err)
 	}
 	if err := s.ConfirmRun(ctx, run.ID, "", "alice@example.com"); err != nil {
@@ -172,7 +172,7 @@ func TestRunLifecycle(t *testing.T) {
 	}
 
 	// A plan without changes ends the run right away.
-	again, err := s.CreateRun(ctx, w.ID, "apply", "")
+	again, err := s.CreateRun(ctx, w.ID, "apply", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestAutoApplyAndDiscard(t *testing.T) {
 	}
 
 	// Destroys ask even with auto-apply; a discarded plan frees the workspace.
-	d, err := s.CreateRun(ctx, w.ID, "destroy", "")
+	d, err := s.CreateRun(ctx, w.ID, "destroy", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestAutoApplyAndDiscard(t *testing.T) {
 	if err := s.DiscardRun(ctx, d.ID, "bob@example.com"); err != nil || status(t, s, d.ID) != Discarded {
 		t.Fatalf("discard: %v", err)
 	}
-	if _, err := s.CreateRun(ctx, w.ID, "apply", ""); err != nil {
+	if _, err := s.CreateRun(ctx, w.ID, "apply", "", nil); err != nil {
 		t.Fatalf("a discarded run must free the workspace: %v", err)
 	}
 }
@@ -410,7 +410,7 @@ func TestCancel(t *testing.T) {
 
 	// Running: asked to stop; the runner keeps its lease (Terraform must still save state) and
 	// hears about it on its next heartbeat or log post.
-	run2, err := s.CreateRun(ctx, w.ID, "apply", "")
+	run2, err := s.CreateRun(ctx, w.ID, "apply", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -432,7 +432,7 @@ func TestCancel(t *testing.T) {
 	}
 
 	// Force: cut off right away; the runner's lease and state lock are gone.
-	run3, _ := s.CreateRun(ctx, w.ID, "apply", "")
+	run3, _ := s.CreateRun(ctx, w.ID, "apply", "", nil)
 	j = claim(t, s, "plan")
 	s.LockState(ctx, w.ID, "l1", []byte(`{"ID":"l1"}`))
 	if st, err := s.CancelRun(ctx, run3.ID, "a@b.c", true); err != nil || st != Canceled {
@@ -443,5 +443,23 @@ func TestCancel(t *testing.T) {
 	}
 	if lock, _ := s.StateLockID(ctx, w.ID); lock != "" {
 		t.Fatalf("force cancel must release the state lock: %q", lock)
+	}
+}
+
+func TestRunMetrics(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	w, run := newWorkspace(t, s, false)
+	// planning for 90s, then errored; the trailing errored entry has no end and is ignored
+	if _, err := s.DB.Exec(`INSERT INTO run_status_history (run_id, status, created_at) VALUES
+		($1, 'planning', now() + interval '1 hour'), ($1, 'errored', now() + interval '1 hour 90 seconds')`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.DB.Exec(`UPDATE runs SET status = 'errored' WHERE id = $1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	m, err := s.RunMetrics(ctx, w.ID)
+	if err != nil || m.Runs != 1 || m.Failed != 1 || m.AvgPlan != 90*time.Second || m.AvgApply != 0 {
+		t.Fatalf("metrics: %+v %v", m, err)
 	}
 }

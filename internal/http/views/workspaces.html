@@ -11,7 +11,7 @@
 <tr><th>Workspace</th><th>Configuration</th><th>Version</th><th>Latest run</th><th>Owner</th><th>Updated</th></tr>
 {{range .}}
 <tr>
-  <td><a href="/workspaces/{{.Name}}"><strong>{{.Name}}</strong></a>{{if .AutoApply}} <span class="tag" title="plans of apply runs are applied without confirmation">auto-apply</span>{{end}}</td>
+  <td><a href="/workspaces/{{.Name}}"><strong>{{.Name}}</strong></a>{{if .AutoApply}} <span class="tag" title="plans of apply runs are applied without confirmation">auto-apply</span>{{end}}{{if .Drifted}} <span class="status drifted">drifted</span>{{end}}</td>
   <td>{{if .TemplateID}}{{.TemplateID}}{{else if .VCSConnectionID}}<code>{{.VCSRepo}}</code>{{else}}<span class="muted">none</span>{{end}}</td>
   <td>{{if .TemplateID}}<span class="tag">{{.ModuleRef}}</span>{{else if .VCSConnectionID}}<span class="tag">{{.VCSBranch}}</span>{{end}}</td>
   <td>{{with .Latest}}<span class="status {{.Status}}">{{status .Status}}</span>{{if eq .Action "destroy"}} <small>destroy</small>{{end}}{{else}}<span class="muted">none</span>{{end}}</td>

@@ -18,7 +18,7 @@ import (
 	"github.com/rudesome/form2stack/internal/vcs"
 )
 
-// Workspaces without a template, HCP style: empty, or holding only variables,
+// Workspaces without a template: empty, or holding only variables,
 // or taking their configuration from a VCS branch. Runs need configuration (a template or a branch).
 
 var branchRe = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,255}$`)
@@ -273,8 +273,8 @@ func (s *Server) vcsArchive(w http.ResponseWriter, r *http.Request) {
 	w.Write(b)
 }
 
-// rollbackState makes a copy of an older state version the workspace's current state, as HCP's
-// state version rollback does: same content, serial one above the current one, older versions kept.
+// rollbackState makes a copy of an older state version the workspace's current state:
+// same content, serial one above the current one, older versions kept.
 // It holds the state lock and refuses during a run, so no run writes or applies a plan meanwhile.
 func (s *Server) rollbackState(w http.ResponseWriter, r *http.Request) {
 	ws, _, ok := s.loadWorkspace(w, r, levelOperate)

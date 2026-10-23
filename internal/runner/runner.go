@@ -330,12 +330,21 @@ func writeOutputs(dir string, mods []runnerapi.Module) error {
 func (r *Runner) plan(ctx context.Context, tf *tfexec.Terraform, dir string, job runnerapi.Job, w io.Writer,
 	fail func(string, error) runnerapi.FinishRequest) runnerapi.FinishRequest {
 	destroy := job.Action == "destroy"
+	refresh := job.Action == "refresh" || job.Action == "assess"
+	opts := []tfexec.PlanOption{tfexec.Out(planFile), tfexec.Destroy(destroy), tfexec.RefreshOnly(refresh)}
 	step := "plan"
-	if destroy {
-		step = "plan -destroy"
+	switch {
+	case destroy:
+		step += " -destroy"
+	case refresh:
+		step += " -refresh-only"
+	}
+	for _, a := range job.Replace {
+		opts = append(opts, tfexec.Replace(a))
+		step += " -replace=" + a
 	}
 	fmt.Fprintf(w, "\n==> terraform %s\n", step)
-	changes, err := tf.Plan(ctx, tfexec.Out(planFile), tfexec.Destroy(destroy))
+	changes, err := tf.Plan(ctx, opts...)
 	if err != nil {
 		return fail("plan", err)
 	}
@@ -350,7 +359,15 @@ func (r *Runner) plan(ctx context.Context, tf *tfexec.Terraform, dir string, job
 	if err != nil {
 		return fail("read plan", err)
 	}
-	sum := summarize(p)
+	rcs := p.ResourceChanges
+	if refresh { // a refresh-only plan changes no resources; it lists the drift
+		rcs = p.ResourceDrift
+	}
+	sum := summarize(rcs)
+	if job.Action == "assess" { // never applied, so the plan isn't kept
+		fmt.Fprintf(w, "\n==> drift: %d changed, %d deleted outside Terraform\n", sum.Change, sum.Destroy)
+		return runnerapi.FinishRequest{Status: "succeeded", Plan: &sum}
+	}
 	for _, a := range []struct{ name, file string }{{runnerapi.ArtifactPlan, planFile}, {runnerapi.ArtifactLockfile, lockFile}} {
 		b, err := os.ReadFile(filepath.Join(dir, a.file))
 		if errors.Is(err, os.ErrNotExist) && a.file == lockFile {
@@ -367,11 +384,11 @@ func (r *Runner) plan(ctx context.Context, tf *tfexec.Terraform, dir string, job
 	return runnerapi.FinishRequest{Status: "succeeded", Plan: &sum}
 }
 
-// summarize counts a plan's resource changes, like Terraform's "Plan: x to add" line, and lists
-// their addresses. Values are never included.
-func summarize(p *tfjson.Plan) runnerapi.Plan {
+// summarize counts a plan's resource changes (or drift), like Terraform's "Plan: x to add" line,
+// and lists their addresses. Values are never included.
+func summarize(rcs []*tfjson.ResourceChange) runnerapi.Plan {
 	sum := runnerapi.Plan{Changes: []runnerapi.Change{}}
-	for _, rc := range p.ResourceChanges {
+	for _, rc := range rcs {
 		if rc.Change == nil {
 			continue
 		}

@@ -22,10 +22,13 @@ type ClaimRequest struct {
 // Job is one phase of a run: "plan" saves a plan and reports what it will do; "apply" applies
 // the plan saved by that run's plan phase (possibly on another runner, after confirmation).
 type Job struct {
-	RunID        string         `json:"run_id"`
-	WorkspaceID  string         `json:"workspace_id"`
-	Phase        string         `json:"phase"`  // plan | apply
-	Action       string         `json:"action"` // apply | destroy
+	RunID       string `json:"run_id"`
+	WorkspaceID string `json:"workspace_id"`
+	Phase       string `json:"phase"` // plan | apply
+	// apply | destroy | refresh (refresh-only: the apply only updates state) | assess (drift check:
+	// a refresh-only plan that is never applied, so its plan phase uploads nothing)
+	Action       string         `json:"action"`
+	Replace      []string       `json:"replace,omitempty"` // resource addresses the plan replaces (-replace)
 	LeaseID      string         `json:"lease_id"`
 	LeaseSeconds int            `json:"lease_seconds"`
 	ModuleSource string         `json:"module_source"` // go-getter address; a leading "/" is relative to the server URL; "" = none
@@ -49,7 +52,8 @@ type FinishRequest struct {
 	Status  string         `json:"status"` // succeeded | failed | canceled
 	Message string         `json:"message,omitempty"`
 	Outputs map[string]any `json:"outputs,omitempty"`
-	// Plan is set by a plan phase that found changes; nil means nothing to do.
+	// Plan is set by a plan phase that found changes; nil means nothing to do. For refresh and
+	// assess runs it lists the drift: resources changed or deleted outside Terraform.
 	Plan *Plan `json:"plan,omitempty"`
 	// Resources indexes the workspace's state as the apply left it. null (not empty) means the
 	// state couldn't be read, so the current version stays unindexed; [] means nothing is deployed.

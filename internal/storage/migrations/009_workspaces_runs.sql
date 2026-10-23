@@ -1,4 +1,4 @@
--- Workspaces and runs, HCP Terraform style. A workspace (formerly "deployment") is long-lived and
+-- Workspaces and runs. A workspace (formerly "deployment") is long-lived and
 -- holds one state; every plan → (confirm) → apply, and every destroy, is a run. Runs are the job queue.
 ALTER TABLE deployments RENAME TO workspaces;
 ALTER TABLE workspaces ADD COLUMN name text, ADD COLUMN auto_apply boolean NOT NULL DEFAULT false;

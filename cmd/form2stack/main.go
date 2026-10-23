@@ -197,7 +197,11 @@ func serve(log *slog.Logger) error {
 	return nil
 }
 
-// reapLostRunners fails running jobs whose runner stopped heartbeating (crash, node loss).
+// driftInterval is how often workspaces with drift detection are assessed.
+const driftInterval = 24 * time.Hour
+
+// reapLostRunners fails running jobs whose runner stopped heartbeating (crash, node loss), and
+// queues the drift checks that are due.
 func reapLostRunners(ctx context.Context, store *storage.Store, log *slog.Logger) {
 	t := time.NewTicker(15 * time.Second)
 	defer t.Stop()
@@ -212,6 +216,11 @@ func reapLostRunners(ctx context.Context, store *storage.Store, log *slog.Logger
 			}
 			for _, id := range ids {
 				log.Warn("runner lost, deployment failed", "id", id)
+			}
+			if n, err := store.QueueAssessments(ctx, driftInterval); err != nil {
+				log.Error("queue drift checks", "err", err)
+			} else if n > 0 {
+				log.Info("drift checks queued", "count", n)
 			}
 		}
 	}

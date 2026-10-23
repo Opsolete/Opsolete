@@ -16,7 +16,7 @@ import (
 	"github.com/rudesome/form2stack/internal/vcs"
 )
 
-// Variables, HCP Terraform style: environment variables (cloud credentials) and Terraform variables
+// Variables: environment variables (cloud credentials) and Terraform variables
 // for a workspace's runs, set on the workspace (operate access) or in variable sets (admins) that
 // apply to all workspaces or to the ones they're attached to. Values are sealed with SECRET_KEY.
 func (s *Server) variableRoutes(mux *http.ServeMux) {
@@ -148,7 +148,7 @@ func (s *Server) setWorkspaceVariable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Log.Info("variable set", "workspace", ws.Name, "category", v.Category, "key", v.Key, "user", auth.FromContext(r.Context()).Email)
-	http.Redirect(w, r, "/workspaces/"+ws.Name+"#variables", http.StatusSeeOther)
+	http.Redirect(w, r, "/workspaces/"+ws.Name+"/variables", http.StatusSeeOther)
 }
 
 func (s *Server) deleteWorkspaceVariable(w http.ResponseWriter, r *http.Request) {
@@ -161,7 +161,7 @@ func (s *Server) deleteWorkspaceVariable(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.Log.Info("variable deleted", "workspace", ws.Name, "id", r.PathValue("id"), "user", auth.FromContext(r.Context()).Email)
-	http.Redirect(w, r, "/workspaces/"+ws.Name+"#variables", http.StatusSeeOther)
+	http.Redirect(w, r, "/workspaces/"+ws.Name+"/variables", http.StatusSeeOther)
 }
 
 func (s *Server) variableSets(w http.ResponseWriter, r *http.Request) {

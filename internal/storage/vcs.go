@@ -117,7 +117,7 @@ func (s *Store) SetVCSSync(ctx context.Context, namespace, name, system, syncErr
 }
 
 // ConfigureWorkspace moves a workspace to a module version and inputs and queues the plan that
-// applies them, HCP no-code style. Without a free workspace (ErrRunActive) nothing changes.
+// applies them. Without a free workspace (ErrRunActive) nothing changes.
 func (s *Store) ConfigureWorkspace(ctx context.Context, workspaceID, source, ref string, inputs map[string]any, createdBy string) (Run, error) {
 	raw, err := json.Marshal(inputs)
 	if err != nil {

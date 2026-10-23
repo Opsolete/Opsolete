@@ -241,6 +241,19 @@ func TestPlanThenApply(t *testing.T) {
 		t.Fatalf("second plan should find no changes: %+v\n%s", res, logs)
 	}
 
+	// Drift check: a refresh-only plan; nothing drifted, and an assessment never keeps a plan.
+	if res, logs = f.do(t, r, job("assess", "plan", "assess", src, vars)); res.Status != "succeeded" || res.Plan != nil ||
+		!strings.Contains(logs, "plan -refresh-only") || f.artifacts["assess/artifacts/tfplan"] != nil {
+		t.Fatalf("assess: %+v\n%s", res, logs)
+	}
+
+	// Replace: same inputs, but the resource is planned for replacement.
+	rj := job("replace", "plan", "apply", src, vars)
+	rj.Replace = []string{"terraform_data.this"}
+	if res, logs = f.do(t, r, rj); res.Plan == nil || len(res.Plan.Changes) != 1 || res.Plan.Changes[0].Action != "replace" {
+		t.Fatalf("replace: %+v\n%s", res, logs)
+	}
+
 	// A plan made before the state changed is refused, and the failed apply still reports the
 	// state, without streaming it.
 	f.do(t, r, job("stale", "plan", "apply", src, map[string]any{"greeting": "hi"}))

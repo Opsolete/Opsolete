@@ -1,4 +1,4 @@
--- Variables replace runner pools, HCP Terraform style: any runner runs any workspace, with the
+-- Variables replace runner pools: any runner runs any workspace, with the
 -- environment (credentials such as ARM_CLIENT_SECRET) and Terraform variables the server hands it
 -- per job. They come from the workspace itself and from variable sets: global, or attached to workspaces.
 

@@ -17,7 +17,7 @@ import (
 	"github.com/rudesome/form2stack/internal/vcs"
 )
 
-// VCS providers, HCP Terraform style: an admin connects GitHub or Azure DevOps with an access
+// VCS providers: an admin connects GitHub or Azure DevOps with an access
 // token, then publishes a repo as a registry module. Its semver tags become versions (see vcs.Poll).
 func (s *Server) vcsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /vcs", s.admin(s.vcsPage))
@@ -129,7 +129,7 @@ func (s *Server) renderPublish(w http.ResponseWriter, r *http.Request, status in
 	s.render(w, r, status, "publish.html", p)
 }
 
-// HCP's module repo naming convention; used to fill in name and system when left empty.
+// Terraform's module repo naming convention (terraform-<system>-<name>); used to fill in name and system when left empty.
 var tfRepoRe = regexp.MustCompile(`^terraform-([a-z0-9]+)-([a-z0-9][a-z0-9_-]*)$`)
 
 // publishModule links a repo to a registry module and publishes its tags right away.

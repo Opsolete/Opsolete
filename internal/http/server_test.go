@@ -623,8 +623,8 @@ func TestWorkspaceFlow(t *testing.T) {
 		t.Fatalf("unknown run: %d", rec.Code)
 	}
 
-	// Workspace page, with its resources.
-	page = get(h, "/workspaces/"+name).Body.String()
+	// Workspace page, with its resources (and outputs, in their tab).
+	page = get(h, "/workspaces/"+name).Body.String() + get(h, "/workspaces/"+name+"?show=outputs").Body.String()
 	for _, want := range []string{"<code>&#34;abc&#34;</code>", "<code>&#34;(sensitive)&#34;</code>", "<code>azurerm_storage_account.this</code>", "v2", "applied", "New run"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("workspace page lacks %q", want)
@@ -639,6 +639,50 @@ func TestWorkspaceFlow(t *testing.T) {
 	if rec := get(h, "/resources"); rec.Code != http.StatusNotFound {
 		t.Fatalf("the global resources page is gone: %d", rec.Code)
 	}
+
+	// Replace: only addresses of the workspace's state reach the runner.
+	if rec := post(h, "/workspaces/"+name+"/runs", url.Values{"action": {"apply"}, "replace": {"-destroy"}}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("replace of an unknown address: %d", rec.Code)
+	}
+	if rec := post(h, "/workspaces/"+name+"/runs", url.Values{"action": {"refresh"}, "replace": {"azurerm_storage_account.this"}}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("replace in a refresh-only run: %d", rec.Code)
+	}
+	rec = post(h, "/workspaces/"+name+"/runs", url.Values{"action": {"apply"}, "replace": {"azurerm_storage_account.this"}})
+	runURL = rec.Header().Get("Location")
+	runID = strings.TrimPrefix(runURL, "/workspaces/"+name+"/runs/")
+	claimJob("plan")
+	if len(job.Replace) != 1 || job.Replace[0] != "azurerm_storage_account.this" {
+		t.Fatalf("replace job: %+v", job)
+	}
+	finish(`{"status":"succeeded"}`)
+
+	// Drift check: queued by the schedule once drift detection is on, never applied, kept out of the runs list.
+	if rec := post(h, "/workspaces/"+name+"/settings", url.Values{"drift_detection": {"on"}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("settings: %d", rec.Code)
+	}
+	if n, err := store.QueueAssessments(ctx, time.Hour); err != nil || n < 1 {
+		t.Fatalf("queue assessments: %d %v", n, err)
+	}
+	a, err := store.LatestAssessment(ctx, ws.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID = a.ID
+	claimJob("plan")
+	finish(`{"status":"succeeded","plan":{"add":0,"change":1,"destroy":0,"changes":[{"address":"azurerm_storage_account.this","action":"update"}]}}`)
+	if a, _, _ = store.GetRun(ctx, runID); a.Status != storage.Drifted {
+		t.Fatalf("assessment with drift: %+v", a)
+	}
+	if n, _ := store.QueueAssessments(ctx, time.Hour); n != 0 {
+		t.Fatalf("assessed again within the interval: %d", n)
+	}
+	if page := get(h, "/workspaces/"+name).Body.String(); !strings.Contains(page, "Drift detected") || !strings.Contains(get(h, "/workspaces").Body.String(), "drifted") {
+		t.Fatalf("drift not shown: %s", page)
+	}
+	if runs, _ := store.Runs(ctx, ws.ID, 25); runs[0].Action == "assess" {
+		t.Fatal("assessments must not be listed as runs")
+	}
+	post(h, "/workspaces/"+name+"/settings", url.Values{"drift_detection": {}})
 
 	// Destroy: a plan that always asks; discarding it frees the workspace; confirming destroys.
 	if page := get(other, "/workspaces/"+name).Body.String(); strings.Contains(page, "Destroy…") {
@@ -712,7 +756,7 @@ func TestWorkspaceFlow(t *testing.T) {
 	if out, _, _ := store.CurrentOutputs(ctx, ws.ID); out["id"] != "abc" {
 		t.Fatalf("rolled back outputs: %v", out)
 	}
-	if page := get(h, "/workspaces/"+name).Body.String(); !strings.Contains(page, "rollback to v2") {
+	if page := get(h, "/workspaces/"+name+"/states").Body.String(); !strings.Contains(page, "rollback to v2") {
 		t.Fatalf("version list must show the rollback: %s", page)
 	}
 	if b, _ := app.StateStore.ReadAll(ctx, vs[0].BlobKey); !strings.Contains(string(b), `"serial": 4`) || !strings.Contains(string(b), "azurerm_storage_account") {
@@ -765,7 +809,7 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 	if !strings.Contains(get(reader, "/workspaces").Body.String(), name) || get(reader, runURL).Code != 200 {
 		t.Fatal("a read grant must show the workspace and its runs")
 	}
-	if !strings.Contains(get(admin, wsURL).Body.String(), `<option value="grp-ops">`) {
+	if !strings.Contains(get(admin, wsURL+"/settings").Body.String(), `<option value="grp-ops">`) {
 		t.Fatal("grant form must offer the groups seen at login")
 	}
 	if rec := get(owner, "/workspaces/new?template=vars"); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/templates/vars" ||
@@ -829,7 +873,7 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 	if rec := post(admin, "/variable-sets/"+setName+"/workspaces", url.Values{"workspace": {"no-such-ws"}}); rec.Code != http.StatusBadRequest {
 		t.Fatalf("attach to an unknown workspace: %d", rec.Code)
 	}
-	page := get(reader, wsURL).Body.String()
+	page := get(reader, wsURL+"/variables").Body.String()
 	if strings.Contains(page, "s3cret-ws") || !strings.Contains(page, "client-ws") || !strings.Contains(page, setName) {
 		t.Fatalf("workspace page must show non-sensitive values and applied sets, never sensitive ones: %s", page)
 	}
@@ -897,13 +941,13 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 		t.Fatalf("invalid name: %d", rec.Code)
 	}
 	if rec := post(operator, wsURL+"/rename", url.Values{"name": {name + "-renamed"}}); rec.Code != http.StatusSeeOther ||
-		rec.Header().Get("Location") != wsURL+"-renamed" {
+		rec.Header().Get("Location") != wsURL+"-renamed/settings" {
 		t.Fatalf("rename: %d %q", rec.Code, rec.Header().Get("Location"))
 	}
 	if get(owner, wsURL).Code != http.StatusNotFound {
 		t.Fatal("the old name must be free")
 	}
-	page = get(reader, wsURL+"-renamed").Body.String()
+	page = get(reader, wsURL+"-renamed/runs").Body.String() + get(reader, wsURL+"-renamed/variables").Body.String()
 	if !strings.Contains(page, "canceled") || !strings.Contains(page, "client-ws") || !strings.Contains(page, setName) {
 		t.Fatalf("renamed workspace lost its runs or variables: %s", page)
 	}

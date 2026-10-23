@@ -1,5 +1,5 @@
-// Package vcs publishes registry modules from GitHub and Azure DevOps repositories, the way HCP
-// Terraform does: every semver tag of a linked repo becomes an immutable module version. It talks
+// Package vcs publishes registry modules from GitHub and Azure DevOps repositories:
+// every semver tag of a linked repo becomes an immutable module version. It talks
 // to the providers' REST APIs with an access token, so the server needs no git binary.
 package vcs
 

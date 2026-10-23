@@ -1,4 +1,4 @@
--- Workspaces no longer need a template, HCP style: one can be empty, hold only a state (uploaded),
+-- Workspaces no longer need a template: one can be empty, hold only a state (uploaded),
 -- only variables, or take its configuration from a VCS repository branch.
 ALTER TABLE workspaces ALTER COLUMN template_id DROP NOT NULL, ALTER COLUMN module_ref DROP NOT NULL;
 ALTER TABLE workspaces

@@ -19,7 +19,8 @@ type Job struct {
 	RunID        string
 	WorkspaceID  string
 	Phase        string // plan | apply
-	Action       string // apply | destroy
+	Action       string // apply | destroy | refresh | assess
+	Replace      []string
 	LeaseID      string
 	ModuleSource string
 	ModuleRef    string
@@ -39,18 +40,24 @@ func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration
 	defer tx.Rollback()
 	j := Job{LeaseID: rand.Text()}
 	var status string
+	var replace []byte
 	err = tx.QueryRowContext(ctx, `
 		UPDATE runs SET status = CASE status WHEN 'plan_queued' THEN 'planning' ELSE 'applying' END,
 			runner = $1, lease_id = $2, lease_until = now() + make_interval(secs => $3), updated_at = now()
 		WHERE id = (SELECT id FROM runs WHERE status IN ('plan_queued', 'apply_queued')
 			ORDER BY updated_at FOR UPDATE SKIP LOCKED LIMIT 1)
-		RETURNING id, workspace_id, action, status`,
-		runner, j.LeaseID, lease.Seconds()).Scan(&j.RunID, &j.WorkspaceID, &j.Action, &status)
+		RETURNING id, workspace_id, action, status, replace`,
+		runner, j.LeaseID, lease.Seconds()).Scan(&j.RunID, &j.WorkspaceID, &j.Action, &status, &replace)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, false, nil
 	}
 	if err != nil {
 		return Job{}, false, err
+	}
+	if replace != nil {
+		if err := json.Unmarshal(replace, &j.Replace); err != nil {
+			return Job{}, false, err
+		}
 	}
 	j.Phase = "plan"
 	if status == Applying {
@@ -178,7 +185,8 @@ func (s *Store) CancelRun(ctx context.Context, id, email string, force bool) (st
 // FinishJob records the result of a phase, releases the lease and the workspace's state lock, and
 // returns the run's new status:
 //   - plan with changes: needs_confirmation, or apply_queued for apply runs of auto-apply workspaces
-//     (destroys always wait for a human); without changes: no_changes
+//     (destroys and refresh-only runs always wait for a human), or drifted for assess runs, which are
+//     never applied; without changes: no_changes
 //   - apply: applied
 //   - failed / canceled: errored / canceled
 //
@@ -209,6 +217,8 @@ func (s *Store) FinishJob(ctx context.Context, runID, lease, result, message str
 		final = Applied
 	case plan == nil:
 		final = NoChanges
+	case action == "assess":
+		final = Drifted
 	case autoApply && action == "apply":
 		final = ApplyQueued
 	default:
@@ -220,7 +230,7 @@ func (s *Store) FinishJob(ctx context.Context, runID, lease, result, message str
 			return "", err
 		}
 	}
-	if final == Applied && action == "apply" {
+	if final == Applied && action != "destroy" {
 		if outJSON, err = json.Marshal(outputs); err != nil {
 			return "", err
 		}

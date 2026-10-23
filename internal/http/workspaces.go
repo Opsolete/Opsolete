@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -44,6 +45,10 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /workspaces/{name}/state-versions/{version}/rollback", s.rollbackState)
 	mux.HandleFunc("GET /v1/vcs-archives/{file}", s.vcsArchive)
 	mux.HandleFunc("GET /workspaces/{name}", s.workspace)
+	// the workspace's side-menu pages: one handler, workspace.html shows the part of the current tab
+	for _, tab := range []string{"runs", "states", "variables", "settings"} {
+		mux.HandleFunc("GET /workspaces/{name}/"+tab, s.workspace)
+	}
 	mux.HandleFunc("POST /workspaces/{name}/runs", s.newRun)
 	mux.HandleFunc("POST /workspaces/{name}/settings", s.workspaceSettings)
 	mux.HandleFunc("GET /workspaces/{name}/configure", s.configureForm)
@@ -258,11 +263,20 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	var active *storage.Run
+	var active, assessment *storage.Run
 	if len(runs) > 0 && runs[0].Active() {
 		active = &runs[0]
 	}
-	// HCP no-code style: the template now pins another module version than the workspace runs.
+	if a, err := s.Store.LatestAssessment(ctx, ws.ID); err == nil {
+		assessment = &a
+		if a.Active() { // a drift check holds the workspace like any run
+			active = assessment
+		}
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		s.internalError(w, "latest assessment", err)
+		return
+	}
+	// the template now pins another module version than the workspace runs.
 	var update *templates.Module
 	t, hasTemplate := s.Templates.Get(ws.TemplateID)
 	if hasTemplate && (t.Module.Source != ws.ModuleSource || t.Module.Ref != ws.ModuleRef) {
@@ -279,14 +293,44 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 			updates[a.Name] = t.Module.Ref
 		}
 	}
+	// Runs page: status filters, counted over the runs listed
+	filter := r.URL.Query().Get("filter")
+	counts, list := map[string]int{"all": len(runs)}, []runItem{}
+	for i, run := range runs {
+		g := runGroup(run.Status)
+		counts[g]++
+		if filter == "" || filter == "all" || filter == g {
+			list = append(list, runItem{run, i == 0})
+		}
+	}
+	var current *runItem
+	var latestPlan, latestApply phase
+	if len(runs) > 0 {
+		current = &runItem{runs[0], true}
+		_, hist, err := s.Store.GetRun(ctx, runs[0].ID)
+		if err != nil {
+			s.internalError(w, "latest run", err)
+			return
+		}
+		latestPlan, latestApply = runPhases(runs[0], hist)
+	}
+	metrics, err := s.Store.RunMetrics(ctx, ws.ID)
+	if err != nil {
+		s.internalError(w, "run metrics", err)
+		return
+	}
 	s.render(w, r, http.StatusOK, "workspace.html", map[string]any{"W": ws, "Runs": runs, "Active": active,
+		"Filter": filter, "Counts": counts, "RunList": list, "Current": current,
+		"LatestPlan": latestPlan, "LatestApply": latestApply, "Metrics": metrics, "Show": r.URL.Query().Get("show"),
 		"Update": update, "HasTemplate": hasTemplate, "Added": added, "Updates": updates, "Catalog": s.Templates.List(),
 		"Resources": res, "Versions": versions, "Outputs": outputs, "Destroyed": destroyed, "Grants": grants,
-		"Variables": vars, "Sets": sets, "Groups": groups,
+		"Variables": vars, "Sets": sets, "Groups": groups, "Assessment": assessment,
 		"CanOperate": level == levelOperate, "Admin": auth.FromContext(ctx).Admin()})
 }
 
-// newRun queues a plan: action=apply (re-plan with the workspace's inputs) or action=destroy.
+// newRun queues a plan: action=apply (re-plan with the workspace's inputs; replace=<address> any
+// number of times plans replacing those resources), destroy, refresh (refresh-only) or assess
+// (check for drift now).
 func (s *Server) newRun(w http.ResponseWriter, r *http.Request) {
 	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
 	if !ok {
@@ -294,15 +338,34 @@ func (s *Server) newRun(w http.ResponseWriter, r *http.Request) {
 	}
 	u := auth.FromContext(r.Context())
 	action := r.PostFormValue("action")
-	if action != "apply" && action != "destroy" {
-		http.Error(w, "action must be apply or destroy", http.StatusBadRequest)
+	if action != "apply" && action != "destroy" && action != "refresh" && action != "assess" {
+		http.Error(w, "action must be apply, destroy, refresh or assess", http.StatusBadRequest)
 		return
 	}
 	if !ws.HasConfig() {
 		http.Error(w, "this workspace has no configuration to plan: link a repository first", http.StatusConflict)
 		return
 	}
-	run, err := s.Store.CreateRun(r.Context(), ws.ID, action, u.ID)
+	replace := r.PostForm["replace"]
+	if len(replace) > 0 {
+		if action != "apply" {
+			http.Error(w, "only apply runs can replace resources", http.StatusBadRequest)
+			return
+		}
+		// Only addresses of the current state: they become Terraform arguments.
+		res, err := s.Store.Resources(r.Context(), ws.ID)
+		if err != nil {
+			s.internalError(w, "workspace resources", err)
+			return
+		}
+		for _, a := range replace {
+			if !slices.ContainsFunc(res, func(x storage.Resource) bool { return x.Address == a }) {
+				http.Error(w, "not a resource of this workspace: "+a, http.StatusBadRequest)
+				return
+			}
+		}
+	}
+	run, err := s.Store.CreateRun(r.Context(), ws.ID, action, u.ID, replace)
 	if errors.Is(err, storage.ErrRunActive) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -385,11 +448,11 @@ func (s *Server) workspaceSettings(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.Store.SetAutoApply(r.Context(), ws.ID, r.PostFormValue("auto_apply") != ""); err != nil {
+	if err := s.Store.SetSettings(r.Context(), ws.ID, r.PostFormValue("auto_apply") != "", r.PostFormValue("drift_detection") != ""); err != nil {
 		s.internalError(w, "workspace settings", err)
 		return
 	}
-	http.Redirect(w, r, "/workspaces/"+ws.Name, http.StatusSeeOther)
+	http.Redirect(w, r, "/workspaces/"+ws.Name+"/settings", http.StatusSeeOther)
 }
 
 // renameWorkspace changes the name in URLs and lists; state, runs and grants stay (keyed by id).
@@ -411,7 +474,7 @@ func (s *Server) renameWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Log.Info("workspace renamed", "from", ws.Name, "to", name, "user", auth.FromContext(r.Context()).Email)
-	http.Redirect(w, r, "/workspaces/"+name, http.StatusSeeOther)
+	http.Redirect(w, r, "/workspaces/"+name+"/settings", http.StatusSeeOther)
 }
 
 // deleteWorkspace deletes a workspace that manages no resources, with its state files.
@@ -458,7 +521,7 @@ func (s *Server) workspaceAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Log.Info("workspace access", "workspace", ws.Name, "group", group, "level", level, "user", auth.FromContext(r.Context()).Email)
-	http.Redirect(w, r, "/workspaces/"+ws.Name, http.StatusSeeOther)
+	http.Redirect(w, r, "/workspaces/"+ws.Name+"/settings", http.StatusSeeOther)
 }
 
 func (s *Server) run(w http.ResponseWriter, r *http.Request) {
@@ -466,8 +529,100 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	plan, apply := runPhases(run, hist)
 	s.render(w, r, http.StatusOK, "run.html", map[string]any{"W": ws, "R": run, "History": hist,
-		"CanOperate": level == levelOperate})
+		"Plan": plan, "Apply": apply, "CanOperate": level == levelOperate})
+}
+
+// runItem is a row of the runs page; Current: the workspace's latest run.
+type runItem struct {
+	storage.Run
+	Current bool
+}
+
+// runGroup is the runs page filter a status falls under.
+func runGroup(status string) string {
+	switch status {
+	case storage.NeedsConfirmation:
+		return "attention"
+	case storage.Errored:
+		return "errored"
+	case storage.PlanQueued, storage.Planning, storage.ApplyQueued, storage.Applying:
+		return "running"
+	case storage.Applied, storage.NoChanges:
+		return "success"
+	}
+	return "other" // discarded, canceled: only under All
+}
+
+// phase is the plan or apply step of a run as the run page shows it.
+type phase struct {
+	State      string // queued | running | finished | errored | canceled | pending | discarded; "" never runs
+	Start, End time.Time
+}
+
+func (p phase) Duration() string {
+	if p.Start.IsZero() || p.End.IsZero() {
+		return ""
+	}
+	return humanDuration(p.End.Sub(p.Start))
+}
+
+// humanDuration: "" for 0 (nothing measured), else "less than a minute" or e.g. "2m5s".
+func humanDuration(d time.Duration) string {
+	switch {
+	case d <= 0:
+		return ""
+	case d < time.Minute:
+		return "less than a minute"
+	}
+	return d.Round(time.Second).String()
+}
+
+// runPhases reads the plan and apply steps from the run's status history (oldest first).
+func runPhases(r storage.Run, hist []storage.StatusEntry) (plan, apply phase) {
+	span := func(status string) (p phase, next string) {
+		for i, e := range hist { // the last attempt: a runner whose lease expired re-queues the run
+			if e.Status == status {
+				p, next = phase{Start: e.CreatedAt}, ""
+				if i+1 < len(hist) {
+					p.End, next = hist[i+1].CreatedAt, hist[i+1].Status
+				}
+			}
+		}
+		return
+	}
+	ended := func(next string) string {
+		if next == storage.Errored || next == storage.Canceled {
+			return next
+		}
+		return "finished"
+	}
+	plan, next := span(storage.Planning)
+	switch {
+	case plan.Start.IsZero() && r.Status == storage.PlanQueued:
+		plan.State = "queued"
+	case plan.Start.IsZero(): // ended before a runner picked it up
+		plan.State = r.Status
+	case next == "":
+		plan.State = "running"
+	default:
+		plan.State = ended(next)
+	}
+	apply, next = span(storage.Applying)
+	switch {
+	case !apply.Start.IsZero() && next == "":
+		apply.State = "running"
+	case !apply.Start.IsZero():
+		apply.State = ended(next)
+	case r.Status == storage.NeedsConfirmation:
+		apply.State = "pending"
+	case r.Status == storage.ApplyQueued:
+		apply.State = "queued"
+	case r.Status == storage.Discarded:
+		apply.State = "discarded"
+	}
+	return
 }
 
 // cancelRun cancels a queued run, asks a running one to stop (Terraform still saves state), or with

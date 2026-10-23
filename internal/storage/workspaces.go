@@ -47,6 +47,8 @@ type Workspace struct {
 	StateKey        string // blob key prefix of its state versions
 	Templates       int    // how many templates were added (see WorkspaceTemplates)
 	AutoApply       bool   // apply plans of apply runs without confirmation
+	DriftDetection  bool   // queue an assess run (refresh-only plan, never applied) daily
+	Drifted         bool   // the latest assessment found drift and nothing was applied since
 	CreatedBy       string // email; empty for workspaces from before login
 	CreatedAt       time.Time
 	Latest          *Run // most recent run
@@ -66,6 +68,7 @@ const (
 	Applying          = "applying"
 	Applied           = "applied"
 	NoChanges         = "no_changes"
+	Drifted           = "drifted" // final status of an assess run that found drift
 	Discarded         = "discarded"
 	Errored           = "errored"
 	Canceled          = "canceled"
@@ -75,8 +78,9 @@ const (
 type Run struct {
 	ID          string
 	WorkspaceID string
-	Action      string // apply | destroy
+	Action      string // apply | destroy | refresh (refresh-only) | assess (drift check, never applied)
 	Status      string
+	Replace     []string        // resource addresses an apply run plans to replace
 	Plan        *runnerapi.Plan // nil until planned, or when the plan had no changes
 	Outputs     map[string]any
 	Runner      *string
@@ -111,33 +115,42 @@ type StatusEntry struct {
 
 const workspaceCols = `w.id, w.name, COALESCE(w.template_id, ''), COALESCE(w.module_source, ''), COALESCE(w.module_ref, ''),
 	w.inputs, COALESCE(w.vcs_connection_id::text, ''), COALESCE(w.vcs_repo, ''), COALESCE(w.vcs_branch, ''), w.state_key,
-	(SELECT count(*) FROM workspace_templates t WHERE t.workspace_id = w.id), w.auto_apply, COALESCE((SELECT email FROM users u WHERE u.id = w.created_by), ''), w.created_at`
+	(SELECT count(*) FROM workspace_templates t WHERE t.workspace_id = w.id), w.auto_apply, w.drift_detection,
+	COALESCE((SELECT a.status = 'drifted' AND NOT EXISTS (SELECT 1 FROM runs x WHERE x.workspace_id = w.id
+		AND x.status = 'applied' AND x.updated_at > a.updated_at) FROM runs a
+		WHERE a.workspace_id = w.id AND a.action = 'assess' AND a.status IN ('no_changes', 'drifted')
+		ORDER BY a.created_at DESC LIMIT 1), false), COALESCE((SELECT email FROM users u WHERE u.id = w.created_by), ''), w.created_at`
 
 func scanWorkspace(row interface{ Scan(...any) error }, extra ...any) (Workspace, error) {
 	var w Workspace
 	var raw []byte
 	dest := append([]any{&w.ID, &w.Name, &w.TemplateID, &w.ModuleSource, &w.ModuleRef, &raw,
 		&w.VCSConnectionID, &w.VCSRepo, &w.VCSBranch, &w.StateKey, &w.Templates,
-		&w.AutoApply, &w.CreatedBy, &w.CreatedAt}, extra...)
+		&w.AutoApply, &w.DriftDetection, &w.Drifted, &w.CreatedBy, &w.CreatedAt}, extra...)
 	if err := row.Scan(dest...); err != nil {
 		return w, err
 	}
 	return w, json.Unmarshal(raw, &w.Inputs)
 }
 
-const runCols = `r.id, r.workspace_id, r.action, r.status, r.plan, r.outputs, r.runner,
+const runCols = `r.id, r.workspace_id, r.action, r.status, r.replace, r.plan, r.outputs, r.runner,
 	COALESCE((SELECT email FROM users u WHERE u.id = r.created_by), ''),
 	COALESCE((SELECT email FROM users u WHERE u.id = r.confirmed_by), ''), r.cancel_requested, COALESCE(r.vcs_commit, ''), r.created_at, r.updated_at`
 
 func scanRun(row interface{ Scan(...any) error }) (Run, error) {
 	var r Run
-	var plan, outputs []byte
-	if err := row.Scan(&r.ID, &r.WorkspaceID, &r.Action, &r.Status, &plan, &outputs, &r.Runner,
+	var replace, plan, outputs []byte
+	if err := row.Scan(&r.ID, &r.WorkspaceID, &r.Action, &r.Status, &replace, &plan, &outputs, &r.Runner,
 		&r.CreatedBy, &r.ConfirmedBy, &r.CancelRequested, &r.VCSCommit, &r.CreatedAt, &r.UpdatedAt); err != nil {
 		return r, err
 	}
 	if plan != nil {
 		if err := json.Unmarshal(plan, &r.Plan); err != nil {
+			return r, err
+		}
+	}
+	if replace != nil {
+		if err := json.Unmarshal(replace, &r.Replace); err != nil {
 			return r, err
 		}
 	}
@@ -198,8 +211,9 @@ func (s *Store) createWorkspace(ctx context.Context, name, templateID, moduleSou
 	return w, run, err
 }
 
-// CreateRun queues a new plan (action apply or destroy) on a workspace without an active run.
-func (s *Store) CreateRun(ctx context.Context, workspaceID, action, createdBy string) (Run, error) {
+// CreateRun queues a new plan (action apply, destroy, refresh or assess) on a workspace without an
+// active run; replace lists resource addresses an apply run replaces.
+func (s *Store) CreateRun(ctx context.Context, workspaceID, action, createdBy string, replace []string) (Run, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return Run{}, err
@@ -208,6 +222,16 @@ func (s *Store) CreateRun(ctx context.Context, workspaceID, action, createdBy st
 	r, err := createRun(ctx, tx, workspaceID, action, createdBy)
 	if err != nil {
 		return Run{}, err
+	}
+	if len(replace) > 0 {
+		b, err := json.Marshal(replace)
+		if err != nil {
+			return Run{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE runs SET replace = $2 WHERE id = $1`, r.ID, b); err != nil {
+			return Run{}, err
+		}
+		r.Replace = replace
 	}
 	return r, tx.Commit()
 }
@@ -242,7 +266,7 @@ func (s *Store) GetWorkspaceByID(ctx context.Context, id string) (Workspace, err
 func (s *Store) ListWorkspaces(ctx context.Context, v Viewer) ([]Workspace, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT `+workspaceCols+`, l.status, l.action, l.updated_at
 		FROM workspaces w LEFT JOIN LATERAL (SELECT status, action, updated_at FROM runs
-			WHERE workspace_id = w.id ORDER BY created_at DESC LIMIT 1) l ON true
+			WHERE workspace_id = w.id AND action <> 'assess' ORDER BY created_at DESC LIMIT 1) l ON true
 		WHERE `+visible+`
 		ORDER BY COALESCE(l.updated_at, w.created_at) DESC LIMIT 200`, v.UserID, v.Admin)
 	if err != nil {
@@ -416,15 +440,44 @@ func (s *Store) PinVCSCommit(ctx context.Context, runID, commit string) (string,
 	return commit, err
 }
 
-// SetAutoApply changes whether apply plans run without confirmation.
-func (s *Store) SetAutoApply(ctx context.Context, workspaceID string, on bool) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET auto_apply = $2, updated_at = now() WHERE id::text = $1`, workspaceID, on)
+// SetSettings changes whether apply plans run without confirmation and whether drift is checked daily.
+func (s *Store) SetSettings(ctx context.Context, workspaceID string, autoApply, driftDetection bool) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET auto_apply = $2, drift_detection = $3, updated_at = now()
+		WHERE id::text = $1`, workspaceID, autoApply, driftDetection)
 	return err
 }
 
-// Runs lists a workspace's runs, newest first.
+// QueueAssessments queues an assess run (a refresh-only plan that is never applied) on every
+// workspace with drift detection whose current state manages resources and that wasn't assessed
+// within every. Workspaces with an active run are skipped; they get their turn at a later call.
+func (s *Store) QueueAssessments(ctx context.Context, every time.Duration) (int, error) {
+	res, err := s.DB.ExecContext(ctx, `
+		WITH due AS (
+			SELECT w.id FROM workspaces w
+			WHERE w.drift_detection
+				AND (w.module_source IS NOT NULL OR w.vcs_connection_id IS NOT NULL
+					OR EXISTS (SELECT 1 FROM workspace_templates t WHERE t.workspace_id = w.id))
+				AND EXISTS (SELECT 1 FROM state_version_resources r WHERE r.state_version_id =
+					(SELECT max(v.id) FROM state_versions v WHERE v.workspace_id = w.id))
+				AND NOT EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = w.id AND a.action = 'assess'
+					AND a.created_at > now() - make_interval(secs => $1))
+		), r AS (
+			INSERT INTO runs (workspace_id, action, status) SELECT id, 'assess', 'plan_queued' FROM due
+			ON CONFLICT (workspace_id) WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')
+			DO NOTHING RETURNING id
+		)
+		INSERT INTO run_status_history (run_id, status, message)
+		SELECT id, 'plan_queued', 'drift detection: refresh-only plan queued, waiting for a runner' FROM r`, every.Seconds())
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
+// Runs lists a workspace's runs, newest first; assessments (drift checks) are not listed.
 func (s *Store) Runs(ctx context.Context, workspaceID string, limit int) ([]Run, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT `+runCols+` FROM runs r WHERE r.workspace_id::text = $1
+	rows, err := s.DB.QueryContext(ctx, `SELECT `+runCols+` FROM runs r WHERE r.workspace_id::text = $1 AND r.action <> 'assess'
 		ORDER BY r.created_at DESC LIMIT $2`, workspaceID, limit)
 	if err != nil {
 		return nil, err
@@ -439,6 +492,33 @@ func (s *Store) Runs(ctx context.Context, workspaceID string, limit int) ([]Run,
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// RunMetrics summarizes a workspace's runs (drift checks excluded) for its overview page.
+type RunMetrics struct {
+	Runs, Failed      int
+	AvgPlan, AvgApply time.Duration // 0 when no plan or apply has finished
+}
+
+// RunMetrics: a phase lasts from its planning/applying entry to the next history entry.
+func (s *Store) RunMetrics(ctx context.Context, workspaceID string) (RunMetrics, error) {
+	var m RunMetrics
+	var plan, apply float64
+	err := s.DB.QueryRowContext(ctx, `WITH r AS (SELECT id, status FROM runs WHERE workspace_id::text = $1 AND action <> 'assess'),
+		h AS (SELECT h.status, lead(h.created_at) OVER (PARTITION BY h.run_id ORDER BY h.id) - h.created_at AS d
+			FROM run_status_history h JOIN r ON r.id = h.run_id)
+		SELECT (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE status = 'errored'),
+			COALESCE(EXTRACT(EPOCH FROM (SELECT avg(d) FROM h WHERE status = 'planning')), 0)::float8,
+			COALESCE(EXTRACT(EPOCH FROM (SELECT avg(d) FROM h WHERE status = 'applying')), 0)::float8`,
+		workspaceID).Scan(&m.Runs, &m.Failed, &plan, &apply)
+	m.AvgPlan, m.AvgApply = time.Duration(plan*float64(time.Second)), time.Duration(apply*float64(time.Second))
+	return m, err
+}
+
+// LatestAssessment returns the workspace's most recent assess run; sql.ErrNoRows if there is none.
+func (s *Store) LatestAssessment(ctx context.Context, workspaceID string) (Run, error) {
+	return scanRun(s.DB.QueryRowContext(ctx, `SELECT `+runCols+` FROM runs r WHERE r.workspace_id::text = $1
+		AND r.action = 'assess' ORDER BY r.created_at DESC LIMIT 1`, workspaceID))
 }
 
 // CurrentOutputs returns the outputs of the workspace's current state version. destroyed is true

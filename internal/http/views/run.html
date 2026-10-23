@@ -1,10 +1,11 @@
+{{define "pclass"}}{{if eq . "finished"}}succeeded{{else if eq . "running"}}running{{else if eq . "pending"}}needs_confirmation{{else}}{{.}}{{end}}{{end}}
 {{template "top"}}
-{{$w := .W}}{{$r := .R}}
-<a class="back" href="/workspaces/{{$w.Name}}">← {{$w.Name}}</a>
+{{$w := .W}}{{$r := .R}}{{$logInApply := not .Apply.Start.IsZero}}
+<nav class="back" aria-label="breadcrumb"><a href="/workspaces">Workspaces</a> / <a href="/workspaces/{{$w.Name}}">{{$w.Name}}</a> / <a href="/workspaces/{{$w.Name}}/runs">Runs</a> / <code>{{$r.ID}}</code></nav>
 <div class="page-head">
   <div>
-    <h1>{{if eq $r.Action "destroy"}}Destroy{{else}}Run{{end}} <span class="status {{$r.Status}}" id="status">{{status $r.Status}}</span></h1>
-    <p class="muted">{{$r.CreatedAt.Format "2006-01-02 15:04:05"}}{{with $r.CreatedBy}} · triggered by {{.}}{{end}}{{with $r.ConfirmedBy}} · confirmed by {{.}}{{end}}{{with $r.Runner}} · runner {{.}}{{end}}{{with $r.VCSCommit}} · commit <code>{{printf "%.12s" .}}</code>{{end}}</p>
+    <h1>{{$w.Name}}</h1>
+    <p class="muted">{{$r.CreatedAt.Format "2006-01-02 15:04:05"}}{{with $r.VCSCommit}} · commit <code>{{printf "%.12s" .}}</code>{{end}}</p>
   </div>
   {{if and $.CanOperate $r.Working}}
   <div class="inline">
@@ -20,31 +21,96 @@
   {{else if and $.CanOperate (not $r.Active) $w.HasConfig}}
   <form method="post" action="/workspaces/{{$w.Name}}/runs"{{if eq $r.Action "destroy"}}
     onsubmit="return confirm('Start a new destroy run for {{$w.Name}}?')"{{end}}>
-    <input type="hidden" name="action" value="{{$r.Action}}">
-    <button type="submit" class="secondary">Re-run {{if eq $r.Action "destroy"}}destroy{{else}}plan{{end}}</button></form>
+    <input type="hidden" name="action" value="{{$r.Action}}">{{range $r.Replace}}<input type="hidden" name="replace" value="{{.}}">{{end}}
+    <button type="submit" class="secondary">Re-run {{if eq $r.Action "destroy"}}destroy{{else if eq $r.Action "assess"}}drift check{{else}}plan{{end}}</button></form>
   {{end}}
 </div>
 
-{{with $r.Plan}}
-<div class="card">
-  <h3>Plan: <span class="plan">{{.Add}} to add, {{.Change}} to change, {{.Destroy}} to destroy</span></h3>
-  {{with .Changes}}
-  <table>
-  {{range .}}<tr><td class="nowrap" style="width:6rem"><span class="change {{.Action}}">{{.Action}}</span></td><td><code>{{.Address}}</code></td></tr>{{end}}
-  </table>
-  {{else}}<p class="muted">Only output values change.</p>{{end}}
-  {{if and (eq $r.Status "needs_confirmation") $.CanOperate}}
-  <div class="actions">
-    <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/confirm">
-      <button type="submit"{{if eq $r.Action "destroy"}} class="danger"{{end}}>Confirm &amp; {{if eq $r.Action "destroy"}}destroy{{else}}apply{{end}}</button></form>
-    <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/discard">
-      <button type="submit" class="secondary">Discard</button></form>
-  </div>
-  {{else if eq $r.Status "needs_confirmation"}}
-  <p class="muted">Waiting for the workspace's owner or an admin to confirm.</p>
-  {{end}}
+<div class="run-title">
+  <h2>{{if eq $r.Action "destroy"}}Destroy{{else if eq $r.Action "refresh"}}Refresh state{{else if eq $r.Action "assess"}}Drift check{{else}}Plan and apply{{end}}</h2>
+  <span class="status {{$r.Status}}" id="status">{{status $r.Status}}</span>
 </div>
-{{else}}{{if eq $r.Status "no_changes"}}<div class="card"><p>No changes: the infrastructure matches the configuration{{if eq $r.Action "destroy"}} (nothing to destroy){{end}}.</p></div>{{end}}
+
+<dl class="stats">
+  <div><dt>Plan duration</dt><dd>{{or .Plan.Duration "—"}}</dd></div>
+  <div><dt>{{if or (eq $r.Action "refresh") (eq $r.Action "assess")}}Drift{{else}}Resources to be changed{{end}}</dt>
+    <dd class="plan">{{with $r.Plan}}{{if or (eq $r.Action "refresh") (eq $r.Action "assess")}}~{{.Change}} −{{.Destroy}}{{else}}<span class="change create">+{{.Add}}</span> <span class="change update">~{{.Change}}</span> <span class="change delete">−{{.Destroy}}</span>{{end}}{{else}}+0 ~0 −0{{end}}</dd></div>
+  <div><dt>Apply duration</dt><dd>{{or .Apply.Duration "—"}}</dd></div>
+  <div><dt>Triggered by</dt><dd>{{or $r.CreatedBy "—"}}</dd></div>
+</dl>
+
+<details class="section">
+  <summary><strong>Run details</strong> <span class="muted">{{$r.CreatedAt.Format "2006-01-02 15:04:05"}}</span>
+    <span class="end muted">{{with $r.CreatedBy}}<strong>{{.}}</strong> triggered the run{{end}}</span></summary>
+  <div class="body">
+    <dl class="kv">
+      <dt>Run ID</dt><dd><code>{{$r.ID}}</code></dd>
+      {{with $r.VCSCommit}}<dt>Commit</dt><dd><code>{{.}}</code></dd>{{end}}
+      {{with $r.Replace}}<dt>Replacing</dt><dd>{{range $i, $a := .}}{{if $i}}, {{end}}<code>{{$a}}</code>{{end}}</dd>{{end}}
+      {{with $r.ConfirmedBy}}<dt>Confirmed by</dt><dd>{{.}}</dd>{{end}}
+      {{with $r.Runner}}<dt>Runner</dt><dd>{{.}}</dd>{{end}}
+    </dl>
+    <h3 style="margin-top:1.25rem">History</h3>
+    <table>
+    <tr><th>Time</th><th>Status</th><th>Message</th></tr>
+    {{range .History}}
+    <tr><td class="nowrap">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td><td><span class="status {{.Status}}">{{status .Status}}</span></td><td>{{with .Message}}{{.}}{{end}}</td></tr>
+    {{end}}
+    </table>
+  </div>
+</details>
+
+{{with .Plan}}
+<details class="section"{{if not $logInApply}} open{{end}}>
+  <summary><span class="status {{template "pclass" .State}}">{{if eq .State "running"}}Planning{{else}}Plan {{status .State}}{{end}}</span>
+    {{if not .Start.IsZero}}<span class="muted">{{.Start.Format "15:04:05"}}</span>{{end}}</summary>
+  <div class="body">
+    {{if not .Start.IsZero}}<p class="steps"><strong>Started</strong> {{.Start.Format "15:04:05"}}{{if not .End.IsZero}} › <strong>{{if eq .State "finished"}}Finished{{else}}{{status .State}}{{end}}</strong> {{.End.Format "15:04:05"}}{{end}}</p>{{end}}
+    {{with $r.Plan}}
+    {{if or (eq $r.Action "refresh") (eq $r.Action "assess")}}
+    <h3>Drift: <span class="plan">{{.Change}} changed, {{.Destroy}} deleted outside Terraform</span></h3>
+    <p class="muted">{{if eq $r.Action "refresh"}}Applying updates the state to match; it changes no infrastructure.{{else}}A drift check is never applied. Start a refresh-only run to accept these changes into state, or a new run to revert them.{{end}}</p>
+    {{else}}
+    <h3>Plan: <span class="plan">{{.Add}} to add, {{.Change}} to change, {{.Destroy}} to destroy</span></h3>
+    {{end}}
+    {{with .Changes}}
+    <table class="changes">
+    {{range .}}<tr><td class="nowrap" style="width:6rem"><span class="change {{.Action}}">{{.Action}}</span></td><td><code>{{.Address}}</code></td></tr>{{end}}
+    </table>
+    {{else}}<p class="muted">Only output values change.</p>{{end}}
+    {{else}}{{if eq $r.Status "no_changes"}}<p>No changes: {{if or (eq $r.Action "refresh") (eq $r.Action "assess")}}no drift, the state matches the infrastructure{{else}}the infrastructure matches the configuration{{if eq $r.Action "destroy"}} (nothing to destroy){{end}}{{end}}.</p>{{end}}
+    {{end}}
+    {{if not $logInApply}}{{template "runlog" $}}{{end}}
+  </div>
+</details>
+{{end}}
+
+{{with .Apply}}
+{{if .State}}
+<details class="section"{{if or $logInApply (eq .State "pending")}} open{{end}}>
+  <summary><span class="status {{template "pclass" .State}}">{{if eq .State "running"}}Applying{{else if eq .State "pending"}}Apply pending{{else}}Apply {{status .State}}{{end}}</span>
+    {{if not .Start.IsZero}}<span class="muted">{{.Start.Format "15:04:05"}}</span>{{end}}</summary>
+  <div class="body">
+    {{if not .Start.IsZero}}<p class="steps"><strong>Started</strong> {{.Start.Format "15:04:05"}}{{if not .End.IsZero}} › <strong>{{if eq .State "finished"}}Finished{{else}}{{status .State}}{{end}}</strong> {{.End.Format "15:04:05"}}{{end}}</p>{{end}}
+    {{if and (eq $r.Status "needs_confirmation") $.CanOperate}}
+    <p>{{if eq $r.Action "destroy"}}Confirm to destroy the resources above.{{else}}Review the plan above, then confirm to apply it.{{end}}</p>
+    <div class="actions" style="margin-top:0">
+      <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/confirm">
+        <button type="submit"{{if eq $r.Action "destroy"}} class="danger"{{end}}>Confirm &amp; {{if eq $r.Action "destroy"}}destroy{{else}}apply{{end}}</button></form>
+      <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/discard">
+        <button type="submit" class="secondary">Discard</button></form>
+    </div>
+    {{else if eq $r.Status "needs_confirmation"}}
+    <p class="muted">Waiting for the workspace's owner or an admin to confirm.</p>
+    {{else if eq .State "queued"}}<p class="muted">Waiting for a runner…</p>
+    {{else if eq .State "discarded"}}<p class="muted">The plan was discarded{{with $r.ConfirmedBy}} by {{.}}{{end}}.</p>
+    {{end}}
+    {{if $logInApply}}{{template "runlog" $}}{{end}}
+  </div>
+</details>
+{{else}}
+<div class="section skipped">— Apply will not run</div>
+{{end}}
 {{end}}
 
 {{with $r.Outputs}}
@@ -56,19 +122,6 @@
 </table>
 </div>
 {{end}}
-
-<h2>Log <small><a href="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/logs">raw</a></small></h2>
-<pre id="log" class="log" aria-live="polite">{{if eq $r.Status "plan_queued" "apply_queued"}}Waiting for a runner…{{end}}</pre>
-
-<h2>History</h2>
-<div class="card flush">
-<table>
-<tr><th>Time</th><th>Status</th><th>Message</th></tr>
-{{range .History}}
-<tr><td class="nowrap">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td><td><span class="status {{.Status}}">{{status .Status}}</span></td><td>{{with .Message}}{{.}}{{end}}</td></tr>
-{{end}}
-</table>
-</div>
 
 <script>
   // Follow the log live; reload once a runner is done with the run (finished, or waiting for confirmation).
@@ -84,3 +137,11 @@
   es.addEventListener("done", () => { es.close(); if (wasWorking) location.reload(); });
 </script>
 {{template "bottom"}}
+
+{{define "runlog"}}
+<div class="log-bar"><a class="btn secondary small" href="/workspaces/{{.W.Name}}/runs/{{.R.ID}}/logs">View raw log</a>
+  <button type="button" class="secondary small" onclick="log.scrollTop=0">Top</button>
+  <button type="button" class="secondary small" onclick="log.scrollTop=log.scrollHeight">Bottom</button>
+  <button type="button" class="secondary small" onclick="log.requestFullscreen()">Full screen</button></div>
+<pre id="log" class="log" aria-live="polite">{{if eq .R.Status "plan_queued" "apply_queued"}}Waiting for a runner…{{end}}</pre>
+{{end}}

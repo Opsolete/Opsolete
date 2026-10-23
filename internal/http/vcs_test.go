@@ -17,7 +17,7 @@ import (
 	"github.com/rudesome/form2stack/internal/vcs"
 )
 
-// The HCP no-code flow: connect GitHub, publish a repo, provision a workspace from its template,
+// The no-code flow: connect GitHub, publish a repo, provision a workspace from its template,
 // push a new tag, and move the workspace to it.
 func TestVCSPublishAndUpdate(t *testing.T) {
 	store := testStore(t)

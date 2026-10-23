@@ -90,7 +90,7 @@ func TestWorkspaceTemplates(t *testing.T) {
 	if rec := post(h, base+"two/remove", nil); rec.Code != http.StatusNotFound {
 		t.Fatalf("removing twice: %d", rec.Code)
 	}
-	if page := get(h, "/workspaces/"+ws).Body.String(); !strings.Contains(page, base+"one") || strings.Contains(page, base+"two") {
+	if page := get(h, "/workspaces/"+ws+"?show=templates").Body.String(); !strings.Contains(page, base+"one") || strings.Contains(page, base+"two") {
 		t.Fatalf("workspace page: %s", page)
 	}
 

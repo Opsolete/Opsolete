@@ -1,4 +1,4 @@
--- VCS providers (GitHub, Azure DevOps): registry modules published from a repository, HCP-style.
+-- VCS providers (GitHub, Azure DevOps): registry modules published from a repository.
 -- Every semver tag in the repo becomes an (immutable) module version.
 CREATE TABLE vcs_connections (
     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
