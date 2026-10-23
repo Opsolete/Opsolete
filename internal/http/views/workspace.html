@@ -151,6 +151,11 @@
   <input id="rename" name="name" value="{{$w.Name}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}" style="max-width:24rem">
   <button type="submit" class="secondary">Rename</button>
 </form>
+<form method="post" action="/workspaces/{{$w.Name}}/delete" class="card inline"
+  onsubmit="return confirm('Delete {{$w.Name}} with its runs, variables and state history? This cannot be undone.')">
+  <span class="muted" style="flex:1">Deleting needs a state without resources: destroy them first.</span>
+  <button type="submit" class="danger"{{if or .Active .Resources}} disabled{{end}}>Delete workspace…</button>
+</form>
 {{end}}
 
 {{with .Versions}}
@@ -158,10 +163,10 @@
 <div class="card flush">
 <table>
 <tr><th>Version</th><th>Saved</th><th>Size</th><th>Resources</th>{{if $.CanOperate}}<th></th>{{end}}</tr>
-{{range $i, $v := .}}<tr><td><span class="tag">v{{.Serial}}</span></td><td class="nowrap">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td>
+{{range $i, $v := .}}<tr><td><span class="tag">v{{.Serial}}</span>{{if not $i}} <span class="muted">current</span>{{end}}{{with .CopyOf}} <span class="muted">rollback to v{{.}}</span>{{end}}</td><td class="nowrap">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td>
   <td>{{.Size}} B</td><td>{{if .Indexed}}{{.Resources}}{{else}}<span class="muted">not indexed</span>{{end}}</td>
-  {{if $.CanOperate}}<td>{{if $i}}<form method="post" action="/workspaces/{{$w.Name}}/state-versions/{{.ID}}/rollback"
-    onsubmit="return confirm('Make a copy of state v{{.Serial}} the current state? The next run plans against it: resources created since then may be duplicated or orphaned.')">
+  {{if $.CanOperate}}<td>{{if and $i (not $.Active)}}<form method="post" action="/workspaces/{{$w.Name}}/state-versions/{{.ID}}/rollback"
+    onsubmit="return confirm('Roll back to state v{{.Serial}}?\n\nA copy of v{{.Serial}} becomes the current state. Newer versions are kept, so you can roll forward again. Your infrastructure is not changed.\n\nThe state will no longer match what is deployed if anything changed since v{{.Serial}}: resources created since then are no longer tracked (the next run may try to create them again), and resources deleted since then are tracked again (the next run will recreate them). Review the next plan before applying it.')">
     <button type="submit" class="secondary small">Roll back</button></form>{{end}}</td>{{end}}</tr>{{end}}
 </table>
 </div>

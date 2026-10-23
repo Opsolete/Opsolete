@@ -9,8 +9,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// ErrLastConfig: removing the template would leave the workspace's state without configuration.
-var ErrLastConfig = errors.New("this template is the workspace's only configuration: destroy its resources instead, or add another template first")
+// ErrLastConfig: the workspace's other configuration went while removing a template; retrying
+// takes the last-template path.
+var ErrLastConfig = errors.New("the workspace's configuration changed meanwhile: try again")
 
 // WorkspaceTemplate is a template added to a workspace: the module block module.<Name>, pinned to
 // a module version, with its inputs.
@@ -69,9 +70,48 @@ func (s *Store) SetWorkspaceTemplate(ctx context.Context, workspaceID string, t 
 }
 
 // RemoveWorkspaceTemplate removes an added template and queues the plan that destroys its resources.
+// The last configuration of a workspace can't be removed by a plan (nothing would be left to plan
+// with): if its state manages resources, a destroy run is queued that removes the template once
+// applied; if not, it is removed right away and no run is queued (Run.ID "").
 func (s *Store) RemoveWorkspaceTemplate(ctx context.Context, workspaceID, name, createdBy string) (Run, error) {
-	return s.changeTemplates(ctx, workspaceID, createdBy, `DELETE FROM workspace_templates
-		WHERE workspace_id = $1::uuid AND name = $2`, workspaceID, name)
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return Run{}, err
+	}
+	defer tx.Rollback()
+	// FOR UPDATE: templates can't be added meanwhile (their FK check waits for the lock).
+	var exists, last bool
+	if err := tx.QueryRowContext(ctx, `SELECT
+			EXISTS (SELECT 1 FROM workspace_templates t WHERE t.workspace_id = w.id AND t.name = $2),
+			module_source IS NULL AND vcs_connection_id IS NULL
+				AND NOT EXISTS (SELECT 1 FROM workspace_templates t WHERE t.workspace_id = w.id AND t.name <> $2)
+		FROM workspaces w WHERE w.id = $1::uuid FOR UPDATE`, workspaceID, name).Scan(&exists, &last); err != nil {
+		return Run{}, err
+	}
+	switch err := requireIdle(ctx, tx, workspaceID); {
+	case !exists:
+		return Run{}, sql.ErrNoRows
+	case !last:
+		tx.Rollback()
+		return s.changeTemplates(ctx, workspaceID, createdBy, `DELETE FROM workspace_templates
+			WHERE workspace_id = $1::uuid AND name = $2`, workspaceID, name)
+	case errors.Is(err, ErrHasResources):
+		r, err := createRun(ctx, tx, workspaceID, "destroy", createdBy)
+		if err != nil {
+			return Run{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE runs SET remove_template = $2 WHERE id = $1`, r.ID, name); err != nil {
+			return Run{}, err
+		}
+		return r, tx.Commit()
+	case err != nil:
+		return Run{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM workspace_templates WHERE workspace_id = $1::uuid AND name = $2`,
+		workspaceID, name); err != nil {
+		return Run{}, err
+	}
+	return Run{}, tx.Commit()
 }
 
 // changeTemplates runs q (which must change one row, else sql.ErrNoRows) and queues a plan, atomically.
@@ -99,7 +139,7 @@ func (s *Store) changeTemplates(ctx context.Context, workspaceID, createdBy, q s
 		workspaceID).Scan(&hasConfig); err != nil {
 		return Run{}, err
 	}
-	if !hasConfig {
+	if !hasConfig { // the last other template went meanwhile
 		return Run{}, ErrLastConfig
 	}
 	r, err := createRun(ctx, tx, workspaceID, "apply", createdBy)

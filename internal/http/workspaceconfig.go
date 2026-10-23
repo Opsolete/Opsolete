@@ -273,8 +273,9 @@ func (s *Server) vcsArchive(w http.ResponseWriter, r *http.Request) {
 	w.Write(b)
 }
 
-// rollbackState makes a copy of an older state version the workspace's current state, HCP style:
-// same content, serial one above the current one. It holds the state lock, so no run writes meanwhile.
+// rollbackState makes a copy of an older state version the workspace's current state, as HCP's
+// state version rollback does: same content, serial one above the current one, older versions kept.
+// It holds the state lock and refuses during a run, so no run writes or applies a plan meanwhile.
 func (s *Server) rollbackState(w http.ResponseWriter, r *http.Request) {
 	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
 	if !ok {
@@ -284,15 +285,6 @@ func (s *Server) rollbackState(w http.ResponseWriter, r *http.Request) {
 	from, err := strconv.ParseInt(r.PathValue("version"), 10, 64)
 	if err != nil {
 		http.NotFound(w, r)
-		return
-	}
-	runs, err := s.Store.Runs(ctx, ws.ID, 1)
-	if err != nil {
-		s.internalError(w, "list runs", err)
-		return
-	}
-	if len(runs) > 0 && runs[0].Active() {
-		http.Error(w, storage.ErrRunActive.Error(), http.StatusConflict)
 		return
 	}
 	u := auth.FromContext(ctx)
@@ -310,6 +302,17 @@ func (s *Server) rollbackState(w http.ResponseWriter, r *http.Request) {
 			s.Log.Error("unlock state", "workspace", ws.Name, "err", err)
 		}
 	}()
+	// After locking: a run that starts now can't touch the state until the rollback is done, and one
+	// that is between phases (e.g. waiting for confirmation) would apply a plan made against the old state.
+	runs, err := s.Store.Runs(ctx, ws.ID, 1)
+	if err != nil {
+		s.internalError(w, "list runs", err)
+		return
+	}
+	if len(runs) > 0 && runs[0].Active() {
+		http.Error(w, storage.ErrRunActive.Error(), http.StatusConflict)
+		return
+	}
 	key, err := s.Store.StateVersionBlob(ctx, ws.ID, from)
 	if errors.Is(err, sql.ErrNoRows) {
 		http.NotFound(w, r)

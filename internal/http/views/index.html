@@ -2,7 +2,7 @@
 <div class="page-head">
   <div>
     <h1>Templates</h1>
-    <p class="muted">Pick a template, fill in the form, and a runner deploys it with Terraform.</p>
+    <p class="muted">No-code ready modules: each template pins a module version and turns its variables into a form. Pick one, fill it in, and a runner provisions a workspace with Terraform.</p>
   </div>
   {{if .Editor}}<a class="btn" href="/templates/new">+ New template</a>{{end}}
 </div>
@@ -15,7 +15,7 @@
     <p>{{or .Description "No description."}}</p>
     <footer>
       <span class="tag" title="module version">{{.Module.Ref}}</span>
-      <span>{{if $editor}}<a href="/templates/{{.ID}}/edit">Edit</a> · {{end}}<a href="/templates/{{.ID}}">Deploy →</a></span>
+      <span>{{if $editor}}<a href="/templates/{{.ID}}/edit">Edit</a> · {{end}}<a href="/templates/{{.ID}}">Provision workspace →</a></span>
     </footer>
   </article>
   {{end}}

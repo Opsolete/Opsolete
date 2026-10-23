@@ -144,5 +144,9 @@ func (s *Server) removeWorkspaceTemplate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.Log.Info("workspace template removed", "workspace", ws.Name, "module", r.PathValue("module"), "run", run.ID, "user", u.Email)
+	if run.ID == "" { // nothing was deployed, so nothing to plan
+		http.Redirect(w, r, "/workspaces/"+ws.Name, http.StatusSeeOther)
+		return
+	}
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID, http.StatusSeeOther)
 }

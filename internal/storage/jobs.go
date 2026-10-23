@@ -233,6 +233,13 @@ func (s *Store) FinishJob(ctx context.Context, runID, lease, result, message str
 	if _, err := tx.ExecContext(ctx, `UPDATE workspaces SET state_lock = NULL WHERE id = $1`, workspaceID); err != nil {
 		return "", err
 	}
+	if action == "destroy" && (final == Applied || final == NoChanges) {
+		// A destroy run that removes the workspace's last template: its resources are gone now.
+		if _, err := tx.ExecContext(ctx, `DELETE FROM workspace_templates t USING runs r
+			WHERE r.id::text = $1 AND t.workspace_id = r.workspace_id AND t.name = r.remove_template`, runID); err != nil {
+			return "", err
+		}
+	}
 	if final == ApplyQueued && message == "" {
 		message = "auto-apply: waiting for a runner"
 	}

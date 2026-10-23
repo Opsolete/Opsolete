@@ -17,6 +17,7 @@ var (
 	ErrRunActive      = errors.New("the workspace already has an active run: confirm or discard it, or wait for it to finish")
 	ErrNotConfirmable = errors.New("the run isn't waiting for confirmation")
 	ErrNotCancelable  = errors.New("the run can't be canceled: it isn't queued or running")
+	ErrHasResources   = errors.New("the workspace's state still manages resources: destroy them first")
 )
 
 // Viewer is who asks: admins see everything, others their own workspaces and those granted to
@@ -271,6 +272,63 @@ func (s *Store) RenameWorkspace(ctx context.Context, id, name string) error {
 		return ErrNameTaken
 	}
 	return err
+}
+
+// DeleteWorkspace deletes a workspace with its runs, variables, grants and state versions, and
+// returns the blob keys of its state files for the caller to delete. It refuses while a run is
+// active (ErrRunActive) or the current state manages resources or isn't indexed (ErrHasResources),
+// so deleting never orphans real infrastructure.
+func (s *Store) DeleteWorkspace(ctx context.Context, id string) ([]string, error) {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	if err := requireIdle(ctx, tx, id); err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT blob_key FROM state_versions WHERE workspace_id::text = $1`, id)
+	if err != nil {
+		return nil, err
+	}
+	var keys []string
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		keys = append(keys, k)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM workspaces WHERE id::text = $1`, id); err != nil {
+		return nil, err
+	}
+	return keys, tx.Commit()
+}
+
+// requireIdle locks the workspace row (keeping new runs out until tx ends: their FK check waits)
+// and returns ErrRunActive if a run is active, or ErrHasResources if its current state manages
+// resources or isn't indexed; sql.ErrNoRows if there is no such workspace.
+func requireIdle(ctx context.Context, tx *sql.Tx, id string) error {
+	var active, deployed bool
+	if err := tx.QueryRowContext(ctx, `SELECT
+			EXISTS (SELECT 1 FROM runs WHERE workspace_id = w.id AND status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')),
+			EXISTS (SELECT 1 FROM (SELECT v.id, v.indexed FROM state_versions v WHERE v.workspace_id = w.id ORDER BY v.id DESC LIMIT 1) cur
+				WHERE NOT cur.indexed OR EXISTS (SELECT 1 FROM state_version_resources r WHERE r.state_version_id = cur.id))
+		FROM workspaces w WHERE w.id::text = $1 FOR UPDATE`, id).Scan(&active, &deployed); err != nil {
+		return err
+	}
+	switch {
+	case active:
+		return ErrRunActive
+	case deployed:
+		return ErrHasResources
+	}
+	return nil
 }
 
 // Access returns what userID may do in a workspace through being its creator or through a group

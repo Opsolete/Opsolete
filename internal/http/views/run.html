@@ -17,6 +17,11 @@
     <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/cancel"><button type="submit" class="secondary">Cancel run</button></form>
     {{end}}
   </div>
+  {{else if and $.CanOperate (not $r.Active) $w.HasConfig}}
+  <form method="post" action="/workspaces/{{$w.Name}}/runs"{{if eq $r.Action "destroy"}}
+    onsubmit="return confirm('Start a new destroy run for {{$w.Name}}?')"{{end}}>
+    <input type="hidden" name="action" value="{{$r.Action}}">
+    <button type="submit" class="secondary">Re-run {{if eq $r.Action "destroy"}}destroy{{else}}plan{{end}}</button></form>
   {{end}}
 </div>
 

@@ -706,11 +706,14 @@ func TestWorkspaceFlow(t *testing.T) {
 		t.Fatalf("rollback: %d", code)
 	}
 	vs, _ = store.StateVersions(ctx, ws.ID, 10)
-	if vs[0].Serial != 4 || !vs[0].Indexed || vs[0].Resources != 1 {
+	if vs[0].Serial != 4 || !vs[0].Indexed || vs[0].Resources != 1 || vs[0].CopyOf != 2 {
 		t.Fatalf("rolled back version: %+v", vs[0])
 	}
 	if out, _, _ := store.CurrentOutputs(ctx, ws.ID); out["id"] != "abc" {
 		t.Fatalf("rolled back outputs: %v", out)
+	}
+	if page := get(h, "/workspaces/"+name).Body.String(); !strings.Contains(page, "rollback to v2") {
+		t.Fatalf("version list must show the rollback: %s", page)
 	}
 	if b, _ := app.StateStore.ReadAll(ctx, vs[0].BlobKey); !strings.Contains(string(b), `"serial": 4`) || !strings.Contains(string(b), "azurerm_storage_account") {
 		t.Fatalf("rolled back state: %s", b)

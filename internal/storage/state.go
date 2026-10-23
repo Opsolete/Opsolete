@@ -20,6 +20,7 @@ type StateVersion struct {
 	Size      int64
 	Indexed   bool
 	Resources int            // index size
+	CopyOf    int64          // a rollback: serial of the version this is a copy of; 0 otherwise
 	Outputs   map[string]any // from the state file, sensitive values masked (not read by StateVersions)
 	CreatedAt time.Time
 }
@@ -36,7 +37,8 @@ func (s *Store) WorkingRun(ctx context.Context, workspaceID string) (string, err
 // StateVersions lists a workspace's state versions, newest first.
 func (s *Store) StateVersions(ctx context.Context, workspaceID string, limit int) ([]StateVersion, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT v.id, v.serial, v.lineage, v.blob_key, v.md5, v.size, v.indexed,
-			(SELECT count(*) FROM state_version_resources r WHERE r.state_version_id = v.id), v.created_at
+			(SELECT count(*) FROM state_version_resources r WHERE r.state_version_id = v.id),
+			COALESCE((SELECT o.serial FROM state_versions o WHERE o.id = v.rollback_of), 0), v.created_at
 		FROM state_versions v WHERE v.workspace_id::text = $1 ORDER BY v.id DESC LIMIT $2`, workspaceID, limit)
 	if err != nil {
 		return nil, err
@@ -45,7 +47,7 @@ func (s *Store) StateVersions(ctx context.Context, workspaceID string, limit int
 	var out []StateVersion
 	for rows.Next() {
 		var v StateVersion
-		if err := rows.Scan(&v.ID, &v.Serial, &v.Lineage, &v.BlobKey, &v.MD5, &v.Size, &v.Indexed, &v.Resources, &v.CreatedAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.Serial, &v.Lineage, &v.BlobKey, &v.MD5, &v.Size, &v.Indexed, &v.Resources, &v.CopyOf, &v.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, v)
@@ -76,14 +78,14 @@ func (s *Store) StateVersionBlob(ctx context.Context, workspaceID string, id int
 }
 
 // CopyStateIndex gives the workspace's current state version the resource index of version from,
-// for a rollback: the current version is a copy of it.
+// and records it as a copy of from: a rollback.
 func (s *Store) CopyStateIndex(ctx context.Context, workspaceID string, from int64) error {
 	_, err := s.DB.ExecContext(ctx, `
 		WITH cur AS (SELECT id FROM state_versions WHERE workspace_id::text = $1 ORDER BY id DESC LIMIT 1),
 		ins AS (INSERT INTO state_version_resources (state_version_id, address, type, name, provider, module)
 			SELECT cur.id, r.address, r.type, r.name, r.provider, r.module FROM cur, state_version_resources r
 			WHERE r.state_version_id = $2 ON CONFLICT DO NOTHING)
-		UPDATE state_versions SET indexed = (SELECT indexed FROM state_versions WHERE id = $2)
+		UPDATE state_versions SET indexed = (SELECT indexed FROM state_versions WHERE id = $2), rollback_of = $2
 		WHERE id = (SELECT id FROM cur)`, workspaceID, from)
 	return err
 }

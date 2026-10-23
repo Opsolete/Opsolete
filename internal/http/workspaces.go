@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"gocloud.dev/gcerrors"
+
 	"github.com/rudesome/form2stack/internal/auth"
 	"github.com/rudesome/form2stack/internal/storage"
 	"github.com/rudesome/form2stack/internal/templates"
@@ -47,6 +49,7 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /workspaces/{name}/configure", s.configureForm)
 	mux.HandleFunc("POST /workspaces/{name}/configure", s.configureWorkspace)
 	mux.HandleFunc("POST /workspaces/{name}/rename", s.renameWorkspace)
+	mux.HandleFunc("POST /workspaces/{name}/delete", s.deleteWorkspace)
 	mux.HandleFunc("GET /workspaces/{name}/templates/new", s.workspaceTemplateForm)
 	mux.HandleFunc("POST /workspaces/{name}/templates/new", s.saveWorkspaceTemplate)
 	mux.HandleFunc("GET /workspaces/{name}/templates/{module}", s.workspaceTemplateForm)
@@ -409,6 +412,33 @@ func (s *Server) renameWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Log.Info("workspace renamed", "from", ws.Name, "to", name, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/workspaces/"+name, http.StatusSeeOther)
+}
+
+// deleteWorkspace deletes a workspace that manages no resources, with its state files.
+func (s *Server) deleteWorkspace(w http.ResponseWriter, r *http.Request) {
+	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
+	if !ok {
+		return
+	}
+	keys, err := s.Store.DeleteWorkspace(r.Context(), ws.ID)
+	switch {
+	case errors.Is(err, sql.ErrNoRows): // deleted meanwhile
+		http.NotFound(w, r)
+		return
+	case errors.Is(err, storage.ErrRunActive), errors.Is(err, storage.ErrHasResources):
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	case err != nil:
+		s.internalError(w, "delete workspace", err)
+		return
+	}
+	for _, k := range keys { // failures only leave an unreferenced file behind
+		if err := s.StateStore.Delete(r.Context(), k); err != nil && gcerrors.Code(err) != gcerrors.NotFound {
+			s.Log.Warn("delete state file", "workspace", ws.Name, "key", k, "err", err)
+		}
+	}
+	s.Log.Info("workspace deleted", "workspace", ws.Name, "id", ws.ID, "user", auth.FromContext(r.Context()).Email)
+	http.Redirect(w, r, "/workspaces", http.StatusSeeOther)
 }
 
 // workspaceAccess grants an IdP group read or operate access to a workspace (level "" revokes).
