@@ -54,6 +54,7 @@
   .topbar nav a { color: var(--nav-text); padding: .45rem .75rem; border-radius: 5px; font-weight: 500; }
   .topbar nav a:hover { color: #fff; background: var(--nav-hover); text-decoration: none; }
   .topbar nav a[aria-current="page"] { color: #fff; background: var(--nav-hover); box-shadow: inset 3px 0 0 #a067da; }
+  .nav-label { color: var(--nav-text); font-size: .8rem; font-weight: 500; padding: .9rem .75rem .3rem; }
   .nav-head { color: #fff; font-weight: 600; padding: .9rem .75rem .3rem; overflow-wrap: anywhere; }
   .who { margin-top: auto; display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; font-size: .8rem; color: var(--nav-text);
     border-top: 1px solid var(--nav-hover); padding: .9rem .5rem 0; }
@@ -238,6 +239,18 @@
 <header class="topbar"><div class="wrap">
   <a class="brand" href="/"><span class="logo" aria-hidden="true">F2S</span>Form2Stack</a>
   {{with workspace}}{{$t := tab}}
+  {{if and (or (eq $t "settings") (eq $t "vcs")) $}}{{$p := $.Page}}
+  <!-- the side nav becomes the settings menu; only pages that pass their data to "top" get it -->
+  <nav aria-label="Workspace settings">
+    <a href="/workspaces/{{.}}">‹ {{.}}</a>
+    <span class="nav-label">Workspace settings</span>
+    <a href="/workspaces/{{.}}/settings"{{if eq $p ""}} aria-current="page"{{end}}>General</a>
+    <a href="/workspaces/{{.}}/settings/health"{{if eq $p "health"}} aria-current="page"{{end}}>Health</a>
+    <a href="/workspaces/{{.}}/settings/access"{{if eq $p "access"}} aria-current="page"{{end}}>Team access</a>
+    {{if and $.CanOperate (features).VCS (not $.W.TemplateID)}}<a href="/workspaces/{{.}}/vcs"{{if eq $t "vcs"}} aria-current="page"{{end}}>Version control</a>{{end}}
+    {{if $.CanOperate}}<a href="/workspaces/{{.}}/settings/deletion"{{if eq $p "deletion"}} aria-current="page"{{end}}>Destruction and deletion</a>{{end}}
+  </nav>
+  {{else}}
   <nav aria-label="Workspace">
     <a href="/workspaces">‹ Workspaces</a>
     <span class="nav-head">{{.}}</span>
@@ -247,6 +260,7 @@
     <a href="/workspaces/{{.}}/variables"{{if eq $t "variables"}} aria-current="page"{{end}}>Variables</a>
     <a href="/workspaces/{{.}}/settings"{{if eq $t "settings"}} aria-current="page"{{end}}>Settings</a>
   </nav>
+  {{end}}
   {{else}}
   <nav aria-label="Main">
     {{$s := section}}{{with features}}

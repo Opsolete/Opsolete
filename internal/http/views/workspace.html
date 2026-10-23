@@ -1,6 +1,7 @@
-{{template "top"}}
-{{$w := .W}}{{$tab := tab}}
-<nav class="back" aria-label="breadcrumb"><a href="/workspaces">Workspaces</a> / <a href="/workspaces/{{$w.Name}}">{{$w.Name}}</a> / {{if eq $tab "runs"}}Runs{{else if eq $tab "states"}}States{{else if eq $tab "variables"}}Variables{{else if eq $tab "settings"}}Settings{{else}}Overview{{end}}</nav>
+{{template "top" .}}
+{{$w := .W}}{{$tab := tab}}{{$p := .Page}}
+<nav class="back" aria-label="breadcrumb"><a href="/workspaces">Workspaces</a> / <a href="/workspaces/{{$w.Name}}">{{$w.Name}}</a> / {{if eq $tab "runs"}}Runs{{else if eq $tab "states"}}States{{else if eq $tab "variables"}}Variables{{else if eq $tab "settings"}}<a href="/workspaces/{{$w.Name}}/settings">Settings</a> / {{if eq $p "health"}}Health{{else if eq $p "access"}}Team access{{else if eq $p "deletion"}}Destruction and deletion{{else}}General{{end}}{{else}}Overview{{end}}</nav>
+{{if ne $tab "settings"}}
 <div class="page-head">
   <div>
     <h1>{{$w.Name}}{{if .Destroyed}} <span class="status destroyed">destroyed</span>{{end}}</h1>
@@ -38,12 +39,11 @@
       </form>
     </dialog>
     {{if .HasTemplate}}<a class="btn secondary" href="/workspaces/{{$w.Name}}/configure">Configure…</a>{{end}}
-    <form method="post" action="/workspaces/{{$w.Name}}/runs"><input type="hidden" name="action" value="destroy">
-      <button type="submit" class="danger">Destroy…</button></form>
     {{end}}
   </div>
   {{end}}
 </div>
+{{end}}
 
 {{if eq $tab "overview"}}
 {{if and .Update $.CanOperate}}
@@ -151,7 +151,7 @@
     {{if not $w.TemplateID}}<li>Repository: {{if $w.VCSConnectionID}}<code>{{$w.VCSRepo}}</code> <span class="tag">{{$w.VCSBranch}}</span>{{else}}<span class="muted">none{{with $w.VCSRepo}} (was {{.}}; its VCS connection was deleted){{end}}</span>{{end}}
       {{if and .CanOperate (features).VCS}} · <a href="/workspaces/{{$w.Name}}/vcs">{{if $w.VCSConnectionID}}Change{{else}}Link{{end}}…</a>{{end}}</li>{{end}}
     <li>Auto-apply: <a href="/workspaces/{{$w.Name}}/settings">{{if $w.AutoApply}}On{{else}}Off{{end}}</a></li>
-    <li>Drift detection: <a href="/workspaces/{{$w.Name}}/settings">{{if $w.DriftDetection}}On{{else}}Off{{end}}</a></li>
+    <li>Drift detection: <a href="/workspaces/{{$w.Name}}/settings/health">{{if $w.DriftDetection}}On{{else}}Off{{end}}</a></li>
     <li>Last drift check: {{with .Assessment}}<a href="/workspaces/{{$w.Name}}/runs/{{.ID}}"><span class="status {{.Status}}">{{status .Status}}</span></a> {{.UpdatedAt.Format "2006-01-02 15:04"}}{{else}}<span class="muted">never</span>{{end}}</li>
   </ul>
   {{if $w.TemplateID}}
@@ -199,11 +199,44 @@
 {{end}}
 
 {{if eq $tab "settings"}}
-{{if not .CanOperate}}<p>{{if $w.AutoApply}}Auto-apply{{else}}Manual apply{{end}} · drift detection {{if $w.DriftDetection}}on{{else}}off{{end}}</p>{{end}}
-{{if or .Admin .Grants}}
-<h2>Access</h2>
+{{if eq $p ""}}
+<h1>General settings</h1>
+<p class="muted">The workspace's name and how its runs apply.</p>
+{{if .CanOperate}}
+<h2>Name</h2>
+<form method="post" action="/workspaces/{{$w.Name}}/rename" class="card inline">
+  <label for="rename" style="margin:0">Name</label>
+  <input id="rename" name="name" value="{{$w.Name}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}" style="max-width:24rem">
+  <button type="submit" class="secondary">Rename</button>
+</form>
+<h2>Apply method</h2>
+<form method="post" action="/workspaces/{{$w.Name}}/settings" class="card">
+  <!-- one settings endpoint: keep the Health page's value -->
+  {{if $w.DriftDetection}}<input type="hidden" name="drift_detection" value="on">{{end}}
+  <label style="margin:0;font-weight:normal"><input type="checkbox" name="auto_apply"{{if $w.AutoApply}} checked{{end}}>
+    Auto-apply: apply plans without confirmation (destroys and refresh-only runs always ask)</label>
+  <div class="actions" style="margin-top:1rem"><button type="submit" class="secondary">Save</button></div>
+</form>
+{{else}}<p>{{if $w.AutoApply}}Auto-apply{{else}}Manual apply{{end}}</p>{{end}}
+
+{{else if eq $p "health"}}
+<h1>Health</h1>
+<p class="muted">Drift detection: whether the infrastructure still matches the state.</p>
+{{if .CanOperate}}
+<form method="post" action="/workspaces/{{$w.Name}}/settings" class="card">
+  <input type="hidden" name="page" value="health">
+  {{if $w.AutoApply}}<input type="hidden" name="auto_apply" value="on">{{end}}
+  <label style="margin:0;font-weight:normal"><input type="checkbox" name="drift_detection"{{if $w.DriftDetection}} checked{{end}}>
+    Drift detection: check daily for changes made outside Terraform (a refresh-only plan, never applied)</label>
+  <div class="actions" style="margin-top:1rem"><button type="submit" class="secondary">Save</button></div>
+</form>
+{{else}}<p>Drift detection {{if $w.DriftDetection}}on{{else}}off{{end}}</p>{{end}}
+<p class="muted">Last drift check: {{with .Assessment}}<a href="/workspaces/{{$w.Name}}/runs/{{.ID}}"><span class="status {{.Status}}">{{status .Status}}</span></a> {{.UpdatedAt.Format "2006-01-02 15:04"}}{{else}}never{{end}}</p>
+
+{{else if eq $p "access"}}
+<h1>Team access</h1>
+<p class="muted">Visible to its creator, admins and these IdP groups. <strong>operate</strong>: runs, confirm, destroy, settings, rename; <strong>read</strong>: view only.</p>
 <div class="card">
-  <p class="muted">Visible to its creator, admins and these IdP groups. <strong>operate</strong>: runs, confirm, destroy, settings, rename; <strong>read</strong>: view only.</p>
   {{with .Grants}}
   <table>
   <tr><th>Group</th><th>Access</th>{{if $.Admin}}<th></th>{{end}}</tr>
@@ -211,6 +244,7 @@
     {{if $.Admin}}<td><form method="post" action="/workspaces/{{$w.Name}}/access"><input type="hidden" name="group" value="{{.Group}}">
       <button type="submit" class="secondary small">Revoke</button></form></td>{{end}}</tr>{{end}}
   </table>
+  {{else}}<p class="muted" style="margin:0">No groups have access.</p>
   {{end}}
   {{if .Admin}}
   <form method="post" action="/workspaces/{{$w.Name}}/access" class="inline" style="margin-top:1rem">
@@ -222,29 +256,38 @@
   </form>
   {{end}}
 </div>
-{{end}}
 
-{{if .CanOperate}}
-<h2 id="settings">Settings</h2>
-<form method="post" action="/workspaces/{{$w.Name}}/settings" class="card">
-  <label style="margin:0;font-weight:normal"><input type="checkbox" name="auto_apply"{{if $w.AutoApply}} checked{{end}}>
-    Auto-apply: apply plans without confirmation (destroys and refresh-only runs always ask)</label>
-  <label style="margin:.5rem 0 0;font-weight:normal"><input type="checkbox" name="drift_detection"{{if $w.DriftDetection}} checked{{end}}>
-    Drift detection: check daily for changes made outside Terraform (a refresh-only plan, never applied)</label>
-  <div class="actions" style="margin-top:1rem"><button type="submit" class="secondary">Save</button></div>
+{{else if .CanOperate}}
+<h1>Destruction and deletion</h1>
+<p class="muted" style="max-width:52rem">There are two independent steps for destroying this workspace and the infrastructure associated with it.
+  First, its Terraform infrastructure should be destroyed. Second, the workspace in Form2Stack, including its runs, variables, settings and state history, can be deleted.</p>
+
+<h2>Manually destroy</h2>
+<p style="max-width:44rem">Queuing a destroy plan will redirect to a new plan that will destroy all of the infrastructure managed by Terraform.
+  It is equivalent to running <code>terraform plan -destroy -out=destroy.tfplan</code> followed by <code>terraform apply destroy.tfplan</code> locally;
+  the plan always asks for confirmation before it is applied.</p>
+{{if .Active}}<p class="muted">A run is in progress: wait for it to finish.</p>{{else if not $w.HasConfig}}<p class="muted">This workspace has no configuration to plan.</p>{{end}}
+<form method="post" action="/workspaces/{{$w.Name}}/runs"><input type="hidden" name="action" value="destroy">
+  <button type="submit" class="danger"{{if or .Active (not $w.HasConfig)}} disabled{{end}}>Queue destroy plan</button>
 </form>
-<form method="post" action="/workspaces/{{$w.Name}}/rename" class="card inline">
-  <label for="rename" style="margin:0">Name</label>
-  <input id="rename" name="name" value="{{$w.Name}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}" style="max-width:24rem">
-  <button type="submit" class="secondary">Rename</button>
-</form>
-<form method="post" action="/workspaces/{{$w.Name}}/delete" class="card inline"
+
+<hr style="border:0;border-top:1px solid var(--border);margin:2rem 0 0;max-width:60rem">
+<h2>Delete workspace</h2>
+<div style="max-width:44rem">
+<p><strong>Warning!</strong> Deleting this workspace permanently removes all of its variables, settings, run history and Terraform state.</p>
+{{if or .Resources .Active}}
+<ul>
+  {{with .Resources}}<li>This workspace <strong>manages {{len .}} resource{{if ne (len .) 1}}s{{end}}</strong>. You must destroy them before you can delete this workspace: queue a destroy plan above.</li>{{end}}
+  {{if .Active}}<li>A run is in progress.</li>{{end}}
+</ul>
+{{end}}
+</div>
+<form method="post" action="/workspaces/{{$w.Name}}/delete"
   onsubmit="return confirm('Delete {{$w.Name}} with its runs, variables and state history? This cannot be undone.')">
-  <span class="muted" style="flex:1">Deleting needs a state without resources: destroy them first.</span>
-  <button type="submit" class="danger"{{if or .Active .Resources}} disabled{{end}}>Delete workspace…</button>
+  <button type="submit" class="danger"{{if or .Active .Resources}} disabled{{end}}>Delete workspace</button>
 </form>
+{{else}}<p class="muted">Destroying or deleting this workspace needs operate access.</p>
 {{end}}
-
 {{end}}
 
 {{if eq $tab "states"}}

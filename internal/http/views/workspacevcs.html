@@ -12,9 +12,9 @@
 <input id="vcs_branch" name="vcs_branch" value="{{index $f "vcs_branch"}}" placeholder="main">
 <p class="hint">Runs plan the Terraform configuration at the repository root, at the branch's latest commit.</p>
 {{end}}
-{{template "top"}}
+{{template "top" .}}
 {{$w := .W}}
-<a class="back" href="/workspaces/{{$w.Name}}">← {{$w.Name}}</a>
+<nav class="back" aria-label="breadcrumb"><a href="/workspaces">Workspaces</a> / <a href="/workspaces/{{$w.Name}}">{{$w.Name}}</a> / <a href="/workspaces/{{$w.Name}}/settings">Settings</a> / Version control</nav>
 <div class="page-head">
   <div>
     <h1>Version control</h1>

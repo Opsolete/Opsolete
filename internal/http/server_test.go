@@ -685,8 +685,20 @@ func TestWorkspaceFlow(t *testing.T) {
 	post(h, "/workspaces/"+name+"/settings", url.Values{"drift_detection": {}})
 
 	// Destroy: a plan that always asks; discarding it frees the workspace; confirming destroys.
-	if page := get(other, "/workspaces/"+name).Body.String(); strings.Contains(page, "Destroy…") {
-		t.Fatal("destroy button shown to a user who may not destroy")
+	if strings.Contains(get(h, "/workspaces/"+name).Body.String(), "Destroy…") || !strings.Contains(get(h, "/workspaces/"+name+"/settings/deletion").Body.String(), "Queue destroy plan") {
+		t.Fatal("destroy belongs on the Destruction and deletion settings page, not the overview")
+	}
+	for _, page := range []string{"", "/health", "/access", "/deletion"} { // the settings menu replaces the side nav; "</html>": rendered to the end
+		if body := get(h, "/workspaces/"+name+"/settings"+page).Body.String(); !strings.Contains(body, `aria-label="Workspace settings"`) || !strings.Contains(body, "</html>") {
+			t.Fatalf("settings%s: no settings menu or render error", page)
+		}
+	}
+	if !strings.Contains(get(h, "/workspaces/"+name+"/settings/health").Body.String(), "Drift detection:") ||
+		!strings.Contains(get(h, "/workspaces/"+name+"/settings").Body.String(), "Rename") {
+		t.Fatal("settings General and Health pages")
+	}
+	if get(h, "/workspaces/"+name+"/settings/nope").Code != http.StatusNotFound {
+		t.Fatal("unknown settings page must 404")
 	}
 	if rec := post(other, "/workspaces/"+name+"/runs", url.Values{"action": {"destroy"}}); rec.Code != http.StatusNotFound {
 		t.Fatalf("destroy by a user without access: %d", rec.Code)
@@ -809,7 +821,7 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 	if !strings.Contains(get(reader, "/workspaces").Body.String(), name) || get(reader, runURL).Code != 200 {
 		t.Fatal("a read grant must show the workspace and its runs")
 	}
-	if !strings.Contains(get(admin, wsURL+"/settings").Body.String(), `<option value="grp-ops">`) {
+	if !strings.Contains(get(admin, wsURL+"/settings/access").Body.String(), `<option value="grp-ops">`) {
 		t.Fatal("grant form must offer the groups seen at login")
 	}
 	if rec := get(owner, "/workspaces/new?template=vars"); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/templates/vars" ||

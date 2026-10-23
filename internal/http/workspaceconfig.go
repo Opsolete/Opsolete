@@ -184,7 +184,7 @@ func (s *Server) renderWorkspaceVCS(w http.ResponseWriter, r *http.Request, stat
 		s.internalError(w, "vcs connections", err)
 		return
 	}
-	s.render(w, r, status, "workspacevcs.html", map[string]any{"W": ws, "VCS": f})
+	s.render(w, r, status, "workspacevcs.html", map[string]any{"W": ws, "VCS": f, "CanOperate": true, "Page": "vcs"}) // CanOperate, Page: the settings menu
 }
 
 func (s *Server) linkWorkspaceVCS(w http.ResponseWriter, r *http.Request) {

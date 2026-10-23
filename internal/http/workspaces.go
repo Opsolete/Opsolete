@@ -49,6 +49,7 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 	for _, tab := range []string{"runs", "states", "variables", "settings"} {
 		mux.HandleFunc("GET /workspaces/{name}/"+tab, s.workspace)
 	}
+	mux.HandleFunc("GET /workspaces/{name}/settings/{page}", s.workspace)
 	mux.HandleFunc("POST /workspaces/{name}/runs", s.newRun)
 	mux.HandleFunc("POST /workspaces/{name}/settings", s.workspaceSettings)
 	mux.HandleFunc("GET /workspaces/{name}/configure", s.configureForm)
@@ -216,6 +217,12 @@ func (s *Server) loadRun(w http.ResponseWriter, r *http.Request, need string) (s
 }
 
 func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
+	// settings sub-pages; "" is General
+	page := r.PathValue("page")
+	if !slices.Contains([]string{"", "health", "access", "deletion"}, page) {
+		http.NotFound(w, r)
+		return
+	}
 	ws, level, ok := s.loadWorkspace(w, r, levelRead)
 	if !ok {
 		return
@@ -321,7 +328,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 	}
 	s.render(w, r, http.StatusOK, "workspace.html", map[string]any{"W": ws, "Runs": runs, "Active": active,
 		"Filter": filter, "Counts": counts, "RunList": list, "Current": current,
-		"LatestPlan": latestPlan, "LatestApply": latestApply, "Metrics": metrics, "Show": r.URL.Query().Get("show"),
+		"LatestPlan": latestPlan, "LatestApply": latestApply, "Metrics": metrics, "Show": r.URL.Query().Get("show"), "Page": page,
 		"Update": update, "HasTemplate": hasTemplate, "Added": added, "Updates": updates, "Catalog": s.Templates.List(),
 		"Resources": res, "Versions": versions, "Outputs": outputs, "Destroyed": destroyed, "Grants": grants,
 		"Variables": vars, "Sets": sets, "Groups": groups, "Assessment": assessment,
@@ -452,7 +459,11 @@ func (s *Server) workspaceSettings(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "workspace settings", err)
 		return
 	}
-	http.Redirect(w, r, "/workspaces/"+ws.Name+"/settings", http.StatusSeeOther)
+	back := "/workspaces/" + ws.Name + "/settings"
+	if r.PostFormValue("page") == "health" {
+		back += "/health"
+	}
+	http.Redirect(w, r, back, http.StatusSeeOther)
 }
 
 // renameWorkspace changes the name in URLs and lists; state, runs and grants stay (keyed by id).
@@ -521,7 +532,7 @@ func (s *Server) workspaceAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Log.Info("workspace access", "workspace", ws.Name, "group", group, "level", level, "user", auth.FromContext(r.Context()).Email)
-	http.Redirect(w, r, "/workspaces/"+ws.Name+"/settings", http.StatusSeeOther)
+	http.Redirect(w, r, "/workspaces/"+ws.Name+"/settings/access", http.StatusSeeOther)
 }
 
 func (s *Server) run(w http.ResponseWriter, r *http.Request) {
