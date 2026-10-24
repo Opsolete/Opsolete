@@ -8,7 +8,7 @@ require (
 	github.com/hashicorp/go-version v1.9.0
 	github.com/hashicorp/terraform-config-inspect v0.0.0-20260904064934-75d64de68c31
 	github.com/hashicorp/terraform-exec v0.25.3
-	github.com/hashicorp/terraform-json v0.28.0
+	github.com/hashicorp/terraform-json v0.29.0
 	github.com/hashicorp/terraform-registry-address v0.5.0
 	github.com/jackc/pgx/v5 v5.11.0
 	gocloud.dev v0.47.0
