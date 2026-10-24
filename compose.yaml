@@ -1,0 +1,9 @@
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: opsolete
+      POSTGRES_PASSWORD: opsolete
+      POSTGRES_DB: opsolete
+    ports:
+      - "5432:5432"

@@ -1,0 +1,14 @@
+{{template "top"}}
+<div class="page-head">
+  <div>
+    <h1>Authorize Terraform CLI</h1>
+    <p class="muted">Terraform on your computer (<code>terraform login</code>) asks for an API token.</p>
+  </div>
+</div>
+<form method="post" class="card">
+  <p>The token acts as <strong>{{.Email}}</strong>: it can read and write the state of every workspace you operate,
+    create workspaces and download registry modules. It expires in {{.Days}} days.</p>
+  <p class="hint">Only continue if you just ran <code>terraform login</code> yourself.</p>
+  <div class="actions"><button type="submit">Authorize</button><a class="btn secondary" href="/">Cancel</a></div>
+</form>
+{{template "bottom"}}

@@ -1,0 +1,48 @@
+{{template "top"}}
+{{$v := .Set}}
+<a class="back" href="/variable-sets">← Variable sets</a>
+<div class="page-head">
+  <div>
+    <h1>{{$v.Name}}{{if $v.Global}} <span class="tag">global</span>{{end}}</h1>
+    {{with $v.Description}}<p class="muted">{{.}}</p>{{end}}
+  </div>
+  <form method="post" action="/variable-sets/{{$v.Name}}/delete"
+    onsubmit="return confirm('Delete this variable set and its variables? Runs of its workspaces no longer get them.')">
+    <button type="submit" class="danger">Delete</button></form>
+</div>
+
+<form method="post" action="/variable-sets/{{$v.Name}}" class="card">
+  <label for="description">Description</label>
+  <input id="description" name="description" value="{{$v.Description}}" class="wide" maxlength="500">
+  <label for="global"><input type="checkbox" id="global" name="global"{{if $v.Global}} checked{{end}}> Global: apply to every workspace not linked to a repository</label>
+  <div class="actions"><button type="submit" class="secondary">Save</button></div>
+</form>
+
+<h2>Variables</h2>
+{{template "variables" .Variables}}
+
+{{if not $v.Global}}
+<h2>Workspaces</h2>
+<div class="card">
+  {{with $v.Workspaces}}
+  <table>
+  <tr><th>Workspace</th><th></th></tr>
+  {{range .}}<tr><td><a href="/workspaces/{{.}}">{{.}}</a></td>
+    <td><form method="post" action="/variable-sets/{{$v.Name}}/workspaces"><input type="hidden" name="workspace" value="{{.}}">
+      <input type="hidden" name="detach" value="1"><button type="submit" class="secondary small">Detach</button></form></td></tr>{{end}}
+  </table>
+  {{else}}
+  <p class="muted">Not attached to any workspace.</p>
+  {{end}}
+  {{with .Attachable}}
+  <form method="post" action="/variable-sets/{{$v.Name}}/workspaces" class="inline" style="margin-top:1rem">
+    <select name="workspace" aria-label="workspace" required>
+      <option value="">choose a workspace…</option>
+      {{range .}}<option>{{.}}</option>{{end}}
+    </select>
+    <button type="submit" class="secondary">Attach</button>
+  </form>
+  {{end}}
+</div>
+{{end}}
+{{template "bottom"}}

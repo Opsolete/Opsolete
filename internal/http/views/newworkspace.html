@@ -1,0 +1,34 @@
+{{template "top"}}
+<a class="back" href="/workspaces">← Workspaces</a>
+<div class="page-head">
+  <div>
+    <h1>New workspace</h1>
+    <p class="muted">A workspace holds one Terraform state, its variables and its runs.</p>
+  </div>
+</div>
+{{with .VCS.Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
+<form method="post" class="card">
+  <h3>Blank workspace</h3>
+  <p class="muted">Empty, or with just variables; link a repository now or later to run it.</p>
+  <label for="name">Workspace name <span class="req" aria-hidden="true">*</span></label>
+  <input id="name" name="name" value="{{index .VCS.Form "name"}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}" placeholder="network-prod">
+  <p class="hint">Lowercase letters, digits and dashes.</p>
+  <label for="auto_apply"><input type="checkbox" id="auto_apply" name="auto_apply"{{if index .VCS.Form "auto_apply"}} checked{{end}}>
+    Auto-apply: apply plans without asking for confirmation</label>
+  {{if .VCS.Conns}}{{template "vcsfields" .VCS}}{{end}}
+  <div class="actions"><button type="submit">Create workspace</button><a class="btn secondary" href="/workspaces">Cancel</a></div>
+</form>
+{{with .Templates}}
+<form method="get" class="card">
+  <h3>From a template</h3>
+  <p class="muted">Fill in a template's form; the workspace deploys its module.</p>
+  <div class="inline">
+    <select name="template" aria-label="template" required>
+      <option value="">choose a template…</option>
+      {{range .}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
+    </select>
+    <button type="submit" class="secondary">Continue</button>
+  </div>
+</form>
+{{end}}
+{{template "bottom"}}

@@ -1,0 +1,101 @@
+name: release
+
+# Runs after ci succeeds on a push to master, so a release is only cut from a green commit, and a
+# Release Please failure here never affects the CI result. Safe to re-run: Release Please is idempotent.
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  # Open/update the release PR, or cut the release when that PR was merged.
+  release-please:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      created: ${{ steps.rp.outputs.release_created }}
+      tag: ${{ steps.rp.outputs.tag_name }}
+      sha: ${{ steps.rp.outputs.sha }}
+    steps:
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: rp
+        with:
+          # PRs opened with GITHUB_TOKEN don't trigger CI, so required checks would never run
+          # on the release PR; a PAT or GitHub App token in RELEASE_PLEASE_TOKEN fixes that.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+      - if: success()
+        env:
+          CREATED: ${{ steps.rp.outputs.release_created }}
+          TAG: ${{ steps.rp.outputs.tag_name }}
+        run: |
+          if [ "$CREATED" = true ]; then echo "Released **$TAG**; images are published by the next job." >> "$GITHUB_STEP_SUMMARY"
+          else echo "No release this run; the release PR was opened or updated if there were releasable commits." >> "$GITHUB_STEP_SUMMARY"; fi
+      - if: failure()
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ### Release Please failed
+          Tests, Nix and image builds already passed in the `ci` run; nothing was released or published.
+          This is usually a transient GitHub API error ("Something went wrong while executing your query").
+          Use **Re-run failed jobs**: Release Please picks up where it left off.
+          EOF
+
+  # Push the release images, built from the release commit (cached layers from the ci run).
+  publish:
+    needs: release-please
+    if: needs.release-please.outputs.created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [app, runner]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release-please.outputs.sha }}
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          # git context: sha tag and revision label come from the release commit, not master's head.
+          context: git
+          images: ghcr.io/${{ github.repository }}-${{ matrix.target }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ needs.release-please.outputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.tag }}
+            type=raw,value=latest
+            type=sha
+      # shortcut: linux/amd64 only; add `platforms: linux/amd64,linux/arm64` (plus setup-qemu) for arm nodes.
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          target: ${{ matrix.target }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.target }}
+      - env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          { echo "### Published ${{ matrix.target }}"; echo '```'; echo "$TAGS"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - if: failure()
+        run: echo "Publishing failed after the release was created. Use **Re-run failed jobs** (not a new push) so the release outputs are reused." >> "$GITHUB_STEP_SUMMARY"

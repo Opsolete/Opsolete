@@ -1,0 +1,428 @@
+{{template "top" .}}
+{{$w := .W}}{{$tab := tab}}{{$p := .Page}}
+<nav class="back" aria-label="breadcrumb"><a href="/workspaces">Workspaces</a> / <a href="/workspaces/{{$w.Name}}">{{$w.Name}}</a> / {{if eq $tab "runs"}}Runs{{else if eq $tab "states"}}States{{else if eq $tab "variables"}}Variables{{else if eq $tab "settings"}}<a href="/workspaces/{{$w.Name}}/settings">Settings</a> / {{if eq $p "health"}}Health{{else if eq $p "access"}}Team access{{else if eq $p "deletion"}}Destruction and deletion{{else}}General{{end}}{{else}}Overview{{end}}</nav>
+{{if ne $tab "settings"}}
+<div class="page-head">
+  <div>
+    <h1>{{$w.Name}}{{if .Destroyed}} <span class="status destroyed">destroyed</span>{{end}}</h1>
+    <p class="muted">{{if $w.TemplateID}}From template <a href="/templates/{{$w.TemplateID}}">{{$w.TemplateID}}</a>{{else if $w.VCSConnectionID}}From <code>{{$w.VCSRepo}}</code> branch <code>{{$w.VCSBranch}}</code>{{else if $w.Templates}}From added templates{{else}}No configuration{{end}} · created {{$w.CreatedAt.Format "2006-01-02 15:04"}}{{with $w.CreatedBy}} by {{.}}{{end}}</p>
+    <p class="meta">{{if .Active}}<span>Locked by a run</span>{{else}}<span>Unlocked</span>{{end}}<span>Resources {{len .Resources}}</span>{{with .Versions}}{{with index . 0}}<span>State v{{.Serial}}</span><span>Updated {{.CreatedAt.Format "2006-01-02 15:04"}}</span>{{end}}{{end}}</p>
+  </div>
+  {{if .CanOperate}}
+  <div class="inline">
+    {{if .Active}}
+    <a class="btn secondary" href="/workspaces/{{$w.Name}}/runs/{{.Active.ID}}">Current run: {{status .Active.Status}} →</a>
+    {{else if eq $w.ExecutionMode "local"}}
+    <span class="muted">Local execution: run Terraform with the cloud block</span>
+    {{else if $w.HasConfig}}
+    <button type="button" onclick="document.getElementById('new-run').showModal()">New run</button>
+    <dialog id="new-run" aria-labelledby="new-run-title">
+      <form method="post" action="/workspaces/{{$w.Name}}/runs">
+        <header><h3 id="new-run-title">Start a new run</h3>
+          <button type="button" class="secondary small" aria-label="close" onclick="this.closest('dialog').close()">✕</button></header>
+        <fieldset>
+          <legend>Run type</legend>
+          <!-- a <select> can't show descriptions: radios in a <details> popover, the summary mirrors the choice -->
+          <details class="menu">
+            <summary>✓ <span>Plan and apply (standard)</span></summary>
+            <div role="radiogroup" aria-label="run type"
+              onchange="const d=this.closest('details');d.querySelector('summary span').textContent=event.target.closest('label').querySelector('strong').textContent;d.open=false">
+              <label class="choice"><input type="radio" name="action" value="apply" checked>
+                <span><strong>Plan and apply (standard)</strong><small>Plans the configuration, then applies it{{if not $w.AutoApply}} after confirmation{{end}}.</small></span></label>
+              <label class="choice"><input type="radio" name="action" value="refresh">
+                <span><strong>Refresh state</strong><small>Detects drift and synchronizes the state with the infrastructure, after confirmation. Changes no infrastructure.</small></span></label>
+              <label class="choice"><input type="radio" name="action" value="assess">
+                <span><strong>Check for drift</strong><small>A refresh-only plan that is never applied: reports changes made outside Terraform.</small></span></label>
+            </div>
+          </details>
+        </fieldset>
+        <footer><button type="submit">Start run</button>
+          <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancel</button></footer>
+      </form>
+    </dialog>
+    {{if .HasTemplate}}<a class="btn secondary" href="/workspaces/{{$w.Name}}/configure">Configure…</a>{{end}}
+    {{end}}
+  </div>
+  {{end}}
+</div>
+{{end}}
+
+{{if eq $tab "overview"}}
+{{if and .Update $.CanOperate}}
+<div class="alert warn" role="status">
+  A new module version is available: the template now uses <code>{{.Update.Ref}}</code>, this workspace runs <code>{{$w.ModuleRef}}</code>.
+  <a href="/workspaces/{{$w.Name}}/configure">View update →</a>
+</div>
+{{else if .Update}}
+<div class="alert warn" role="status">A new module version (<code>{{.Update.Ref}}</code>) is available; someone with operate access can apply it.</div>
+{{end}}
+
+{{if $w.Drifted}}{{with .Assessment}}
+<div class="alert warn" role="status">
+  Drift detected {{.UpdatedAt.Format "2006-01-02 15:04"}}{{with .Plan}}: {{.Change}} changed, {{.Destroy}} deleted outside Terraform{{end}}.
+  <a href="/workspaces/{{$w.Name}}/runs/{{.ID}}">View drift →</a>
+</div>
+{{end}}{{end}}
+
+<div class="overview">
+<div>
+{{with .Current}}
+<div class="section-head"><h2>Latest run</h2><a href="/workspaces/{{$w.Name}}/runs">View all runs →</a></div>
+<div class="card">
+  <div class="run-title"><h3>{{if eq .Action "destroy"}}Destroy{{else if eq .Action "refresh"}}Refresh state{{else}}Plan and apply{{end}}</h3>
+    <span class="status {{.Status}}">{{status .Status}}</span></div>
+  <p class="muted">{{with .CreatedBy}}<strong>{{.}}</strong> triggered a run {{end}}{{.CreatedAt.Format "2006-01-02 15:04"}}{{with .VCSCommit}} · <code>{{printf "%.7s" .}}</code>{{end}}</p>
+  <div class="latest-foot">
+    <dl class="stats">
+      <div><dt>Plan duration</dt><dd>{{or $.LatestPlan.Duration "—"}}</dd></div>
+      <div><dt>Resources to be changed</dt><dd class="plan">{{with .Plan}}<span class="change create">+{{.Add}}</span> <span class="change update">~{{.Change}}</span> <span class="change delete">−{{.Destroy}}</span>{{else}}+0 ~0 −0{{end}}</dd></div>
+      <div><dt>Apply duration</dt><dd>{{or $.LatestApply.Duration "—"}}</dd></div>
+    </dl>
+    <a class="btn secondary" href="/workspaces/{{$w.Name}}/runs/{{.ID}}">See details</a>
+  </div>
+</div>
+{{end}}
+
+{{$show := or .Show "resources"}}
+<div class="tabs-row">
+  <nav class="chips" aria-label="workspace contents">
+    <a href="?show=resources"{{if eq $show "resources"}} aria-current="true"{{end}}>Resources {{len .Resources}}</a>
+    <a href="?show=outputs"{{if eq $show "outputs"}} aria-current="true"{{end}}>Outputs {{len .Outputs}}</a>
+    <a href="?show=templates"{{if eq $show "templates"}} aria-current="true"{{end}}>Templates {{len .Added}}</a>
+  </nav>
+  {{with .Versions}}{{with index . 0}}<small>Current as of state version v{{.Serial}}: {{.CreatedAt.Format "2006-01-02 15:04"}}</small>{{end}}{{end}}
+</div>
+
+{{if eq $show "resources"}}
+{{with .Resources}}
+{{$replace := and $.CanOperate (not $.Active) $w.HasConfig (eq $w.ExecutionMode "remote")}}
+<input type="search" placeholder="Filter resources" aria-label="filter resources" style="max-width:20rem;margin-bottom:.75rem"
+  oninput="const q=this.value.toLowerCase();document.querySelectorAll('#resources tr[data-row]').forEach(tr=>tr.hidden=!tr.textContent.toLowerCase().includes(q))">
+<form method="post" action="/workspaces/{{$w.Name}}/runs"><input type="hidden" name="action" value="apply">
+<div class="card flush">
+<table id="resources">
+<tr>{{if $replace}}<th>Replace</th>{{end}}<th>Name</th><th>Provider</th><th>Type</th><th>Module</th></tr>
+{{range .}}<tr data-row>{{if $replace}}<td style="width:2rem"><input type="checkbox" name="replace" value="{{.Address}}" aria-label="replace {{.Address}}"></td>{{end}}
+  <td><code>{{.Address}}</code></td><td>{{provider .Provider}}</td><td>{{.Type}}</td><td>{{or .Module "root"}}</td></tr>{{end}}
+</table>
+</div>
+{{if $replace}}<div class="actions"><button type="submit" class="secondary">Plan replacing selected</button></div>{{end}}
+</form>
+{{else}}
+<p class="muted">{{if not .Versions}}No state saved yet.{{else if not (index .Versions 0).Indexed}}The current state version isn't indexed yet (the run couldn't read it back); the next apply indexes it.{{else}}The current state holds no resources.{{end}}</p>
+{{end}}
+{{else if eq $show "outputs"}}
+{{with .Outputs}}
+<div class="card flush">
+<table>
+<tr><th>Name</th><th>Value</th></tr>
+{{range $k, $v := .}}<tr><td><code>{{$k}}</code></td><td><code>{{json $v}}</code></td></tr>{{end}}
+</table>
+</div>
+{{else}}<p class="muted">No outputs.</p>{{end}}
+{{else}}
+<p class="muted">Templates added to this workspace: each is a module (<code>module.&lt;name&gt;</code>) planned and applied with the rest of its configuration, in its one state. Their outputs show as <code>&lt;name&gt;__&lt;output&gt;</code>.</p>
+{{with .Added}}
+<div class="card flush">
+<table>
+<tr><th>Name</th><th>Template</th><th>Module</th><th>Inputs</th>{{if $.CanOperate}}<th></th>{{end}}</tr>
+{{range .}}<tr><td><code>{{.Name}}</code></td><td><a href="/templates/{{.TemplateID}}">{{.TemplateID}}</a></td>
+  <td><code>{{.ModuleSource}}</code> <span class="tag">{{.ModuleRef}}</span>{{with index $.Updates .Name}} <span class="tag">update: {{.}}</span>{{end}}</td>
+  <td>{{range $k, $v := .Inputs}}<code>{{$k}} = {{$v}}</code><br>{{end}}</td>
+  {{if $.CanOperate}}<td class="nowrap">{{if not $.Active}}<a class="btn secondary small" href="/workspaces/{{$w.Name}}/templates/{{.Name}}">Configure…</a>
+    <form method="post" action="/workspaces/{{$w.Name}}/templates/{{.Name}}/remove" class="inline"
+      onsubmit="return confirm('Remove {{.Name}}? This starts a plan that destroys its resources.')">
+      <button type="submit" class="danger small">Remove…</button></form>{{end}}</td>{{end}}</tr>{{end}}
+</table>
+</div>
+{{else}}<p class="muted">None.</p>{{end}}
+{{if and .CanOperate (not .Active) .Catalog}}
+<form method="get" action="/workspaces/{{$w.Name}}/templates/new" class="card inline">
+  <label for="add-template" style="margin:0">Add a template</label>
+  <select id="add-template" name="template" style="max-width:24rem">{{range .Catalog}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select>
+  <button type="submit" class="secondary">Add…</button>
+</form>
+{{end}}
+
+{{end}}
+</div>
+
+<aside class="side">
+  <ul class="facts">
+    {{if $w.ModuleSource}}<li>Module: <code>{{$w.ModuleSource}}</code> <span class="tag">{{$w.ModuleRef}}</span></li>{{end}}
+    {{if not $w.TemplateID}}<li>Repository: {{if $w.VCSConnectionID}}<code>{{$w.VCSRepo}}</code> <span class="tag">{{$w.VCSBranch}}</span>{{else}}<span class="muted">none{{with $w.VCSRepo}} (was {{.}}; its VCS connection was deleted){{end}}</span>{{end}}
+      {{if and .CanOperate (features).VCS}} · <a href="/workspaces/{{$w.Name}}/vcs">{{if $w.VCSConnectionID}}Change{{else}}Link{{end}}…</a>{{end}}</li>{{end}}
+    <li>Execution mode: <a href="/workspaces/{{$w.Name}}/settings">{{if eq $w.ExecutionMode "local"}}Local{{else}}Remote{{end}}</a></li>
+    <li>Auto-apply: <a href="/workspaces/{{$w.Name}}/settings">{{if $w.AutoApply}}On{{else}}Off{{end}}</a></li>
+    <li>Drift detection: <a href="/workspaces/{{$w.Name}}/settings/health">{{if $w.DriftDetection}}On{{else}}Off{{end}}</a></li>
+    <li>Last drift check: {{with .Assessment}}<a href="/workspaces/{{$w.Name}}/runs/{{.ID}}"><span class="status {{.Status}}">{{status .Status}}</span></a> {{.UpdatedAt.Format "2006-01-02 15:04"}}{{else}}<span class="muted">never</span>{{end}}</li>
+  </ul>
+  {{if $w.TemplateID}}
+  <h3>Inputs</h3>
+  <ul class="facts">{{range $k, $v := $w.Inputs}}<li><code>{{$k}} = {{$v}}</code></li>{{else}}<li class="muted">none</li>{{end}}</ul>
+  {{end}}
+  <h3>Metrics <small>(last {{.Metrics.Runs}} runs)</small></h3>
+  <dl class="metrics">
+    <dt>Average plan duration</dt><dd>{{or (duration .Metrics.AvgPlan) "—"}}</dd>
+    <dt>Average apply duration</dt><dd>{{or (duration .Metrics.AvgApply) "—"}}</dd>
+    <dt>Total failed runs</dt><dd>{{.Metrics.Failed}}</dd>
+  </dl>
+</aside>
+</div>
+
+{{end}}
+
+{{if eq $tab "runs"}}
+{{with .Current}}
+<h2>Current run</h2>
+<div class="runlist">{{template "runrow" .}}</div>
+{{end}}
+<h2 id="runs">Run list</h2>
+{{$f := or .Filter "all"}}
+<nav class="chips" aria-label="filter runs">
+  <a href="?filter=all"{{if eq $f "all"}} aria-current="true"{{end}}>All {{index .Counts "all"}}</a>
+  <a href="?filter=attention"{{if eq $f "attention"}} aria-current="true"{{end}}>Needs attention {{index .Counts "attention"}}</a>
+  <a href="?filter=errored"{{if eq $f "errored"}} aria-current="true"{{end}}>Errored {{index .Counts "errored"}}</a>
+  <a href="?filter=running"{{if eq $f "running"}} aria-current="true"{{end}}>Running {{index .Counts "running"}}</a>
+  <a href="?filter=success"{{if eq $f "success"}} aria-current="true"{{end}}>Success {{index .Counts "success"}}</a>
+</nav>
+<div class="runlist">
+{{range .RunList}}{{template "runrow" .}}{{else}}<p class="empty">{{if .Runs}}No runs match this filter.{{else}}No runs yet.{{end}}</p>{{end}}
+</div>
+{{end}}
+
+{{if eq $tab "variables"}}
+<h2 id="variables">Variables</h2>
+<p class="muted">Runs of this workspace get all its Terraform variables and environment variables (cloud credentials such as <code>ARM_CLIENT_ID</code>, <code>ARM_CLIENT_SECRET</code>).
+  The template's inputs override Terraform variables.</p>
+
+<h3>Sensitive variables</h3>
+<p class="muted">Sensitive variables are never shown again in the UI and can't be read back. To change one, save it again or delete and replace it.</p>
+
+<h3>Workspace variables <span class="tag">{{len .Variables.Vars}}</span></h3>
+<p class="muted">Variables defined within a workspace always override variables from variable sets with the same category and key.</p>
+{{template "variables" .Variables}}
+
+<h3>Variable sets <span class="tag">{{len .Sets}}</span></h3>
+<p class="muted">Variable sets let admins reuse variables across workspaces. Between sets, attached sets win over global ones, then the first by name.</p>
+{{range .Sets}}
+<div class="card">
+  <div class="section-head"><h3 style="margin:0">{{if $.Admin}}<a href="/variable-sets/{{.Name}}">{{.Name}}</a>{{else}}{{.Name}}{{end}}</h3>
+    {{if $.Admin}}<a class="btn secondary small" href="/variable-sets/{{.Name}}">Edit…</a>{{end}}</div>
+  {{with .Description}}<p class="muted">{{.}}</p>{{end}}
+  <p class="meta">{{if .Global}}<span>Global: applies to all workspaces</span>{{else}}<span>{{len .Workspaces}} workspace{{if ne (len .Workspaces) 1}}s{{end}}</span>{{end}}
+    <span>{{len .Vars.Vars}} variable{{if ne (len .Vars.Vars) 1}}s{{end}}</span><span>Created {{.CreatedAt.Format "2006-01-02 15:04"}}</span></p>
+</div>
+{{template "variables" .Vars}}
+{{else}}
+<p class="muted">No variable sets apply to this workspace.</p>
+{{end}}
+
+{{end}}
+
+{{if eq $tab "settings"}}
+{{if eq $p ""}}
+<h1>General settings</h1>
+<div class="settings">
+<div class="field">ID</div>
+<p class="id"><code>{{$w.ID}}</code>
+  <button type="button" class="copy" aria-label="Copy ID" title="Copy ID" onclick="navigator.clipboard.writeText('{{$w.ID}}')">⧉</button></p>
+{{if .CanOperate}}
+<form method="post" action="/workspaces/{{$w.Name}}/settings">
+  <!-- one settings endpoint: keep the Health page's value -->
+  {{if $w.DriftDetection}}<input type="hidden" name="drift_detection" value="on">{{end}}
+  <label for="name">Name</label>
+  <input id="name" name="name" value="{{$w.Name}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}">
+  <fieldset>
+    <legend>Execution mode</legend>
+    <p class="hint">Changing the execution mode doesn't stop a run or a CLI lock already under way; it only refuses new ones.</p>
+    <label class="check"><input type="radio" name="execution_mode" value="remote"{{if ne $w.ExecutionMode "local"}} checked{{end}}>
+      <span>Remote<small>Your plans and applies run on Opsolete's runners, and your team can review and collaborate on runs directly in the app.</small></span></label>
+    <label class="check"><input type="radio" name="execution_mode" value="local"{{if eq $w.ExecutionMode "local"}} checked{{end}}>
+      <span>Local<small>Your plans and applies run on your own machines with Terraform's cloud block. Opsolete only stores and synchronizes state.</small></span></label>
+  </fieldset>
+  <fieldset>
+    <legend>Auto-apply</legend>
+    <p class="hint">Sets this workspace to automatically apply changes for successful runs. If disabled, runs require operator approval.</p>
+    <label class="check"><input type="checkbox" name="auto_apply"{{if $w.AutoApply}} checked{{end}}>
+      <span>Auto-apply runs<small>Automatically apply changes when a plan is successful. Destroy and refresh-only runs always ask for confirmation.</small></span></label>
+  </fieldset>
+  <fieldset>
+    <legend>Remote state sharing</legend>
+    <p class="hint">Choose whether this workspace should share state with all workspaces, or only with specific approved workspaces.
+      Their runs read it with the <code>terraform_remote_state</code> data source.</p>
+    <label class="check"><input type="radio" name="remote_state" value="all"{{if $w.GlobalRemoteState}} checked{{end}}>
+      <span>Share with all workspaces</span></label>
+    <label class="check"><input type="radio" name="remote_state" value="specific"{{if not $w.GlobalRemoteState}} checked{{end}}>
+      <span>Share with specific workspaces</span></label>
+    <!-- searchable multi-select: checkboxes in a dropdown; closed <details> still submit their boxes -->
+    <details class="menu picker indent">
+      <summary><span>{{with .StateShared}}{{.}} selected{{else}}Select workspaces{{end}}</span></summary>
+      <div class="picker-panel">
+        <input type="search" placeholder="Search" aria-label="Search workspaces" autocomplete="off"
+          oninput="filterPicker(this)" onkeydown="if(event.key==='Enter')event.preventDefault()">
+        <div class="picker-list" role="group" aria-label="Workspaces to share the state with" onchange="filterPicker(this)">
+          {{range .StateConsumers}}<label class="check"><input type="checkbox" name="remote_state_consumers" value="{{.ID}}"{{if .Selected}} checked{{end}}><span>{{.Name}}</span></label>
+          {{else}}<p class="hint">There are no other workspaces.</p>{{end}}
+        </div>
+        <footer><button type="button" class="secondary small" aria-pressed="false"
+          onclick="this.setAttribute('aria-pressed',this.ariaPressed!=='true');filterPicker(this)">Show selected</button>
+          <span class="muted">{{len .StateConsumers}} total</span></footer>
+      </div>
+    </details>
+    <p class="hint indent">None selected: the state isn't shared.</p>
+<script>
+  // filters the picker by the search text and "Show selected", and shows the count in its summary
+  function filterPicker(el) {
+    const d = el.closest('details'), q = d.querySelector('input[type=search]').value.toLowerCase();
+    const only = d.querySelector('[aria-pressed]').ariaPressed === 'true';
+    let n = 0;
+    for (const l of d.querySelectorAll('.picker-list label')) {
+      const box = l.querySelector('input');
+      l.hidden = !l.textContent.toLowerCase().includes(q) || (only && !box.checked);
+      n += box.checked;
+    }
+    d.querySelector('summary span').textContent = n ? n + ' selected' : 'Select workspaces';
+  }
+  document.addEventListener('click', e => { // a click outside closes it, like a select
+    for (const d of document.querySelectorAll('details.picker[open]')) if (!d.contains(e.target)) d.open = false;
+  });
+</script>
+    <p class="hint">In the other workspace's configuration:</p>
+<pre class="code"><code>data "terraform_remote_state" "shared" {
+  backend = "http"
+  config = {
+    address = "{{.StateAddress}}"
+  }
+}</code></pre>
+  </fieldset>
+  <div class="actions"><button type="submit">Save settings</button></div>
+</form>
+{{else}}
+<div class="field">Name</div><p>{{$w.Name}}</p>
+<div class="field">Execution mode</div><p>{{if eq $w.ExecutionMode "local"}}Local: Terraform runs on your own machines{{else}}Remote: runs on Opsolete's runners{{end}}</p>
+<div class="field">Auto-apply</div><p>{{if $w.AutoApply}}On{{else}}Off: runs require operator approval{{end}}</p>
+<div class="field">Remote state sharing</div><p>{{if $w.GlobalRemoteState}}Shared with all workspaces{{else}}Shared with specific workspaces, if any{{end}}</p>
+{{end}}
+</div>
+
+{{else if eq $p "health"}}
+<h1>Health</h1>
+<p class="muted">Drift detection: whether the infrastructure still matches the state.</p>
+{{if .CanOperate}}
+<form method="post" action="/workspaces/{{$w.Name}}/settings" class="card">
+  <input type="hidden" name="page" value="health">
+  {{if $w.AutoApply}}<input type="hidden" name="auto_apply" value="on">{{end}}
+  <label style="margin:0;font-weight:normal"><input type="checkbox" name="drift_detection"{{if $w.DriftDetection}} checked{{end}}>
+    Drift detection: check daily for changes made outside Terraform (a refresh-only plan, never applied)</label>
+  <div class="actions" style="margin-top:1rem"><button type="submit" class="secondary">Save</button></div>
+</form>
+{{else}}<p>Drift detection {{if $w.DriftDetection}}on{{else}}off{{end}}</p>{{end}}
+<p class="muted">Last drift check: {{with .Assessment}}<a href="/workspaces/{{$w.Name}}/runs/{{.ID}}"><span class="status {{.Status}}">{{status .Status}}</span></a> {{.UpdatedAt.Format "2006-01-02 15:04"}}{{else}}never{{end}}</p>
+
+{{else if eq $p "access"}}
+<h1>Team access</h1>
+<p class="muted">Visible to its creator, admins and these IdP groups. <strong>operate</strong>: runs, confirm, destroy, settings, rename; <strong>read</strong>: view only.</p>
+<div class="card">
+  {{with .Grants}}
+  <table>
+  <tr><th>Group</th><th>Access</th>{{if $.Admin}}<th></th>{{end}}</tr>
+  {{range .}}<tr><td><code>{{.Group}}</code></td><td>{{.Level}}</td>
+    {{if $.Admin}}<td><form method="post" action="/workspaces/{{$w.Name}}/access"><input type="hidden" name="group" value="{{.Group}}">
+      <button type="submit" class="secondary small">Revoke</button></form></td>{{end}}</tr>{{end}}
+  </table>
+  {{else}}<p class="muted" style="margin:0">No groups have access.</p>
+  {{end}}
+  {{if .Admin}}
+  <form method="post" action="/workspaces/{{$w.Name}}/access" class="inline" style="margin-top:1rem">
+    <!-- datalist, not select: a group may be granted before any of its members has logged in -->
+    <input name="group" list="known-groups" aria-label="group" placeholder="IdP group (e.g. Entra group object id)" required>
+    <datalist id="known-groups">{{range .Groups}}<option value="{{.}}">{{end}}</datalist>
+    <select name="level" aria-label="access level" style="flex:0 0 9rem"><option>read</option><option>operate</option></select>
+    <button type="submit" class="secondary">Grant</button>
+  </form>
+  {{end}}
+</div>
+
+{{else if .CanOperate}}
+<h1>Destruction and deletion</h1>
+<p class="muted" style="max-width:52rem">There are two independent steps for destroying this workspace and the infrastructure associated with it.
+  First, its Terraform infrastructure should be destroyed. Second, the workspace in Opsolete, including its runs, variables, settings and state history, can be deleted.</p>
+
+<h2>Manually destroy</h2>
+<p style="max-width:44rem">Queuing a destroy plan will redirect to a new plan that will destroy all of the infrastructure managed by Terraform.
+  It is equivalent to running <code>terraform plan -destroy -out=destroy.tfplan</code> followed by <code>terraform apply destroy.tfplan</code> locally;
+  the plan always asks for confirmation before it is applied.</p>
+{{if .Active}}<p class="muted">A run is in progress: wait for it to finish.</p>{{else if not $w.HasConfig}}<p class="muted">This workspace has no configuration to plan.</p>{{end}}
+<button type="button" class="danger"{{if or .Active (not $w.HasConfig)}} disabled{{end}} onclick="document.getElementById('queue-destroy').showModal()">Queue destroy plan</button>
+<dialog id="queue-destroy" class="danger-dialog" aria-labelledby="queue-destroy-title">
+  <form method="post" action="/workspaces/{{$w.Name}}/runs"><input type="hidden" name="action" value="destroy">
+    <header><h3 id="queue-destroy-title">⚠ Queue destroy plan for workspace</h3>
+      <button type="button" class="secondary small" aria-label="close" onclick="this.closest('dialog').close()">✕</button></header>
+    <fieldset>
+      <p style="margin-top:0">Please proceed with caution. Selecting "Queue destroy plan" below will immediately create a new plan that will destroy all of the infrastructure managed by <strong>{{$w.Name}}</strong>.</p>
+      <!-- typed confirmation guards against a slip; the destroy plan still asks before it is applied -->
+      <label for="destroy-confirm">To confirm, type "delete"</label>
+      <input id="destroy-confirm" required pattern="delete" autocomplete="off">
+    </fieldset>
+    <footer><button type="submit" class="danger">Queue destroy plan</button>
+      <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancel</button></footer>
+  </form>
+</dialog>
+
+<hr style="border:0;border-top:1px solid var(--border);margin:2rem 0 0;max-width:60rem">
+<h2>Delete workspace</h2>
+<div style="max-width:44rem">
+<p><strong>Warning!</strong> Deleting this workspace permanently removes all of its variables, settings, run history and Terraform state.</p>
+{{if or .Resources .Active}}
+<ul>
+  {{with .Resources}}<li>This workspace <strong>manages {{len .}} resource{{if ne (len .) 1}}s{{end}}</strong>. You must destroy them before you can delete this workspace: queue a destroy plan above.</li>{{end}}
+  {{if .Active}}<li>A run is in progress.</li>{{end}}
+</ul>
+{{end}}
+</div>
+<button type="button" class="danger"{{if or .Active .Resources}} disabled{{end}} onclick="document.getElementById('delete-workspace').showModal()">Delete workspace</button>
+<dialog id="delete-workspace" class="danger-dialog" aria-labelledby="delete-workspace-title">
+  <form method="post" action="/workspaces/{{$w.Name}}/delete">
+    <header><h3 id="delete-workspace-title">⚠ Delete workspace</h3>
+      <button type="button" class="secondary small" aria-label="close" onclick="this.closest('dialog').close()">✕</button></header>
+    <fieldset>
+      <p style="margin-top:0">Deleting <strong>{{$w.Name}}</strong> workspace will permanently remove its variables, settings, run history and Terraform state.<br>
+        This workspace has no run in progress and is not managing any resources.</p>
+      <label for="delete-confirm">To confirm deletion, enter "delete"</label>
+      <input id="delete-confirm" required pattern="delete" autocomplete="off">
+    </fieldset>
+    <footer><button type="submit" class="danger">Delete</button>
+      <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancel</button></footer>
+  </form>
+</dialog>
+{{else}}<p class="muted">Destroying or deleting this workspace needs operate access.</p>
+{{end}}
+{{end}}
+
+{{if eq $tab "states"}}
+{{with .Versions}}
+<h2>State versions</h2>
+<div class="card flush">
+<table>
+<tr><th>Version</th><th>Saved</th><th>Size</th><th>Resources</th>{{if $.CanOperate}}<th></th>{{end}}</tr>
+{{range $i, $v := .}}<tr><td><span class="tag">v{{.Serial}}</span>{{if not $i}} <span class="muted">current</span>{{end}}{{with .CopyOf}} <span class="muted">rollback to v{{.}}</span>{{end}}</td><td class="nowrap">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td>
+  <td>{{.Size}} B</td><td>{{if .Indexed}}{{.Resources}}{{else}}<span class="muted">not indexed</span>{{end}}</td>
+  {{if $.CanOperate}}<td>{{if and $i (not $.Active)}}<form method="post" action="/workspaces/{{$w.Name}}/state-versions/{{.ID}}/rollback"
+    onsubmit="return confirm('Roll back to state v{{.Serial}}?\n\nA copy of v{{.Serial}} becomes the current state. Newer versions are kept, so you can roll forward again. Your infrastructure is not changed.\n\nThe state will no longer match what is deployed if anything changed since v{{.Serial}}: resources created since then are no longer tracked (the next run may try to create them again), and resources deleted since then are tracked again (the next run will recreate them). Review the next plan before applying it.')">
+    <button type="submit" class="secondary small">Roll back</button></form>{{end}}</td>{{end}}</tr>{{end}}
+</table>
+</div>
+{{else}}<p class="muted">No state saved yet.</p>
+{{end}}
+{{end}}
+{{template "bottom"}}
+
+{{define "runrow"}}<!-- relative link: only used on /workspaces/{name}/runs -->
+<a class="runrow{{if .Current}} current{{end}}" href="runs/{{.ID}}">
+  <span>
+    <strong>{{if eq .Action "destroy"}}Destroy{{else if eq .Action "refresh"}}Refresh state{{else}}Plan and apply{{end}}</strong>{{if .Current}} <span class="tag">current</span>{{end}}
+    <small>#{{printf "%.8s" .ID}}{{with .CreatedBy}} | <strong>{{.}}</strong> triggered{{end}}{{with .VCSCommit}} | <code>{{printf "%.7s" .}}</code>{{end}}{{with .Plan}} | <span class="plan">+{{.Add}} ~{{.Change}} −{{.Destroy}}</span>{{end}}</small>
+  </span>
+  <span class="end"><span class="status {{.Status}}">{{status .Status}}</span><small>{{.CreatedAt.Format "2006-01-02 15:04"}}</small></span>
+</a>{{end}}

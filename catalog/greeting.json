@@ -1,0 +1,13 @@
+{
+  "id": "greeting",
+  "name": "Greeting (example)",
+  "description": "Example template on the registry's examples/greeting module. Needs no cloud credentials.",
+  "module": {
+    "source": "opsolete.localhost:8080/examples/greeting/terraform",
+    "ref": "1.1.0"
+  },
+  "inputs": [
+    { "name": "greeting", "label": "Greeting", "type": "select", "required": true, "options": ["hello", "hi", "hey"], "default": "hello" },
+    { "name": "name", "label": "Who to greet", "type": "string", "required": true, "pattern": "^[A-Za-z0-9 ]{1,40}$", "default": "world" }
+  ]
+}

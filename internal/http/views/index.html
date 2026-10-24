@@ -1,0 +1,29 @@
+{{template "top"}}
+<div class="page-head">
+  <div>
+    <h1>Templates</h1>
+    <p class="muted">No-code ready modules: each template pins a module version and turns its variables into a form. Pick one, fill it in, and a runner provisions a workspace with Terraform.</p>
+  </div>
+  {{if .Editor}}<a class="btn" href="/templates/new">+ New template</a>{{end}}
+</div>
+{{$editor := .Editor}}
+{{with .Templates}}
+<div class="grid">
+  {{range .}}
+  <article class="card tile">
+    <h3><a href="/templates/{{.ID}}">{{.Name}}</a></h3>
+    <p>{{or .Description "No description."}}</p>
+    <footer>
+      <span class="tag" title="module version">{{.Module.Ref}}</span>
+      <span>{{if $editor}}<a href="/templates/{{.ID}}/edit">Edit</a> · {{end}}<a href="/templates/{{.ID}}">Provision workspace →</a></span>
+    </footer>
+  </article>
+  {{end}}
+</div>
+{{else}}
+<div class="card empty">
+  <p><strong>No templates yet.</strong></p>
+  <p>{{if .Editor}}<a href="/templates/new">Create one</a> or add{{else}}Add{{end}} JSON files to the catalog directory.</p>
+</div>
+{{end}}
+{{template "bottom"}}

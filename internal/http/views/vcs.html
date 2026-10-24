@@ -1,0 +1,68 @@
+{{template "top"}}
+<div class="page-head">
+  <div>
+    <h1>VCS providers</h1>
+    <p class="muted">Connect GitHub or Azure DevOps to <a href="/registry#publish">publish registry modules</a> straight from a repository.</p>
+  </div>
+</div>
+
+<div class="card flush">
+<table>
+<tr><th>Name</th><th>Provider</th><th>API URL</th><th>Workspace repositories</th><th>Added</th><th></th></tr>
+{{range .Connections}}
+<tr>
+  <td><strong>{{.Name}}</strong></td>
+  <td>{{.Provider}}</td>
+  <td><code>{{.BaseURL}}</code></td>
+  <td>
+    <form method="post" action="/vcs/{{.ID}}/workspace-repos">
+      <textarea name="workspace_repos" aria-label="Repositories workspaces may link through {{.Name}}" rows="2" placeholder="none: modules only">{{.WorkspaceRepos}}</textarea>
+      <button type="submit" class="secondary small">Save</button>
+    </form>
+  </td>
+  <td class="nowrap">{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+  <td class="nowrap">
+    <a class="btn secondary small" href="/registry/publish?connection={{.ID}}">Publish module</a>
+    <form method="post" action="/vcs/{{.ID}}/delete" style="display:inline"
+      onsubmit="return confirm('Delete this connection? Its modules stop syncing; published versions stay.')">
+      <button type="submit" class="danger small">Delete</button></form>
+  </td>
+</tr>
+{{else}}
+<tr><td colspan="6" class="empty">No VCS providers connected yet.</td></tr>
+{{end}}
+</table>
+</div>
+
+<h2>Connect a VCS provider</h2>
+{{with .Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
+<form method="post" class="card">
+  <label for="name">Name <span class="req" aria-hidden="true">*</span></label>
+  <input id="name" name="name" value="{{index .Form "name"}}" required maxlength="64" placeholder="github-acme">
+
+  <label for="provider">Provider</label>
+  <select id="provider" name="provider">
+    <option value="github"{{if eq (index .Form "provider") "github"}} selected{{end}}>GitHub</option>
+    <option value="azure-devops"{{if eq (index .Form "provider") "azure-devops"}} selected{{end}}>Azure DevOps</option>
+  </select>
+
+  <label for="base_url">API URL</label>
+  <input id="base_url" name="base_url" value="{{index .Form "base_url"}}" class="wide" aria-describedby="base_url-hint"
+    placeholder="https://api.github.com · https://dev.azure.com/<organization>">
+  <p class="hint" id="base_url-hint">GitHub: leave empty for github.com, or <code>https://github.example.com/api/v3</code> for Enterprise Server.
+    Azure DevOps: <code>https://dev.azure.com/&lt;organization&gt;</code> (required).</p>
+
+  <label for="token">Access token <span class="req" aria-hidden="true">*</span></label>
+  <input id="token" name="token" type="password" required autocomplete="off" aria-describedby="token-hint">
+  <p class="hint" id="token-hint">Read-only is enough. GitHub: a fine-grained token with <em>Contents: read</em> on <em>selected</em> repositories only (the module and workspace repos).
+    Azure DevOps: a PAT with <em>Code (Read)</em>. It's checked now, stored encrypted, and never shown again.</p>
+
+  <label for="workspace_repos">Workspace repositories</label>
+  <textarea id="workspace_repos" name="workspace_repos" rows="3" aria-describedby="workspace_repos-hint"
+    placeholder="acme/infra-*">{{index .Form "workspace_repos"}}</textarea>
+  <p class="hint" id="workspace_repos-hint">Repositories users may link workspaces to, one pattern per line (<code>acme/infra-*</code>, <code>*/*</code> for all).
+    Empty: none, the connection only publishes modules. Anyone who can push to a linked branch runs code with the workspace's credentials: protect those branches.</p>
+
+  <div class="actions"><button type="submit">Connect</button></div>
+</form>
+{{template "bottom"}}

@@ -1,0 +1,34 @@
+# Dependabot bumps go.mod/go.sum but can't update flake.nix's vendorHash; this recomputes it
+# and pushes the fix to the Dependabot branch.
+name: vendorhash
+
+on:
+  pull_request:
+    paths: [go.mod, go.sum]
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      # A PAT, not GITHUB_TOKEN: pushes made with GITHUB_TOKEN don't trigger ci.yml on the new commit.
+      # DEPENDABOT_PUSH_TOKEN must be a *Dependabot* secret (fine-grained PAT, contents: write, this repo).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.DEPENDABOT_PUSH_TOKEN }}
+      - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31.11.2
+      - name: recompute vendorHash
+        run: |
+          # Builds only the go-modules derivation; on a stale hash nix prints "got: sha256-...".
+          got=$(nix build .#default.goModules --no-link 2>&1 | awk '/got:/ {print $2}')
+          if [ -z "$got" ]; then echo "no vendorHash mismatch (other build errors are ci.yml's nix job's to report)"; exit 0; fi
+          sed -i "s|vendorHash = \"[^\"]*\"|vendorHash = \"$got\"|" flake.nix
+          nix build .#default.goModules --no-link # fail loudly if the new hash still doesn't match
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "fix(flake): update vendorHash"
+          git push

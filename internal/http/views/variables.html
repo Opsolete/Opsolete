@@ -1,0 +1,33 @@
+{{define "variables"}}
+{{with .Vars}}
+<div class="card flush">
+<table>
+<tr><th>Key</th><th>Value</th><th>Category</th><th>Actions</th></tr>
+{{range .}}
+<tr>
+  <td><code>{{.Key}}</code>{{if .Sensitive}} <span class="tag">Sensitive</span>{{end}}</td>
+  <td>{{if .Sensitive}}<span class="muted">Sensitive - write only</span>{{else}}<code>{{.Value}}</code>{{end}}</td>
+  <td>{{.Category}}</td>
+  <td>{{if $.CanEdit}}<form method="post" action="{{$.Base}}/variables/{{.ID}}/delete">
+    <button type="submit" class="secondary small" aria-label="Delete {{.Key}}">Delete</button></form>{{else}}<span class="muted">None</span>{{end}}</td>
+</tr>
+{{end}}
+</table>
+</div>
+{{end}}
+{{if .CanEdit}}{{if .NoKey}}
+<p class="muted">Adding variables needs <code>SECRET_KEY</code> to be set on the server.</p>
+{{else}}
+<details class="add">
+<summary class="btn secondary">+ Add variable</summary>
+<form method="post" action="{{.Base}}/variables" class="card inline">
+  <select name="category" aria-label="category" style="flex:0 0 8rem"><option value="env">env</option><option value="terraform">terraform</option></select>
+  <input name="key" aria-label="key" placeholder="ARM_CLIENT_SECRET" required maxlength="128">
+  <input name="value" type="password" aria-label="value" placeholder="value" autocomplete="off">
+  <label style="margin:0;font-weight:normal"><input type="checkbox" name="sensitive" checked> Sensitive</label>
+  <button type="submit">Save variable</button>
+</form>
+<p class="hint">Saving a key that exists (same category) replaces it. Sensitive values can't be read back, only replaced.</p>
+</details>
+{{end}}{{end}}
+{{end}}

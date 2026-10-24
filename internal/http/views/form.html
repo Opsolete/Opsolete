@@ -1,0 +1,77 @@
+{{template "top"}}
+{{with .Configure}}
+<a class="back" href="/workspaces/{{.Name}}">← {{.Name}}</a>
+<div class="page-head">
+  <div>
+    {{if $.Adding}}
+    <h1>Add {{$.T.Name}} to {{.Name}}</h1>
+    <p class="muted">The template becomes the module <code>module.&lt;name&gt;</code> in this workspace's configuration and state; adding it starts a plan.</p>
+    {{else}}
+    <h1>Configure {{with $.Module}}{{.}} in {{end}}{{.Name}}</h1>
+    <p class="muted">Change the inputs{{if or (ne $.Cur.Ref $.T.Module.Ref) (ne $.Cur.Source $.T.Module.Source)}} and move to the template's module version{{end}}, then plan the change.</p>
+    {{end}}
+  </div>
+</div>
+{{if and (not $.Adding) (or (ne $.Cur.Ref $.T.Module.Ref) (ne $.Cur.Source $.T.Module.Source))}}
+<div class="alert warn" role="status">Module update: <code>{{$.Cur.Ref}}</code> → <code>{{$.T.Module.Ref}}</code>{{if ne $.Cur.Source $.T.Module.Source}} (source <code>{{$.T.Module.Source}}</code>){{end}}. Fill in any new inputs below.</div>
+{{end}}
+{{with $.Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
+{{else}}
+<a class="back" href="/">← Templates</a>
+<div class="page-head">
+  <div>
+    <h1>{{.T.Name}}</h1>
+    {{with .T.Description}}<p class="muted">{{.}}</p>{{end}}
+  </div>
+  {{if .Editor}}<a class="btn secondary" href="/templates/{{.T.ID}}/edit">Edit template</a>{{end}}
+</div>
+{{end}}
+<form method="post" class="card">
+{{$v := .Values}}{{$e := .Errors}}
+{{if .Adding}}
+  <label for="ops-module">Name in the workspace <span class="req" aria-hidden="true">*</span></label>
+  <input id="ops-module" name="ops-module" value="{{.Module}}" required pattern="[a-z][a-z0-9_\-]{0,62}" aria-describedby="ops-module-hint">
+  <p class="hint" id="ops-module-hint">Lowercase letters, digits, dashes and underscores, starting with a letter. Add a template more than once under different names.</p>
+  {{with index $e "ops-module"}}<p class="err" role="alert">{{.}}</p>{{end}}
+  <hr style="border:0;border-top:1px solid var(--border);margin:1.4rem 0 .4rem">
+{{end}}
+{{if not .Configure}}
+  <label for="ops-workspace">Workspace name <span class="req" aria-hidden="true">*</span></label>
+  <input id="ops-workspace" name="ops-workspace" value="{{.Workspace}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}"
+    placeholder="{{.T.ID}}-prod" aria-describedby="ops-workspace-hint">
+  <p class="hint" id="ops-workspace-hint">Lowercase letters, digits and dashes. It holds this deployment's state and runs.</p>
+  {{with index $e "ops-workspace"}}<p class="err" role="alert">{{.}}</p>{{end}}
+  <label for="ops-auto-apply"><input type="checkbox" id="ops-auto-apply" name="ops-auto-apply"{{if .AutoApply}} checked{{end}}>
+    Auto-apply: apply plans without asking for confirmation</label>
+  <hr style="border:0;border-top:1px solid var(--border);margin:1.4rem 0 .4rem">
+{{end}}
+{{range .T.Inputs}}
+  {{if eq .Type "bool"}}
+    <label for="{{.Name}}"><input type="checkbox" id="{{.Name}}" name="{{.Name}}"{{if eq (index $v .Name) "on" "true"}} checked{{end}}>
+      {{or .Label .Name}}</label>
+  {{else}}
+    <label for="{{.Name}}">{{or .Label .Name}}{{if .Required}} <span class="req" aria-hidden="true">*</span>{{end}}</label>
+    {{if eq .Type "select"}}
+    <select id="{{.Name}}" name="{{.Name}}">
+      {{$cur := index $v .Name}}
+      {{range .Options}}<option{{if eq . $cur}} selected{{end}}>{{.}}</option>{{end}}
+    </select>
+    {{else}}
+    <input id="{{.Name}}" name="{{.Name}}" value="{{index $v .Name}}"
+      {{if eq .Type "number"}}type="number" step="any"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}>
+    {{end}}
+  {{end}}
+  {{with index $e .Name}}<p class="err" role="alert">{{.}}</p>{{end}}
+{{end}}
+  <p class="hint">Deploys <code>{{.T.Module.Source}}</code> at <code>{{.T.Module.Ref}}</code>.</p>
+  <div class="actions">
+    {{with .Configure}}
+    <button type="submit">{{if $.Adding}}Add template{{else}}Save configuration{{end}} &amp; start plan</button>
+    <a class="btn secondary" href="/workspaces/{{.Name}}">Cancel</a>
+    {{else}}
+    <button type="submit">Create workspace &amp; plan</button>
+    <a class="btn secondary" href="/">Cancel</a>
+    {{end}}
+  </div>
+</form>
+{{template "bottom"}}
