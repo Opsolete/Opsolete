@@ -3,7 +3,7 @@
 #   docker build --target app    -t form2stack     .   # web UI, registry, runner API
 #   docker build --target runner -t form2stack-runner .  # executes deployments with terraform
 
-FROM golang:1.26 AS build
+FROM golang:1.27 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
