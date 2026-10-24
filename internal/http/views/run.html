@@ -18,7 +18,7 @@
     <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/cancel"><button type="submit" class="secondary">Cancel run</button></form>
     {{end}}
   </div>
-  {{else if and $.CanOperate (not $r.Active) $w.HasConfig}}
+  {{else if and $.CanOperate (not $r.Active) $w.HasConfig (ne $r.Action "plan")}}
   <form method="post" action="/workspaces/{{$w.Name}}/runs"{{if eq $r.Action "destroy"}}
     onsubmit="return confirm('Start a new destroy run for {{$w.Name}}?')"{{end}}>
     <input type="hidden" name="action" value="{{$r.Action}}">{{range $r.Replace}}<input type="hidden" name="replace" value="{{.}}">{{end}}
@@ -27,7 +27,7 @@
 </div>
 
 <div class="run-title">
-  <h2>{{if eq $r.Action "destroy"}}Destroy{{else if eq $r.Action "refresh"}}Refresh state{{else if eq $r.Action "assess"}}Drift check{{else}}Plan and apply{{end}}</h2>
+  <h2>{{if eq $r.Action "destroy"}}Destroy{{else if eq $r.Action "refresh"}}Refresh state{{else if eq $r.Action "assess"}}Drift check{{else if eq $r.Action "plan"}}Speculative plan{{with $r.VCSPullRequest}} · pull request #{{.}}{{end}}{{else}}Plan and apply{{end}}</h2>
   <span class="status {{$r.Status}}" id="status">{{status $r.Status}}</span>
 </div>
 
@@ -36,7 +36,7 @@
   <div><dt>{{if or (eq $r.Action "refresh") (eq $r.Action "assess")}}Drift{{else}}Resources to be changed{{end}}</dt>
     <dd class="plan">{{with $r.Plan}}{{if or (eq $r.Action "refresh") (eq $r.Action "assess")}}~{{.Change}} −{{.Destroy}}{{else}}<span class="change create">+{{.Add}}</span> <span class="change update">~{{.Change}}</span> <span class="change delete">−{{.Destroy}}</span>{{end}}{{else}}+0 ~0 −0{{end}}</dd></div>
   <div><dt>Apply duration</dt><dd>{{or .Apply.Duration "—"}}</dd></div>
-  <div><dt>Triggered by</dt><dd>{{or $r.CreatedBy "—"}}</dd></div>
+  <div><dt>Triggered by</dt><dd>{{if $r.CreatedBy}}{{$r.CreatedBy}}{{else if $r.VCSPullRequest}}pull request #{{$r.VCSPullRequest}}{{else if and $r.VCSCommit (eq $r.Action "apply")}}new commit{{else}}—{{end}}</dd></div>
 </dl>
 
 <details class="section">
@@ -72,6 +72,7 @@
     <p class="muted">{{if eq $r.Action "refresh"}}Applying updates the state to match; it changes no infrastructure.{{else}}A drift check is never applied. Start a refresh-only run to accept these changes into state, or a new run to revert them.{{end}}</p>
     {{else}}
     <h3>Plan: <span class="plan">{{.Add}} to add, {{.Change}} to change, {{.Destroy}} to destroy</span></h3>
+    {{if eq $r.Action "plan"}}<p class="muted">A speculative plan of a pull request is never applied. Merge the pull request to apply it.</p>{{end}}
     {{end}}
     {{with .Changes}}
     <table class="changes">

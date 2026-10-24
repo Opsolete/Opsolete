@@ -45,6 +45,8 @@ type Workspace struct {
 	VCSConnectionID   string // "" if not linked to a repository
 	VCSRepo           string
 	VCSBranch         string
+	VCSTrigger        bool   // a new commit on the branch queues an apply run (see vcs.TriggerRuns)
+	VCSPullRequests   bool   // open pull requests into the branch get speculative plans
 	StateKey          string // blob key prefix of its state versions
 	Templates         int    // how many templates were added (see WorkspaceTemplates)
 	AutoApply         bool   // apply plans of apply runs without confirmation
@@ -72,6 +74,7 @@ const (
 	Applied           = "applied"
 	NoChanges         = "no_changes"
 	Drifted           = "drifted" // final status of an assess run that found drift
+	Planned           = "planned" // final status of a speculative plan that found changes
 	Discarded         = "discarded"
 	Errored           = "errored"
 	Canceled          = "canceled"
@@ -81,7 +84,7 @@ const (
 type Run struct {
 	ID          string
 	WorkspaceID string
-	Action      string // apply | destroy | refresh (refresh-only) | assess (drift check, never applied)
+	Action      string // apply | destroy | refresh (refresh-only) | assess (drift check, never applied) | plan (speculative, never applied)
 	Status      string
 	Replace     []string        // resource addresses an apply run plans to replace
 	Plan        *runnerapi.Plan // nil until planned, or when the plan had no changes
@@ -92,6 +95,7 @@ type Run struct {
 	// CancelRequested: a user asked to cancel while a runner works on it.
 	CancelRequested bool
 	VCSCommit       string // commit a VCS workspace's run planned; "" until its plan fetched the configuration
+	VCSPullRequest  int    // pull request a speculative plan was made for; 0 for other runs
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 }
@@ -117,7 +121,7 @@ type StatusEntry struct {
 }
 
 const workspaceCols = `w.id, w.name, COALESCE(w.template_id, ''), COALESCE(w.module_source, ''), COALESCE(w.module_ref, ''),
-	w.inputs, COALESCE(w.vcs_connection_id::text, ''), COALESCE(w.vcs_repo, ''), COALESCE(w.vcs_branch, ''), w.state_key,
+	w.inputs, COALESCE(w.vcs_connection_id::text, ''), COALESCE(w.vcs_repo, ''), COALESCE(w.vcs_branch, ''), w.vcs_trigger, w.vcs_pull_requests, w.state_key,
 	(SELECT count(*) FROM workspace_templates t WHERE t.workspace_id = w.id), w.auto_apply, w.drift_detection, w.global_remote_state, w.execution_mode,
 	COALESCE((SELECT a.status = 'drifted' AND NOT EXISTS (SELECT 1 FROM runs x WHERE x.workspace_id = w.id
 		AND x.status = 'applied' AND x.updated_at > a.updated_at) FROM runs a
@@ -128,7 +132,7 @@ func scanWorkspace(row interface{ Scan(...any) error }, extra ...any) (Workspace
 	var w Workspace
 	var raw []byte
 	dest := append([]any{&w.ID, &w.Name, &w.TemplateID, &w.ModuleSource, &w.ModuleRef, &raw,
-		&w.VCSConnectionID, &w.VCSRepo, &w.VCSBranch, &w.StateKey, &w.Templates,
+		&w.VCSConnectionID, &w.VCSRepo, &w.VCSBranch, &w.VCSTrigger, &w.VCSPullRequests, &w.StateKey, &w.Templates,
 		&w.AutoApply, &w.DriftDetection, &w.GlobalRemoteState, &w.ExecutionMode, &w.Drifted, &w.CreatedBy, &w.CreatedAt}, extra...)
 	if err := row.Scan(dest...); err != nil {
 		return w, err
@@ -138,13 +142,13 @@ func scanWorkspace(row interface{ Scan(...any) error }, extra ...any) (Workspace
 
 const runCols = `r.id, r.workspace_id, r.action, r.status, r.replace, r.plan, r.outputs, r.runner,
 	COALESCE((SELECT email FROM users u WHERE u.id = r.created_by), ''),
-	COALESCE((SELECT email FROM users u WHERE u.id = r.confirmed_by), ''), r.cancel_requested, COALESCE(r.vcs_commit, ''), r.created_at, r.updated_at`
+	COALESCE((SELECT email FROM users u WHERE u.id = r.confirmed_by), ''), r.cancel_requested, COALESCE(r.vcs_commit, ''), COALESCE(r.vcs_pull_request, 0), r.created_at, r.updated_at`
 
 func scanRun(row interface{ Scan(...any) error }) (Run, error) {
 	var r Run
 	var replace, plan, outputs []byte
 	if err := row.Scan(&r.ID, &r.WorkspaceID, &r.Action, &r.Status, &replace, &plan, &outputs, &r.Runner,
-		&r.CreatedBy, &r.ConfirmedBy, &r.CancelRequested, &r.VCSCommit, &r.CreatedAt, &r.UpdatedAt); err != nil {
+		&r.CreatedBy, &r.ConfirmedBy, &r.CancelRequested, &r.VCSCommit, &r.VCSPullRequest, &r.CreatedAt, &r.UpdatedAt); err != nil {
 		return r, err
 	}
 	if plan != nil {
@@ -273,7 +277,7 @@ func (s *Store) GetWorkspaceByID(ctx context.Context, id string) (Workspace, err
 func (s *Store) ListWorkspaces(ctx context.Context, v Viewer) ([]Workspace, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT `+workspaceCols+`, l.status, l.action, l.updated_at
 		FROM workspaces w LEFT JOIN LATERAL (SELECT status, action, updated_at FROM runs
-			WHERE workspace_id = w.id AND action <> 'assess' ORDER BY created_at DESC LIMIT 1) l ON true
+			WHERE workspace_id = w.id AND action NOT IN ('assess', 'plan') ORDER BY created_at DESC LIMIT 1) l ON true
 		WHERE `+visible+`
 		ORDER BY COALESCE(l.updated_at, w.created_at) DESC LIMIT 200`, v.UserID, v.Admin)
 	if err != nil {
@@ -432,37 +436,85 @@ func (s *Store) SetGrant(ctx context.Context, workspaceID, group, level string) 
 }
 
 // SetWorkspaceVCS links a workspace without a template to a repository branch; connID "" unlinks it.
-// A changed link detaches the workspace's variable sets: an admin must attach them again.
-func (s *Store) SetWorkspaceVCS(ctx context.Context, workspaceID, connID, repo, branch string) error {
+// trigger and pullRequests set which VCS events queue runs. A changed link, or turning on pull
+// request plans, detaches the workspace's variable sets: an admin must attach them again.
+func (s *Store) SetWorkspaceVCS(ctx context.Context, workspaceID, connID, repo, branch string, trigger, pullRequests bool) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	var changed bool
+	var detach bool
 	err = tx.QueryRowContext(ctx, `SELECT (vcs_connection_id, vcs_repo, vcs_branch) IS DISTINCT FROM
-		(NULLIF($2, '')::uuid, NULLIF($3, ''), NULLIF($4, '')) FROM workspaces WHERE id::text = $1 AND template_id IS NULL
-		FOR UPDATE`,
-		workspaceID, connID, repo, branch).Scan(&changed)
+		(NULLIF($2, '')::uuid, NULLIF($3, ''), NULLIF($4, '')) OR (NOT vcs_pull_requests AND $5)
+		FROM workspaces WHERE id::text = $1 AND template_id IS NULL FOR UPDATE`,
+		workspaceID, connID, repo, branch, pullRequests && connID != "").Scan(&detach)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil // deleted meanwhile, or a template workspace: nothing to link
 	}
 	if err != nil {
 		return err
 	}
-	if !changed {
-		return nil
-	}
 	if _, err := tx.ExecContext(ctx, `UPDATE workspaces SET vcs_connection_id = NULLIF($2, '')::uuid,
-		vcs_repo = NULLIF($3, ''), vcs_branch = NULLIF($4, ''), updated_at = now()
-		WHERE id::text = $1 AND template_id IS NULL`, workspaceID, connID, repo, branch); err != nil {
+		vcs_repo = NULLIF($3, ''), vcs_branch = NULLIF($4, ''), vcs_trigger = $5, vcs_pull_requests = $6, updated_at = now()
+		WHERE id::text = $1 AND template_id IS NULL`, workspaceID, connID, repo, branch, trigger && connID != "", pullRequests && connID != ""); err != nil {
 		return err
 	}
-	// The admin who attached sets vouched for the old repository and branch, not for the new one.
-	if _, err := tx.ExecContext(ctx, `DELETE FROM variable_set_workspaces WHERE workspace_id::text = $1`, workspaceID); err != nil {
-		return err
+	// The admin who attached sets vouched for the old repository and branch, not for the new one,
+	// nor for unreviewed pull requests.
+	if detach {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM variable_set_workspaces WHERE workspace_id::text = $1`, workspaceID); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
+}
+
+// VCSTriggered lists the remote workspaces whose branch pushes or pull requests queue runs.
+func (s *Store) VCSTriggered(ctx context.Context) ([]Workspace, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT `+workspaceCols+` FROM workspaces w
+		WHERE w.vcs_connection_id IS NOT NULL AND (w.vcs_trigger OR w.vcs_pull_requests) AND w.execution_mode = 'remote'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Workspace
+	for rows.Next() {
+		w, err := scanWorkspace(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+// QueueVCSRun queues a run of commit, pinned at once: an apply run for a push (pullRequest 0), or a
+// speculative plan of a pull request. It queues nothing (false) if the workspace has an active run,
+// or a run of this commit exists already: for a push any run but a drift check or speculative plan,
+// for a pull request a speculative plan of it. The poller retries at its next round.
+func (s *Store) QueueVCSRun(ctx context.Context, workspaceID, commit string, pullRequest int, message string) (bool, error) {
+	action := "apply"
+	if pullRequest > 0 {
+		action = "plan"
+	}
+	var id string
+	err := s.DB.QueryRowContext(ctx, `
+		WITH r AS (
+			INSERT INTO runs (workspace_id, action, status, vcs_commit, vcs_pull_request)
+			SELECT w.id, $2, 'plan_queued', $3, NULLIF($4, 0) FROM workspaces w
+			WHERE w.id::text = $1 AND w.execution_mode = 'remote' AND NOT EXISTS (SELECT 1 FROM runs x
+				WHERE x.workspace_id = w.id AND x.vcs_commit = $3
+					AND CASE WHEN $4 > 0 THEN x.action = 'plan' AND x.vcs_pull_request = $4 ELSE x.action NOT IN ('assess', 'plan') END)
+			ON CONFLICT (workspace_id) WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')
+			DO NOTHING RETURNING id
+		)
+		INSERT INTO run_status_history (run_id, status, message) SELECT id, 'plan_queued', $5 FROM r RETURNING run_id`,
+		workspaceID, action, commit, pullRequest, message).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // PinVCSCommit records the commit a run plans, unless one is recorded already, and returns the

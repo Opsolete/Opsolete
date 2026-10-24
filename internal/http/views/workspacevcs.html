@@ -11,6 +11,10 @@
 <label for="vcs_branch">Branch</label>
 <input id="vcs_branch" name="vcs_branch" value="{{index $f "vcs_branch"}}" placeholder="main">
 <p class="hint">Runs plan the Terraform configuration at the repository root, at the branch's latest commit.</p>
+<label class="check"><input type="checkbox" name="vcs_trigger" value="1"{{if index $f "vcs_trigger"}} checked{{end}}>
+  <span>Start a run on every new commit on the branch<small>Checked every minute. The run plans that commit and is applied like any other: with auto-apply, or after confirmation.</small></span></label>
+<label class="check"><input type="checkbox" name="vcs_pull_requests" value="1"{{if index $f "vcs_pull_requests"}} checked{{end}}>
+  <span>Speculative plans for pull requests into the branch<small>A plan-only run, never applied, for each new commit of an open pull request from this repository (not from forks). It runs unreviewed code with the workspace's variables, so turning this on detaches its variable sets.</small></span></label>
 {{end}}
 {{template "top" .}}
 {{$w := .W}}

@@ -19,12 +19,13 @@ type Job struct {
 	RunID        string
 	WorkspaceID  string
 	Phase        string // plan | apply
-	Action       string // apply | destroy | refresh | assess
+	Action       string // apply | destroy | refresh | assess | plan
 	Replace      []string
 	LeaseID      string
 	ModuleSource string
 	ModuleRef    string
-	VCS          bool // configuration comes from the workspace's VCS branch
+	VCS          bool   // configuration comes from the workspace's VCS branch
+	VCSCommit    string // commit pinned when the run was queued (VCS-triggered runs), or by an earlier phase
 	Inputs       map[string]any
 	Modules      []WorkspaceTemplate // templates added to the workspace
 }
@@ -46,8 +47,8 @@ func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration
 			runner = $1, lease_id = $2, lease_until = now() + make_interval(secs => $3), updated_at = now()
 		WHERE id = (SELECT id FROM runs WHERE status IN ('plan_queued', 'apply_queued')
 			ORDER BY updated_at FOR UPDATE SKIP LOCKED LIMIT 1)
-		RETURNING id, workspace_id, action, status, replace`,
-		runner, j.LeaseID, lease.Seconds()).Scan(&j.RunID, &j.WorkspaceID, &j.Action, &status, &replace)
+		RETURNING id, workspace_id, action, status, replace, COALESCE(vcs_commit, '')`,
+		runner, j.LeaseID, lease.Seconds()).Scan(&j.RunID, &j.WorkspaceID, &j.Action, &status, &replace, &j.VCSCommit)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, false, nil
 	}
@@ -185,8 +186,8 @@ func (s *Store) CancelRun(ctx context.Context, id, email string, force bool) (st
 // FinishJob records the result of a phase, releases the lease and the workspace's state lock, and
 // returns the run's new status:
 //   - plan with changes: needs_confirmation, or apply_queued for apply runs of auto-apply workspaces
-//     (destroys and refresh-only runs always wait for a human), or drifted for assess runs, which are
-//     never applied; without changes: no_changes
+//     (destroys and refresh-only runs always wait for a human), or drifted for assess runs and
+//     planned for speculative plans, which are never applied; without changes: no_changes
 //   - apply: applied
 //   - failed / canceled: errored / canceled
 //
@@ -219,6 +220,8 @@ func (s *Store) FinishJob(ctx context.Context, runID, lease, result, message str
 		final = NoChanges
 	case action == "assess":
 		final = Drifted
+	case action == "plan":
+		final = Planned
 	case autoApply && action == "apply":
 		final = ApplyQueued
 	default:

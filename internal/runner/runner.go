@@ -398,8 +398,12 @@ func (r *Runner) plan(ctx context.Context, tf *tfexec.Terraform, dir string, job
 		rcs = p.ResourceDrift
 	}
 	sum := summarize(rcs)
-	if job.Action == "assess" { // never applied, so the plan isn't kept
+	switch job.Action { // never applied, so the plan isn't kept
+	case "assess":
 		fmt.Fprintf(w, "\n==> drift: %d changed, %d deleted outside Terraform\n", sum.Change, sum.Destroy)
+		return runnerapi.FinishRequest{Status: "succeeded", Plan: &sum}
+	case "plan":
+		fmt.Fprintf(w, "\n==> speculative plan: %d to add, %d to change, %d to destroy (never applied)\n", sum.Add, sum.Change, sum.Destroy)
 		return runnerapi.FinishRequest{Status: "succeeded", Plan: &sum}
 	}
 	for _, a := range []struct{ name, file string }{{runnerapi.ArtifactPlan, planFile}, {runnerapi.ArtifactLockfile, lockFile}} {

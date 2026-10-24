@@ -1,5 +1,6 @@
-// Package vcs publishes registry modules from GitHub and Azure DevOps repositories:
-// every semver tag of a linked repo becomes an immutable module version. It talks
+// Package vcs publishes registry modules from GitHub and Azure DevOps repositories (every
+// semver tag of a linked repo becomes an immutable module version), and starts the runs of
+// workspaces linked to a branch on pushes and pull requests (see PollRuns). It talks
 // to the providers' REST APIs with an access token, so the server needs no git binary.
 package vcs
 
@@ -23,6 +24,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/opsolete/opsolete/internal/registry"
@@ -114,16 +116,87 @@ func splitRepo(repo string) (string, string, error) {
 	return url.PathEscape(a), url.PathEscape(b), nil
 }
 
-func (c Conn) get(ctx context.Context, u string, limit int64) ([]byte, error) {
+// GitHub answers a conditional request with 304 when nothing changed, and a 304 doesn't count
+// against the rate limit, so polling an unchanged branch or pull request list is free. Responses
+// are cached per token and URL, in memory: each replica's first poll after a start costs one call.
+// shortcut: at most maxCached responses up to maxCachedSize each, then the cache starts over.
+const (
+	maxCached     = 500
+	maxCachedSize = 1 << 20
+)
+
+type cachedResponse struct {
+	etag string
+	body []byte
+}
+
+var (
+	cacheMu sync.Mutex
+	cache   = map[string]cachedResponse{}
+	pauses  = map[string]time.Time{} // API root -> when the provider wants polling to resume
+)
+
+// pausedUntil is when the provider at baseURL asked to be polled again; zero if it didn't.
+func pausedUntil(baseURL string) time.Time {
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+	if t := pauses[baseURL]; time.Now().Before(t) {
+		return t
+	}
+	return time.Time{}
+}
+
+// notePause records how long the provider wants clients to wait: Retry-After (GitHub and Azure
+// DevOps, which also sends it with a 200 when a client uses too much), GitHub's x-poll-interval,
+// and an exhausted GitHub rate limit (x-ratelimit-reset).
+func (c Conn) notePause(resp *http.Response) {
+	var until time.Time
+	for _, h := range []string{"Retry-After", "X-Poll-Interval"} {
+		if n, err := strconv.Atoi(resp.Header.Get(h)); err == nil && n > 0 {
+			until = later(until, time.Now().Add(time.Duration(n)*time.Second))
+		}
+	}
+	if (resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests) && resp.Header.Get("X-RateLimit-Remaining") == "0" {
+		if n, err := strconv.ParseInt(resp.Header.Get("X-RateLimit-Reset"), 10, 64); err == nil {
+			until = later(until, time.Unix(n, 0))
+		}
+	}
+	if !until.IsZero() {
+		cacheMu.Lock()
+		pauses[c.BaseURL] = later(pauses[c.BaseURL], until)
+		cacheMu.Unlock()
+	}
+}
+
+func later(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
+}
+
+// get fetches u; conditional (GitHub only, see cache) makes it a conditional request.
+func (c Conn) get(ctx context.Context, u string, limit int64, conditional bool) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
 	}
+	conditional = conditional && c.Provider == GitHub
+	key := fmt.Sprintf("%x %s", sha256.Sum256([]byte(c.Token)), u) // another token may see other data
+	var cached cachedResponse
 	switch c.Provider {
 	case GitHub:
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 		req.Header.Set("Accept", "application/vnd.github+json")
 		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+		if conditional {
+			cacheMu.Lock()
+			cached = cache[key]
+			cacheMu.Unlock()
+			if cached.etag != "" {
+				req.Header.Set("If-None-Match", cached.etag)
+			}
+		}
 	case AzureDevOps:
 		req.SetBasicAuth("", c.Token) // PAT as the password
 	}
@@ -132,6 +205,10 @@ func (c Conn) get(ctx context.Context, u string, limit int64) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	c.notePause(resp)
+	if resp.StatusCode == http.StatusNotModified && cached.etag != "" {
+		return cached.body, nil
+	}
 	// Azure DevOps answers a bad token with 203 and a sign-in page, so anything but 200 is an error.
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
@@ -141,11 +218,20 @@ func (c Conn) get(ctx context.Context, u string, limit int64) ([]byte, error) {
 	if err == nil && int64(len(b)) > limit {
 		err = fmt.Errorf("%s %s: response larger than %d MB", c.Provider, req.URL.Path, limit>>20)
 	}
+	if etag := resp.Header.Get("ETag"); err == nil && conditional && etag != "" && len(b) <= maxCachedSize {
+		cacheMu.Lock()
+		if len(cache) >= maxCached {
+			clear(cache)
+		}
+		cache[key] = cachedResponse{etag, b}
+		cacheMu.Unlock()
+	}
 	return b, err
 }
 
-func (c Conn) getJSON(ctx context.Context, u string, v any) error {
-	b, err := c.get(ctx, u, maxJSON)
+// getJSON decodes u; polled endpoints (branches, pull requests, tags) set conditional (see cache).
+func (c Conn) getJSON(ctx context.Context, u string, v any, conditional bool) error {
+	b, err := c.get(ctx, u, maxJSON, conditional)
 	if err != nil {
 		return err
 	}
@@ -165,7 +251,7 @@ func (c Conn) Repos(ctx context.Context) ([]string, error) {
 			var rs []struct {
 				FullName string `json:"full_name"`
 			}
-			if err := c.getJSON(ctx, c.BaseURL+"/user/repos?per_page=100&sort=full_name&page="+strconv.Itoa(page), &rs); err != nil {
+			if err := c.getJSON(ctx, c.BaseURL+"/user/repos?per_page=100&sort=full_name&page="+strconv.Itoa(page), &rs, false); err != nil {
 				return nil, err
 			}
 			for _, r := range rs {
@@ -184,7 +270,7 @@ func (c Conn) Repos(ctx context.Context) ([]string, error) {
 				} `json:"project"`
 			} `json:"value"`
 		}
-		if err := c.getJSON(ctx, c.BaseURL+"/_apis/git/repositories?api-version=7.1", &rs); err != nil {
+		if err := c.getJSON(ctx, c.BaseURL+"/_apis/git/repositories?api-version=7.1", &rs, false); err != nil {
 			return nil, err
 		}
 		for _, r := range rs.Value {
@@ -209,7 +295,7 @@ func (c Conn) Tags(ctx context.Context, repo string) ([]string, error) {
 			var ts []struct {
 				Name string `json:"name"`
 			}
-			if err := c.getJSON(ctx, fmt.Sprintf("%s/repos/%s/%s/tags?per_page=100&page=%d", c.BaseURL, a, b, page), &ts); err != nil {
+			if err := c.getJSON(ctx, fmt.Sprintf("%s/repos/%s/%s/tags?per_page=100&page=%d", c.BaseURL, a, b, page), &ts, true); err != nil {
 				return nil, err
 			}
 			for _, t := range ts {
@@ -225,7 +311,7 @@ func (c Conn) Tags(ctx context.Context, repo string) ([]string, error) {
 				Name string `json:"name"`
 			} `json:"value"`
 		}
-		if err := c.getJSON(ctx, fmt.Sprintf("%s/%s/_apis/git/repositories/%s/refs?filter=tags/&api-version=7.1", c.BaseURL, a, b), &rs); err != nil {
+		if err := c.getJSON(ctx, fmt.Sprintf("%s/%s/_apis/git/repositories/%s/refs?filter=tags/&api-version=7.1", c.BaseURL, a, b), &rs, true); err != nil {
 			return nil, err
 		}
 		for _, r := range rs.Value {
@@ -250,7 +336,7 @@ func (c Conn) Head(ctx context.Context, repo, branch string) (string, error) {
 				SHA string `json:"sha"`
 			} `json:"commit"`
 		}
-		err = c.getJSON(ctx, fmt.Sprintf("%s/repos/%s/%s/branches/%s", c.BaseURL, a, b, url.PathEscape(branch)), &br)
+		err = c.getJSON(ctx, fmt.Sprintf("%s/repos/%s/%s/branches/%s", c.BaseURL, a, b, url.PathEscape(branch)), &br, true)
 		if err == nil && br.Commit.SHA == "" {
 			err = fmt.Errorf("branch %s not found in %s", branch, repo)
 		}
@@ -263,7 +349,7 @@ func (c Conn) Head(ctx context.Context, repo, branch string) (string, error) {
 			} `json:"value"`
 		}
 		q := url.Values{"filter": {"heads/" + branch}, "api-version": {"7.1"}}
-		if err := c.getJSON(ctx, fmt.Sprintf("%s/%s/_apis/git/repositories/%s/refs?%s", c.BaseURL, a, b, q.Encode()), &rs); err != nil {
+		if err := c.getJSON(ctx, fmt.Sprintf("%s/%s/_apis/git/repositories/%s/refs?%s", c.BaseURL, a, b, q.Encode()), &rs, true); err != nil {
 			return "", err
 		}
 		for _, r := range rs.Value { // the filter is a prefix match
@@ -274,6 +360,67 @@ func (c Conn) Head(ctx context.Context, repo, branch string) (string, error) {
 		return "", fmt.Errorf("branch %s not found in %s", branch, repo)
 	}
 	return "", fmt.Errorf("unknown VCS provider %q", c.Provider)
+}
+
+// PullRequest is an open pull request into a branch, at its latest commit.
+type PullRequest struct {
+	Number int
+	Commit string
+}
+
+// PullRequests lists the open pull requests into branch that come from the repository itself.
+// Pull requests from forks are left out: anyone may open one, and its commit isn't in the repository.
+// shortcut: the first 100 pull requests; plenty for one branch.
+func (c Conn) PullRequests(ctx context.Context, repo, branch string) ([]PullRequest, error) {
+	a, b, err := splitRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+	var out []PullRequest
+	switch c.Provider {
+	case GitHub:
+		var prs []struct {
+			Number int `json:"number"`
+			Head   struct {
+				SHA  string `json:"sha"`
+				Repo *struct {
+					FullName string `json:"full_name"`
+				} `json:"repo"` // null once a fork is deleted
+			} `json:"head"`
+		}
+		q := url.Values{"state": {"open"}, "base": {branch}, "per_page": {"100"}}
+		if err := c.getJSON(ctx, fmt.Sprintf("%s/repos/%s/%s/pulls?%s", c.BaseURL, a, b, q.Encode()), &prs, true); err != nil {
+			return nil, err
+		}
+		for _, p := range prs {
+			if p.Head.Repo != nil && strings.EqualFold(p.Head.Repo.FullName, repo) && p.Head.SHA != "" {
+				out = append(out, PullRequest{p.Number, p.Head.SHA})
+			}
+		}
+	case AzureDevOps:
+		var rs struct {
+			Value []struct {
+				ID     int `json:"pullRequestId"`
+				Source struct {
+					CommitID string `json:"commitId"`
+				} `json:"lastMergeSourceCommit"`
+				ForkSource *struct{} `json:"forkSource"`
+			} `json:"value"`
+		}
+		q := url.Values{"searchCriteria.status": {"active"}, "searchCriteria.targetRefName": {"refs/heads/" + branch},
+			"$top": {"100"}, "api-version": {"7.1"}}
+		if err := c.getJSON(ctx, fmt.Sprintf("%s/%s/_apis/git/repositories/%s/pullrequests?%s", c.BaseURL, a, b, q.Encode()), &rs, true); err != nil {
+			return nil, err
+		}
+		for _, p := range rs.Value {
+			if p.ForkSource == nil && p.Source.CommitID != "" {
+				out = append(out, PullRequest{p.ID, p.Source.CommitID})
+			}
+		}
+	default:
+		return nil, fmt.Errorf("unknown VCS provider %q", c.Provider)
+	}
+	return out, nil
 }
 
 // Archive downloads the repository at a tag or commit (refType "tag" | "commit") as a module
@@ -287,7 +434,7 @@ func (c Conn) Archive(ctx context.Context, repo, ref, refType string) ([]byte, e
 	var files []file
 	switch c.Provider {
 	case GitHub:
-		raw, err := c.get(ctx, fmt.Sprintf("%s/repos/%s/%s/tarball/%s", c.BaseURL, a, b, url.PathEscape(tag)), maxDownload)
+		raw, err := c.get(ctx, fmt.Sprintf("%s/repos/%s/%s/tarball/%s", c.BaseURL, a, b, url.PathEscape(tag)), maxDownload, false)
 		if err != nil {
 			return nil, err
 		}
@@ -297,7 +444,7 @@ func (c Conn) Archive(ctx context.Context, repo, ref, refType string) ([]byte, e
 	case AzureDevOps:
 		q := url.Values{"path": {"/"}, "recursionLevel": {"full"}, "$format": {"zip"}, "download": {"true"},
 			"versionDescriptor.version": {tag}, "versionDescriptor.versionType": {refType}, "api-version": {"7.1"}}
-		raw, err := c.get(ctx, fmt.Sprintf("%s/%s/_apis/git/repositories/%s/items?%s", c.BaseURL, a, b, q.Encode()), maxDownload)
+		raw, err := c.get(ctx, fmt.Sprintf("%s/%s/_apis/git/repositories/%s/items?%s", c.BaseURL, a, b, q.Encode()), maxDownload, false)
 		if err != nil {
 			return nil, err
 		}
@@ -469,7 +616,7 @@ func ConnFor(key []byte, c storage.VCSConnection) (Conn, error) {
 // the outcome. A bad tag doesn't stop the others. It returns the versions it added.
 // shortcut: a tag that fails to publish is retried on every sync; fine for the odd broken tag.
 func Sync(ctx context.Context, st *storage.Store, key []byte, m storage.VCSModule) ([]string, error) {
-	added, err := sync(ctx, st, key, m)
+	added, err := syncModule(ctx, st, key, m)
 	msg := ""
 	if err != nil {
 		msg = err.Error()
@@ -480,7 +627,7 @@ func Sync(ctx context.Context, st *storage.Store, key []byte, m storage.VCSModul
 	return added, err
 }
 
-func sync(ctx context.Context, st *storage.Store, key []byte, m storage.VCSModule) ([]string, error) {
+func syncModule(ctx context.Context, st *storage.Store, key []byte, m storage.VCSModule) ([]string, error) {
 	sc, err := st.GetVCSConnection(ctx, m.ConnectionID)
 	if err != nil {
 		return nil, err
@@ -559,3 +706,89 @@ func Poll(ctx context.Context, st *storage.Store, key []byte, interval time.Dura
 		}
 	}
 }
+
+// PollRuns queues the runs VCS events call for, now and then every interval, until ctx ends: an
+// apply run for a new commit on a workspace's branch, a speculative plan for each new commit of a
+// pull request into it. Polling, like Poll, needs no inbound webhooks, so Opsolete can stay
+// internal. Each repository branch is polled once per round however many workspaces link it, and
+// on GitHub with conditional requests, so an unchanged branch costs no rate limit.
+func PollRuns(ctx context.Context, st *storage.Store, key []byte, interval time.Duration, log *slog.Logger) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		wss, err := st.VCSTriggered(ctx)
+		if err != nil && ctx.Err() == nil {
+			log.Error("list vcs-triggered workspaces", "err", err)
+		}
+		groups := map[string][]storage.Workspace{}
+		for _, ws := range wss {
+			k := ws.VCSConnectionID + "\n" + strings.ToLower(ws.VCSRepo) + "\n" + ws.VCSBranch
+			groups[k] = append(groups[k], ws)
+		}
+		for _, g := range groups {
+			if err := TriggerRuns(ctx, st, key, g); err != nil && ctx.Err() == nil {
+				log.Warn("vcs trigger", "repo", g[0].VCSRepo, "branch", g[0].VCSBranch, "workspaces", len(g), "err", err)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// TriggerRuns queues the runs a branch and its pull requests call for (see PollRuns) on the
+// workspaces of group, which all link the same connection, repository and branch. A workspace with
+// an active run gets them at a later round, one at a time.
+func TriggerRuns(ctx context.Context, st *storage.Store, key []byte, group []storage.Workspace) error {
+	ws := group[0]
+	sc, err := st.GetVCSConnection(ctx, ws.VCSConnectionID)
+	if err != nil {
+		return err
+	}
+	c, err := ConnFor(key, sc)
+	if err != nil {
+		return err
+	}
+	if !RepoAllowed(c.WorkspaceRepos, ws.VCSRepo) { // narrowed since the link; manual runs fail with the reason
+		return fmt.Errorf("workspaces may no longer link %q through this connection", ws.VCSRepo)
+	}
+	if until := pausedUntil(c.BaseURL); !until.IsZero() {
+		return fmt.Errorf("%s asked to wait: polling resumes at %s", c.Provider, until.Format(time.TimeOnly))
+	}
+	var head string
+	var prs []PullRequest
+	fetchedPRs := false
+	for _, ws := range group {
+		if ws.VCSTrigger {
+			if head == "" {
+				if head, err = c.Head(ctx, ws.VCSRepo, ws.VCSBranch); err != nil {
+					return err
+				}
+			}
+			if _, err := st.QueueVCSRun(ctx, ws.ID, head, 0,
+				fmt.Sprintf("commit %s on %s: apply plan queued, waiting for a runner", short(head), ws.VCSBranch)); err != nil {
+				return err
+			}
+		}
+		if !ws.VCSPullRequests {
+			continue
+		}
+		if !fetchedPRs {
+			if prs, err = c.PullRequests(ctx, ws.VCSRepo, ws.VCSBranch); err != nil {
+				return err
+			}
+			fetchedPRs = true
+		}
+		for _, pr := range prs {
+			if _, err := st.QueueVCSRun(ctx, ws.ID, pr.Commit, pr.Number,
+				fmt.Sprintf("pull request #%d at %s: speculative plan queued, waiting for a runner", pr.Number, short(pr.Commit))); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func short(commit string) string { return commit[:min(len(commit), 8)] }

@@ -28,7 +28,8 @@ type Job struct {
 	WorkspaceID string `json:"workspace_id"`
 	Phase       string `json:"phase"` // plan | apply
 	// apply | destroy | refresh (refresh-only: the apply only updates state) | assess (drift check:
-	// a refresh-only plan that is never applied, so its plan phase uploads nothing)
+	// a refresh-only plan that is never applied, so its plan phase uploads nothing) | plan (speculative
+	// plan of a pull request: never applied either)
 	Action       string         `json:"action"`
 	Replace      []string       `json:"replace,omitempty"` // resource addresses the plan replaces (-replace)
 	LeaseID      string         `json:"lease_id"`

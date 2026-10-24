@@ -621,7 +621,7 @@ func runGroup(status string) string {
 		return "errored"
 	case storage.PlanQueued, storage.Planning, storage.ApplyQueued, storage.Applying:
 		return "running"
-	case storage.Applied, storage.NoChanges:
+	case storage.Applied, storage.NoChanges, storage.Planned:
 		return "success"
 	}
 	return "other" // discarded, canceled: only under All

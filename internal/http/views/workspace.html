@@ -69,7 +69,7 @@
 {{with .Current}}
 <div class="section-head"><h2>Latest run</h2><a href="/workspaces/{{$w.Name}}/runs">View all runs →</a></div>
 <div class="card">
-  <div class="run-title"><h3>{{if eq .Action "destroy"}}Destroy{{else if eq .Action "refresh"}}Refresh state{{else}}Plan and apply{{end}}</h3>
+  <div class="run-title"><h3>{{if eq .Action "destroy"}}Destroy{{else if eq .Action "refresh"}}Refresh state{{else if eq .Action "plan"}}Speculative plan{{with .VCSPullRequest}} · PR #{{.}}{{end}}{{else}}Plan and apply{{end}}</h3>
     <span class="status {{.Status}}">{{status .Status}}</span></div>
   <p class="muted">{{with .CreatedBy}}<strong>{{.}}</strong> triggered a run {{end}}{{.CreatedAt.Format "2006-01-02 15:04"}}{{with .VCSCommit}} · <code>{{printf "%.7s" .}}</code>{{end}}</p>
   <div class="latest-foot">
@@ -421,7 +421,7 @@
 {{define "runrow"}}<!-- relative link: only used on /workspaces/{name}/runs -->
 <a class="runrow{{if .Current}} current{{end}}" href="runs/{{.ID}}">
   <span>
-    <strong>{{if eq .Action "destroy"}}Destroy{{else if eq .Action "refresh"}}Refresh state{{else}}Plan and apply{{end}}</strong>{{if .Current}} <span class="tag">current</span>{{end}}
+    <strong>{{if eq .Action "destroy"}}Destroy{{else if eq .Action "refresh"}}Refresh state{{else if eq .Action "plan"}}Speculative plan{{with .VCSPullRequest}} · PR #{{.}}{{end}}{{else}}Plan and apply{{end}}</strong>{{if .Current}} <span class="tag">current</span>{{end}}
     <small>#{{printf "%.8s" .ID}}{{with .CreatedBy}} | <strong>{{.}}</strong> triggered{{end}}{{with .VCSCommit}} | <code>{{printf "%.7s" .}}</code>{{end}}{{with .Plan}} | <span class="plan">+{{.Add}} ~{{.Change}} −{{.Destroy}}</span>{{end}}</small>
   </span>
   <span class="end"><span class="status {{.Status}}">{{status .Status}}</span><small>{{.CreatedAt.Format "2006-01-02 15:04"}}</small></span>

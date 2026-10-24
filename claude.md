@@ -83,7 +83,7 @@ Implement a single Go application with clearly separated packages:
 - `internal/terraform` — Terraform-related types and integrations.
 - `internal/runner`, `internal/runnerapi` — the execution runner and its wire protocol.
 - `internal/registry` — private Terraform module registry.
-- `internal/vcs` — GitHub / Azure DevOps connections; semver tags of linked repos are published as registry versions (polled, no webhooks).
+- `internal/vcs` — GitHub / Azure DevOps connections; semver tags of linked repos are published as registry versions, and branch commits and pull requests of linked workspaces queue runs (both polled, no webhooks).
 - `internal/storage` — PostgreSQL access and repositories.
 - `internal/http` — HTTP handlers, routing, and middleware.
 - `internal/config` — application configuration.

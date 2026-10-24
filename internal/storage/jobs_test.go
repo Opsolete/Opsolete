@@ -527,18 +527,84 @@ func TestVCSWorkspaceVariableSets(t *testing.T) {
 	}
 	attach()
 	check("attached", "global")
-	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main"); err != nil {
+	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", true, false); err != nil {
 		t.Fatal(err)
 	}
 	check() // linking detached the set, and global sets don't reach a linked workspace
 	attach()
 	check("attached")
-	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main"); err != nil {
+	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", true, false); err != nil {
 		t.Fatal(err)
 	}
 	check("attached") // same link: the admin's attachment stands
-	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "other"); err != nil {
+	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", false, true); err != nil {
+		t.Fatal(err)
+	}
+	check() // pull request plans run unreviewed code: the admin's attachment is gone
+	attach()
+	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", true, true); err != nil {
+		t.Fatal(err)
+	}
+	check("attached") // they were on already
+	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "other", true, false); err != nil {
 		t.Fatal(err)
 	}
 	check()
+}
+
+func TestQueueVCSRun(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	name := "t-" + strings.ToLower(rand.Text()[:10])
+	w, err := s.CreateEmptyWorkspace(ctx, name, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateVCSConnection(ctx, VCSConnection{Name: name, Provider: "github", Token: []byte("x")}); err != nil {
+		t.Fatal(err)
+	}
+	var conn string
+	s.DB.QueryRow(`SELECT id FROM vcs_connections WHERE name = $1`, name).Scan(&conn)
+	t.Cleanup(func() {
+		s.DB.Exec(`DELETE FROM workspaces WHERE id = $1`, w.ID)
+		s.DB.Exec(`DELETE FROM vcs_connections WHERE id = $1`, conn)
+	})
+	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", true, true); err != nil {
+		t.Fatal(err)
+	}
+	if ws, err := s.VCSTriggered(ctx); err != nil || !slices.ContainsFunc(ws, func(x Workspace) bool { return x.ID == w.ID && x.VCSTrigger && x.VCSPullRequests }) {
+		t.Fatalf("triggered workspaces: %v %v", ws, err)
+	}
+	queue := func(commit string, pr int, want bool) {
+		t.Helper()
+		if ok, err := s.QueueVCSRun(ctx, w.ID, commit, pr, "test"); err != nil || ok != want {
+			t.Fatalf("queue %s #%d: %v %v, want %v", commit, pr, ok, err, want)
+		}
+	}
+	finish := func(want string) {
+		t.Helper()
+		j := claim(t, s, "plan")
+		if j.RunID == "" || j.VCSCommit == "" {
+			t.Fatalf("job without pinned commit: %+v", j)
+		}
+		got, err := s.FinishJob(ctx, j.RunID, j.LeaseID, "succeeded", "", nil, &runnerapi.Plan{Add: 1}, nil)
+		if err != nil || got != want {
+			t.Fatalf("finish: %q %v, want %q", got, err, want)
+		}
+	}
+	queue("aaa", 0, true)
+	queue("bbb", 7, false) // the push run holds the workspace
+	finish(NeedsConfirmation)
+	runs, err := s.Runs(ctx, w.ID, 1)
+	if err != nil || runs[0].Action != "apply" || runs[0].VCSCommit != "aaa" {
+		t.Fatalf("push run: %+v %v", runs, err)
+	}
+	if err := s.DiscardRun(ctx, runs[0].ID, "x"); err != nil {
+		t.Fatal(err)
+	}
+	queue("aaa", 0, false) // that commit had its run
+	queue("bbb", 7, true)
+	finish(Planned)
+	queue("bbb", 7, false) // planned already
+	queue("bbb", 0, true)  // merged by fast-forward: the speculative plan doesn't count as its run
 }

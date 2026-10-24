@@ -66,7 +66,7 @@ func (s *Server) loadVCSForm(ctx context.Context, form map[string]string, errMsg
 
 func vcsFormValues(r *http.Request) map[string]string {
 	form := map[string]string{}
-	for _, k := range []string{"name", "auto_apply", "vcs_connection", "vcs_repo", "vcs_branch"} {
+	for _, k := range []string{"name", "auto_apply", "vcs_connection", "vcs_repo", "vcs_branch", "vcs_trigger", "vcs_pull_requests"} {
 		form[k] = strings.TrimSpace(r.PostFormValue(k))
 	}
 	return form
@@ -117,7 +117,7 @@ func (s *Server) newWorkspacePage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/templates/"+url.PathEscape(id), http.StatusSeeOther)
 		return
 	}
-	s.renderNewWorkspace(w, r, http.StatusOK, map[string]string{"vcs_branch": "main"}, "")
+	s.renderNewWorkspace(w, r, http.StatusOK, map[string]string{"vcs_branch": "main", "vcs_trigger": "1"}, "")
 }
 
 func (s *Server) renderNewWorkspace(w http.ResponseWriter, r *http.Request, status int, form map[string]string, errMsg string) {
@@ -151,7 +151,7 @@ func (s *Server) createEmptyWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err == nil && connID != "" {
-		err = s.Store.SetWorkspaceVCS(r.Context(), ws.ID, connID, repo, branch)
+		err = s.Store.SetWorkspaceVCS(r.Context(), ws.ID, connID, repo, branch, form["vcs_trigger"] != "", form["vcs_pull_requests"] != "")
 	}
 	if err != nil {
 		s.internalError(w, "create workspace", err)
@@ -184,8 +184,14 @@ func (s *Server) workspaceVCSPage(w http.ResponseWriter, r *http.Request) {
 	if branch == "" {
 		branch = "main"
 	}
-	s.renderWorkspaceVCS(w, r, http.StatusOK, ws, map[string]string{"vcs_connection": ws.VCSConnectionID,
-		"vcs_repo": ws.VCSRepo, "vcs_branch": branch}, "")
+	form := map[string]string{"vcs_connection": ws.VCSConnectionID, "vcs_repo": ws.VCSRepo, "vcs_branch": branch}
+	if ws.VCSTrigger || ws.VCSConnectionID == "" { // on by default for a new link, as in HCP Terraform
+		form["vcs_trigger"] = "1"
+	}
+	if ws.VCSPullRequests {
+		form["vcs_pull_requests"] = "1"
+	}
+	s.renderWorkspaceVCS(w, r, http.StatusOK, ws, form, "")
 }
 
 func (s *Server) renderWorkspaceVCS(w http.ResponseWriter, r *http.Request, status int, ws storage.Workspace, form map[string]string, errMsg string) {
@@ -217,15 +223,17 @@ func (s *Server) linkWorkspaceVCS(w http.ResponseWriter, r *http.Request) {
 		s.renderWorkspaceVCS(w, r, http.StatusUnprocessableEntity, ws, form, err.Error())
 		return
 	}
-	if err := s.Store.SetWorkspaceVCS(r.Context(), ws.ID, connID, repo, branch); err != nil {
+	if err := s.Store.SetWorkspaceVCS(r.Context(), ws.ID, connID, repo, branch, form["vcs_trigger"] != "", form["vcs_pull_requests"] != ""); err != nil {
 		s.internalError(w, "link workspace vcs", err)
 		return
 	}
-	s.Log.Info("workspace vcs", "workspace", ws.Name, "repo", repo, "branch", branch, "user", auth.FromContext(r.Context()).Email)
+	s.Log.Info("workspace vcs", "workspace", ws.Name, "repo", repo, "branch", branch,
+		"trigger", form["vcs_trigger"] != "", "pull_requests", form["vcs_pull_requests"] != "", "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name, http.StatusSeeOther)
 }
 
-// pinCommit records the head of the workspace's branch as the commit a plan job runs.
+// pinCommit records the head of the workspace's branch as the commit a plan job runs, unless the
+// run was queued with its commit.
 func (s *Server) pinCommit(ctx context.Context, j storage.Job) error {
 	ws, err := s.Store.GetWorkspaceByID(ctx, j.WorkspaceID)
 	if err != nil {
@@ -237,6 +245,9 @@ func (s *Server) pinCommit(ctx context.Context, j storage.Job) error {
 	}
 	if !vcs.RepoAllowed(c.WorkspaceRepos, ws.VCSRepo) { // the admin narrowed the connection since the link
 		return fmt.Errorf("vcs: workspaces may no longer link %q through this connection", ws.VCSRepo)
+	}
+	if j.VCSCommit != "" { // queued for a pushed commit or pull request
+		return nil
 	}
 	head, err := c.Head(ctx, ws.VCSRepo, ws.VCSBranch)
 	if err != nil {

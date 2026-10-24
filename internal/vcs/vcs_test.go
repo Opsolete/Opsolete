@@ -6,8 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/opsolete/opsolete/internal/registry"
 	"github.com/opsolete/opsolete/internal/registry/registrytest"
@@ -40,6 +42,15 @@ func fakeVCS(t *testing.T) *httptest.Server {
 		// Like GitHub: everything under one "owner-repo-sha/" directory.
 		w.Write(registrytest.TarGz(t, map[string]string{"acme-storage-abc123/main.tf": mainTF, "acme-storage-abc123/README.md": "hi"}))
 	}))
+	mux.HandleFunc("GET /gh/repos/acme/terraform-azurerm-storage/pulls", gh(func(w http.ResponseWriter, r *http.Request) {
+		if q := r.URL.Query(); q.Get("base") != "main" || q.Get("state") != "open" {
+			http.Error(w, "bad query "+r.URL.RawQuery, http.StatusBadRequest)
+			return
+		}
+		w.Write([]byte(`[{"number":3,"head":{"sha":"pr3","repo":{"full_name":"Acme/terraform-azurerm-storage"}}},
+			{"number":4,"head":{"sha":"fork","repo":{"full_name":"mallory/terraform-azurerm-storage"}}},
+			{"number":5,"head":{"sha":"gone","repo":null}}]`))
+	}))
 	az := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			if _, pw, _ := r.BasicAuth(); pw != "az-pat" {
@@ -59,6 +70,14 @@ func fakeVCS(t *testing.T) *httptest.Server {
 			return
 		}
 		w.Write([]byte(`{"value":[{"name":"refs/tags/2.0.0"}]}`))
+	}))
+	mux.HandleFunc("GET /org/Platform Team/_apis/git/repositories/storage/pullrequests", az(func(w http.ResponseWriter, r *http.Request) {
+		if q := r.URL.Query(); q.Get("searchCriteria.targetRefName") != "refs/heads/main" || q.Get("searchCriteria.status") != "active" {
+			http.Error(w, "bad query "+r.URL.RawQuery, http.StatusBadRequest)
+			return
+		}
+		w.Write([]byte(`{"value":[{"pullRequestId":12,"lastMergeSourceCommit":{"commitId":"pr12"}},
+			{"pullRequestId":13,"lastMergeSourceCommit":{"commitId":"fork"},"forkSource":{"name":"refs/heads/x"}}]}`))
 	}))
 	mux.HandleFunc("GET /org/Platform Team/_apis/git/repositories/storage/items", az(func(w http.ResponseWriter, r *http.Request) {
 		if q := r.URL.Query(); q.Get("versionDescriptor.version") != "2.0.0" || q.Get("$format") != "zip" {
@@ -91,11 +110,12 @@ func TestProviders(t *testing.T) {
 		wantFiles  []string
 		wantDenied bool
 		head       string
+		prs        []PullRequest // forks left out
 	}{
-		{Conn{Provider: GitHub, BaseURL: srv.URL + "/gh", Token: "gh-token"}, "acme/terraform-azurerm-storage", "v1.1.0", []string{"README.md", "main.tf"}, false, "abc123"},
-		{Conn{Provider: AzureDevOps, BaseURL: srv.URL + "/org", Token: "az-pat"}, "Platform Team/storage", "2.0.0", []string{"main.tf", "sub/x.tf"}, false, "def456"},
-		{Conn{Provider: GitHub, BaseURL: srv.URL + "/gh", Token: "wrong"}, "", "", nil, true, ""},
-		{Conn{Provider: AzureDevOps, BaseURL: srv.URL + "/org", Token: "wrong"}, "", "", nil, true, ""},
+		{Conn{Provider: GitHub, BaseURL: srv.URL + "/gh", Token: "gh-token"}, "acme/terraform-azurerm-storage", "v1.1.0", []string{"README.md", "main.tf"}, false, "abc123", []PullRequest{{3, "pr3"}}},
+		{Conn{Provider: AzureDevOps, BaseURL: srv.URL + "/org", Token: "az-pat"}, "Platform Team/storage", "2.0.0", []string{"main.tf", "sub/x.tf"}, false, "def456", []PullRequest{{12, "pr12"}}},
+		{Conn{Provider: GitHub, BaseURL: srv.URL + "/gh", Token: "wrong"}, "", "", nil, true, "", nil},
+		{Conn{Provider: AzureDevOps, BaseURL: srv.URL + "/org", Token: "wrong"}, "", "", nil, true, "", nil},
 	} {
 		repos, err := tc.conn.Repos(ctx)
 		if tc.wantDenied {
@@ -109,6 +129,9 @@ func TestProviders(t *testing.T) {
 		}
 		if head, err := tc.conn.Head(ctx, tc.repo, "main"); err != nil || head != tc.head {
 			t.Fatalf("%s head of main: %q %v", tc.conn.Provider, head, err)
+		}
+		if prs, err := tc.conn.PullRequests(ctx, tc.repo, "main"); err != nil || !slices.Equal(prs, tc.prs) {
+			t.Fatalf("%s pull requests into main: %v %v, want %v", tc.conn.Provider, prs, err, tc.prs)
 		}
 		tags, err := tc.conn.Tags(ctx, tc.repo)
 		if err != nil || !slices.Contains(tags, tc.tag) {
@@ -186,5 +209,53 @@ func TestRepoAllowed(t *testing.T) {
 		if _, err := CheckRepoPatterns(bad); err == nil {
 			t.Errorf("CheckRepoPatterns(%q) must fail", bad)
 		}
+	}
+}
+
+// Polled GitHub endpoints are conditional requests: an unchanged branch is answered from the cache
+// with a 304, which costs no rate limit. Retry-After pauses polling of that provider.
+func TestConditionalRequestsAndPause(t *testing.T) {
+	var full, notModified int
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("If-None-Match") == `"v1"` {
+			notModified++
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		full++
+		w.Header().Set("ETag", `"v1"`)
+		w.Write([]byte(`{"commit":{"sha":"abc"}}`))
+	}))
+	defer srv.Close()
+	old := HTTPClient
+	HTTPClient = srv.Client()
+	defer func() { HTTPClient = old }()
+	c := Conn{Provider: GitHub, BaseURL: srv.URL, Token: "t"}
+	for range 3 {
+		if head, err := c.Head(t.Context(), "acme/infra", "main"); err != nil || head != "abc" {
+			t.Fatalf("head: %q %v", head, err)
+		}
+	}
+	if full != 1 || notModified != 2 {
+		t.Fatalf("%d full and %d 304 responses, want 1 and 2", full, notModified)
+	}
+	other := Conn{Provider: GitHub, BaseURL: srv.URL, Token: "other"}
+	if _, err := other.Head(t.Context(), "acme/infra", "main"); err != nil || full != 2 {
+		t.Fatalf("another token must not get the cached answer: %v, %d full", err, full)
+	}
+
+	if !pausedUntil(srv.URL).IsZero() {
+		t.Fatal("paused without being asked")
+	}
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Retry-After": {"30"}}}
+	c.notePause(resp)
+	if until := pausedUntil(srv.URL); until.Before(time.Now().Add(29 * time.Second)) {
+		t.Fatalf("Retry-After ignored: %v", until)
+	}
+	reset := time.Now().Add(time.Hour).Unix()
+	c.notePause(&http.Response{StatusCode: http.StatusForbidden, Header: http.Header{"X-Ratelimit-Remaining": {"0"},
+		"X-Ratelimit-Reset": {strconv.FormatInt(reset, 10)}}})
+	if until := pausedUntil(srv.URL); until.Unix() != reset {
+		t.Fatalf("exhausted rate limit: paused until %v, want %v", until, time.Unix(reset, 0))
 	}
 }

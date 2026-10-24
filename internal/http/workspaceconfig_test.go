@@ -45,6 +45,8 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 			w.Write([]byte(`[{"full_name":"acme/infra"}]`))
 		case p == "/repos/acme/infra/branches/main":
 			fmt.Fprintf(w, `{"commit":{"sha":%q}}`, head)
+		case p == "/repos/acme/infra/pulls":
+			w.Write([]byte(`[{"number":9,"head":{"sha":"pr9","repo":{"full_name":"acme/infra"}}}]`))
 		case strings.HasPrefix(p, "/repos/acme/infra/tarball/"):
 			sha := strings.TrimPrefix(p, "/repos/acme/infra/tarball/")
 			w.Write(registrytest.TarGz(t, map[string]string{"acme-infra-x/main.tf": "# at " + sha}))
@@ -57,7 +59,8 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	vcs.HTTPClient = gh.Client()
 	t.Cleanup(func() { vcs.HTTPClient = old })
 
-	h := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true, Registry: true, VCS: true}).Handler()
+	app := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true, Registry: true, VCS: true})
+	h := app.Handler()
 	if rec := post(h, "/vcs", url.Values{"name": {connName}, "provider": {"github"}, "base_url": {gh.URL}, "token": {"pat"}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("connect: %d %s", rec.Code, rec.Body.String())
 	}
@@ -145,6 +148,35 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	}
 	store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE id = $1`, job.RunID)
 
+	// VCS events: a new commit queues an apply run of it, an open pull request a speculative plan.
+	if rec := post(h, "/workspaces/"+linked+"/vcs", url.Values{"vcs_connection": {connID}, "vcs_repo": {"acme/infra"}, "vcs_branch": {"main"},
+		"vcs_trigger": {"1"}, "vcs_pull_requests": {"1"}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("turn on vcs triggers: %d %s", rec.Code, rec.Body.String())
+	}
+	lw, _ := store.GetWorkspace(ctx, linked)
+	claimVCS := func(wantAction, wantTar string) {
+		t.Helper()
+		if err := vcs.TriggerRuns(ctx, store, app.SecretKey, []storage.Workspace{lw}); err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		head = "sha3" // pushed after the run was queued: it stays on its commit
+		mu.Unlock()
+		req := httptest.NewRequest("POST", runnerapi.Prefix+"/jobs/claim", strings.NewReader(`{"runner":"r1"}`))
+		req.Header.Set("Authorization", "Bearer "+runnerTok)
+		var job runnerapi.Job
+		if rec := do(h, req); json.Unmarshal(rec.Body.Bytes(), &job) != nil || job.Action != wantAction {
+			t.Fatalf("claim %s: %d %s", wantAction, rec.Code, rec.Body.String())
+		}
+		if tar := fetch(job.ModuleSource); !strings.Contains(tar, wantTar) {
+			t.Fatalf("%s run archive: %q, want %s", wantAction, tar, wantTar)
+		}
+		store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE id = $1`, job.RunID)
+	}
+	claimVCS("apply", "# at sha2")
+	claimVCS("apply", "# at sha3")
+	claimVCS("plan", "# at pr9") // the branch's commits all had their run
+
 	// The admin narrows the connection: the linked workspace's next run fails instead of planning.
 	if rec := post(h, "/vcs/"+connID+"/workspace-repos", url.Values{"workspace_repos": {"acme/other"}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("narrow repos: %d", rec.Code)
@@ -155,7 +187,6 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	req = httptest.NewRequest("POST", runnerapi.Prefix+"/jobs/claim", strings.NewReader(`{"runner":"r1"}`))
 	req.Header.Set("Authorization", "Bearer "+runnerTok)
 	do(h, req)
-	lw, _ := store.GetWorkspace(ctx, linked)
 	if runs, _ := store.Runs(ctx, lw.ID, 1); len(runs) == 0 || runs[0].Status != storage.Errored {
 		t.Fatalf("a run of a repository no longer allowed must fail: %+v", runs)
 	}

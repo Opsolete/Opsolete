@@ -174,6 +174,9 @@ func serve(log *slog.Logger) error {
 	}
 	if vcsOn {
 		go vcs.Poll(ctx, store, app.SecretKey, 5*time.Minute, log)
+		if cfg.Deployments {
+			go vcs.PollRuns(ctx, store, app.SecretKey, time.Minute, log)
+		}
 	}
 	if err := app.CheckTemplates(); err != nil {
 		return err
