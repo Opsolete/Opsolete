@@ -1,12 +1,47 @@
 {{define "vcsbranch"}}
 {{$f := .Form}}
-<label for="vcs_branch">Branch</label>
-<input id="vcs_branch" name="vcs_branch" value="{{index $f "vcs_branch"}}" placeholder="main">
-<p class="hint">Runs plan the Terraform configuration at the repository root, at the branch's latest commit.</p>
-<label class="check"><input type="checkbox" name="vcs_trigger" value="1"{{if index $f "vcs_trigger"}} checked{{end}}>
-  <span>Start a run on every new commit on the branch<small>Checked every minute. The run plans that commit and is applied like any other: with auto-apply, or after confirmation.</small></span></label>
-<label class="check"><input type="checkbox" name="vcs_pull_requests" value="1"{{if index $f "vcs_pull_requests"}} checked{{end}}>
-  <span>Speculative plans for pull requests into the branch<small>A plan-only run, never applied, for each new commit of an open pull request from this repository (not from forks). It runs unreviewed code with the workspace's variables, so turning this on detaches its variable sets.</small></span></label>
+<p class="field">VCS trigger type</p>
+<div class="radio-cards">
+  <label class="radio-card">
+    <span class="radio-card-body">
+      <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="4" cy="3" r="1.6"/><circle cx="12" cy="6" r="1.6"/><path d="M4 4.6v9.4M12 7.6c0 3-8 2-8 5"/></svg>
+      <strong>Branch-based</strong>
+      <small>Begin new runs for changes that affect the specified branch.</small>
+    </span>
+    <span class="radio-card-foot"><input type="radio" name="vcs_trigger_type" value="branch"{{if ne (index $f "vcs_trigger_type") "tag"}} checked{{end}}></span>
+  </label>
+  <label class="radio-card">
+    <span class="radio-card-body">
+      <svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M1.75 2.75v4.6l6.9 6.9 5.6-5.6-6.9-6.9H2.75a1 1 0 0 0-1 1Z"/><circle cx="5" cy="5" r="1.1"/></svg>
+      <strong>Tag-based</strong>
+      <small>Begin new runs only for changes that have a specific tag format.</small>
+    </span>
+    <span class="radio-card-foot"><input type="radio" name="vcs_trigger_type" value="tag"{{if eq (index $f "vcs_trigger_type") "tag"}} checked{{end}}></span>
+  </label>
+</div>
+<div class="branch-only">
+  <label for="vcs_branch">Branch</label>
+  <input id="vcs_branch" name="vcs_branch" value="{{index $f "vcs_branch"}}" placeholder="main">
+  <p class="hint">Runs plan the Terraform configuration at the repository root, at the branch's latest commit.</p>
+  <label class="check"><input type="checkbox" name="vcs_trigger" value="1"{{if index $f "vcs_trigger"}} checked{{end}}>
+    <span>Start a run on every new commit on the branch<small>Checked every minute. The run plans that commit and is applied like any other: with auto-apply, or after confirmation.</small></span></label>
+  <label class="check"><input type="checkbox" name="vcs_pull_requests" value="1"{{if index $f "vcs_pull_requests"}} checked{{end}}>
+    <span>Speculative plans for pull requests into the branch<small>A plan-only run, never applied, for each new commit of an open pull request from this repository (not from forks). It runs unreviewed code with the workspace's variables, so turning this on detaches its variable sets.</small></span></label>
+</div>
+<div class="tag-only">
+  <p class="field">Semantic Versioning</p>
+  {{$t := index $f "vcs_tag_format"}}
+  <label class="check"><input type="radio" name="vcs_tag_format" value="semantic"{{if or (eq $t "semantic") (not $t)}} checked{{end}}>
+    <span>Default<small>e.g. <code>12.33.4456</code></small></span></label>
+  <label class="check"><input type="radio" name="vcs_tag_format" value="prefix"{{if eq $t "prefix"}} checked{{end}}>
+    <span>Version contains a prefix<small>e.g. <code>v-12.33.4456</code></small></span></label>
+  <label class="check"><input type="radio" name="vcs_tag_format" value="suffix"{{if eq $t "suffix"}} checked{{end}}>
+    <span>Version contains a suffix<small>e.g. <code>12.33.4456-v</code></small></span></label>
+  <label class="check"><input type="radio" name="vcs_tag_format" value="custom"{{if eq $t "custom"}} checked{{end}}>
+    <span>Custom regular expression</span></label>
+  <input name="vcs_tags_regex" class="tags-regex" value="{{index $f "vcs_tags_regex"}}" maxlength="255" aria-label="Tag regular expression" placeholder="^v\d+\.\d+\.\d+$">
+  <p class="hint">Checked every minute: a new matching tag starts a run of its commit, and manual runs plan the newest matching tag, by the version number in its name. Pull requests get no speculative plans. Anyone who can push a tag runs code with the workspace's credentials: protect tags (GitHub tag rulesets, Azure DevOps tag permissions).</p>
+</div>
 {{end}}
 {{template "top" .}}
 {{$w := .W}}{{$f := .VCS.Form}}{{$t := index $f "type"}}{{$conn := .Conn}}
@@ -21,7 +56,9 @@
 {{with .VCS.Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
 
 {{if not .Edit}}
-<h2>Connected to VCS</h2>
+{{if .Health}}<h2 class="vcs-health bad"><svg aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="8"/><path d="m5.5 5.5 5 5m0-5-5 5"/></svg>Not connected to VCS</h2>
+<div class="alert error" role="alert">{{.Health}}</div>
+{{else}}<h2 class="vcs-health ok"><svg aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="8"/><path d="m4.75 8.25 2.25 2.25 4.25-4.5"/></svg>Connected to VCS</h2>{{end}}
 <div class="card">
   <dl class="kv">
     <dt>Provider</dt><dd>{{with $conn}}{{.Provider}} ({{.Name}}){{else}}<span class="muted">its connection was deleted</span>{{end}}</dd>
@@ -29,7 +66,6 @@
   </dl>
   <p><a href="{{$base}}/edit">Change source →</a></p>
 </div>
-{{if and $conn (not .Allowed)}}<div class="alert error" role="alert">An admin no longer allows this workspace to use {{$conn.Name}}: its runs fail. Change source, or ask an admin to attach it under VCS providers.</div>{{end}}
 <form method="post" action="{{$base}}" class="settings">
   <input type="hidden" name="vcs_connection" value="{{$w.VCSConnectionID}}">
   <input type="hidden" name="vcs_repo" value="{{$w.VCSRepo}}">

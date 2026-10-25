@@ -258,39 +258,8 @@
       <span>Share with all workspaces</span></label>
     <label class="check"><input type="radio" name="remote_state" value="specific"{{if not $w.GlobalRemoteState}} checked{{end}}>
       <span>Share with specific workspaces</span></label>
-    <!-- searchable multi-select: checkboxes in a dropdown; closed <details> still submit their boxes -->
-    <details class="menu picker indent">
-      <summary><span>{{with .StateShared}}{{.}} selected{{else}}Select workspaces{{end}}</span></summary>
-      <div class="picker-panel">
-        <input type="search" placeholder="Search" aria-label="Search workspaces" autocomplete="off"
-          oninput="filterPicker(this)" onkeydown="if(event.key==='Enter')event.preventDefault()">
-        <div class="picker-list" role="group" aria-label="Workspaces to share the state with" onchange="filterPicker(this)">
-          {{range .StateConsumers}}<label class="check"><input type="checkbox" name="remote_state_consumers" value="{{.ID}}"{{if .Selected}} checked{{end}}><span>{{.Name}}</span></label>
-          {{else}}<p class="hint">There are no other workspaces.</p>{{end}}
-        </div>
-        <footer><button type="button" class="secondary small" aria-pressed="false"
-          onclick="this.setAttribute('aria-pressed',this.ariaPressed!=='true');filterPicker(this)">Show selected</button>
-          <span class="muted">{{len .StateConsumers}} total</span></footer>
-      </div>
-    </details>
+    <div class="indent">{{template "picker" .StateConsumers}}</div>
     <p class="hint indent">None selected: the state isn't shared.</p>
-<script>
-  // filters the picker by the search text and "Show selected", and shows the count in its summary
-  function filterPicker(el) {
-    const d = el.closest('details'), q = d.querySelector('input[type=search]').value.toLowerCase();
-    const only = d.querySelector('[aria-pressed]').ariaPressed === 'true';
-    let n = 0;
-    for (const l of d.querySelectorAll('.picker-list label')) {
-      const box = l.querySelector('input');
-      l.hidden = !l.textContent.toLowerCase().includes(q) || (only && !box.checked);
-      n += box.checked;
-    }
-    d.querySelector('summary span').textContent = n ? n + ' selected' : 'Select workspaces';
-  }
-  document.addEventListener('click', e => { // a click outside closes it, like a select
-    for (const d of document.querySelectorAll('details.picker[open]')) if (!d.contains(e.target)) d.open = false;
-  });
-</script>
     <p class="hint">In the other workspace's configuration:</p>
 <pre class="code"><code>data "terraform_remote_state" "shared" {
   backend = "http"

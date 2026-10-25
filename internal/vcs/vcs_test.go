@@ -33,7 +33,7 @@ func fakeVCS(t *testing.T) *httptest.Server {
 		w.Write([]byte(`[{"full_name":"acme/terraform-azurerm-storage"}]`))
 	}))
 	mux.HandleFunc("GET /gh/repos/acme/terraform-azurerm-storage/tags", gh(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`[{"name":"v1.1.0"},{"name":"latest"}]`))
+		w.Write([]byte(`[{"name":"v1.1.0","commit":{"sha":"c110"}},{"name":"latest","commit":{"sha":"c0"}}]`))
 	}))
 	mux.HandleFunc("GET /gh/repos/acme/terraform-azurerm-storage/branches/main", gh(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"name":"main","commit":{"sha":"abc123"}}`))
@@ -69,7 +69,7 @@ func fakeVCS(t *testing.T) *httptest.Server {
 			w.Write([]byte(`{"value":[{"name":"refs/heads/main-old","objectId":"old"},{"name":"refs/heads/main","objectId":"def456"}]}`))
 			return
 		}
-		w.Write([]byte(`{"value":[{"name":"refs/tags/2.0.0"}]}`))
+		w.Write([]byte(`{"value":[{"name":"refs/tags/2.0.0","objectId":"tagobj","peeledObjectId":"c200"}]}`))
 	}))
 	mux.HandleFunc("GET /org/Platform Team/_apis/git/repositories/storage/pullrequests", az(func(w http.ResponseWriter, r *http.Request) {
 		if q := r.URL.Query(); q.Get("searchCriteria.targetRefName") != "refs/heads/main" || q.Get("searchCriteria.status") != "active" {
@@ -134,7 +134,7 @@ func TestProviders(t *testing.T) {
 			t.Fatalf("%s pull requests into main: %v %v, want %v", tc.conn.Provider, prs, err, tc.prs)
 		}
 		tags, err := tc.conn.Tags(ctx, tc.repo)
-		if err != nil || !slices.Contains(tags, tc.tag) {
+		if err != nil || !slices.ContainsFunc(tags, func(t Tag) bool { return t.Name == tc.tag && t.Commit != "" }) {
 			t.Fatalf("%s tags: %v %v", tc.conn.Provider, tags, err)
 		}
 		archive, err := tc.conn.Archive(ctx, tc.repo, tc.tag, "tag")
@@ -153,6 +153,24 @@ func TestProviders(t *testing.T) {
 		slices.Sort(names)
 		if !slices.Equal(names, tc.wantFiles) {
 			t.Errorf("%s files: %v, want %v", tc.conn.Provider, names, tc.wantFiles)
+		}
+	}
+}
+
+// TestLatestTag: tag-based workspaces run the matching tag with the highest version, not the newest-listed.
+func TestLatestTag(t *testing.T) {
+	tags := []Tag{{"1.2.0", "a"}, {"1.10.0", "b"}, {"v-2.0.0", "c"}, {"1.9.0-rc", "d"}, {"release", "e"}}
+	for _, c := range []struct{ pattern, want string }{
+		{`^\d+\.\d+\.\d+$`, "1.10.0"}, // semantic versioning: 1.10.0 beats 1.2.0 (not a string compare)
+		{`\d+\.\d+\.\d+$`, "v-2.0.0"}, // with a prefix
+		{`^\d+\.\d+\.\d+`, "1.10.0"},  // with a suffix: 1.9.0-rc is lower
+		{`-rc$`, "1.9.0-rc"},
+		{`^release$`, ""}, // no version number: never picked
+		{`(`, ""},         // bad pattern
+	} {
+		got, ok := LatestTag(tags, c.pattern)
+		if got.Name != c.want || ok != (c.want != "") {
+			t.Errorf("LatestTag(%q) = %q %v, want %q", c.pattern, got.Name, ok, c.want)
 		}
 	}
 }

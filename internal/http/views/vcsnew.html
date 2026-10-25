@@ -90,26 +90,8 @@
       <label class="check"><input type="radio" name="workspace_scope" value="selected"{{if eq (index $f "workspace_scope") "selected"}} checked{{end}}>
         <span>Selected workspaces<small>Only the workspaces you attach below.</small></span></label>
       <div class="selected-ws indent">
-        {{$id := .Conn.ID}}
-        {{with .Conn.Workspaces}}
-        <table>
-        <tr><th>Workspace</th><th></th></tr>
-        {{range .}}<tr><td><a href="/workspaces/{{.}}/vcs">{{.}}</a></td>
-          <td><button type="submit" formaction="/vcs/{{$id}}/workspaces" name="detach" value="{{.}}" class="secondary small">Detach</button></td></tr>{{end}}
-        </table>
-        {{else}}
-        <p class="muted">No workspace attached yet.</p>
-        {{end}}
-        {{with .Attachable}}
-        <div class="inline" style="margin-top:.75rem">
-          <select name="workspace" aria-label="workspace">
-            <option value="">choose a workspace…</option>
-            {{range .}}<option>{{.}}</option>{{end}}
-          </select>
-          <button type="submit" formaction="/vcs/{{$id}}/workspaces" class="secondary">Attach</button>
-        </div>
-        {{end}}
-        <p class="hint">An attached workspace links its repository under its own Settings → Version control. Runs of a detached workspace that links a repository through this connection fail when they start.</p>
+        {{template "picker" .Picker}}
+        <p class="hint">A selected workspace links its repository under its own Settings → Version control. Runs of a deselected workspace that links a repository through this connection fail when they start.</p>
       </div>
       <p class="hint">Anyone who can push to a linked branch runs code with the workspace's credentials: protect those branches.</p>
     </div>

@@ -344,8 +344,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 	}
 	// General settings: workspaces to share the state with, the ones it already does first: they stay
 	// selected even if this user can't see them
-	var stateConsumers []stateConsumer
-	stateShared := 0
+	stateConsumers := picker{Name: "remote_state_consumers", Label: "Workspaces to share the state with"}
 	if strings.HasSuffix(r.URL.Path, "/settings") && level == levelOperate {
 		cur, err := s.Store.RemoteStateConsumers(ctx, ws.ID)
 		if err != nil {
@@ -360,12 +359,12 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		seen := map[string]bool{ws.ID: true}
 		for _, c := range cur {
 			seen[c.ID] = true
-			stateConsumers = append(stateConsumers, stateConsumer{c.ID, c.Name, true})
-			stateShared++
+			stateConsumers.Items = append(stateConsumers.Items, pickerItem{c.ID, c.Name, true})
+			stateConsumers.Selected++
 		}
 		for _, o := range all {
 			if !seen[o.ID] {
-				stateConsumers = append(stateConsumers, stateConsumer{o.ID, o.Name, false})
+				stateConsumers.Items = append(stateConsumers.Items, pickerItem{o.ID, o.Name, false})
 			}
 		}
 	}
@@ -379,15 +378,57 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		"LatestPlan": latestPlan, "LatestApply": latestApply, "Metrics": metrics, "Show": r.URL.Query().Get("show"), "Page": page,
 		"Update": update, "HasTemplate": hasTemplate, "Added": added, "Updates": updates, "Catalog": s.Templates.List(),
 		"TemplateCount": templateCount,
-		"Resources": res, "Versions": versions, "Outputs": outputs, "Destroyed": destroyed, "Grants": grants,
-		"Variables": vars, "Sets": setVars, "Groups": groups, "Assessment": assessment, "StateConsumers": stateConsumers, "StateShared": stateShared,
+		"Resources":     res, "Versions": versions, "Outputs": outputs, "Destroyed": destroyed, "Grants": grants,
+		"Variables": vars, "Sets": setVars, "Groups": groups, "Assessment": assessment, "StateConsumers": stateConsumers,
 		"StateAddress": s.Registry.PublicURL.JoinPath(runnerapi.StatePrefix, ws.ID).String(),
 		"CanOperate":   level == levelOperate, "Admin": auth.FromContext(ctx).Admin()})
 }
 
-type stateConsumer struct {
-	ID, Name string
-	Selected bool
+// picker is a searchable multi-select of workspaces: the "picker" template in layout.html.
+type picker struct {
+	Name, Label string       // the checkboxes' form field, and what they select
+	Items       []pickerItem // the selected ones first
+	Selected    int
+}
+
+type pickerItem struct {
+	Value, Name string
+	Selected    bool
+}
+
+// workspacePicker offers the workspaces by name, the selected ones first: they stay selected
+// even if all (a capped list) lacks them.
+func workspacePicker(field, label string, selected []string, all []storage.Workspace, offer func(storage.Workspace) bool) picker {
+	p := picker{Name: field, Label: label, Selected: len(selected)}
+	for _, n := range selected {
+		p.Items = append(p.Items, pickerItem{n, n, true})
+	}
+	for _, ws := range all {
+		if !slices.Contains(selected, ws.Name) && offer(ws) {
+			p.Items = append(p.Items, pickerItem{ws.Name, ws.Name, false})
+		}
+	}
+	return p
+}
+
+// syncSelection attaches the names in want that have lacks, then detaches the ones want lacks,
+// so an unknown name fails before anything is detached.
+func syncSelection(have, want []string, attach func(name string, on bool) error) error {
+	for _, n := range want {
+		if !slices.Contains(have, n) {
+			if err := attach(n, true); err != nil {
+				return err
+			}
+		}
+	}
+	for _, n := range have {
+		if !slices.Contains(want, n) {
+			if err := attach(n, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // newRun queues a plan: action=apply (re-plan with the workspace's inputs; replace=<address> any

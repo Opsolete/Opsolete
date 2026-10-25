@@ -47,6 +47,7 @@ type Workspace struct {
 	VCSBranch         string
 	VCSTrigger        bool   // a new commit on the branch queues an apply run (see vcs.TriggerRuns)
 	VCSPullRequests   bool   // open pull requests into the branch get speculative plans
+	VCSTagsRegex      string // tag-based: new tags matching it queue runs instead of branch commits; "" branch-based
 	StateKey          string // blob key prefix of its state versions
 	Templates         int    // how many templates were added (see WorkspaceTemplates)
 	AutoApply         bool   // apply plans of apply runs without confirmation
@@ -121,7 +122,7 @@ type StatusEntry struct {
 }
 
 const workspaceCols = `w.id, w.name, COALESCE(w.template_id, ''), COALESCE(w.module_source, ''), COALESCE(w.module_ref, ''),
-	w.inputs, COALESCE(w.vcs_connection_id::text, ''), COALESCE(w.vcs_repo, ''), COALESCE(w.vcs_branch, ''), w.vcs_trigger, w.vcs_pull_requests, w.state_key,
+	w.inputs, COALESCE(w.vcs_connection_id::text, ''), COALESCE(w.vcs_repo, ''), COALESCE(w.vcs_branch, ''), w.vcs_trigger, w.vcs_pull_requests, w.vcs_tags_regex, w.state_key,
 	(SELECT count(*) FROM workspace_templates t WHERE t.workspace_id = w.id), w.auto_apply, w.drift_detection, w.global_remote_state, w.execution_mode,
 	COALESCE((SELECT a.status = 'drifted' AND NOT EXISTS (SELECT 1 FROM runs x WHERE x.workspace_id = w.id
 		AND x.status = 'applied' AND x.updated_at > a.updated_at) FROM runs a
@@ -132,7 +133,7 @@ func scanWorkspace(row interface{ Scan(...any) error }, extra ...any) (Workspace
 	var w Workspace
 	var raw []byte
 	dest := append([]any{&w.ID, &w.Name, &w.TemplateID, &w.ModuleSource, &w.ModuleRef, &raw,
-		&w.VCSConnectionID, &w.VCSRepo, &w.VCSBranch, &w.VCSTrigger, &w.VCSPullRequests, &w.StateKey, &w.Templates,
+		&w.VCSConnectionID, &w.VCSRepo, &w.VCSBranch, &w.VCSTrigger, &w.VCSPullRequests, &w.VCSTagsRegex, &w.StateKey, &w.Templates,
 		&w.AutoApply, &w.DriftDetection, &w.GlobalRemoteState, &w.ExecutionMode, &w.Drifted, &w.CreatedBy, &w.CreatedAt}, extra...)
 	if err := row.Scan(dest...); err != nil {
 		return w, err
@@ -436,19 +437,20 @@ func (s *Store) SetGrant(ctx context.Context, workspaceID, group, level string) 
 }
 
 // SetWorkspaceVCS links a workspace without a template to a repository branch; connID "" unlinks it.
-// trigger and pullRequests set which VCS events queue runs. A changed link, or turning on pull
-// request plans, detaches the workspace's variable sets: an admin must attach them again.
-func (s *Store) SetWorkspaceVCS(ctx context.Context, workspaceID, connID, repo, branch string, trigger, pullRequests bool) error {
+// trigger, pullRequests and tagsRegex (tag-based triggers) set which VCS events queue runs. A changed
+// link or tag format, or turning on pull request plans, detaches the workspace's variable sets: an
+// admin must attach them again.
+func (s *Store) SetWorkspaceVCS(ctx context.Context, workspaceID, connID, repo, branch, tagsRegex string, trigger, pullRequests bool) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	var detach bool
-	err = tx.QueryRowContext(ctx, `SELECT (vcs_connection_id, vcs_repo, vcs_branch) IS DISTINCT FROM
-		(NULLIF($2, '')::uuid, NULLIF($3, ''), NULLIF($4, '')) OR (NOT vcs_pull_requests AND $5)
+	err = tx.QueryRowContext(ctx, `SELECT (vcs_connection_id, vcs_repo, vcs_branch, vcs_tags_regex) IS DISTINCT FROM
+		(NULLIF($2, '')::uuid, NULLIF($3, ''), NULLIF($4, ''), $6) OR (NOT vcs_pull_requests AND $5)
 		FROM workspaces WHERE id::text = $1 AND template_id IS NULL FOR UPDATE`,
-		workspaceID, connID, repo, branch, pullRequests && connID != "").Scan(&detach)
+		workspaceID, connID, repo, branch, pullRequests && connID != "", tagsRegex).Scan(&detach)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil // deleted meanwhile, or a template workspace: nothing to link
 	}
@@ -456,12 +458,12 @@ func (s *Store) SetWorkspaceVCS(ctx context.Context, workspaceID, connID, repo, 
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE workspaces SET vcs_connection_id = NULLIF($2, '')::uuid,
-		vcs_repo = NULLIF($3, ''), vcs_branch = NULLIF($4, ''), vcs_trigger = $5, vcs_pull_requests = $6, updated_at = now()
-		WHERE id::text = $1 AND template_id IS NULL`, workspaceID, connID, repo, branch, trigger && connID != "", pullRequests && connID != ""); err != nil {
+		vcs_repo = NULLIF($3, ''), vcs_branch = NULLIF($4, ''), vcs_trigger = $5, vcs_pull_requests = $6, vcs_tags_regex = $7, updated_at = now()
+		WHERE id::text = $1 AND template_id IS NULL`, workspaceID, connID, repo, branch, trigger && connID != "", pullRequests && connID != "", tagsRegex); err != nil {
 		return err
 	}
 	// The admin who attached sets vouched for the old repository and branch, not for the new one,
-	// nor for unreviewed pull requests.
+	// nor for unreviewed pull requests or tags, which may point at any commit.
 	if detach {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM variable_set_workspaces WHERE workspace_id::text = $1`, workspaceID); err != nil {
 			return err

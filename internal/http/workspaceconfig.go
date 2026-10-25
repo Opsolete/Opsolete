@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/opsolete/opsolete/internal/auth"
 	"github.com/opsolete/opsolete/internal/storage"
@@ -67,36 +68,66 @@ func (s *Server) loadVCSForm(ctx context.Context, form map[string]string, errMsg
 
 func vcsFormValues(r *http.Request) map[string]string {
 	form := map[string]string{}
-	for _, k := range []string{"type", "name", "auto_apply", "vcs_connection", "vcs_repo", "vcs_branch", "vcs_trigger", "vcs_pull_requests"} {
+	for _, k := range []string{"type", "name", "auto_apply", "vcs_connection", "vcs_repo", "vcs_branch", "vcs_trigger", "vcs_pull_requests",
+		"vcs_trigger_type", "vcs_tag_format", "vcs_tags_regex"} {
 		form[k] = strings.TrimSpace(r.PostFormValue(k))
 	}
 	return form
 }
 
+// tagFormats are the tag-based trigger formats HCP Terraform offers, as the patterns they stand for.
+var tagFormats = map[string]string{"semantic": `^\d+\.\d+\.\d+$`, "prefix": `\d+\.\d+\.\d+$`, "suffix": `^\d+\.\d+\.\d+`}
+
+// fillTagForm sets the form's trigger type and tag format from a workspace's tag pattern.
+func fillTagForm(form map[string]string, tagsRegex string) {
+	form["vcs_trigger_type"], form["vcs_tag_format"], form["vcs_tags_regex"] = "branch", "semantic", ""
+	if tagsRegex == "" {
+		return
+	}
+	form["vcs_trigger_type"], form["vcs_tag_format"], form["vcs_tags_regex"] = "tag", "custom", tagsRegex
+	for k, re := range tagFormats {
+		if re == tagsRegex {
+			form["vcs_tag_format"], form["vcs_tags_regex"] = k, ""
+		}
+	}
+}
+
 // vcsLink validates the form's repository link for the workspace (by name) and checks the branch
-// exists; no connection = no link.
-func (s *Server) vcsLink(ctx context.Context, workspace string, form map[string]string) (connID, repo, branch string, err error) {
+// exists, or for tag-based triggers (tags: their pattern) that the tags can be read; no connection = no link.
+func (s *Server) vcsLink(ctx context.Context, workspace string, form map[string]string) (connID, repo, branch, tags string, err error) {
 	connID, repo, branch = form["vcs_connection"], form["vcs_repo"], form["vcs_branch"]
 	if connID == "" {
-		return "", "", "", nil
+		return "", "", "", "", nil
 	}
 	if !s.Features.VCS {
-		return "", "", "", errors.New("VCS connections are disabled")
+		return "", "", "", "", errors.New("VCS connections are disabled")
 	}
 	if branch == "" {
 		branch = "main"
 	}
 	if !branchRe.MatchString(branch) || strings.Contains(branch, "..") {
-		return "", "", "", fmt.Errorf("%q is not a branch name", branch)
+		return "", "", "", "", fmt.Errorf("%q is not a branch name", branch)
+	}
+	if form["vcs_trigger_type"] == "tag" {
+		if tags = tagFormats[form["vcs_tag_format"]]; tags == "" {
+			tags = strings.TrimSpace(form["vcs_tags_regex"])
+			if _, err := regexp.Compile(tags); err != nil || tags == "" || len(tags) > 255 {
+				return "", "", "", "", fmt.Errorf("%q is not a tag pattern: use a regular expression such as ^v\\d+\\.\\d+\\.\\d+$", tags)
+			}
+		}
 	}
 	c, err := s.vcsConn(ctx, connID, workspace)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", "", err
 	}
-	if _, err := c.Head(ctx, repo, branch); err != nil {
-		return "", "", "", fmt.Errorf("can't read branch %s of %q: %w", branch, repo, err)
+	if tags != "" {
+		if _, err := c.Tags(ctx, repo); err != nil {
+			return "", "", "", "", fmt.Errorf("can't read the tags of %q: %w", repo, err)
+		}
+	} else if _, err := c.Head(ctx, repo, branch); err != nil {
+		return "", "", "", "", fmt.Errorf("can't read branch %s of %q: %w", branch, repo, err)
 	}
-	return connID, repo, branch, nil
+	return connID, repo, branch, tags, nil
 }
 
 // vcsConn opens a connection the workspace (by name) may link.
@@ -125,6 +156,7 @@ func (s *Server) newWorkspacePage(w http.ResponseWriter, r *http.Request) {
 	}
 	form := map[string]string{"type": q.Get("type"), "vcs_connection": q.Get("conn"), "vcs_repo": q.Get("repo"), "other": q.Get("other"),
 		"vcs_branch": "main", "vcs_trigger": "1"}
+	fillTagForm(form, "")
 	if repo := form["vcs_repo"]; repo != "" {
 		form["name"] = strings.ToLower(path.Base(repo)) // a suggestion; the form checks it
 	}
@@ -163,7 +195,7 @@ func (s *Server) createEmptyWorkspace(w http.ResponseWriter, r *http.Request) {
 		fail("Workspace name: " + workspaceNameRule)
 		return
 	}
-	connID, repo, branch, err := s.vcsLink(r.Context(), name, form)
+	connID, repo, branch, tags, err := s.vcsLink(r.Context(), name, form)
 	if err != nil {
 		fail(err.Error())
 		return
@@ -175,7 +207,7 @@ func (s *Server) createEmptyWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err == nil && connID != "" {
-		err = s.Store.SetWorkspaceVCS(r.Context(), ws.ID, connID, repo, branch, form["vcs_trigger"] != "", form["vcs_pull_requests"] != "")
+		err = s.Store.SetWorkspaceVCS(r.Context(), ws.ID, connID, repo, branch, tags, form["vcs_trigger"] != "" || tags != "", form["vcs_pull_requests"] != "" && tags == "")
 	}
 	if err != nil {
 		s.internalError(w, "create workspace", err)
@@ -218,6 +250,7 @@ func (s *Server) workspaceVCSPage(w http.ResponseWriter, r *http.Request) {
 	if ws.VCSPullRequests {
 		form["vcs_pull_requests"] = "1"
 	}
+	fillTagForm(form, ws.VCSTagsRegex)
 	if q := r.URL.Query(); strings.HasSuffix(r.URL.Path, "/edit") || ws.VCSConnectionID == "" {
 		form["type"], form["vcs_connection"], form["vcs_repo"] = q.Get("type"), q.Get("conn"), q.Get("repo")
 		form["edit"] = "1"
@@ -244,8 +277,8 @@ func (s *Server) renderWorkspaceVCS(w http.ResponseWriter, r *http.Request, stat
 				data["Conn"] = c
 			}
 		}
-	} else if sc, err := s.Store.GetVCSConnection(r.Context(), ws.VCSConnectionID); err == nil {
-		data["Conn"], data["Allowed"] = sc, sc.AllowsWorkspace(ws.Name)
+	} else {
+		data["Conn"], data["Health"] = s.vcsHealth(r.Context(), ws)
 	}
 	s.render(w, r, status, "workspacevcs.html", data)
 }
@@ -265,22 +298,51 @@ func (s *Server) linkWorkspaceVCS(w http.ResponseWriter, r *http.Request) {
 		s.renderWorkspaceVCS(w, r, http.StatusConflict, ws, form, storage.ErrRunActive.Error())
 		return
 	}
-	connID, repo, branch, err := s.vcsLink(r.Context(), ws.Name, form)
+	connID, repo, branch, tags, err := s.vcsLink(r.Context(), ws.Name, form)
 	if err != nil {
 		s.renderWorkspaceVCS(w, r, http.StatusUnprocessableEntity, ws, form, err.Error())
 		return
 	}
-	if err := s.Store.SetWorkspaceVCS(r.Context(), ws.ID, connID, repo, branch, form["vcs_trigger"] != "", form["vcs_pull_requests"] != ""); err != nil {
+	// tag-based: tags always trigger, and pull requests get no plans, as in HCP Terraform
+	if err := s.Store.SetWorkspaceVCS(r.Context(), ws.ID, connID, repo, branch, tags, form["vcs_trigger"] != "" || tags != "", form["vcs_pull_requests"] != "" && tags == ""); err != nil {
 		s.internalError(w, "link workspace vcs", err)
 		return
 	}
 	s.Log.Info("workspace vcs", "workspace", ws.Name, "repo", repo, "branch", branch,
-		"trigger", form["vcs_trigger"] != "", "pull_requests", form["vcs_pull_requests"] != "", "user", auth.FromContext(r.Context()).Email)
+		"trigger", form["vcs_trigger"] != "", "tags", tags, "pull_requests", form["vcs_pull_requests"] != "", "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name, http.StatusSeeOther)
 }
 
-// pinCommit records the head of the workspace's branch as the commit a plan job runs, unless the
-// run was queued with its commit.
+// vcsHealth checks that a linked workspace can read its source as runs do, for the version control
+// page's "Connected to VCS" mark: its connection and, if the workspace may use it, its branch or tags.
+// It returns the connection, if it still exists, and the problem ("" if none).
+func (s *Server) vcsHealth(ctx context.Context, ws storage.Workspace) (*storage.VCSConnection, string) {
+	sc, err := s.Store.GetVCSConnection(ctx, ws.VCSConnectionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, "its VCS connection was deleted"
+	}
+	if err != nil {
+		return nil, err.Error()
+	}
+	if !sc.AllowsWorkspace(ws.Name) {
+		return &sc, "an admin no longer allows this workspace to use " + sc.Name + ": its runs fail. Change source, or ask an admin to attach it under VCS providers."
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	c, err := vcs.ConnFor(s.SecretKey, sc)
+	if err == nil && ws.VCSTagsRegex != "" {
+		_, err = c.Tags(ctx, ws.VCSRepo)
+	} else if err == nil {
+		_, err = c.Head(ctx, ws.VCSRepo, ws.VCSBranch)
+	}
+	if err != nil {
+		return &sc, err.Error()
+	}
+	return &sc, ""
+}
+
+// pinCommit records the commit a plan job runs, unless the run was queued with its commit: the head
+// of the workspace's branch, or for tag-based workspaces the newest matching tag.
 func (s *Server) pinCommit(ctx context.Context, j storage.Job) error {
 	ws, err := s.Store.GetWorkspaceByID(ctx, j.WorkspaceID)
 	if err != nil {
@@ -293,8 +355,18 @@ func (s *Server) pinCommit(ctx context.Context, j storage.Job) error {
 	if j.VCSCommit != "" { // queued for a pushed commit or pull request
 		return nil
 	}
-	head, err := c.Head(ctx, ws.VCSRepo, ws.VCSBranch)
-	if err != nil {
+	var head string
+	if ws.VCSTagsRegex != "" {
+		tags, err := c.Tags(ctx, ws.VCSRepo)
+		if err != nil {
+			return fmt.Errorf("vcs: %w", err)
+		}
+		tag, ok := vcs.LatestTag(tags, ws.VCSTagsRegex)
+		if !ok {
+			return fmt.Errorf("vcs: no tag of %s matches %s", ws.VCSRepo, ws.VCSTagsRegex)
+		}
+		head = tag.Commit
+	} else if head, err = c.Head(ctx, ws.VCSRepo, ws.VCSBranch); err != nil {
 		return fmt.Errorf("vcs: %w", err)
 	}
 	_, err = s.Store.PinVCSCommit(ctx, j.RunID, head)

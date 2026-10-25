@@ -527,26 +527,26 @@ func TestVCSWorkspaceVariableSets(t *testing.T) {
 	}
 	attach()
 	check("attached", "global")
-	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", true, false); err != nil {
+	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", "", true, false); err != nil {
 		t.Fatal(err)
 	}
 	check() // linking detached the set, and global sets don't reach a linked workspace
 	attach()
 	check("attached")
-	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", true, false); err != nil {
+	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", "", true, false); err != nil {
 		t.Fatal(err)
 	}
 	check("attached") // same link: the admin's attachment stands
-	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", false, true); err != nil {
+	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", "", false, true); err != nil {
 		t.Fatal(err)
 	}
 	check() // pull request plans run unreviewed code: the admin's attachment is gone
 	attach()
-	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", true, true); err != nil {
+	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", "", true, true); err != nil {
 		t.Fatal(err)
 	}
 	check("attached") // they were on already
-	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "other", true, false); err != nil {
+	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "other", "", true, false); err != nil {
 		t.Fatal(err)
 	}
 	check()
@@ -569,7 +569,7 @@ func TestQueueVCSRun(t *testing.T) {
 		s.DB.Exec(`DELETE FROM workspaces WHERE id = $1`, w.ID)
 		s.DB.Exec(`DELETE FROM vcs_connections WHERE id = $1`, conn)
 	})
-	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", true, true); err != nil {
+	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", "", true, true); err != nil {
 		t.Fatal(err)
 	}
 	if ws, err := s.VCSTriggered(ctx); err != nil || !slices.ContainsFunc(ws, func(x Workspace) bool { return x.ID == w.ID && x.VCSTrigger && x.VCSPullRequests }) {

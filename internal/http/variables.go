@@ -8,7 +8,6 @@ import (
 	"maps"
 	"net/http"
 	"regexp"
-	"slices"
 	"strings"
 
 	"github.com/opsolete/opsolete/internal/auth"
@@ -227,13 +226,8 @@ func (s *Server) variableSet(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "list workspaces", err)
 		return
 	}
-	var attachable []string
-	for _, ws := range all {
-		if !slices.Contains(set.Workspaces, ws.Name) {
-			attachable = append(attachable, ws.Name)
-		}
-	}
-	s.render(w, r, http.StatusOK, "variableset.html", map[string]any{"Set": set, "Variables": vars, "Attachable": attachable})
+	p := workspacePicker("workspace", "Workspaces to apply the set to", set.Workspaces, all, func(storage.Workspace) bool { return true })
+	s.render(w, r, http.StatusOK, "variableset.html", map[string]any{"Set": set, "Variables": vars, "Picker": p})
 }
 
 func (s *Server) updateVariableSet(w http.ResponseWriter, r *http.Request) {
@@ -294,22 +288,25 @@ func (s *Server) deleteSetVariable(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/variable-sets/"+set.Name, http.StatusSeeOther)
 }
 
-// attachVariableSet applies the set to a workspace (by name), or with detach=1 stops applying it.
+// attachVariableSet applies the set to exactly the workspaces (by name) in the workspace fields.
 func (s *Server) attachVariableSet(w http.ResponseWriter, r *http.Request) {
 	set, ok := s.loadSet(w, r)
 	if !ok {
 		return
 	}
-	ws, attach := strings.TrimSpace(r.PostFormValue("workspace")), r.PostFormValue("detach") == ""
-	err := s.Store.AttachVariableSet(r.Context(), set.ID, ws, attach)
+	r.ParseForm()
+	want := r.PostForm["workspace"]
+	err := syncSelection(set.Workspaces, want, func(ws string, on bool) error {
+		return s.Store.AttachVariableSet(r.Context(), set.ID, ws, on)
+	})
 	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "no workspace named "+ws, http.StatusBadRequest)
+		http.Error(w, "choose existing workspaces", http.StatusBadRequest)
 		return
 	}
 	if err != nil {
 		s.internalError(w, "attach variable set", err)
 		return
 	}
-	s.Log.Info("variable set attached", "set", set.Name, "workspace", ws, "attach", attach, "user", auth.FromContext(r.Context()).Email)
+	s.Log.Info("variable set workspaces", "set", set.Name, "workspaces", want, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/variable-sets/"+set.Name, http.StatusSeeOther)
 }

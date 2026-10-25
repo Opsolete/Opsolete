@@ -45,6 +45,8 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 			w.Write([]byte(`[{"full_name":"acme/infra"}]`))
 		case p == "/repos/acme/infra/branches/main":
 			fmt.Fprintf(w, `{"commit":{"sha":%q}}`, head)
+		case p == "/repos/acme/infra/tags":
+			w.Write([]byte(`[{"name":"1.2.0","commit":{"sha":"tag120"}},{"name":"1.10.0","commit":{"sha":"tag1100"}},{"name":"v9.0.0","commit":{"sha":"tagv9"}}]`))
 		case p == "/repos/acme/infra/pulls":
 			w.Write([]byte(`[{"number":9,"head":{"sha":"pr9","repo":{"full_name":"acme/infra"}}}]`))
 		case strings.HasPrefix(p, "/repos/acme/infra/tarball/"):
@@ -199,19 +201,45 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	claimVCS("apply", "# at sha3")
 	claimVCS("plan", "# at pr9") // the branch's commits all had their run
 
-	// The admin narrows the connection by attaching a workspace, which scopes it to selected workspaces:
-	// attached ones keep linking, the detached workspace's next run fails instead of planning.
-	if page := get(h, "/vcs/"+connID+"/settings").Body.String(); !strings.Contains(page, "<option>"+linked+"</option>") {
-		t.Fatalf("every existing workspace must be attachable: %s", page)
+	// The version control page checks the connection, like HCP Terraform's "Connected to VCS" mark.
+	if page := get(h, "/workspaces/"+linked+"/vcs").Body.String(); !strings.Contains(page, `class="vcs-health ok"`) {
+		t.Fatalf("a working link must show as connected: %s", page)
 	}
-	if rec := post(h, "/vcs/"+connID+"/workspaces", url.Values{"workspace": {"no-such-ws"}}); rec.Code != http.StatusBadRequest {
-		t.Fatalf("attach an unknown workspace: %d", rec.Code)
+	// Tag-based: the newest semver tag runs (1.10.0, not v9.0.0 nor the string-wise larger 1.2.0); pull requests get no plans.
+	tagForm := url.Values{"vcs_connection": {connID}, "vcs_repo": {"acme/infra"}, "vcs_branch": {"main"}, "vcs_trigger_type": {"tag"},
+		"vcs_tag_format": {"custom"}, "vcs_tags_regex": {"("}, "vcs_pull_requests": {"1"}}
+	if rec := post(h, "/workspaces/"+linked+"/vcs", tagForm); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "not a tag pattern") {
+		t.Fatalf("a bad tag pattern: %d", rec.Code)
 	}
-	if rec := post(h, "/vcs/"+connID+"/workspaces", url.Values{"workspace": {linked}}); rec.Code != http.StatusSeeOther {
-		t.Fatalf("attach: %d", rec.Code)
+	tagForm.Set("vcs_tag_format", "semantic")
+	if rec := post(h, "/workspaces/"+linked+"/vcs", tagForm); rec.Code != http.StatusSeeOther {
+		t.Fatalf("tag-based triggers: %d %s", rec.Code, rec.Body.String())
 	}
-	if page := get(h, "/vcs/"+connID+"/settings").Body.String(); !strings.Contains(page, `href="/workspaces/`+linked+`/vcs"`) || strings.Contains(page, "<option>"+linked+"</option>") {
-		t.Fatalf("settings page must list the attached workspace: %s", page)
+	if lw, _ = store.GetWorkspace(ctx, linked); lw.VCSTagsRegex != `^\d+\.\d+\.\d+$` || !lw.VCSTrigger || lw.VCSPullRequests {
+		t.Fatalf("tag-based workspace: %+v", lw)
+	}
+	if page := get(h, "/workspaces/"+linked+"/vcs").Body.String(); !strings.Contains(page, `name="vcs_trigger_type" value="tag" checked`) ||
+		!strings.Contains(page, `name="vcs_tag_format" value="semantic" checked`) {
+		t.Fatalf("the page must show the tag format: %s", page)
+	}
+	claimVCS("apply", "# at tag1100")
+
+	// The admin narrows the connection to selected workspaces: selected ones keep linking, the
+	// deselected workspace's next run fails instead of planning.
+	if page := get(h, "/vcs/"+connID+"/settings").Body.String(); !strings.Contains(page, `name="workspace" value="`+linked+`">`) {
+		t.Fatalf("every existing workspace must be selectable: %s", page)
+	}
+	selected := func(ws ...string) int {
+		return post(h, "/vcs/"+connID+"/settings", url.Values{"workspaces": {"1"}, "workspace_scope": {"selected"}, "workspace": ws}).Code
+	}
+	if code := selected(linked, "no-such-ws"); code != http.StatusBadRequest {
+		t.Fatalf("select an unknown workspace: %d", code)
+	}
+	if code := selected(linked); code != http.StatusSeeOther {
+		t.Fatalf("select: %d", code)
+	}
+	if page := get(h, "/vcs/"+connID+"/settings").Body.String(); !strings.Contains(page, `name="workspace" value="`+linked+`" checked>`) || !strings.Contains(page, "1 selected") {
+		t.Fatalf("settings page must show the selected workspace: %s", page)
 	}
 	// Workspace level, as in HCP Terraform: a linked workspace shows its source; Change source is a wizard.
 	if page := get(h, "/workspaces/"+linked+"/vcs").Body.String(); !strings.Contains(page, "Connected to VCS") ||
@@ -233,8 +261,8 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	if page := get(h, "/workspaces/"+blank+"/vcs?type=vcs").Body.String(); strings.Contains(page, "conn="+connID) {
 		t.Fatalf("an unselected workspace must not be offered the connection: %s", page)
 	}
-	if rec := post(h, "/vcs/"+connID+"/workspaces", url.Values{"detach": {linked}}); rec.Code != http.StatusSeeOther {
-		t.Fatalf("detach: %d", rec.Code)
+	if code := selected(); code != http.StatusSeeOther {
+		t.Fatalf("deselect: %d", code)
 	}
 	if rec := post(h, "/workspaces/"+linked+"/runs", url.Values{"action": {"apply"}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("start run: %d %s", rec.Code, rec.Body.String())
@@ -245,7 +273,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	if runs, _ := store.Runs(ctx, lw.ID, 1); len(runs) == 0 || runs[0].Status != storage.Errored {
 		t.Fatalf("a run of a detached workspace must fail: %+v", runs)
 	}
-	if page := get(h, "/workspaces/"+linked+"/vcs").Body.String(); !strings.Contains(page, "no longer allows") {
+	if page := get(h, "/workspaces/"+linked+"/vcs").Body.String(); !strings.Contains(page, "no longer allows") || !strings.Contains(page, `class="vcs-health bad"`) {
 		t.Fatalf("a detached workspace must be warned: %s", page)
 	}
 	if rec := post(h, "/workspaces/"+linked+"/vcs", url.Values{"type": {"cli"}}); rec.Code != http.StatusSeeOther {

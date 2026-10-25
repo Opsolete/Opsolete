@@ -22,11 +22,13 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/hashicorp/go-version"
 	"github.com/opsolete/opsolete/internal/registry"
 	"github.com/opsolete/opsolete/internal/storage"
 )
@@ -248,24 +250,30 @@ func (c Conn) Repos(ctx context.Context) ([]string, error) {
 	return out, nil
 }
 
-// Tags lists a repository's tag names.
-func (c Conn) Tags(ctx context.Context, repo string) ([]string, error) {
+// Tag is a repository tag and the commit it points at.
+type Tag struct{ Name, Commit string }
+
+// Tags lists a repository's tags.
+func (c Conn) Tags(ctx context.Context, repo string) ([]Tag, error) {
 	a, b, err := splitRepo(repo)
 	if err != nil {
 		return nil, err
 	}
-	var out []string
+	var out []Tag
 	switch c.Provider {
 	case GitHub:
 		for page := 1; page <= 10; page++ { // shortcut: the newest 1000 tags
 			var ts []struct {
-				Name string `json:"name"`
+				Name   string `json:"name"`
+				Commit struct {
+					SHA string `json:"sha"`
+				} `json:"commit"`
 			}
 			if err := c.getJSON(ctx, fmt.Sprintf("%s/repos/%s/%s/tags?per_page=100&page=%d", c.BaseURL, a, b, page), &ts, true); err != nil {
 				return nil, err
 			}
 			for _, t := range ts {
-				out = append(out, t.Name)
+				out = append(out, Tag{t.Name, t.Commit.SHA})
 			}
 			if len(ts) < 100 {
 				break
@@ -274,14 +282,20 @@ func (c Conn) Tags(ctx context.Context, repo string) ([]string, error) {
 	case AzureDevOps:
 		var rs struct {
 			Value []struct {
-				Name string `json:"name"`
+				Name           string `json:"name"`
+				ObjectID       string `json:"objectId"`
+				PeeledObjectID string `json:"peeledObjectId"` // the commit of an annotated tag
 			} `json:"value"`
 		}
-		if err := c.getJSON(ctx, fmt.Sprintf("%s/%s/_apis/git/repositories/%s/refs?filter=tags/&api-version=7.1", c.BaseURL, a, b), &rs, true); err != nil {
+		if err := c.getJSON(ctx, fmt.Sprintf("%s/%s/_apis/git/repositories/%s/refs?filter=tags/&peelTags=true&api-version=7.1", c.BaseURL, a, b), &rs, true); err != nil {
 			return nil, err
 		}
 		for _, r := range rs.Value {
-			out = append(out, strings.TrimPrefix(r.Name, "refs/tags/"))
+			commit := r.PeeledObjectID
+			if commit == "" {
+				commit = r.ObjectID
+			}
+			out = append(out, Tag{strings.TrimPrefix(r.Name, "refs/tags/"), commit})
 		}
 	default:
 		return nil, fmt.Errorf("unknown VCS provider %q", c.Provider)
@@ -616,7 +630,8 @@ func syncModule(ctx context.Context, st *storage.Store, key []byte, m storage.VC
 	}
 	var added []string
 	var errs []error
-	for _, tag := range tags {
+	for _, t := range tags {
+		tag := t.Name
 		ver, err := registry.CanonicalVersion(tag)
 		if err != nil || have[ver] {
 			continue // not a release tag, or already published (v1.0.0 and 1.0.0 are one version)
@@ -722,9 +737,24 @@ func TriggerRuns(ctx context.Context, st *storage.Store, key []byte, group []sto
 	}
 	var head string
 	var prs []PullRequest
+	var tags []Tag
 	fetchedPRs := false
 	for _, ws := range group {
 		if !sc.AllowsWorkspace(ws.Name) { // deselected since the link; manual runs fail with the reason
+			continue
+		}
+		if ws.VCSTagsRegex != "" { // tag-based: no branch commits, no pull requests, as in HCP Terraform
+			if tags == nil {
+				if tags, err = c.Tags(ctx, ws.VCSRepo); err != nil {
+					return err
+				}
+			}
+			if tag, ok := LatestTag(tags, ws.VCSTagsRegex); ok {
+				if _, err := st.QueueVCSRun(ctx, ws.ID, tag.Commit, 0,
+					fmt.Sprintf("tag %s at %s: apply plan queued, waiting for a runner", tag.Name, short(tag.Commit))); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 		if ws.VCSTrigger {
@@ -758,3 +788,27 @@ func TriggerRuns(ctx context.Context, st *storage.Store, key []byte, group []sto
 }
 
 func short(commit string) string { return commit[:min(len(commit), 8)] }
+
+var tagVersionRe = regexp.MustCompile(`\d+(\.\d+)+`)
+
+// LatestTag returns the matching tag with the highest version in its name; tag-based workspaces
+// run it. A bad pattern matches nothing.
+// shortcut: tags without a version number (1.2 or 1.2.3) are never newest; order by date if custom patterns need it.
+func LatestTag(tags []Tag, pattern string) (Tag, bool) {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return Tag{}, false
+	}
+	var best Tag
+	var bestV *version.Version
+	for _, t := range tags {
+		if !re.MatchString(t.Name) || t.Commit == "" {
+			continue
+		}
+		v, err := version.NewVersion(tagVersionRe.FindString(t.Name))
+		if err == nil && (bestV == nil || v.GreaterThan(bestV)) {
+			best, bestV = t, v
+		}
+	}
+	return best, bestV != nil
+}

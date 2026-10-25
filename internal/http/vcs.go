@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"path"
 	"regexp"
-	"slices"
 	"strings"
 	"time"
 
@@ -28,7 +27,6 @@ func (s *Server) vcsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /vcs/{id}/delete", s.admin(s.deleteConnection))
 	mux.HandleFunc("GET /vcs/{id}/settings", s.admin(s.connectionSettings))
 	mux.HandleFunc("POST /vcs/{id}/settings", s.admin(s.saveConnectionSettings))
-	mux.HandleFunc("POST /vcs/{id}/workspaces", s.admin(s.attachConnectionWorkspace))
 	mux.HandleFunc("POST /registry/publish", s.admin(s.publishModule))
 	mux.HandleFunc("POST /registry/{ns}/{name}/{system}/sync", s.admin(s.syncModule))
 }
@@ -55,15 +53,15 @@ func (s *Server) renderVCS(w http.ResponseWriter, r *http.Request, status int, e
 // 2 set it up (name, URL, token), 3 advanced settings (which workspaces may link it) of the created connection.
 // Return is the wizard that sent the user here; finishing continues it with the new connection.
 type newConnection struct {
-	Step       int
-	Edit       bool   // step 3 alone, as the connection's settings page
-	Return     string // "workspace", "module" or ""
-	Next       string // where finishing goes
-	Providers  any    // vcs.Providers
-	Conn       storage.VCSConnection
-	Error      string
-	Form       map[string]string
-	Attachable []string // workspaces not selected yet, in step 3
+	Step      int
+	Edit      bool   // step 3 alone, as the connection's settings page
+	Return    string // "workspace", "module" or ""
+	Next      string // where finishing goes
+	Providers any    // vcs.Providers
+	Conn      storage.VCSConnection
+	Error     string
+	Form      map[string]string
+	Picker    picker // the selected workspaces, in step 3
 }
 
 func (s *Server) newConnectionPage(w http.ResponseWriter, r *http.Request) {
@@ -101,11 +99,8 @@ func (s *Server) renderNewConnection(w http.ResponseWriter, r *http.Request, sta
 			s.internalError(w, "list workspaces", err)
 			return
 		}
-		for _, ws := range all {
-			if ws.TemplateID == "" && !slices.Contains(p.Conn.Workspaces, ws.Name) { // template workspaces never link a repository
-				p.Attachable = append(p.Attachable, ws.Name)
-			}
-		}
+		p.Picker = workspacePicker("workspace", "Workspaces that may link this connection's repositories", p.Conn.Workspaces, all,
+			func(ws storage.Workspace) bool { return ws.TemplateID == "" }) // template workspaces never link a repository
 	}
 	s.render(w, r, status, "vcsnew.html", p)
 }
@@ -173,39 +168,9 @@ func (s *Server) connectionSettings(w http.ResponseWriter, r *http.Request) {
 	s.renderNewConnection(w, r, http.StatusOK, newConnection{Step: 3, Edit: true, Conn: sc, Form: scopeFormOf(sc)})
 }
 
-// attachConnectionWorkspace selects a workspace (by name) for the connection, which scopes it to
-// selected workspaces, or with detach=<name> deselects one: runs of a deselected workspace linked
-// through it fail when they start. The scope form's Attach and Detach buttons post here.
-func (s *Server) attachConnectionWorkspace(w http.ResponseWriter, r *http.Request) {
-	sc, ok := s.getConnection(w, r, r.PathValue("id"))
-	if !ok {
-		return
-	}
-	name, attach := r.PostFormValue("detach"), false
-	if name == "" {
-		name, attach = r.PostFormValue("workspace"), true
-	}
-	err := s.Store.AttachVCSWorkspace(r.Context(), sc.ID, name, attach)
-	if err == nil && attach && sc.WorkspaceScope != "selected" {
-		err = s.Store.SetVCSScope(r.Context(), sc.ID, "selected", sc.Modules)
-	}
-	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "choose a workspace", http.StatusBadRequest)
-		return
-	} else if err != nil {
-		s.internalError(w, "attach vcs workspace", err)
-		return
-	}
-	s.Log.Info("vcs connection workspace", "id", sc.ID, "workspace", name, "attach", attach, "user", auth.FromContext(r.Context()).Email)
-	next := "/vcs/" + sc.ID + "/settings"
-	if r.PostFormValue("wizard") != "" {
-		next = "/vcs/new?connection=" + sc.ID + "&return=" + url.QueryEscape(r.PostFormValue("return"))
-	}
-	http.Redirect(w, r, next, http.StatusSeeOther)
-}
-
-// saveConnectionSettings sets what a connection may be used for; runs of linked workspaces no
-// longer allowed fail when they start, and linked modules keep syncing.
+// saveConnectionSettings sets what a connection may be used for, with selected workspaces exactly
+// those (by name) in the workspace fields; runs of linked workspaces no longer allowed fail when
+// they start, and linked modules keep syncing.
 // From the add-VCS-provider wizard (wizard=1) it finishes the wizard.
 func (s *Server) saveConnectionSettings(w http.ResponseWriter, r *http.Request) {
 	sc, ok := s.getConnection(w, r, r.PathValue("id"))
@@ -234,11 +199,23 @@ func (s *Server) saveConnectionSettings(w http.ResponseWriter, r *http.Request) 
 		s.renderNewConnection(w, r, http.StatusUnprocessableEntity, newConnection{Step: 3, Edit: !wizard, Return: ret, Conn: sc, Error: err.Error(), Form: form})
 		return
 	}
-	if err := s.Store.SetVCSScope(r.Context(), sc.ID, scope, form["modules"] != ""); err != nil {
+	if scope == "selected" { // else the hidden picker's selection stays for later
+		err = syncSelection(sc.Workspaces, r.PostForm["workspace"], func(ws string, on bool) error {
+			return s.Store.AttachVCSWorkspace(r.Context(), sc.ID, ws, on)
+		})
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "choose existing workspaces", http.StatusBadRequest)
+		return
+	}
+	if err == nil {
+		err = s.Store.SetVCSScope(r.Context(), sc.ID, scope, form["modules"] != "")
+	}
+	if err != nil {
 		s.internalError(w, "set vcs scope", err)
 		return
 	}
-	s.Log.Info("vcs connection scope", "id", sc.ID, "workspace_scope", scope, "modules", form["modules"] != "", "user", auth.FromContext(r.Context()).Email)
+	s.Log.Info("vcs connection scope", "id", sc.ID, "workspace_scope", scope, "workspaces", r.PostForm["workspace"], "modules", form["modules"] != "", "user", auth.FromContext(r.Context()).Email)
 	next := "/vcs"
 	if wizard {
 		next = finishConnection(ret, sc.ID)
