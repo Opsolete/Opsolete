@@ -551,31 +551,108 @@ func Key(secret string) []byte {
 	return k[:]
 }
 
-// Seal encrypts a token with AES-256-GCM (random nonce prepended).
-func Seal(key []byte, token string) ([]byte, error) {
+// sealedV2 starts values sealed with associated data. Older values (a bare nonce and ciphertext)
+// open only through OpenLegacy.
+var sealedV2 = []byte("opsolete-v2:")
+
+// Seal encrypts plain with AES-256-GCM (random nonce). ad binds the result to where it is stored
+// (e.g. VariableAD): copied to another row or file, it no longer opens.
+func Seal(key []byte, plain, ad string) ([]byte, error) {
 	g, err := gcm(key)
 	if err != nil {
 		return nil, err
 	}
 	nonce := make([]byte, g.NonceSize())
 	rand.Read(nonce)
-	return g.Seal(nonce, nonce, []byte(token), nil), nil
+	return g.Seal(append(bytes.Clone(sealedV2), nonce...), nonce, []byte(plain), []byte(ad)), nil
 }
 
-// Open decrypts a sealed token; it fails if SECRET_KEY changed since the token was stored.
-func Open(key, sealed []byte) (string, error) {
+// Open decrypts a value sealed with the same ad; it fails if SECRET_KEY changed since, or the
+// value was moved.
+func Open(key, sealed []byte, ad string) (string, error) {
+	if !bytes.HasPrefix(sealed, sealedV2) {
+		return "", errors.New("can't decrypt: not sealed for this place, or from before Opsolete re-sealed it")
+	}
+	return open(key, sealed[len(sealedV2):], []byte(ad))
+}
+
+// OpenLegacy decrypts a value sealed without associated data, for re-sealing and old state files.
+func OpenLegacy(key, sealed []byte) (string, error) { return open(key, sealed, nil) }
+
+func open(key, sealed, ad []byte) (string, error) {
 	g, err := gcm(key)
 	if err != nil {
 		return "", err
 	}
 	if len(sealed) < g.NonceSize() {
-		return "", errors.New("sealed token too short")
+		return "", errors.New("sealed value too short")
 	}
-	b, err := g.Open(nil, sealed[:g.NonceSize()], sealed[g.NonceSize():], nil)
+	b, err := g.Open(nil, sealed[:g.NonceSize()], sealed[g.NonceSize():], ad)
 	if err != nil {
-		return "", errors.New("can't decrypt the token: SECRET_KEY changed? Delete and re-add the connection")
+		return "", errors.New("can't decrypt: SECRET_KEY changed, or the value was moved? Set it again")
 	}
 	return string(b), nil
+}
+
+// TokenAD binds a VCS token to its connection's endpoint: pointing base_url elsewhere in the
+// database must not send the token there.
+func TokenAD(c storage.VCSConnection) string {
+	return "vcs token\x00" + c.Provider + "\x00" + c.BaseURL + "\x00" + c.Name
+}
+
+// VariableAD binds a variable's value to its owner, name and sensitivity: a sensitive value copied
+// into a non-sensitive row (which the UI shows) or into another workspace doesn't open.
+func VariableAD(v storage.Variable) string {
+	return fmt.Sprintf("variable\x00%s\x00%s\x00%s\x00%s\x00%t", v.Owner.WorkspaceID, v.Owner.SetID, v.Category, v.Key, v.Sensitive)
+}
+
+// Reseal moves variables and VCS tokens sealed without associated data to Seal's format, once
+// at startup; values that don't open (SECRET_KEY changed) are left as they are.
+func Reseal(ctx context.Context, st *storage.Store, key []byte) (int, error) {
+	n := 0
+	vars, err := st.AllVariables(ctx)
+	if err != nil {
+		return n, err
+	}
+	for _, v := range vars {
+		if bytes.HasPrefix(v.Value, sealedV2) {
+			continue
+		}
+		plain, err := OpenLegacy(key, v.Value)
+		if err != nil {
+			continue
+		}
+		sealed, err := Seal(key, plain, VariableAD(v))
+		if err != nil {
+			return n, err
+		}
+		if err := st.ResealVariable(ctx, v.ID, v.Value, sealed); err != nil {
+			return n, err
+		}
+		n++
+	}
+	conns, err := st.VCSConnections(ctx)
+	if err != nil {
+		return n, err
+	}
+	for _, c := range conns {
+		if bytes.HasPrefix(c.Token, sealedV2) {
+			continue
+		}
+		plain, err := OpenLegacy(key, c.Token)
+		if err != nil {
+			continue
+		}
+		sealed, err := Seal(key, plain, TokenAD(c))
+		if err != nil {
+			return n, err
+		}
+		if err := st.ResealVCSToken(ctx, c.ID, c.Token, sealed); err != nil {
+			return n, err
+		}
+		n++
+	}
+	return n, nil
 }
 
 func gcm(key []byte) (cipher.AEAD, error) {
@@ -588,7 +665,7 @@ func gcm(key []byte) (cipher.AEAD, error) {
 
 // ConnFor opens a stored connection's token.
 func ConnFor(key []byte, c storage.VCSConnection) (Conn, error) {
-	token, err := Open(key, c.Token)
+	token, err := Open(key, c.Token, TokenAD(c))
 	return Conn{Provider: c.Provider, BaseURL: c.BaseURL, Token: token}, err
 }
 
@@ -721,7 +798,8 @@ func PollRuns(ctx context.Context, st *storage.Store, key []byte, interval time.
 
 // TriggerRuns queues the runs a branch and its pull requests call for (see PollRuns) on the
 // workspaces of group, which all link the same connection, repository and branch. A workspace with
-// an active run gets them at a later round, one at a time.
+// an active run gets them at a later round, one at a time. One workspace's error (or a failed list
+// of tags, head or pull requests) doesn't keep the others from their runs; all are returned.
 func TriggerRuns(ctx context.Context, st *storage.Store, key []byte, group []storage.Workspace) error {
 	ws := group[0]
 	sc, err := st.GetVCSConnection(ctx, ws.VCSConnectionID)
@@ -735,56 +813,49 @@ func TriggerRuns(ctx context.Context, st *storage.Store, key []byte, group []sto
 	if until := pausedUntil(c.BaseURL); !until.IsZero() {
 		return fmt.Errorf("%s asked to wait: polling resumes at %s", c.Provider, until.Format(time.TimeOnly))
 	}
-	var head string
-	var prs []PullRequest
-	var tags []Tag
-	fetchedPRs := false
+	// each list is fetched once per round, at first need; a failed fetch fails just its users
+	tags := sync.OnceValues(func() ([]Tag, error) { return c.Tags(ctx, ws.VCSRepo) })
+	head := sync.OnceValues(func() (string, error) { return c.Head(ctx, ws.VCSRepo, ws.VCSBranch) })
+	prs := sync.OnceValues(func() ([]PullRequest, error) { return c.PullRequests(ctx, ws.VCSRepo, ws.VCSBranch) })
+	var errs []error
+	queue := func(ws storage.Workspace, commit string, pr int, msg string) {
+		if _, err := st.QueueVCSRun(ctx, ws.ID, commit, pr, msg); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", ws.Name, err))
+		}
+	}
 	for _, ws := range group {
 		if !sc.AllowsWorkspace(ws.Name) { // deselected since the link; manual runs fail with the reason
 			continue
 		}
 		if ws.VCSTagsRegex != "" { // tag-based: no branch commits, no pull requests, as in HCP Terraform
-			if tags == nil {
-				if tags, err = c.Tags(ctx, ws.VCSRepo); err != nil {
-					return err
-				}
-			}
-			if tag, ok := LatestTag(tags, ws.VCSTagsRegex); ok {
-				if _, err := st.QueueVCSRun(ctx, ws.ID, tag.Commit, 0,
-					fmt.Sprintf("tag %s at %s: apply plan queued, waiting for a runner", tag.Name, short(tag.Commit))); err != nil {
-					return err
-				}
+			list, err := tags()
+			if err != nil {
+				errs = append(errs, fmt.Errorf("%s: tags: %w", ws.Name, err))
+			} else if tag, ok := LatestTag(list, ws.VCSTagsRegex); ok && tag.Commit != ws.VCSTagBaseline {
+				queue(ws, tag.Commit, 0, fmt.Sprintf("tag %s at %s: apply plan queued, waiting for a runner", tag.Name, short(tag.Commit)))
 			}
 			continue
 		}
 		if ws.VCSTrigger {
-			if head == "" {
-				if head, err = c.Head(ctx, ws.VCSRepo, ws.VCSBranch); err != nil {
-					return err
-				}
-			}
-			if _, err := st.QueueVCSRun(ctx, ws.ID, head, 0,
-				fmt.Sprintf("commit %s on %s: apply plan queued, waiting for a runner", short(head), ws.VCSBranch)); err != nil {
-				return err
+			if h, err := head(); err != nil {
+				errs = append(errs, fmt.Errorf("%s: branch head: %w", ws.Name, err))
+			} else {
+				queue(ws, h, 0, fmt.Sprintf("commit %s on %s: apply plan queued, waiting for a runner", short(h), ws.VCSBranch))
 			}
 		}
 		if !ws.VCSPullRequests {
 			continue
 		}
-		if !fetchedPRs {
-			if prs, err = c.PullRequests(ctx, ws.VCSRepo, ws.VCSBranch); err != nil {
-				return err
-			}
-			fetchedPRs = true
+		list, err := prs()
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: pull requests: %w", ws.Name, err))
+			continue
 		}
-		for _, pr := range prs {
-			if _, err := st.QueueVCSRun(ctx, ws.ID, pr.Commit, pr.Number,
-				fmt.Sprintf("pull request #%d at %s: speculative plan queued, waiting for a runner", pr.Number, short(pr.Commit))); err != nil {
-				return err
-			}
+		for _, pr := range list {
+			queue(ws, pr.Commit, pr.Number, fmt.Sprintf("pull request #%d at %s: speculative plan queued, waiting for a runner", pr.Number, short(pr.Commit)))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func short(commit string) string { return commit[:min(len(commit), 8)] }

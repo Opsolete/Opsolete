@@ -18,6 +18,7 @@ type Variable struct {
 	Key       string
 	Value     []byte
 	Sensitive bool
+	Owner     VarOwner // part of the value's seal (vcs.VariableAD)
 	UpdatedAt time.Time
 }
 
@@ -28,8 +29,21 @@ const ownerCond = `workspace_id IS NOT DISTINCT FROM NULLIF($1, '')::uuid AND se
 
 // Variables lists an owner's variables by category and key.
 func (s *Store) Variables(ctx context.Context, o VarOwner) ([]Variable, error) {
-	return scanVariables(s.DB.QueryContext(ctx, `SELECT id, category, key, value, sensitive, updated_at FROM variables
+	return scanVariables(s.DB.QueryContext(ctx, `SELECT `+varCols+` FROM variables v
 		WHERE `+ownerCond+` ORDER BY category, key`, o.WorkspaceID, o.SetID))
+}
+
+const varCols = `v.id, v.category, v.key, v.value, v.sensitive, COALESCE(v.workspace_id::text, ''), COALESCE(v.set_id::text, ''), v.updated_at`
+
+// AllVariables lists every variable, for re-sealing.
+func (s *Store) AllVariables(ctx context.Context) ([]Variable, error) {
+	return scanVariables(s.DB.QueryContext(ctx, `SELECT `+varCols+` FROM variables v`))
+}
+
+// ResealVariable replaces a variable's sealed value, unless it changed since it was read.
+func (s *Store) ResealVariable(ctx context.Context, id string, old, sealed []byte) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE variables SET value = $3 WHERE id = $1::uuid AND value = $2`, id, old, sealed)
+	return err
 }
 
 func scanVariables(rows *sql.Rows, err error) ([]Variable, error) {
@@ -40,7 +54,7 @@ func scanVariables(rows *sql.Rows, err error) ([]Variable, error) {
 	var out []Variable
 	for rows.Next() {
 		var v Variable
-		if err := rows.Scan(&v.ID, &v.Category, &v.Key, &v.Value, &v.Sensitive, &v.UpdatedAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.Category, &v.Key, &v.Value, &v.Sensitive, &v.Owner.WorkspaceID, &v.Owner.SetID, &v.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, v)
@@ -63,7 +77,7 @@ func (s *Store) SetVariable(ctx context.Context, o VarOwner, v Variable) error {
 
 // DeleteVariable deletes one of the owner's variables; ids of other owners are ignored.
 func (s *Store) DeleteVariable(ctx context.Context, o VarOwner, id string) error {
-	_, err := s.DB.ExecContext(ctx, `DELETE FROM variables WHERE `+ownerCond+` AND id::text = $3`, o.WorkspaceID, o.SetID, id)
+	_, err := s.DB.ExecContext(ctx, `DELETE FROM variables WHERE `+ownerCond+` AND id = ops_uuid($3)`, o.WorkspaceID, o.SetID, id)
 	return err
 }
 
@@ -76,8 +90,7 @@ const globalApplies = `(vs.global AND NOT EXISTS (SELECT 1 FROM workspaces gw
 // workspace's own win over attached sets, attached sets over global ones (not for VCS-linked
 // workspaces, see globalApplies), and between sets of one kind the first by name wins.
 func (s *Store) RunVariables(ctx context.Context, workspaceID string) ([]Variable, error) {
-	return scanVariables(s.DB.QueryContext(ctx, `SELECT DISTINCT ON (v.category, v.key) v.id, v.category, v.key, v.value,
-			v.sensitive, v.updated_at
+	return scanVariables(s.DB.QueryContext(ctx, `SELECT DISTINCT ON (v.category, v.key) `+varCols+`
 		FROM variables v LEFT JOIN variable_sets vs ON vs.id = v.set_id
 		WHERE v.workspace_id = $1::uuid OR `+globalApplies+`
 			OR v.set_id IN (SELECT set_id FROM variable_set_workspaces WHERE workspace_id = $1::uuid)

@@ -1,10 +1,12 @@
 package httpserver
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"regexp"
 	"slices"
@@ -233,6 +235,11 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
+	// the side-menu page: each loads only what it shows (the header's data on every one)
+	tab, _, _ := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/workspaces/"+r.PathValue("name")), "/"), "/")
+	if tab == "" {
+		tab = "overview"
+	}
 	runs, err := s.Store.Runs(ctx, ws.ID, 25)
 	if err != nil {
 		s.internalError(w, "list runs", err)
@@ -253,40 +260,6 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "outputs", err)
 		return
 	}
-	grants, err := s.Store.Grants(ctx, ws.ID)
-	if err != nil {
-		s.internalError(w, "workspace grants", err)
-		return
-	}
-	vars, err := s.varsBlock(ctx, storage.VarOwner{WorkspaceID: ws.ID}, "/workspaces/"+ws.Name, level == levelOperate)
-	if err != nil {
-		s.internalError(w, "workspace variables", err)
-		return
-	}
-	sets, err := s.Store.WorkspaceVariableSets(ctx, ws.ID)
-	if err != nil {
-		s.internalError(w, "workspace variable sets", err)
-		return
-	}
-	// Variables page: each applied set with its variables, read-only (sets are edited by admins on their page)
-	var setVars []setView
-	if strings.HasSuffix(r.URL.Path, "/variables") {
-		for _, set := range sets {
-			b, err := s.varsBlock(ctx, storage.VarOwner{SetID: set.ID}, "", false)
-			if err != nil {
-				s.internalError(w, "variable set variables", err)
-				return
-			}
-			setVars = append(setVars, setView{set, b})
-		}
-	}
-	var groups []string
-	if auth.FromContext(ctx).Admin() {
-		if groups, err = s.Store.KnownGroups(ctx); err != nil {
-			s.internalError(w, "known groups", err)
-			return
-		}
-	}
 	var active, assessment *storage.Run
 	if len(runs) > 0 && runs[0].Active() {
 		active = &runs[0]
@@ -300,88 +273,130 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "latest assessment", err)
 		return
 	}
-	// the template now pins another module version than the workspace runs.
-	var update *templates.Module
-	t, hasTemplate := s.Templates.Get(ws.TemplateID)
-	if hasTemplate && (t.Module.Source != ws.ModuleSource || t.Module.Ref != ws.ModuleRef) {
-		update = &t.Module
-	}
-	added, err := s.Store.WorkspaceTemplates(ctx, ws.ID)
-	if err != nil {
-		s.internalError(w, "workspace templates", err)
-		return
-	}
-	templateCount := len(added)
-	if ws.TemplateID != "" { // the template the workspace was created from counts too
-		templateCount++
-	}
-	updates := map[string]string{} // added template name -> module version its template pins now
-	for _, a := range added {
-		if t, ok := s.Templates.Get(a.TemplateID); ok && (t.Module.Source != a.ModuleSource || t.Module.Ref != a.ModuleRef) {
-			updates[a.Name] = t.Module.Ref
-		}
-	}
-	// Runs page: status filters, counted over the runs listed
-	filter := r.URL.Query().Get("filter")
-	counts, list := map[string]int{"all": len(runs)}, []runItem{}
-	for i, run := range runs {
-		g := runGroup(run.Status)
-		counts[g]++
-		if filter == "" || filter == "all" || filter == g {
-			list = append(list, runItem{run, i == 0})
-		}
-	}
 	var current *runItem
-	var latestPlan, latestApply phase
 	if len(runs) > 0 {
 		current = &runItem{runs[0], true}
-		_, hist, err := s.Store.GetRun(ctx, runs[0].ID)
-		if err != nil {
-			s.internalError(w, "latest run", err)
-			return
-		}
-		latestPlan, latestApply = runPhases(runs[0], hist)
 	}
-	// General settings: workspaces to share the state with, the ones it already does first: they stay
-	// selected even if this user can't see them
-	stateConsumers := picker{Name: "remote_state_consumers", Label: "Workspaces to share the state with"}
-	if strings.HasSuffix(r.URL.Path, "/settings") && level == levelOperate {
-		cur, err := s.Store.RemoteStateConsumers(ctx, ws.ID)
+	t, hasTemplate := s.Templates.Get(ws.TemplateID)
+	data := map[string]any{"W": ws, "Runs": runs, "Active": active, "Current": current, "Page": page,
+		"HasTemplate": hasTemplate, "Resources": res, "Versions": versions, "Outputs": outputs, "Destroyed": destroyed,
+		"Assessment": assessment, "CanOperate": level == levelOperate, "Admin": auth.FromContext(ctx).Admin()}
+
+	switch tab {
+	case "overview":
+		// the template now pins another module version than the workspace runs.
+		if hasTemplate && (t.Module.Source != ws.ModuleSource || t.Module.Ref != ws.ModuleRef) {
+			data["Update"] = &t.Module
+		}
+		added, err := s.Store.WorkspaceTemplates(ctx, ws.ID)
 		if err != nil {
-			s.internalError(w, "remote state consumers", err)
+			s.internalError(w, "workspace templates", err)
 			return
 		}
-		all, err := s.Store.ListWorkspaces(ctx, viewer(r))
-		if err != nil {
-			s.internalError(w, "list workspaces", err)
-			return
+		templateCount := len(added)
+		if ws.TemplateID != "" { // the template the workspace was created from counts too
+			templateCount++
 		}
-		seen := map[string]bool{ws.ID: true}
-		for _, c := range cur {
-			seen[c.ID] = true
-			stateConsumers.Items = append(stateConsumers.Items, pickerItem{c.ID, c.Name, true})
-			stateConsumers.Selected++
-		}
-		for _, o := range all {
-			if !seen[o.ID] {
-				stateConsumers.Items = append(stateConsumers.Items, pickerItem{o.ID, o.Name, false})
+		updates := map[string]string{} // added template name -> module version its template pins now
+		for _, a := range added {
+			if t, ok := s.Templates.Get(a.TemplateID); ok && (t.Module.Source != a.ModuleSource || t.Module.Ref != a.ModuleRef) {
+				updates[a.Name] = t.Module.Ref
 			}
 		}
+		var latestPlan, latestApply phase
+		if len(runs) > 0 {
+			_, hist, err := s.Store.GetRun(ctx, runs[0].ID)
+			if err != nil {
+				s.internalError(w, "latest run", err)
+				return
+			}
+			latestPlan, latestApply = runPhases(runs[0], hist)
+		}
+		metrics, err := s.Store.RunMetrics(ctx, ws.ID)
+		if err != nil {
+			s.internalError(w, "run metrics", err)
+			return
+		}
+		maps.Copy(data, map[string]any{"Added": added, "TemplateCount": templateCount, "Updates": updates, "Catalog": s.Templates.List(),
+			"LatestPlan": latestPlan, "LatestApply": latestApply, "Metrics": metrics, "Show": r.URL.Query().Get("show")})
+
+	case "runs": // status filters, counted over the runs listed
+		filter := r.URL.Query().Get("filter")
+		counts, list := map[string]int{"all": len(runs)}, []runItem{}
+		for i, run := range runs {
+			g := runGroup(run.Status)
+			counts[g]++
+			if filter == "" || filter == "all" || filter == g {
+				list = append(list, runItem{run, i == 0})
+			}
+		}
+		maps.Copy(data, map[string]any{"Filter": filter, "Counts": counts, "RunList": list})
+
+	case "variables": // each applied set with its variables, read-only (sets are edited by admins on their page)
+		vars, err := s.varsBlock(ctx, storage.VarOwner{WorkspaceID: ws.ID}, "/workspaces/"+ws.Name, level == levelOperate)
+		if err != nil {
+			s.internalError(w, "workspace variables", err)
+			return
+		}
+		sets, err := s.Store.WorkspaceVariableSets(ctx, ws.ID)
+		if err != nil {
+			s.internalError(w, "workspace variable sets", err)
+			return
+		}
+		var setVars []setView
+		for _, set := range sets {
+			b, err := s.varsBlock(ctx, storage.VarOwner{SetID: set.ID}, "", false)
+			if err != nil {
+				s.internalError(w, "variable set variables", err)
+				return
+			}
+			setVars = append(setVars, setView{set, b})
+		}
+		maps.Copy(data, map[string]any{"Variables": vars, "Sets": setVars})
+
+	case "settings":
+		grants, err := s.Store.Grants(ctx, ws.ID)
+		if err != nil {
+			s.internalError(w, "workspace grants", err)
+			return
+		}
+		var groups []string
+		if auth.FromContext(ctx).Admin() {
+			if groups, err = s.Store.KnownGroups(ctx); err != nil {
+				s.internalError(w, "known groups", err)
+				return
+			}
+		}
+		// General: workspaces to share the state with, the ones it already does first: they stay
+		// selected even if this user can't see them
+		stateConsumers := picker{Name: "remote_state_consumers", Label: "Workspaces to share the state with"}
+		if page == "" && level == levelOperate {
+			cur, err := s.Store.RemoteStateConsumers(ctx, ws.ID)
+			if err != nil {
+				s.internalError(w, "remote state consumers", err)
+				return
+			}
+			all, err := s.Store.ListWorkspaces(ctx, viewer(r))
+			if err != nil {
+				s.internalError(w, "list workspaces", err)
+				return
+			}
+			seen := map[string]bool{ws.ID: true}
+			for _, c := range cur {
+				seen[c.ID] = true
+				stateConsumers.Items = append(stateConsumers.Items, pickerItem{c.ID, c.Name, true})
+				stateConsumers.Selected++
+			}
+			for _, o := range all {
+				if !seen[o.ID] {
+					stateConsumers.Items = append(stateConsumers.Items, pickerItem{o.ID, o.Name, false})
+				}
+			}
+		}
+		maps.Copy(data, map[string]any{"Grants": grants, "Groups": groups, "StateConsumers": stateConsumers,
+			"StateAddress": s.Registry.PublicURL.JoinPath(runnerapi.StatePrefix, ws.ID).String()})
 	}
-	metrics, err := s.Store.RunMetrics(ctx, ws.ID)
-	if err != nil {
-		s.internalError(w, "run metrics", err)
-		return
-	}
-	s.render(w, r, http.StatusOK, "workspace.html", map[string]any{"W": ws, "Runs": runs, "Active": active,
-		"Filter": filter, "Counts": counts, "RunList": list, "Current": current,
-		"LatestPlan": latestPlan, "LatestApply": latestApply, "Metrics": metrics, "Show": r.URL.Query().Get("show"), "Page": page,
-		"Update": update, "HasTemplate": hasTemplate, "Added": added, "Updates": updates, "Catalog": s.Templates.List(),
-		"TemplateCount": templateCount,
-		"Resources":     res, "Versions": versions, "Outputs": outputs, "Destroyed": destroyed, "Grants": grants,
-		"Variables": vars, "Sets": setVars, "Groups": groups, "Assessment": assessment, "StateConsumers": stateConsumers,
-		"StateAddress": s.Registry.PublicURL.JoinPath(runnerapi.StatePrefix, ws.ID).String(),
-		"CanOperate":   level == levelOperate, "Admin": auth.FromContext(ctx).Admin()})
+	s.render(w, r, http.StatusOK, "workspace.html", data)
 }
 
 // picker is a searchable multi-select of workspaces: the "picker" template in layout.html.
@@ -411,9 +426,20 @@ func workspacePicker(field, label string, selected []string, all []storage.Works
 	return p
 }
 
-// syncSelection attaches the names in want that have lacks, then detaches the ones want lacks,
-// so an unknown name fails before anything is detached.
-func syncSelection(have, want []string, attach func(name string, on bool) error) error {
+// syncSelection attaches the names in want that have lacks, then detaches the ones want lacks.
+// An unknown workspace name fails (sql.ErrNoRows) before anything changes.
+func (s *Server) syncSelection(ctx context.Context, have, want []string, attach func(name string, on bool) error) error {
+	var added []string
+	for _, n := range want {
+		if !slices.Contains(have, n) {
+			added = append(added, n)
+		}
+	}
+	if ok, err := s.Store.WorkspacesExist(ctx, added); err != nil {
+		return err
+	} else if !ok {
+		return sql.ErrNoRows
+	}
 	for _, n := range want {
 		if !slices.Contains(have, n) {
 			if err := attach(n, true); err != nil {
@@ -786,7 +812,7 @@ func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if status == storage.Canceled {
-		s.deleteArtifacts(r, run.ID)
+		s.DeleteArtifacts(r.Context(), run.ID)
 	}
 	s.Log.Info("run cancel", "workspace", ws.Name, "run", run.ID, "status", status, "user", u.Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID, http.StatusSeeOther)
@@ -817,7 +843,7 @@ func (s *Server) decideRun(w http.ResponseWriter, r *http.Request, confirm bool)
 		return
 	}
 	if !confirm {
-		s.deleteArtifacts(r, run.ID)
+		s.DeleteArtifacts(r.Context(), run.ID)
 	}
 	s.Log.Info("run decided", "workspace", ws.Name, "run", run.ID, "confirmed", confirm, "user", u.Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID, http.StatusSeeOther)
@@ -845,6 +871,8 @@ func (s *Server) logText(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
+
+var sseNewlines = strings.NewReplacer("\r\n", "\n", "\r", "\n")
 
 // logStream follows a run's log as Server-Sent Events. Event ids are log sequence numbers, so a
 // reconnecting EventSource resumes via Last-Event-ID. Ends with a "done" event (data: the run's
@@ -874,7 +902,8 @@ func (s *Server) logStream(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, c := range chunks {
 			fmt.Fprintf(w, "id: %d\n", c.Seq)
-			for _, line := range strings.Split(c.Chunk, "\n") {
+			// SSE ends a line at \r too: a bare \r in Terraform's output would start a bogus field
+			for _, line := range strings.Split(sseNewlines.Replace(c.Chunk), "\n") {
 				fmt.Fprintf(w, "data: %s\n", line)
 			}
 			io.WriteString(w, "\n")

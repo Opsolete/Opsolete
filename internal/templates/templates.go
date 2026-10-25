@@ -4,6 +4,7 @@ package templates
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -40,6 +41,9 @@ type Input struct {
 var (
 	idRe   = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`) // safe for use in state keys
 	nameRe = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)        // valid Terraform variable name
+	// Terraform forbids these as variable names; as inputs they'd set a module block's meta-arguments
+	// (source: run other code with the workspace's credentials).
+	reserved = []string{"source", "version", "providers", "count", "for_each", "lifecycle", "depends_on", "locals"}
 )
 
 // LoadDir reads every *.json file in dir. Any invalid file fails the whole load.
@@ -154,8 +158,9 @@ func (t Template) check() error {
 			return fmt.Errorf("duplicate input %q", in.Name)
 		}
 		seen[in.Name] = true
-		if !nameRe.MatchString(in.Name) {
-			return fmt.Errorf("invalid input name %q (a Terraform variable name: lowercase, digits, underscores)", in.Name)
+		if !nameRe.MatchString(in.Name) || slices.Contains(reserved, in.Name) {
+			return fmt.Errorf("invalid input name %q (a Terraform variable name: lowercase, digits, underscores; not %s)",
+				in.Name, strings.Join(reserved, ", "))
 		}
 		switch in.Type {
 		case "string", "number", "bool":
@@ -197,7 +202,7 @@ func (t Template) Validate(raw map[string]string) (map[string]any, map[string]st
 		switch in.Type {
 		case "number":
 			n, err := strconv.ParseFloat(v, 64)
-			if err != nil {
+			if err != nil || math.IsNaN(n) || math.IsInf(n, 0) { // NaN and Inf parse, but aren't JSON
 				errs[in.Name] = "must be a number"
 				continue
 			}
@@ -209,7 +214,8 @@ func (t Template) Validate(raw map[string]string) (map[string]any, map[string]st
 			}
 			vals[in.Name] = v
 		default:
-			if in.Pattern != "" && !regexp.MustCompile(in.Pattern).MatchString(v) {
+			// anchored like the browser's pattern attribute: the whole value must match
+			if in.Pattern != "" && !regexp.MustCompile("^(?:"+in.Pattern+")$").MatchString(v) {
 				errs[in.Name] = "must match " + in.Pattern
 				continue
 			}

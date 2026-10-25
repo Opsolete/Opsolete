@@ -17,7 +17,7 @@
         pname = "opsolete";
         version = "0.1.0";
         src = self;
-        vendorHash = "sha256-8VFCHlcnwVK+l3PbB24rv5XgknPjq+hwNKGzHMD2YQg="; # update after go.mod changes
+        vendorHash = "sha256-Dj2gNDalPZy7nQ36TxDxeyR1YJKLzU+ZljZddhafcG0="; # update after go.mod changes
         subPackages = ["cmd/opsolete"];
         nativeBuildInputs = [pkgs.makeWrapper];
         # DB tests skip themselves without TEST_DATABASE_URL; the rest need the catalog from src.

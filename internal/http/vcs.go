@@ -56,7 +56,6 @@ type newConnection struct {
 	Step      int
 	Edit      bool   // step 3 alone, as the connection's settings page
 	Return    string // "workspace", "module" or ""
-	Next      string // where finishing goes
 	Providers any    // vcs.Providers
 	Conn      storage.VCSConnection
 	Error     string
@@ -91,7 +90,7 @@ func (s *Server) renderNewConnection(w http.ResponseWriter, r *http.Request, sta
 	if p.Return != "workspace" && p.Return != "module" {
 		p.Return = ""
 	}
-	p.Providers, p.Next = vcs.Providers, finishConnection(p.Return, p.Conn.ID)
+	p.Providers = vcs.Providers
 	if p.Step == 3 {
 		// shortcut: offers the 200 most recently active workspaces, as variable sets do; add search if there are more.
 		all, err := s.Store.ListWorkspaces(r.Context(), storage.Viewer{Admin: true}) // admin-only page
@@ -141,12 +140,12 @@ func (s *Server) addConnection(w http.ResponseWriter, r *http.Request) {
 		fail("connection check failed: " + err.Error())
 		return
 	}
-	sealed, err := vcs.Seal(s.SecretKey, token)
-	if err != nil {
+	conn := storage.VCSConnection{Name: form["name"], Provider: form["provider"], BaseURL: baseURL}
+	if conn.Token, err = vcs.Seal(s.SecretKey, token, vcs.TokenAD(conn)); err != nil {
 		s.internalError(w, "seal vcs token", err)
 		return
 	}
-	id, err := s.Store.CreateVCSConnection(r.Context(), storage.VCSConnection{Name: form["name"], Provider: form["provider"], BaseURL: baseURL, Token: sealed})
+	id, err := s.Store.CreateVCSConnection(r.Context(), conn)
 	if errors.Is(err, storage.ErrExists) {
 		fail("a connection with this name already exists")
 		return
@@ -200,7 +199,7 @@ func (s *Server) saveConnectionSettings(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if scope == "selected" { // else the hidden picker's selection stays for later
-		err = syncSelection(sc.Workspaces, r.PostForm["workspace"], func(ws string, on bool) error {
+		err = s.syncSelection(r.Context(), sc.Workspaces, r.PostForm["workspace"], func(ws string, on bool) error {
 			return s.Store.AttachVCSWorkspace(r.Context(), sc.ID, ws, on)
 		})
 	}

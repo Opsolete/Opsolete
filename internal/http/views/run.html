@@ -132,7 +132,7 @@
   es.onmessage = (e) => {
     if (first) { log.textContent = ""; first = false; }
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
-    log.textContent += e.data;
+    log.append(e.data); // a text node: += would re-render the whole log on every chunk
     if (atBottom) log.scrollTop = log.scrollHeight;
   };
   es.addEventListener("done", () => { es.close(); if (wasWorking) location.reload(); });

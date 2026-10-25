@@ -88,7 +88,7 @@ const working = `status IN ('planning', 'applying')`
 // Heartbeat extends the lease of a running job. cancel reports that a user asked to cancel it.
 func (s *Store) Heartbeat(ctx context.Context, runID, lease string, ttl time.Duration) (cancel bool, err error) {
 	err = s.DB.QueryRowContext(ctx, `UPDATE runs SET lease_until = now() + make_interval(secs => $3)
-		WHERE id::text = $1 AND lease_id = $2 AND `+working+` RETURNING cancel_requested`, runID, lease, ttl.Seconds()).Scan(&cancel)
+		WHERE id = ops_uuid($1) AND lease_id = $2 AND `+working+` RETURNING cancel_requested`, runID, lease, ttl.Seconds()).Scan(&cancel)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, ErrLeaseLost
 	}
@@ -98,7 +98,7 @@ func (s *Store) Heartbeat(ctx context.Context, runID, lease string, ttl time.Dur
 // HoldsLease reports whether lease is the current lease of a run in the given phase status.
 func (s *Store) HoldsLease(ctx context.Context, runID, lease, status string) (bool, error) {
 	var ok bool
-	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM runs WHERE id::text = $1 AND lease_id = $2 AND status = $3)`,
+	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM runs WHERE id = ops_uuid($1) AND lease_id = $2 AND status = $3)`,
 		runID, lease, status).Scan(&ok)
 	return ok, err
 }
@@ -113,7 +113,7 @@ func (s *Store) AppendLog(ctx context.Context, runID, lease, chunk string, ttl t
 	defer tx.Rollback()
 	var total int64
 	err = tx.QueryRowContext(ctx, `UPDATE runs SET lease_until = now() + make_interval(secs => $3),
-		log_bytes = log_bytes + $4 WHERE id::text = $1 AND lease_id = $2 AND `+working+` RETURNING log_bytes, cancel_requested`,
+		log_bytes = log_bytes + $4 WHERE id = ops_uuid($1) AND lease_id = $2 AND `+working+` RETURNING log_bytes, cancel_requested`,
 		runID, lease, ttl.Seconds(), len(chunk)).Scan(&total, &cancel)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, ErrLeaseLost
@@ -147,7 +147,7 @@ func (s *Store) CancelRun(ctx context.Context, id, email string, force bool) (st
 	}
 	defer tx.Rollback()
 	var status, workspaceID string
-	err = tx.QueryRowContext(ctx, `SELECT status, workspace_id FROM runs WHERE id::text = $1 FOR UPDATE`, id).Scan(&status, &workspaceID)
+	err = tx.QueryRowContext(ctx, `SELECT status, workspace_id FROM runs WHERE id = ops_uuid($1) FOR UPDATE`, id).Scan(&status, &workspaceID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrNotCancelable
 	}
@@ -161,15 +161,15 @@ func (s *Store) CancelRun(ctx context.Context, id, email string, force bool) (st
 			msg = "force-canceled by " + email + "; the runner was cut off, check the state for resources it may have missed"
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE runs SET status = 'canceled', lease_id = NULL, lease_until = NULL,
-			updated_at = now() WHERE id::text = $1`, id); err != nil {
+			updated_at = now() WHERE id = ops_uuid($1)`, id); err != nil {
 			return "", err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE workspaces SET state_lock = NULL WHERE id = $1`, workspaceID); err != nil {
+		if _, err := tx.ExecContext(ctx, releaseRunLock, workspaceID, id); err != nil {
 			return "", err
 		}
 		status = Canceled
 	case status == Planning || status == Applying:
-		if _, err := tx.ExecContext(ctx, `UPDATE runs SET cancel_requested = true WHERE id::text = $1`, id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE runs SET cancel_requested = true WHERE id = ops_uuid($1)`, id); err != nil {
 			return "", err
 		}
 		msg = "cancel requested by " + email + ": waiting for Terraform to stop and save state"
@@ -203,7 +203,7 @@ func (s *Store) FinishJob(ctx context.Context, runID, lease, result, message str
 	var autoApply bool
 	err = tx.QueryRowContext(ctx, `SELECT r.status, r.action, r.workspace_id, w.auto_apply FROM runs r
 		JOIN workspaces w ON w.id = r.workspace_id
-		WHERE r.id::text = $1 AND r.lease_id = $2 AND r.`+working+` FOR UPDATE OF r`, runID, lease).
+		WHERE r.id = ops_uuid($1) AND r.lease_id = $2 AND r.`+working+` FOR UPDATE OF r`, runID, lease).
 		Scan(&status, &action, &workspaceID, &autoApply)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrLeaseLost
@@ -239,17 +239,17 @@ func (s *Store) FinishJob(ctx context.Context, runID, lease, result, message str
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE runs SET status = $2, plan = COALESCE($3::jsonb, plan),
-		outputs = COALESCE($4::jsonb, outputs), lease_id = NULL, lease_until = NULL, updated_at = now() WHERE id::text = $1`,
+		outputs = COALESCE($4::jsonb, outputs), lease_id = NULL, lease_until = NULL, updated_at = now() WHERE id = ops_uuid($1)`,
 		runID, final, nullJSON(planJSON), nullJSON(outJSON)); err != nil {
 		return "", err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE workspaces SET state_lock = NULL WHERE id = $1`, workspaceID); err != nil {
+	if _, err := tx.ExecContext(ctx, releaseRunLock, workspaceID, runID); err != nil {
 		return "", err
 	}
 	if action == "destroy" && (final == Applied || final == NoChanges) {
 		// A destroy run that removes the workspace's last template: its resources are gone now.
 		if _, err := tx.ExecContext(ctx, `DELETE FROM workspace_templates t USING runs r
-			WHERE r.id::text = $1 AND t.workspace_id = r.workspace_id AND t.name = r.remove_template`, runID); err != nil {
+			WHERE r.id = ops_uuid($1) AND t.workspace_id = r.workspace_id AND t.name = r.remove_template`, runID); err != nil {
 			return "", err
 		}
 	}
@@ -283,7 +283,7 @@ func (s *Store) ReapExpiredLeases(ctx context.Context) ([]string, error) {
 			UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL, updated_at = now()
 			WHERE `+working+` AND lease_id IS NOT NULL AND lease_until < now() RETURNING id, workspace_id
 		), unlocked AS (
-			UPDATE workspaces SET state_lock = NULL WHERE id IN (SELECT workspace_id FROM r)
+			UPDATE workspaces w SET state_lock = NULL FROM r WHERE w.id = r.workspace_id AND w.state_lock->>'OpsoleteRun' = r.id::text
 		)
 		INSERT INTO run_status_history (run_id, status, message)
 		SELECT id, 'errored', 'runner stopped responding (lease expired)' FROM r RETURNING run_id`)
@@ -310,7 +310,7 @@ type LogChunk struct {
 // Logs returns up to limit chunks of a run's log after seq.
 func (s *Store) Logs(ctx context.Context, runID string, after int64, limit int) ([]LogChunk, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT seq, chunk FROM run_logs
-		WHERE run_id::text = $1 AND seq > $2 ORDER BY seq LIMIT $3`, runID, after, limit)
+		WHERE run_id = ops_uuid($1) AND seq > $2 ORDER BY seq LIMIT $3`, runID, after, limit)
 	if err != nil {
 		return nil, err
 	}

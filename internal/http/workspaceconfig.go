@@ -200,6 +200,11 @@ func (s *Server) createEmptyWorkspace(w http.ResponseWriter, r *http.Request) {
 		fail(err.Error())
 		return
 	}
+	baseline, err := s.tagBaseline(r.Context(), connID, repo, tags)
+	if err != nil {
+		fail(err.Error())
+		return
+	}
 	u := auth.FromContext(r.Context())
 	ws, err := s.Store.CreateEmptyWorkspace(r.Context(), name, form["auto_apply"] != "", u.ID)
 	if errors.Is(err, storage.ErrNameTaken) {
@@ -207,7 +212,7 @@ func (s *Server) createEmptyWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err == nil && connID != "" {
-		err = s.Store.SetWorkspaceVCS(r.Context(), ws.ID, connID, repo, branch, tags, form["vcs_trigger"] != "" || tags != "", form["vcs_pull_requests"] != "" && tags == "")
+		err = s.Store.SetWorkspaceVCS(r.Context(), ws.ID, connID, repo, branch, tags, baseline, form["vcs_trigger"] != "" || tags != "", form["vcs_pull_requests"] != "" && tags == "")
 	}
 	if err != nil {
 		s.internalError(w, "create workspace", err)
@@ -289,28 +294,50 @@ func (s *Server) linkWorkspaceVCS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	form := vcsFormValues(r)
-	runs, err := s.Store.Runs(r.Context(), ws.ID, 1)
-	if err != nil {
-		s.internalError(w, "list runs", err)
-		return
-	}
-	if len(runs) > 0 && runs[0].Active() {
-		s.renderWorkspaceVCS(w, r, http.StatusConflict, ws, form, storage.ErrRunActive.Error())
-		return
-	}
 	connID, repo, branch, tags, err := s.vcsLink(r.Context(), ws.Name, form)
+	var baseline string
+	if err == nil && (connID != ws.VCSConnectionID || repo != ws.VCSRepo || tags != ws.VCSTagsRegex) {
+		baseline, err = s.tagBaseline(r.Context(), connID, repo, tags)
+	}
 	if err != nil {
 		s.renderWorkspaceVCS(w, r, http.StatusUnprocessableEntity, ws, form, err.Error())
 		return
 	}
 	// tag-based: tags always trigger, and pull requests get no plans, as in HCP Terraform
-	if err := s.Store.SetWorkspaceVCS(r.Context(), ws.ID, connID, repo, branch, tags, form["vcs_trigger"] != "" || tags != "", form["vcs_pull_requests"] != "" && tags == ""); err != nil {
+	err = s.Store.SetWorkspaceVCS(r.Context(), ws.ID, connID, repo, branch, tags, baseline, form["vcs_trigger"] != "" || tags != "", form["vcs_pull_requests"] != "" && tags == "")
+	if errors.Is(err, storage.ErrRunActive) {
+		s.renderWorkspaceVCS(w, r, http.StatusConflict, ws, form, err.Error())
+		return
+	}
+	if err != nil {
 		s.internalError(w, "link workspace vcs", err)
 		return
 	}
 	s.Log.Info("workspace vcs", "workspace", ws.Name, "repo", repo, "branch", branch,
 		"trigger", form["vcs_trigger"] != "", "tags", tags, "pull_requests", form["vcs_pull_requests"] != "", "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name, http.StatusSeeOther)
+}
+
+// tagBaseline is the commit of the repository's newest tag matching tags ("" for branch-based):
+// tag triggers start with the tags pushed after it, so switching to them doesn't apply an old release.
+func (s *Server) tagBaseline(ctx context.Context, connID, repo, tags string) (string, error) {
+	if tags == "" {
+		return "", nil
+	}
+	sc, err := s.Store.GetVCSConnection(ctx, connID)
+	if err != nil {
+		return "", fmt.Errorf("load connection: %w", err)
+	}
+	c, err := vcs.ConnFor(s.SecretKey, sc)
+	if err != nil {
+		return "", err
+	}
+	list, err := c.Tags(ctx, repo)
+	if err != nil {
+		return "", fmt.Errorf("list the repository's tags: %w", err)
+	}
+	t, _ := vcs.LatestTag(list, tags)
+	return t.Commit, nil
 }
 
 // vcsHealth checks that a linked workspace can read its source as runs do, for the version control
@@ -430,7 +457,7 @@ func (s *Server) rollbackState(w http.ResponseWriter, r *http.Request) {
 	u := auth.FromContext(ctx)
 	lockID := rand.Text()
 	info, _ := json.Marshal(map[string]string{"ID": lockID, "Operation": "OperationTypeRollback", "Who": u.Email})
-	if _, ok, err := s.Store.LockState(ctx, ws.ID, lockID, info); err != nil {
+	if _, ok, err := s.Store.LockState(ctx, ws.ID, lockID, "", info); err != nil {
 		s.internalError(w, "lock state", err)
 		return
 	} else if !ok {
@@ -487,7 +514,7 @@ func (s *Server) rollbackState(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "encode state", err)
 		return
 	}
-	if code, msg := s.saveState(ctx, ws.ID, body); code != http.StatusOK {
+	if code, msg := s.saveState(ctx, ws.ID, "", body); code != http.StatusOK {
 		http.Error(w, msg, code) // e.g. a version of another lineage
 		return
 	}

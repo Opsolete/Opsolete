@@ -96,7 +96,7 @@ func TestRunLifecycle(t *testing.T) {
 		t.Fatalf("claims: %+v", won)
 	}
 	plan := won[0]
-	if working, err := s.WorkingRun(ctx, w.ID); err != nil || working != run.ID {
+	if working, _, err := s.WorkingRun(ctx, w.ID); err != nil || working != run.ID {
 		t.Fatalf("the planning run must hold the workspace's state: %q %v", working, err)
 	}
 
@@ -149,7 +149,7 @@ func TestRunLifecycle(t *testing.T) {
 		{Address: "azurerm_storage_account.this", Type: "azurerm_storage_account", Name: "this", Provider: "registry.terraform.io/hashicorp/azurerm"},
 		{Address: "module.net.azurerm_subnet.a[0]", Type: "azurerm_subnet", Name: "a", Provider: "registry.terraform.io/hashicorp/azurerm", Module: "module.net"},
 	}
-	if err := s.AddStateVersion(ctx, w.ID, StateVersion{Serial: 3, Lineage: "lin", BlobKey: "k/" + w.ID, MD5: "m", Size: 1, Outputs: map[string]any{"id": "abc"}}); err != nil {
+	if err := s.AddStateVersion(ctx, w.ID, "", StateVersion{Serial: 3, Lineage: "lin", BlobKey: "k/" + w.ID, MD5: "m", Size: 1, Outputs: map[string]any{"id": "abc"}}); err != nil {
 		t.Fatal(err)
 	}
 	if st, err := s.FinishJob(ctx, run.ID, apply.LeaseID, "succeeded", "", map[string]any{"id": "abc"}, nil, res); err != nil || st != Applied {
@@ -220,6 +220,53 @@ func TestAutoApplyAndDiscard(t *testing.T) {
 	}
 }
 
+// A run ending releases only its own Terraform's lock, not a rollback's or a CLI's.
+func TestFinishKeepsForeignStateLock(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	w, run := newWorkspace(t, s, false)
+	j, ok, err := s.ClaimJob(ctx, "r", time.Minute)
+	if err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	if _, ok, err := s.LockState(ctx, w.ID, "rb", "", []byte(`{"ID":"rb","OpsoleteRun":"`+run.ID+`"}`)); !ok || err != nil {
+		t.Fatalf("lock: %v %v", ok, err)
+	}
+	if _, err := s.FinishJob(ctx, run.ID, j.LeaseID, "failed", "423", nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if lock, _ := s.StateLockID(ctx, w.ID); lock != "rb" {
+		t.Fatalf("a run's end released a lock it didn't take: %q", lock)
+	}
+}
+
+// A run's state write is recorded only while it applies with a lease: not from a plan, not after a force-cancel.
+func TestStateWriteFenced(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	w, run := newWorkspace(t, s, false)
+	if _, ok, err := s.ClaimJob(ctx, "r", time.Minute); err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	v := StateVersion{Serial: 1, Lineage: "lin", BlobKey: "fence/" + w.ID, MD5: "m", Size: 1}
+	if err := s.AddStateVersion(ctx, w.ID, run.ID, v); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("a planning run must not record state: %v", err)
+	}
+	if _, err := s.DB.ExecContext(ctx, `UPDATE runs SET status = 'applying' WHERE id = $1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddStateVersion(ctx, w.ID, run.ID, v); err != nil {
+		t.Fatalf("applying run: %v", err)
+	}
+	if _, err := s.CancelRun(ctx, run.ID, "a@b.c", true); err != nil {
+		t.Fatal(err)
+	}
+	v.Serial, v.BlobKey = 2, "fence2/"+w.ID
+	if err := s.AddStateVersion(ctx, w.ID, run.ID, v); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("a force-canceled run must not record state: %v", err)
+	}
+}
+
 func TestExpiredLeaseIsErrored(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -228,7 +275,7 @@ func TestExpiredLeaseIsErrored(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("claim: %v %v", ok, err)
 	}
-	if _, ok, err := s.LockState(ctx, w.ID, "l1", []byte(`{"ID":"l1"}`)); !ok || err != nil {
+	if _, ok, err := s.LockState(ctx, w.ID, "l1", run.ID, []byte(`{"ID":"l1"}`)); !ok || err != nil {
 		t.Fatalf("lock: %v %v", ok, err)
 	}
 	time.Sleep(50 * time.Millisecond)
@@ -435,7 +482,7 @@ func TestCancel(t *testing.T) {
 	// Force: cut off right away; the runner's lease and state lock are gone.
 	run3, _ := s.CreateRun(ctx, w.ID, "apply", "", nil)
 	j = claim(t, s, "plan")
-	s.LockState(ctx, w.ID, "l1", []byte(`{"ID":"l1"}`))
+	s.LockState(ctx, w.ID, "l1", run3.ID, []byte(`{"ID":"l1"}`))
 	if st, err := s.CancelRun(ctx, run3.ID, "a@b.c", true); err != nil || st != Canceled {
 		t.Fatalf("force cancel: %q %v", st, err)
 	}
@@ -527,26 +574,26 @@ func TestVCSWorkspaceVariableSets(t *testing.T) {
 	}
 	attach()
 	check("attached", "global")
-	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", "", true, false); err != nil {
+	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", "", "", true, false); err != nil {
 		t.Fatal(err)
 	}
 	check() // linking detached the set, and global sets don't reach a linked workspace
 	attach()
 	check("attached")
-	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", "", true, false); err != nil {
+	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", "", "", true, false); err != nil {
 		t.Fatal(err)
 	}
 	check("attached") // same link: the admin's attachment stands
-	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", "", false, true); err != nil {
+	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", "", "", false, true); err != nil {
 		t.Fatal(err)
 	}
 	check() // pull request plans run unreviewed code: the admin's attachment is gone
 	attach()
-	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", "", true, true); err != nil {
+	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", "", "", true, true); err != nil {
 		t.Fatal(err)
 	}
 	check("attached") // they were on already
-	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "other", "", true, false); err != nil {
+	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "other", "", "", true, false); err != nil {
 		t.Fatal(err)
 	}
 	check()
@@ -569,7 +616,7 @@ func TestQueueVCSRun(t *testing.T) {
 		s.DB.Exec(`DELETE FROM workspaces WHERE id = $1`, w.ID)
 		s.DB.Exec(`DELETE FROM vcs_connections WHERE id = $1`, conn)
 	})
-	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", "", true, true); err != nil {
+	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", "", "", true, true); err != nil {
 		t.Fatal(err)
 	}
 	if ws, err := s.VCSTriggered(ctx); err != nil || !slices.ContainsFunc(ws, func(x Workspace) bool { return x.ID == w.ID && x.VCSTrigger && x.VCSPullRequests }) {

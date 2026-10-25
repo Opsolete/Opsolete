@@ -225,7 +225,7 @@ func (s *Server) cloudLock(w http.ResponseWriter, r *http.Request) {
 		lockID := storage.CloudLockPrefix + rand.Text()
 		info, _ := json.Marshal(map[string]string{"ID": lockID, "Operation": "terraform (cloud block)", "Who": u.Email,
 			"UserID": u.ID, "Created": time.Now().UTC().Format(time.RFC3339)})
-		_, ok, err := s.Store.LockState(ctx, ws.ID, lockID, info)
+		_, ok, err := s.Store.LockState(ctx, ws.ID, lockID, "", info)
 		if err != nil {
 			s.cloudError(w, "lock state", err)
 			return
@@ -372,7 +372,7 @@ func (s *Server) cloudCreateState(w http.ResponseWriter, r *http.Request) {
 		writeErrors(w, http.StatusConflict, "the workspace must be locked by you to save state")
 		return
 	}
-	if code, msg := s.saveState(ctx, ws.ID, state); code != http.StatusOK {
+	if code, msg := s.saveState(ctx, ws.ID, "", state); code != http.StatusOK {
 		writeErrors(w, code, msg)
 		return
 	}

@@ -31,6 +31,7 @@ import (
 const (
 	MaxArchiveSize   = 20 << 20  // compressed upload limit
 	maxExtractedSize = 200 << 20 // guards against gzip bombs
+	maxEntries       = 20000     // and against millions of empty files (inodes, CPU)
 )
 
 // Registry knows its public URL (whose host is the registry hostname) and the URL signing key.
@@ -117,7 +118,11 @@ func (r *Registry) RunnerSource(m templates.Module, ttl time.Duration) string {
 	if ns, name, sys, ok := r.ParseSource(m.Source); ok {
 		return r.SignedArchiveURL(ArchivePath(ns, name, sys, m.Ref), ttl)
 	}
-	return m.Source + "?ref=" + m.Ref
+	sep := "?"
+	if strings.Contains(m.Source, "?") { // e.g. git::https://host/repo//dir?depth=1
+		sep = "&"
+	}
+	return m.Source + sep + "ref=" + url.QueryEscape(m.Ref)
 }
 
 // Inspection is what Inspect learns from a module archive.
@@ -195,13 +200,16 @@ func extract(archive []byte, dir string) error {
 	}
 	tr := tar.NewReader(gz)
 	var total int64
-	for {
+	for entries := 0; ; entries++ {
 		h, err := tr.Next()
 		if err == io.EOF {
 			return nil
 		}
 		if err != nil {
 			return fmt.Errorf("read archive: %w", err)
+		}
+		if entries >= maxEntries {
+			return fmt.Errorf("archive has more than %d entries", maxEntries)
 		}
 		name := filepath.Clean(h.Name)
 		if !filepath.IsLocal(name) {

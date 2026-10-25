@@ -32,7 +32,7 @@ func workspaceTemplates(ctx context.Context, q interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }, workspaceID string) ([]WorkspaceTemplate, error) {
 	rows, err := q.QueryContext(ctx, `SELECT name, template_id, module_source, module_ref, inputs FROM workspace_templates
-		WHERE workspace_id::text = $1 ORDER BY name`, workspaceID)
+		WHERE workspace_id = ops_uuid($1) ORDER BY name`, workspaceID)
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"fmt"
 	"net/url"
 	"strings"
 	"testing"
@@ -67,11 +68,16 @@ func TestInspectAndInputs(t *testing.T) {
 }
 
 func TestInspectRejects(t *testing.T) {
+	many := map[string]string{"main.tf": moduleTF}
+	for i := range maxEntries {
+		many[fmt.Sprintf("e/%d", i)] = ""
+	}
 	for name, archive := range map[string][]byte{
-		"not gzip":       []byte("plain"),
-		"no tf at root":  TarGz(t, map[string]string{"sub/main.tf": moduleTF}),
-		"path traversal": TarGz(t, map[string]string{"../evil.tf": moduleTF}),
-		"invalid hcl":    TarGz(t, map[string]string{"main.tf": `variable "x" {`}),
+		"too many entries": TarGz(t, many),
+		"not gzip":         []byte("plain"),
+		"no tf at root":    TarGz(t, map[string]string{"sub/main.tf": moduleTF}),
+		"path traversal":   TarGz(t, map[string]string{"../evil.tf": moduleTF}),
+		"invalid hcl":      TarGz(t, map[string]string{"main.tf": `variable "x" {`}),
 	} {
 		if _, err := Inspect(archive); err == nil {
 			t.Errorf("%s: expected error", name)
@@ -111,6 +117,9 @@ func TestAddressAndSigning(t *testing.T) {
 	}
 	if got := r.RunnerSource(templates.Module{Source: "git::https://x//m", Ref: "v1"}, time.Hour); got != "git::https://x//m?ref=v1" {
 		t.Fatalf("git source: %s", got)
+	}
+	if got := r.RunnerSource(templates.Module{Source: "git::https://x//m?depth=1", Ref: "v1"}, time.Hour); got != "git::https://x//m?depth=1&ref=v1" {
+		t.Fatalf("git source with a query: %s", got)
 	}
 
 	vs := []string{"1.0.0", "1.10.0", "1.2.0"}

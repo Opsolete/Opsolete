@@ -45,7 +45,8 @@ const maxVariableValue = 64 << 10
 func reservedEnv(key string) bool {
 	k := strings.ToUpper(key)
 	switch k {
-	case "PATH", "HOME", "SHELL", "TMPDIR", "BASH_ENV", "ENV", "NODE_OPTIONS", "PERL5OPT", "RUBYOPT":
+	case "PATH", "HOME", "SHELL", "TMPDIR", "BASH_ENV", "ENV", "NODE_OPTIONS", "PERL5OPT", "RUBYOPT",
+		"SHELLOPTS", "BASHOPTS", "PS4", "PROMPT_COMMAND": // SHELLOPTS=xtrace + PS4='$(…)' runs code in bash
 		return true
 	}
 	for _, p := range []string{"LD_", "DYLD_", "GIT_", "SSH_", "OPS_", "PYTHON"} {
@@ -57,8 +58,8 @@ func reservedEnv(key string) bool {
 	return strings.HasPrefix(k, "TF_")
 }
 
-// variableFromForm validates and seals a posted variable.
-func (s *Server) variableFromForm(r *http.Request) (storage.Variable, error) {
+// variableFromForm validates and seals a posted variable of o.
+func (s *Server) variableFromForm(r *http.Request, o storage.VarOwner) (storage.Variable, error) {
 	if s.SecretKey == nil {
 		return storage.Variable{}, errors.New("variables need SECRET_KEY to be set on the server")
 	}
@@ -74,8 +75,10 @@ func (s *Server) variableFromForm(r *http.Request) (storage.Variable, error) {
 	case len(val) > maxVariableValue:
 		return storage.Variable{}, fmt.Errorf("values are limited to %d KB", maxVariableValue>>10)
 	}
-	sealed, err := vcs.Seal(s.SecretKey, val)
-	return storage.Variable{Category: cat, Key: key, Value: sealed, Sensitive: r.PostFormValue("sensitive") != ""}, err
+	v := storage.Variable{Category: cat, Key: key, Sensitive: r.PostFormValue("sensitive") != "", Owner: o}
+	var err error
+	v.Value, err = vcs.Seal(s.SecretKey, val, vcs.VariableAD(v))
+	return v, err
 }
 
 // varsBlock is the data of the "variables" partial.
@@ -103,7 +106,7 @@ func (s *Server) varsBlock(ctx context.Context, o storage.VarOwner, base string,
 	for _, v := range vars {
 		vv := varView{ID: v.ID, Category: v.Category, Key: v.Key, Sensitive: v.Sensitive}
 		if !v.Sensitive {
-			if vv.Value, err = vcs.Open(s.SecretKey, v.Value); err != nil {
+			if vv.Value, err = vcs.Open(s.SecretKey, v.Value, vcs.VariableAD(v)); err != nil {
 				vv.Value, err = "(can't decrypt: SECRET_KEY changed? Set it again)", nil
 			}
 		}
@@ -121,7 +124,7 @@ func (s *Server) runVariables(ctx context.Context, workspaceID string, inputs ma
 	}
 	env, vars := map[string]string{}, map[string]any{}
 	for _, v := range list {
-		val, err := vcs.Open(s.SecretKey, v.Value)
+		val, err := vcs.Open(s.SecretKey, v.Value, vcs.VariableAD(v))
 		if err != nil {
 			return nil, nil, fmt.Errorf("can't decrypt variable %s: SECRET_KEY missing or changed? Set the variable again", v.Key)
 		}
@@ -140,7 +143,7 @@ func (s *Server) setWorkspaceVariable(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	v, err := s.variableFromForm(r)
+	v, err := s.variableFromForm(r, storage.VarOwner{WorkspaceID: ws.ID})
 	if _, input := ws.Inputs[v.Key]; err == nil && v.Category == "terraform" && input {
 		err = fmt.Errorf("%s is an input of the workspace's template: change it with Configure", v.Key)
 	}
@@ -262,7 +265,7 @@ func (s *Server) setSetVariable(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	v, err := s.variableFromForm(r)
+	v, err := s.variableFromForm(r, storage.VarOwner{SetID: set.ID})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -296,7 +299,7 @@ func (s *Server) attachVariableSet(w http.ResponseWriter, r *http.Request) {
 	}
 	r.ParseForm()
 	want := r.PostForm["workspace"]
-	err := syncSelection(set.Workspaces, want, func(ws string, on bool) error {
+	err := s.syncSelection(r.Context(), set.Workspaces, want, func(ws string, on bool) error {
 		return s.Store.AttachVariableSet(r.Context(), set.ID, ws, on)
 	})
 	if errors.Is(err, sql.ErrNoRows) {

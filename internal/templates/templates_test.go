@@ -67,3 +67,19 @@ func TestCatalogSave(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateEdgeCases(t *testing.T) {
+	tpl := Template{Inputs: []Input{{Name: "n", Type: "number"}, {Name: "s", Type: "string", Pattern: "[a-z]{3}"}}}
+	for _, raw := range []map[string]string{{"n": "NaN"}, {"n": "Inf"}, {"s": "ABCabc!!"}} {
+		if _, errs := tpl.Validate(raw); len(errs) == 0 {
+			t.Errorf("%v must be rejected", raw)
+		}
+	}
+	if _, errs := tpl.Validate(map[string]string{"n": "1.5", "s": "abc"}); len(errs) != 0 {
+		t.Errorf("valid values rejected: %v", errs)
+	}
+	bad := Template{ID: "x", Name: "x", Module: Module{Source: "s", Ref: "r"}, Inputs: []Input{{Name: "source", Type: "string"}}}
+	if bad.check() == nil {
+		t.Error("an input named source must be rejected")
+	}
+}

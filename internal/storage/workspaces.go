@@ -48,6 +48,7 @@ type Workspace struct {
 	VCSTrigger        bool   // a new commit on the branch queues an apply run (see vcs.TriggerRuns)
 	VCSPullRequests   bool   // open pull requests into the branch get speculative plans
 	VCSTagsRegex      string // tag-based: new tags matching it queue runs instead of branch commits; "" branch-based
+	VCSTagBaseline    string // commit of the newest matching tag when tag triggers were set: never queued
 	StateKey          string // blob key prefix of its state versions
 	Templates         int    // how many templates were added (see WorkspaceTemplates)
 	AutoApply         bool   // apply plans of apply runs without confirmation
@@ -122,7 +123,7 @@ type StatusEntry struct {
 }
 
 const workspaceCols = `w.id, w.name, COALESCE(w.template_id, ''), COALESCE(w.module_source, ''), COALESCE(w.module_ref, ''),
-	w.inputs, COALESCE(w.vcs_connection_id::text, ''), COALESCE(w.vcs_repo, ''), COALESCE(w.vcs_branch, ''), w.vcs_trigger, w.vcs_pull_requests, w.vcs_tags_regex, w.state_key,
+	w.inputs, COALESCE(w.vcs_connection_id::text, ''), COALESCE(w.vcs_repo, ''), COALESCE(w.vcs_branch, ''), w.vcs_trigger, w.vcs_pull_requests, w.vcs_tags_regex, w.vcs_tag_baseline, w.state_key,
 	(SELECT count(*) FROM workspace_templates t WHERE t.workspace_id = w.id), w.auto_apply, w.drift_detection, w.global_remote_state, w.execution_mode,
 	COALESCE((SELECT a.status = 'drifted' AND NOT EXISTS (SELECT 1 FROM runs x WHERE x.workspace_id = w.id
 		AND x.status = 'applied' AND x.updated_at > a.updated_at) FROM runs a
@@ -133,7 +134,7 @@ func scanWorkspace(row interface{ Scan(...any) error }, extra ...any) (Workspace
 	var w Workspace
 	var raw []byte
 	dest := append([]any{&w.ID, &w.Name, &w.TemplateID, &w.ModuleSource, &w.ModuleRef, &raw,
-		&w.VCSConnectionID, &w.VCSRepo, &w.VCSBranch, &w.VCSTrigger, &w.VCSPullRequests, &w.VCSTagsRegex, &w.StateKey, &w.Templates,
+		&w.VCSConnectionID, &w.VCSRepo, &w.VCSBranch, &w.VCSTrigger, &w.VCSPullRequests, &w.VCSTagsRegex, &w.VCSTagBaseline, &w.StateKey, &w.Templates,
 		&w.AutoApply, &w.DriftDetection, &w.GlobalRemoteState, &w.ExecutionMode, &w.Drifted, &w.CreatedBy, &w.CreatedAt}, extra...)
 	if err := row.Scan(dest...); err != nil {
 		return w, err
@@ -271,7 +272,7 @@ func (s *Store) GetWorkspace(ctx context.Context, name string) (Workspace, error
 
 // GetWorkspaceByID returns sql.ErrNoRows if the id is unknown or not a valid uuid.
 func (s *Store) GetWorkspaceByID(ctx context.Context, id string) (Workspace, error) {
-	return scanWorkspace(s.DB.QueryRowContext(ctx, `SELECT `+workspaceCols+` FROM workspaces w WHERE w.id::text = $1`, id))
+	return scanWorkspace(s.DB.QueryRowContext(ctx, `SELECT `+workspaceCols+` FROM workspaces w WHERE w.id = ops_uuid($1)`, id))
 }
 
 // ListWorkspaces returns the 200 most recently active workspaces v may see, with their latest run.
@@ -301,9 +302,17 @@ func (s *Store) ListWorkspaces(ctx context.Context, v Viewer) ([]Workspace, erro
 	return out, rows.Err()
 }
 
+// WorkspacesExist reports whether there is a workspace for each name.
+func (s *Store) WorkspacesExist(ctx context.Context, names []string) (bool, error) {
+	var ok bool
+	err := s.DB.QueryRowContext(ctx, `SELECT NOT EXISTS (SELECT 1 FROM unnest($1::text[]) n
+		WHERE NOT EXISTS (SELECT 1 FROM workspaces WHERE name = n))`, names).Scan(&ok)
+	return ok, err
+}
+
 // RenameWorkspace changes a workspace's name; its state and runs are keyed by id and stay put.
 func (s *Store) RenameWorkspace(ctx context.Context, id, name string) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET name = $2, updated_at = now() WHERE id::text = $1`, id, name)
+	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET name = $2, updated_at = now() WHERE id = ops_uuid($1)`, id, name)
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
 		return ErrNameTaken
 	}
@@ -323,7 +332,7 @@ func (s *Store) DeleteWorkspace(ctx context.Context, id string) ([]string, error
 	if err := requireIdle(ctx, tx, id); err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT blob_key FROM state_versions WHERE workspace_id::text = $1`, id)
+	rows, err := tx.QueryContext(ctx, `SELECT blob_key FROM state_versions WHERE workspace_id = ops_uuid($1)`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -340,7 +349,7 @@ func (s *Store) DeleteWorkspace(ctx context.Context, id string) ([]string, error
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM workspaces WHERE id::text = $1`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM workspaces WHERE id = ops_uuid($1)`, id); err != nil {
 		return nil, err
 	}
 	return keys, tx.Commit()
@@ -355,7 +364,7 @@ func requireIdle(ctx context.Context, tx *sql.Tx, id string) error {
 			EXISTS (SELECT 1 FROM runs WHERE workspace_id = w.id AND status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')),
 			EXISTS (SELECT 1 FROM (SELECT v.id, v.indexed FROM state_versions v WHERE v.workspace_id = w.id ORDER BY v.id DESC LIMIT 1) cur
 				WHERE NOT cur.indexed OR EXISTS (SELECT 1 FROM state_version_resources r WHERE r.state_version_id = cur.id))
-		FROM workspaces w WHERE w.id::text = $1 FOR UPDATE`, id).Scan(&active, &deployed); err != nil {
+		FROM workspaces w WHERE w.id = ops_uuid($1) FOR UPDATE`, id).Scan(&active, &deployed); err != nil {
 		return err
 	}
 	switch {
@@ -378,7 +387,7 @@ func (s *Store) Access(ctx context.Context, workspaceID, userID string) (string,
 		FROM workspaces w
 		LEFT JOIN users u ON u.id = NULLIF($2, '')::uuid
 		LEFT JOIN workspace_access a ON a.workspace_id = w.id AND a.group_name = ANY(u.groups)
-		WHERE w.id::text = $1 GROUP BY w.id, w.created_by`, workspaceID, userID).Scan(&level)
+		WHERE w.id = ops_uuid($1) GROUP BY w.id, w.created_by`, workspaceID, userID).Scan(&level)
 	return level, err
 }
 
@@ -391,7 +400,7 @@ type Grant struct {
 // Grants lists a workspace's group grants.
 func (s *Store) Grants(ctx context.Context, workspaceID string) ([]Grant, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT group_name, level FROM workspace_access
-		WHERE workspace_id::text = $1 ORDER BY group_name`, workspaceID)
+		WHERE workspace_id = ops_uuid($1) ORDER BY group_name`, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -428,7 +437,7 @@ func (s *Store) KnownGroups(ctx context.Context) ([]string, error) {
 // SetGrant gives a group read or operate access to a workspace; level "" removes the grant.
 func (s *Store) SetGrant(ctx context.Context, workspaceID, group, level string) error {
 	if level == "" {
-		_, err := s.DB.ExecContext(ctx, `DELETE FROM workspace_access WHERE workspace_id::text = $1 AND group_name = $2`, workspaceID, group)
+		_, err := s.DB.ExecContext(ctx, `DELETE FROM workspace_access WHERE workspace_id = ops_uuid($1) AND group_name = $2`, workspaceID, group)
 		return err
 	}
 	_, err := s.DB.ExecContext(ctx, `INSERT INTO workspace_access (workspace_id, group_name, level) VALUES ($1::uuid, $2, $3)
@@ -437,35 +446,44 @@ func (s *Store) SetGrant(ctx context.Context, workspaceID, group, level string) 
 }
 
 // SetWorkspaceVCS links a workspace without a template to a repository branch; connID "" unlinks it.
-// trigger, pullRequests and tagsRegex (tag-based triggers) set which VCS events queue runs. A changed
-// link or tag format, or turning on pull request plans, detaches the workspace's variable sets: an
-// admin must attach them again.
-func (s *Store) SetWorkspaceVCS(ctx context.Context, workspaceID, connID, repo, branch, tagsRegex string, trigger, pullRequests bool) error {
+// trigger, pullRequests and tagsRegex (tag-based triggers) set which VCS events queue runs; with a
+// changed connection, repository or tag format, tagBaseline becomes the tag commit never to queue.
+// A changed link or tag format, or turning on pull request plans, detaches the workspace's variable
+// sets: an admin must attach them again. It returns ErrRunActive while a run is active: one queued
+// now would run another repository's commit.
+func (s *Store) SetWorkspaceVCS(ctx context.Context, workspaceID, connID, repo, branch, tagsRegex, tagBaseline string, trigger, pullRequests bool) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	var detach bool
+	var detach, active bool
+	// FOR UPDATE: the poller's run inserts (their foreign key check) wait until this commits
 	err = tx.QueryRowContext(ctx, `SELECT (vcs_connection_id, vcs_repo, vcs_branch, vcs_tags_regex) IS DISTINCT FROM
-		(NULLIF($2, '')::uuid, NULLIF($3, ''), NULLIF($4, ''), $6) OR (NOT vcs_pull_requests AND $5)
-		FROM workspaces WHERE id::text = $1 AND template_id IS NULL FOR UPDATE`,
-		workspaceID, connID, repo, branch, pullRequests && connID != "", tagsRegex).Scan(&detach)
+		(NULLIF($2, '')::uuid, NULLIF($3, ''), NULLIF($4, ''), $6) OR (NOT vcs_pull_requests AND $5),
+		EXISTS (SELECT 1 FROM runs WHERE workspace_id = w.id AND status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying'))
+		FROM workspaces w WHERE id = ops_uuid($1) AND template_id IS NULL FOR UPDATE OF w`,
+		workspaceID, connID, repo, branch, pullRequests && connID != "", tagsRegex).Scan(&detach, &active)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil // deleted meanwhile, or a template workspace: nothing to link
 	}
 	if err != nil {
 		return err
 	}
+	if active {
+		return ErrRunActive
+	}
 	if _, err := tx.ExecContext(ctx, `UPDATE workspaces SET vcs_connection_id = NULLIF($2, '')::uuid,
-		vcs_repo = NULLIF($3, ''), vcs_branch = NULLIF($4, ''), vcs_trigger = $5, vcs_pull_requests = $6, vcs_tags_regex = $7, updated_at = now()
-		WHERE id::text = $1 AND template_id IS NULL`, workspaceID, connID, repo, branch, trigger && connID != "", pullRequests && connID != "", tagsRegex); err != nil {
+		vcs_repo = NULLIF($3, ''), vcs_branch = NULLIF($4, ''), vcs_trigger = $5, vcs_pull_requests = $6, vcs_tags_regex = $7,
+		vcs_tag_baseline = CASE WHEN (vcs_connection_id, vcs_repo, vcs_tags_regex) IS DISTINCT FROM (NULLIF($2, '')::uuid, NULLIF($3, ''), $7)
+			THEN $8 ELSE vcs_tag_baseline END, updated_at = now()
+		WHERE id = ops_uuid($1) AND template_id IS NULL`, workspaceID, connID, repo, branch, trigger && connID != "", pullRequests && connID != "", tagsRegex, tagBaseline); err != nil {
 		return err
 	}
 	// The admin who attached sets vouched for the old repository and branch, not for the new one,
 	// nor for unreviewed pull requests or tags, which may point at any commit.
 	if detach {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM variable_set_workspaces WHERE workspace_id::text = $1`, workspaceID); err != nil {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM variable_set_workspaces WHERE workspace_id = ops_uuid($1)`, workspaceID); err != nil {
 			return err
 		}
 	}
@@ -505,7 +523,7 @@ func (s *Store) QueueVCSRun(ctx context.Context, workspaceID, commit string, pul
 		WITH r AS (
 			INSERT INTO runs (workspace_id, action, status, vcs_commit, vcs_pull_request)
 			SELECT w.id, $2, 'plan_queued', $3, NULLIF($4, 0) FROM workspaces w
-			WHERE w.id::text = $1 AND w.execution_mode = 'remote' AND NOT EXISTS (SELECT 1 FROM runs x
+			WHERE w.id = ops_uuid($1) AND w.execution_mode = 'remote' AND NOT EXISTS (SELECT 1 FROM runs x
 				WHERE x.workspace_id = w.id AND x.vcs_commit = $3
 					AND CASE WHEN $4 > 0 THEN x.action = 'plan' AND x.vcs_pull_request = $4 ELSE x.action NOT IN ('assess', 'plan') END)
 			ON CONFLICT (workspace_id) WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')
@@ -523,28 +541,28 @@ func (s *Store) QueueVCSRun(ctx context.Context, workspaceID, commit string, pul
 // run's commit: the apply phase gets the commit its plan was made from.
 func (s *Store) PinVCSCommit(ctx context.Context, runID, commit string) (string, error) {
 	err := s.DB.QueryRowContext(ctx, `UPDATE runs SET vcs_commit = COALESCE(vcs_commit, $2)
-		WHERE id::text = $1 RETURNING vcs_commit`, runID, commit).Scan(&commit)
+		WHERE id = ops_uuid($1) RETURNING vcs_commit`, runID, commit).Scan(&commit)
 	return commit, err
 }
 
 // SetSettings changes whether apply plans run without confirmation and whether drift is checked daily.
 func (s *Store) SetSettings(ctx context.Context, workspaceID string, autoApply, driftDetection bool) error {
 	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET auto_apply = $2, drift_detection = $3, updated_at = now()
-		WHERE id::text = $1`, workspaceID, autoApply, driftDetection)
+		WHERE id = ops_uuid($1)`, workspaceID, autoApply, driftDetection)
 	return err
 }
 
 // SetExecutionMode sets a workspace's execution mode, "remote" or "local". Runs and CLI locks
 // already under way finish; the mode only refuses new ones.
 func (s *Store) SetExecutionMode(ctx context.Context, workspaceID, mode string) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET execution_mode = $2, updated_at = now() WHERE id::text = $1`, workspaceID, mode)
+	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET execution_mode = $2, updated_at = now() WHERE id = ops_uuid($1)`, workspaceID, mode)
 	return err
 }
 
 // RemoteStateConsumers lists the workspaces explicitly allowed to read a workspace's state, by name.
 func (s *Store) RemoteStateConsumers(ctx context.Context, workspaceID string) ([]Workspace, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT w.id, w.name FROM remote_state_consumers c JOIN workspaces w ON w.id = c.consumer_id
-		WHERE c.workspace_id::text = $1 ORDER BY w.name`, workspaceID)
+		WHERE c.workspace_id = ops_uuid($1) ORDER BY w.name`, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -568,11 +586,11 @@ func (s *Store) SetRemoteStateSharing(ctx context.Context, workspaceID string, g
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `UPDATE workspaces SET global_remote_state = $2, updated_at = now() WHERE id::text = $1`,
+	if _, err := tx.ExecContext(ctx, `UPDATE workspaces SET global_remote_state = $2, updated_at = now() WHERE id = ops_uuid($1)`,
 		workspaceID, global); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM remote_state_consumers WHERE workspace_id::text = $1`, workspaceID); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM remote_state_consumers WHERE workspace_id = ops_uuid($1)`, workspaceID); err != nil {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO remote_state_consumers (workspace_id, consumer_id)
@@ -585,8 +603,8 @@ func (s *Store) SetRemoteStateSharing(ctx context.Context, workspaceID string, g
 // SharesState reports whether consumerID's runs may read workspaceID's state.
 func (s *Store) SharesState(ctx context.Context, workspaceID, consumerID string) (bool, error) {
 	var ok bool
-	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM workspaces w WHERE w.id::text = $1 AND w.id::text <> $2
-		AND (w.global_remote_state OR EXISTS (SELECT 1 FROM remote_state_consumers c WHERE c.workspace_id = w.id AND c.consumer_id::text = $2)))`,
+	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM workspaces w WHERE w.id = ops_uuid($1) AND w.id::text <> $2
+		AND (w.global_remote_state OR EXISTS (SELECT 1 FROM remote_state_consumers c WHERE c.workspace_id = w.id AND c.consumer_id = ops_uuid($2))))`,
 		workspaceID, consumerID).Scan(&ok)
 	return ok, err
 }
@@ -621,7 +639,7 @@ func (s *Store) QueueAssessments(ctx context.Context, every time.Duration) (int,
 
 // Runs lists a workspace's runs, newest first; assessments (drift checks) are not listed.
 func (s *Store) Runs(ctx context.Context, workspaceID string, limit int) ([]Run, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT `+runCols+` FROM runs r WHERE r.workspace_id::text = $1 AND r.action <> 'assess'
+	rows, err := s.DB.QueryContext(ctx, `SELECT `+runCols+` FROM runs r WHERE r.workspace_id = ops_uuid($1) AND r.action <> 'assess'
 		ORDER BY r.created_at DESC LIMIT $2`, workspaceID, limit)
 	if err != nil {
 		return nil, err
@@ -648,7 +666,7 @@ type RunMetrics struct {
 func (s *Store) RunMetrics(ctx context.Context, workspaceID string) (RunMetrics, error) {
 	var m RunMetrics
 	var plan, apply float64
-	err := s.DB.QueryRowContext(ctx, `WITH r AS (SELECT id, status FROM runs WHERE workspace_id::text = $1 AND action <> 'assess'),
+	err := s.DB.QueryRowContext(ctx, `WITH r AS (SELECT id, status FROM runs WHERE workspace_id = ops_uuid($1) AND action <> 'assess'),
 		h AS (SELECT h.status, lead(h.created_at) OVER (PARTITION BY h.run_id ORDER BY h.id) - h.created_at AS d
 			FROM run_status_history h JOIN r ON r.id = h.run_id)
 		SELECT (SELECT count(*) FROM r), (SELECT count(*) FROM r WHERE status = 'errored'),
@@ -661,7 +679,7 @@ func (s *Store) RunMetrics(ctx context.Context, workspaceID string) (RunMetrics,
 
 // LatestAssessment returns the workspace's most recent assess run; sql.ErrNoRows if there is none.
 func (s *Store) LatestAssessment(ctx context.Context, workspaceID string) (Run, error) {
-	return scanRun(s.DB.QueryRowContext(ctx, `SELECT `+runCols+` FROM runs r WHERE r.workspace_id::text = $1
+	return scanRun(s.DB.QueryRowContext(ctx, `SELECT `+runCols+` FROM runs r WHERE r.workspace_id = ops_uuid($1)
 		AND r.action = 'assess' ORDER BY r.created_at DESC LIMIT 1`, workspaceID))
 }
 
@@ -670,8 +688,8 @@ func (s *Store) LatestAssessment(ctx context.Context, workspaceID string) (Run, 
 func (s *Store) CurrentOutputs(ctx context.Context, workspaceID string) (outputs map[string]any, destroyed bool, err error) {
 	var raw []byte
 	err = s.DB.QueryRowContext(ctx, `SELECT
-		(SELECT outputs FROM state_versions WHERE workspace_id::text = $1 ORDER BY id DESC LIMIT 1),
-		COALESCE((SELECT action = 'destroy' FROM runs WHERE workspace_id::text = $1 AND status = $2
+		(SELECT outputs FROM state_versions WHERE workspace_id = ops_uuid($1) ORDER BY id DESC LIMIT 1),
+		COALESCE((SELECT action = 'destroy' FROM runs WHERE workspace_id = ops_uuid($1) AND status = $2
 			ORDER BY created_at DESC LIMIT 1), false)`, workspaceID, Applied).Scan(&raw, &destroyed)
 	if err != nil || raw == nil {
 		return nil, destroyed, err
@@ -681,7 +699,7 @@ func (s *Store) CurrentOutputs(ctx context.Context, workspaceID string) (outputs
 
 // GetRun returns a run and its status history; sql.ErrNoRows if the id is unknown or not a uuid.
 func (s *Store) GetRun(ctx context.Context, id string) (Run, []StatusEntry, error) {
-	r, err := scanRun(s.DB.QueryRowContext(ctx, `SELECT `+runCols+` FROM runs r WHERE r.id::text = $1`, id))
+	r, err := scanRun(s.DB.QueryRowContext(ctx, `SELECT `+runCols+` FROM runs r WHERE r.id = ops_uuid($1)`, id))
 	if err != nil {
 		return r, nil, err
 	}
@@ -720,7 +738,7 @@ func (s *Store) decide(ctx context.Context, id, status, confirmedBy, message str
 	}
 	defer tx.Rollback()
 	res, err := tx.ExecContext(ctx, `UPDATE runs SET status = $2, confirmed_by = COALESCE(NULLIF($3, '')::uuid, confirmed_by),
-		updated_at = now() WHERE id::text = $1 AND status = 'needs_confirmation'`, id, status, confirmedBy)
+		updated_at = now() WHERE id = ops_uuid($1) AND status = 'needs_confirmation'`, id, status, confirmedBy)
 	if err != nil {
 		return err
 	}

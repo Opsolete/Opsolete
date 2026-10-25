@@ -13,6 +13,7 @@ import (
 
 	"github.com/opsolete/opsolete/internal/registry"
 	"github.com/opsolete/opsolete/internal/registry/registrytest"
+	"github.com/opsolete/opsolete/internal/storage"
 )
 
 const mainTF = `variable "name" { type = string }`
@@ -176,15 +177,28 @@ func TestLatestTag(t *testing.T) {
 }
 
 func TestSealAndValidation(t *testing.T) {
-	sealed, err := Seal(Key("s1"), "tok")
+	sealed, err := Seal(Key("s1"), "tok", "here")
 	if err != nil || bytes.Contains(sealed, []byte("tok")) {
 		t.Fatal("token not sealed", err)
 	}
-	if got, err := Open(Key("s1"), sealed); err != nil || got != "tok" {
+	if got, err := Open(Key("s1"), sealed, "here"); err != nil || got != "tok" {
 		t.Fatalf("open: %q %v", got, err)
 	}
-	if _, err := Open(Key("s2"), sealed); err == nil {
+	if _, err := Open(Key("s2"), sealed, "here"); err == nil {
 		t.Fatal("opened with another key")
+	}
+	if _, err := Open(Key("s1"), sealed, "elsewhere"); err == nil {
+		t.Fatal("opened where it wasn't sealed for (a copied row)")
+	}
+	if _, err := OpenLegacy(Key("s1"), sealed); err == nil {
+		t.Fatal("a sealed value must not open without its associated data")
+	}
+	// A sensitive value copied into a non-sensitive row doesn't open there.
+	v := storage.Variable{Category: "env", Key: "K", Sensitive: true, Owner: storage.VarOwner{SetID: "s"}}
+	sv, _ := Seal(Key("s1"), "secret", VariableAD(v))
+	v.Sensitive = false
+	if _, err := Open(Key("s1"), sv, VariableAD(v)); err == nil {
+		t.Fatal("sensitivity is not bound to the value")
 	}
 	if u, err := NormalizeURL(GitHub, ""); err != nil || u != "https://api.github.com" {
 		t.Fatalf("github default: %q %v", u, err)

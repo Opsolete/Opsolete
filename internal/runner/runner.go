@@ -139,6 +139,7 @@ func (r *Runner) Execute(hard context.Context, job runnerapi.Job) {
 		return
 	}
 	switch {
+	case res.Status == "succeeded": // finished before the cancel or shutdown took effect: keep the result
 	case hard.Err() != nil:
 		res.Status, res.Message = "canceled", "runner was shut down during the run"
 	case ship.canceled.Load():
@@ -146,6 +147,7 @@ func (r *Runner) Execute(hard context.Context, job runnerapi.Job) {
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		res.Status, res.Message = "failed", fmt.Sprintf("timed out after %s", r.JobTimeout)
 	}
+	res.Message = ship.redact.Replace(res.Message) // Terraform's stderr may quote a signed URL
 	r.finish(log, job, res)
 }
 
@@ -312,10 +314,11 @@ func escapeValue(v any) any {
 func writeModules(dir string, mods []runnerapi.Module) error {
 	blocks := map[string]map[string]any{}
 	for _, m := range mods {
-		b := map[string]any{"source": m.Source}
+		b := map[string]any{}
 		for k, v := range m.Inputs {
 			b[k] = escapeValue(v)
 		}
+		b["source"] = m.Source // last: an input can't replace it
 		blocks[m.Name] = b
 	}
 	j, err := json.Marshal(map[string]any{"module": blocks})
@@ -611,7 +614,7 @@ func (s *shipper) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.buf.Len() < maxBuffered {
-		s.buf.WriteString(s.redact.Replace(string(p)))
+		s.buf.Write(p) // redacted in flush: a signed URL may arrive split over two writes
 	}
 	return len(p), nil
 }
@@ -625,7 +628,9 @@ func (s *shipper) loop() {
 	for {
 		select {
 		case <-s.stop:
-			s.flush(true)
+			// drain the tail (where errors are) in 256 KB posts; stop at the first failure
+			for s.flush(true) {
+			}
 			return
 		case <-tick.C:
 			if s.flush(false) {
@@ -638,7 +643,8 @@ func (s *shipper) loop() {
 	}
 }
 
-// flush sends buffered output; unless final, only up to the last newline. Reports whether it sent.
+// flush sends buffered output; unless final, only up to the last newline. Reports whether it sent
+// something successfully.
 func (s *shipper) flush(final bool) bool {
 	s.mu.Lock()
 	data := s.buf.Bytes()
@@ -646,20 +652,30 @@ func (s *shipper) flush(final bool) bool {
 	if !final {
 		n = bytes.LastIndexByte(data, '\n') + 1
 	}
-	n = min(n, 256<<10)
+	if n > 256<<10 { // cut at a line end if there is one, so redaction sees whole lines
+		n = 256 << 10
+		if i := bytes.LastIndexByte(data[:n], '\n'); i >= 0 {
+			n = i + 1
+		}
+	}
 	chunk := bytes.Clone(data[:n])
 	s.buf.Next(n)
 	s.mu.Unlock()
 	if len(chunk) == 0 {
 		return false
 	}
-	if !s.post("/logs", chunk) && !s.lost.Load() {
+	chunk = []byte(s.redact.Replace(string(chunk)))
+	if !s.post("/logs", chunk) {
+		if s.lost.Load() {
+			return false
+		}
 		s.mu.Lock() // keep it for the next attempt
 		rest := bytes.Clone(s.buf.Bytes())
 		s.buf.Reset()
 		s.buf.Write(chunk)
 		s.buf.Write(rest)
 		s.mu.Unlock()
+		return false
 	}
 	return true
 }

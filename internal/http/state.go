@@ -61,7 +61,7 @@ func (s *Server) stateAuth(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "only this workspace's runs may change its state", http.StatusForbidden)
 			return
 		}
-		run, err := s.Store.WorkingRun(r.Context(), user)
+		run, status, err := s.Store.WorkingRun(r.Context(), user)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "no run is working on this workspace", http.StatusForbidden)
 			return
@@ -75,6 +75,11 @@ func (s *Server) stateAuth(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "invalid state credentials", http.StatusForbidden)
 			return
 		}
+		// plans (also speculative ones of unreviewed code, and drift checks) lock but never write state
+		if r.Method == http.MethodPost && status != storage.Applying {
+			http.Error(w, "only an apply may write the state", http.StatusForbidden)
+			return
+		}
 		if user != id {
 			shared, err := s.Store.SharesState(r.Context(), id, user)
 			if err != nil {
@@ -86,6 +91,7 @@ func (s *Server) stateAuth(next http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 		}
+		r.SetPathValue("run", run) // the authenticated run, for lockState and putState
 		next(w, r)
 	}
 }
@@ -130,7 +136,7 @@ func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Content-MD5 mismatch", http.StatusBadRequest)
 		return
 	}
-	if code, msg := s.saveState(ctx, id, body); code != http.StatusOK {
+	if code, msg := s.saveState(ctx, id, r.PathValue("run"), body); code != http.StatusOK {
 		http.Error(w, msg, code)
 		return
 	}
@@ -138,8 +144,9 @@ func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
 }
 
 // saveState stores body as the workspace's new current state version, unless it's the same as the
-// current one. The caller holds the state lock. It returns 200, or an error status and message.
-func (s *Server) saveState(ctx context.Context, id string, body []byte) (int, string) {
+// current one. The caller holds the state lock; runID is the run writing it ("" for the CLI and
+// rollbacks). It returns 200, or an error status and message.
+func (s *Server) saveState(ctx context.Context, id, runID string, body []byte) (int, string) {
 	sum := md5.Sum(body)
 	// Only the fields needed to version the file and show its outputs; the rest is Terraform's business.
 	var head struct {
@@ -185,10 +192,13 @@ func (s *Server) saveState(ctx context.Context, id string, body []byte) (int, st
 	if err := s.writeBlob(ctx, v.BlobKey, body); err != nil {
 		return s.stateFailure("write state", err)
 	}
-	if err := s.Store.AddStateVersion(ctx, id, v); err != nil {
+	if err := s.Store.AddStateVersion(ctx, id, runID, v); err != nil {
 		// WithoutCancel: a dropped request must not stop the cleanup and leave the file behind.
 		if derr := s.StateStore.Delete(context.WithoutCancel(ctx), v.BlobKey); derr != nil {
 			s.Log.Warn("delete unrecorded state file", "key", v.BlobKey, "err", derr)
+		}
+		if errors.Is(err, storage.ErrLeaseLost) {
+			return http.StatusConflict, "the run was canceled or lost its runner: state not saved"
 		}
 		return s.stateFailure("record state version", err)
 	}
@@ -204,7 +214,7 @@ const sealedPrefix = "opsolete-sealed-v1\n"
 // they hold secrets, so bucket read access alone must not expose them.
 func (s *Server) writeBlob(ctx context.Context, key string, body []byte) error {
 	if s.SecretKey != nil {
-		sealed, err := vcs.Seal(s.SecretKey, string(body))
+		sealed, err := vcs.Seal(s.SecretKey, string(body), blobAD(key))
 		if err != nil {
 			return err
 		}
@@ -222,12 +232,18 @@ func (s *Server) readBlob(ctx context.Context, key string) ([]byte, error) {
 	if s.SecretKey == nil {
 		return nil, fmt.Errorf("%s is encrypted, but SECRET_KEY is not set", key)
 	}
-	plain, err := vcs.Open(s.SecretKey, b[len(sealedPrefix):])
+	plain, err := vcs.Open(s.SecretKey, b[len(sealedPrefix):], blobAD(key))
+	if err != nil { // sealed before files were bound to their key
+		plain, err = vcs.OpenLegacy(s.SecretKey, b[len(sealedPrefix):])
+	}
 	if err != nil {
 		return nil, fmt.Errorf("decrypt %s: SECRET_KEY changed?", key)
 	}
 	return []byte(plain), nil
 }
+
+// blobAD binds a sealed file to its key: a state file copied over another workspace's doesn't open.
+func blobAD(key string) string { return "blob\x00" + key }
 
 func (s *Server) stateFailure(what string, err error) (int, string) {
 	s.Log.Error(what, "err", err)
@@ -239,7 +255,7 @@ func (s *Server) lockState(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	held, ok, err := s.Store.LockState(r.Context(), r.PathValue("id"), lockID, info)
+	held, ok, err := s.Store.LockState(r.Context(), r.PathValue("id"), lockID, r.PathValue("run"), info)
 	if err != nil {
 		s.stateError(w, "lock state", err)
 		return

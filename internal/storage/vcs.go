@@ -27,11 +27,17 @@ func (c VCSConnection) AllowsWorkspace(name string) bool {
 	return c.WorkspaceScope == "all" || c.WorkspaceScope == "selected" && slices.Contains(c.Workspaces, name)
 }
 
+// ResealVCSToken replaces a connection's sealed token, unless it changed since it was read.
+func (s *Store) ResealVCSToken(ctx context.Context, id string, old, sealed []byte) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE vcs_connections SET token = $3 WHERE id = $1::uuid AND token = $2`, id, old, sealed)
+	return err
+}
+
 // CreateVCSConnection returns the new connection's id.
 func (s *Store) CreateVCSConnection(ctx context.Context, c VCSConnection) (string, error) {
 	var id string
-	err := s.DB.QueryRowContext(ctx, `INSERT INTO vcs_connections (name, provider, base_url, token, workspace_scope)
-		VALUES ($1, $2, $3, $4, $5) RETURNING id`, c.Name, c.Provider, c.BaseURL, c.Token, c.WorkspaceScope).Scan(&id)
+	err := s.DB.QueryRowContext(ctx, `INSERT INTO vcs_connections (name, provider, base_url, token)
+		VALUES ($1, $2, $3, $4) RETURNING id`, c.Name, c.Provider, c.BaseURL, c.Token).Scan(&id)
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
 		return "", ErrExists
 	}
@@ -66,7 +72,7 @@ func (s *Store) VCSConnections(ctx context.Context) ([]VCSConnection, error) {
 
 // GetVCSConnection returns sql.ErrNoRows if the id is unknown or not a uuid.
 func (s *Store) GetVCSConnection(ctx context.Context, id string) (VCSConnection, error) {
-	conns, err := scanConns(s.DB.QueryContext(ctx, `SELECT `+connCols+` FROM vcs_connections c WHERE c.id::text = $1`, id))
+	conns, err := scanConns(s.DB.QueryContext(ctx, `SELECT `+connCols+` FROM vcs_connections c WHERE c.id = ops_uuid($1)`, id))
 	if err == nil && len(conns) == 0 {
 		err = sql.ErrNoRows
 	}
@@ -79,7 +85,7 @@ func (s *Store) GetVCSConnection(ctx context.Context, id string) (VCSConnection,
 // SetVCSScope changes what a connection may be used for: the workspaces that may link its
 // repositories ("", "all" or "selected"), and whether registry modules may be published from it.
 func (s *Store) SetVCSScope(ctx context.Context, id, workspaceScope string, modules bool) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE vcs_connections SET workspace_scope = $2, modules = $3 WHERE id::text = $1`, id, workspaceScope, modules)
+	_, err := s.DB.ExecContext(ctx, `UPDATE vcs_connections SET workspace_scope = $2, modules = $3 WHERE id = ops_uuid($1)`, id, workspaceScope, modules)
 	return err
 }
 
@@ -106,7 +112,7 @@ func (s *Store) AttachVCSWorkspace(ctx context.Context, connID, workspace string
 
 // DeleteVCSConnection also unlinks its modules (their published versions stay).
 func (s *Store) DeleteVCSConnection(ctx context.Context, id string) error {
-	_, err := s.DB.ExecContext(ctx, `DELETE FROM vcs_connections WHERE id::text = $1`, id)
+	_, err := s.DB.ExecContext(ctx, `DELETE FROM vcs_connections WHERE id = ops_uuid($1)`, id)
 	return err
 }
 
@@ -182,7 +188,7 @@ func (s *Store) ConfigureWorkspace(ctx context.Context, workspaceID, source, ref
 	}
 	defer tx.Rollback()
 	res, err := tx.ExecContext(ctx, `UPDATE workspaces SET module_source = $2, module_ref = $3, inputs = $4, updated_at = now()
-		WHERE id::text = $1`, workspaceID, source, ref, raw)
+		WHERE id = ops_uuid($1)`, workspaceID, source, ref, raw)
 	if err != nil {
 		return Run{}, err
 	}

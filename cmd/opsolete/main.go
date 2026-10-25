@@ -7,6 +7,8 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -130,6 +132,11 @@ func serve(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	if cfg.SecretKey != "" { // a database dump alone must not forge sessions, state credentials or signed URLs
+		m := hmac.New(sha256.New, []byte(cfg.SecretKey))
+		m.Write(key)
+		key = m.Sum(nil)
+	}
 	reg := &registry.Registry{PublicURL: cfg.PublicURL, Key: key}
 
 	// Same key as the registry: cookie MACs are domain-separated from signed archive URLs.
@@ -169,6 +176,12 @@ func serve(log *slog.Logger) error {
 	app.Organization = cfg.Organization
 	if cfg.SecretKey != "" {
 		app.SecretKey = vcs.Key(cfg.SecretKey)
+		// values sealed before they were bound to their row only open after this
+		if n, err := vcs.Reseal(ctx, store, app.SecretKey); err != nil {
+			return fmt.Errorf("re-seal variables and VCS tokens: %w", err)
+		} else if n > 0 {
+			log.Info("re-sealed variables and VCS tokens", "count", n)
+		}
 	} else if cfg.Deployments {
 		log.Warn("SECRET_KEY is not set: state files and run artifacts are stored unencrypted in STATE_STORE")
 	}
@@ -183,7 +196,7 @@ func serve(log *slog.Logger) error {
 	}
 	log.Info("components", "deployments", cfg.Deployments, "registry", cfg.Registry, "vcs", vcsOn)
 	if cfg.Deployments {
-		go reapLostRunners(ctx, store, log)
+		go reapLostRunners(ctx, store, app, log)
 	}
 
 	srv := &http.Server{Addr: cfg.Addr, Handler: app.Handler(),
@@ -208,7 +221,7 @@ const driftInterval = 24 * time.Hour
 
 // reapLostRunners fails running jobs whose runner stopped heartbeating (crash, node loss), and
 // queues the drift checks that are due.
-func reapLostRunners(ctx context.Context, store *storage.Store, log *slog.Logger) {
+func reapLostRunners(ctx context.Context, store *storage.Store, app *httpserver.Server, log *slog.Logger) {
 	t := time.NewTicker(15 * time.Second)
 	defer t.Stop()
 	for {
@@ -222,6 +235,7 @@ func reapLostRunners(ctx context.Context, store *storage.Store, log *slog.Logger
 			}
 			for _, id := range ids {
 				log.Warn("runner lost, deployment failed", "id", id)
+				app.DeleteArtifacts(ctx, id) // its saved plan will never be applied
 			}
 			if n, err := store.QueueAssessments(ctx, driftInterval); err != nil {
 				log.Error("queue drift checks", "err", err)

@@ -151,7 +151,7 @@ func (s *Server) jobFinish(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		s.Log.Info("job finished", "run", id, "result", req.Status, "status", status)
 		if status != storage.NeedsConfirmation && status != storage.ApplyQueued {
-			s.deleteArtifacts(r, id) // the saved plan has been applied, or will never be
+			s.DeleteArtifacts(r.Context(), id) // the saved plan has been applied, or will never be
 		}
 	}
 	s.leaseResult(w, err)
@@ -217,9 +217,10 @@ func (s *Server) artifactAccess(w http.ResponseWriter, r *http.Request, phase st
 }
 
 // deleteArtifacts removes a run's saved plan; failures only leave a stale file behind.
-func (s *Server) deleteArtifacts(r *http.Request, runID string) {
+// DeleteArtifacts deletes a run's saved plan and lock file.
+func (s *Server) DeleteArtifacts(ctx context.Context, runID string) {
 	for _, name := range []string{runnerapi.ArtifactPlan, runnerapi.ArtifactLockfile} {
-		if err := s.StateStore.Delete(r.Context(), artifactKey(runID, name)); err != nil && gcerrors.Code(err) != gcerrors.NotFound {
+		if err := s.StateStore.Delete(ctx, artifactKey(runID, name)); err != nil && gcerrors.Code(err) != gcerrors.NotFound {
 			s.Log.Warn("delete artifact", "run", runID, "name", name, "err", err)
 		}
 	}

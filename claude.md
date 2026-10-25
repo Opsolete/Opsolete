@@ -80,7 +80,6 @@ Implement a single Go application with clearly separated packages:
 
 - `internal/auth` — authentication and authorization.
 - `internal/templates` — JSON template loading, validation, and Git integration.
-- `internal/terraform` — Terraform-related types and integrations.
 - `internal/runner`, `internal/runnerapi` — the execution runner and its wire protocol.
 - `internal/registry` — private Terraform module registry.
 - `internal/vcs` — GitHub / Azure DevOps connections; semver tags of linked repos are published as registry versions, and branch commits and pull requests of linked workspaces queue runs (both polled, no webhooks).

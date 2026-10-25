@@ -500,37 +500,29 @@ func TestWorkspaceFlow(t *testing.T) {
 	}
 	noJob("one job per run phase")
 
-	// State backend, as Terraform's http backend calls it.
+	// State backend, as Terraform's http backend calls it. A plan locks the state but never writes it.
 	v1 := state(1, "lin", `{"mode":"managed","type":"azurerm_storage_account","name":"this"}`)
-	for _, c := range []struct {
+	type stateCase struct {
 		method, query, token, body string
 		want                       int
-	}{
-		{"GET", "", "", "", http.StatusUnauthorized},
-		{"GET", "", "forged", "", http.StatusForbidden},
-		{"GET", "", job.StateToken, "", http.StatusNoContent},       // new workspace
-		{"POST", "?ID=l1", job.StateToken, v1, http.StatusConflict}, // not locked
-		{"LOCK", "", job.StateToken, `{"ID":"l1","Who":"runner"}`, http.StatusOK},
-		{"LOCK", "", job.StateToken, `{"ID":"l2"}`, http.StatusLocked},
-		{"POST", "?ID=l2", job.StateToken, v1, http.StatusConflict}, // someone else's lock id
-		{"POST", "?ID=l1", job.StateToken, `{"not":"state"}`, http.StatusBadRequest},
-		{"POST", "?ID=l1", job.StateToken, v1, http.StatusOK},
-		{"POST", "?ID=l1", job.StateToken, v1, http.StatusOK},                          // unchanged: no new version
-		{"POST", "?ID=l1", job.StateToken, state(0, "lin", ""), http.StatusConflict},   // older serial
-		{"POST", "?ID=l1", job.StateToken, state(1, "lin", ""), http.StatusConflict},   // same serial, other content
-		{"POST", "?ID=l1", job.StateToken, state(2, "other", ""), http.StatusConflict}, // other lineage
-		{"UNLOCK", "", job.StateToken, `{"ID":"l1"}`, http.StatusOK},
-	} {
-		if rec := stateCall(c.method, c.query, c.token, c.body); rec.Code != c.want {
-			t.Fatalf("%s%s %s: %d, want %d: %s", c.method, c.query, c.body, rec.Code, c.want, rec.Body.String())
+	}
+	stateCases := func(cases []stateCase) {
+		t.Helper()
+		for _, c := range cases {
+			if rec := stateCall(c.method, c.query, c.token, c.body); rec.Code != c.want {
+				t.Fatalf("%s%s %s: %d, want %d: %s", c.method, c.query, c.body, rec.Code, c.want, rec.Body.String())
+			}
 		}
 	}
-	if rec := stateCall("GET", "", job.StateToken, ""); rec.Body.String() != v1 {
-		t.Fatalf("read back state: %q", rec.Body.String())
-	}
-	if vs, _ := store.StateVersions(ctx, ws.ID, 10); len(vs) != 1 || vs[0].Serial != 1 || vs[0].Indexed {
-		t.Fatalf("state versions: %+v", vs)
-	}
+	stateCases([]stateCase{
+		{"GET", "", "", "", http.StatusUnauthorized},
+		{"GET", "", "forged", "", http.StatusForbidden},
+		{"GET", "", job.StateToken, "", http.StatusNoContent}, // new workspace
+		{"LOCK", "", job.StateToken, `{"ID":"l1","Who":"runner"}`, http.StatusOK},
+		{"LOCK", "", job.StateToken, `{"ID":"l2"}`, http.StatusLocked},
+		{"POST", "?ID=l1", job.StateToken, v1, http.StatusForbidden}, // plans don't write state
+		{"UNLOCK", "", job.StateToken, `{"ID":"l1"}`, http.StatusOK},
+	})
 	stateCall("LOCK", "", job.StateToken, `{"ID":"l3","Who":"alice"}`)
 	if rec := stateCall("LOCK", "", job.StateToken, `{"ID":"l4"}`); rec.Code != http.StatusLocked || !strings.Contains(rec.Body.String(), "alice") {
 		t.Fatalf("lock conflict body (shows the holder): %d %s", rec.Code, rec.Body.String())
@@ -617,6 +609,24 @@ func TestWorkspaceFlow(t *testing.T) {
 	}
 	if rec := call("GET", runnerTok, lockPath, job.LeaseID, ""); rec.Code != http.StatusOK || rec.Body.String() != "LOCKBYTES" {
 		t.Fatalf("download lock file: %d %q", rec.Code, rec.Body.String())
+	}
+	stateCases([]stateCase{
+		{"POST", "?ID=l1", job.StateToken, v1, http.StatusConflict}, // not locked
+		{"LOCK", "", job.StateToken, `{"ID":"l1","Who":"runner"}`, http.StatusOK},
+		{"POST", "?ID=l2", job.StateToken, v1, http.StatusConflict}, // someone else's lock id
+		{"POST", "?ID=l1", job.StateToken, `{"not":"state"}`, http.StatusBadRequest},
+		{"POST", "?ID=l1", job.StateToken, v1, http.StatusOK},
+		{"POST", "?ID=l1", job.StateToken, v1, http.StatusOK},                          // unchanged: no new version
+		{"POST", "?ID=l1", job.StateToken, state(0, "lin", ""), http.StatusConflict},   // older serial
+		{"POST", "?ID=l1", job.StateToken, state(1, "lin", ""), http.StatusConflict},   // same serial, other content
+		{"POST", "?ID=l1", job.StateToken, state(2, "other", ""), http.StatusConflict}, // other lineage
+		{"UNLOCK", "", job.StateToken, `{"ID":"l1"}`, http.StatusOK},
+	})
+	if rec := stateCall("GET", "", job.StateToken, ""); rec.Body.String() != v1 {
+		t.Fatalf("read back state: %q", rec.Body.String())
+	}
+	if vs, _ := store.StateVersions(ctx, ws.ID, 10); len(vs) != 1 || vs[0].Serial != 1 || vs[0].Indexed {
+		t.Fatalf("state versions: %+v", vs)
 	}
 	v2 := strings.Replace(state(2, "lin", `{"mode":"managed","type":"azurerm_storage_account","name":"this"}`), "{",
 		`{"outputs":{"id":{"value":"abc","type":"string"},"key":{"value":"s3cret","type":"string","sensitive":true}},`, 1)
@@ -728,6 +738,11 @@ func TestWorkspaceFlow(t *testing.T) {
 	for _, page := range []string{"", "/health", "/access", "/deletion"} { // the settings menu replaces the side nav; "</html>": rendered to the end
 		if body := get(h, "/workspaces/"+name+"/settings"+page).Body.String(); !strings.Contains(body, `aria-label="Workspace settings"`) || !strings.Contains(body, "</html>") {
 			t.Fatalf("settings%s: no settings menu or render error", page)
+		}
+	}
+	for _, tab := range []string{"", "/runs", "/runs?filter=errored", "/states", "/variables", "?show=outputs"} { // each tab loads only its data
+		if rec := get(h, "/workspaces/"+name+tab); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "</html>") {
+			t.Fatalf("tab %q: %d or render error", tab, rec.Code)
 		}
 	}
 	if !strings.Contains(get(h, "/workspaces/"+name+"/settings/health").Body.String(), "Drift detection:") ||

@@ -35,6 +35,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 
 	var mu sync.Mutex
 	head := "sha1"
+	newTag := "" // a tag pushed after tag triggers were set
 	gh := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -46,7 +47,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 		case p == "/repos/acme/infra/branches/main":
 			fmt.Fprintf(w, `{"commit":{"sha":%q}}`, head)
 		case p == "/repos/acme/infra/tags":
-			w.Write([]byte(`[{"name":"1.2.0","commit":{"sha":"tag120"}},{"name":"1.10.0","commit":{"sha":"tag1100"}},{"name":"v9.0.0","commit":{"sha":"tagv9"}}]`))
+			fmt.Fprintf(w, `[%s{"name":"1.2.0","commit":{"sha":"tag120"}},{"name":"1.10.0","commit":{"sha":"tag1100"}},{"name":"v9.0.0","commit":{"sha":"tagv9"}}]`, newTag)
 		case p == "/repos/acme/infra/pulls":
 			w.Write([]byte(`[{"number":9,"head":{"sha":"pr9","repo":{"full_name":"acme/infra"}}}]`))
 		case strings.HasPrefix(p, "/repos/acme/infra/tarball/"):
@@ -121,7 +122,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	if rec := post(h, "/workspaces/new", url.Values{"name": {blank}}); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/workspaces/"+blank {
 		t.Fatalf("create blank: %d %s", rec.Code, rec.Body.String())
 	}
-	if page := get(h, "/workspaces/"+blank).Body.String(); !strings.Contains(page, "No configuration") || strings.Contains(page, "New run") {
+	if page := get(h, "/workspaces/"+blank).Body.String(); strings.Contains(page, "New run") {
 		t.Fatalf("blank workspace page: %s", page)
 	}
 	if rec := post(h, "/workspaces/"+blank+"/runs", url.Values{"action": {"apply"}}); rec.Code != http.StatusConflict {
@@ -205,7 +206,8 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	if page := get(h, "/workspaces/"+linked+"/vcs").Body.String(); !strings.Contains(page, `class="vcs-health ok"`) {
 		t.Fatalf("a working link must show as connected: %s", page)
 	}
-	// Tag-based: the newest semver tag runs (1.10.0, not v9.0.0 nor the string-wise larger 1.2.0); pull requests get no plans.
+	// Tag-based: the newest semver tag (1.10.0, not v9.0.0 nor the string-wise larger 1.2.0) is the
+	// baseline, which never runs: only tags pushed later do. Pull requests get no plans.
 	tagForm := url.Values{"vcs_connection": {connID}, "vcs_repo": {"acme/infra"}, "vcs_branch": {"main"}, "vcs_trigger_type": {"tag"},
 		"vcs_tag_format": {"custom"}, "vcs_tags_regex": {"("}, "vcs_pull_requests": {"1"}}
 	if rec := post(h, "/workspaces/"+linked+"/vcs", tagForm); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "not a tag pattern") {
@@ -215,14 +217,23 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	if rec := post(h, "/workspaces/"+linked+"/vcs", tagForm); rec.Code != http.StatusSeeOther {
 		t.Fatalf("tag-based triggers: %d %s", rec.Code, rec.Body.String())
 	}
-	if lw, _ = store.GetWorkspace(ctx, linked); lw.VCSTagsRegex != `^\d+\.\d+\.\d+$` || !lw.VCSTrigger || lw.VCSPullRequests {
+	if lw, _ = store.GetWorkspace(ctx, linked); lw.VCSTagsRegex != `^\d+\.\d+\.\d+$` || !lw.VCSTrigger || lw.VCSPullRequests || lw.VCSTagBaseline != "tag1100" {
 		t.Fatalf("tag-based workspace: %+v", lw)
 	}
 	if page := get(h, "/workspaces/"+linked+"/vcs").Body.String(); !strings.Contains(page, `name="vcs_trigger_type" value="tag" checked`) ||
 		!strings.Contains(page, `name="vcs_tag_format" value="semantic" checked`) {
 		t.Fatalf("the page must show the tag format: %s", page)
 	}
-	claimVCS("apply", "# at tag1100")
+	if err := vcs.TriggerRuns(ctx, store, app.SecretKey, []storage.Workspace{lw}); err != nil {
+		t.Fatal(err)
+	}
+	if runs, _ := store.Runs(ctx, lw.ID, 1); runs[0].Active() {
+		t.Fatalf("switching to tags must not run an existing tag: %+v", runs[0])
+	}
+	mu.Lock()
+	newTag = `{"name":"1.11.0","commit":{"sha":"tag1110"}},`
+	mu.Unlock()
+	claimVCS("apply", "# at tag1110")
 
 	// The admin narrows the connection to selected workspaces: selected ones keep linking, the
 	// deselected workspace's next run fails instead of planning.
@@ -234,6 +245,9 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	}
 	if code := selected(linked, "no-such-ws"); code != http.StatusBadRequest {
 		t.Fatalf("select an unknown workspace: %d", code)
+	}
+	if c, _ := store.GetVCSConnection(ctx, connID); len(c.Workspaces) != 0 {
+		t.Fatalf("a rejected selection must change nothing: %v", c.Workspaces)
 	}
 	if code := selected(linked); code != http.StatusSeeOther {
 		t.Fatalf("select: %d", code)

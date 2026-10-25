@@ -34,6 +34,7 @@ type fakeServer struct {
 	locks         map[string]string // workspace id -> lock id
 	artifacts     map[string][]byte // "<run>/<name>" -> saved plan / lock file
 	stateToken    string            // the state password of the job being executed
+	planning      bool              // the job is a plan phase: like the server, refuse state writes
 	cancelAfter   string            // answer log posts with 202 (user canceled) once the log contains this
 }
 
@@ -87,7 +88,7 @@ func (f *fakeServer) state(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	case "POST":
-		if f.locks[id] == "" || r.URL.Query().Get("ID") != f.locks[id] {
+		if f.planning || f.locks[id] == "" || r.URL.Query().Get("ID") != f.locks[id] {
 			w.WriteHeader(http.StatusConflict)
 			return
 		}
@@ -182,7 +183,7 @@ func (f *fakeServer) do(t *testing.T, r *Runner, j runnerapi.Job) (*runnerapi.Fi
 	t.Helper()
 	f.logs.Reset()
 	f.finish = nil
-	f.stateToken = j.StateToken
+	f.stateToken, f.planning = j.StateToken, j.Phase == "plan"
 	r.Execute(context.Background(), j)
 	if f.finish == nil {
 		t.Fatalf("%s %s: no result\n%s", j.Phase, j.RunID, f.logs.String())
@@ -316,7 +317,7 @@ resource "terraform_data" "slow" {
 	f.finish = nil
 	start := time.Now()
 	j := job("slow", "apply", "apply", src, nil)
-	f.stateToken = j.StateToken
+	f.stateToken, f.planning = j.StateToken, j.Phase == "plan"
 	r.Execute(context.Background(), j)
 	if f.finish != nil {
 		t.Fatalf("a runner without the lease must not report a result: %+v", f.finish)
@@ -436,5 +437,29 @@ func TestJobHome(t *testing.T) {
 	}
 	if !regexp.MustCompile(`home\s*=\s*"[^"]*/ops-home-[^"/]*"`).MatchString(logs) {
 		t.Fatalf("HOME must be the job's own:\n%s", logs)
+	}
+}
+
+// The shipper masks a signed URL even when it arrives split over two writes, and its final flush
+// ships a tail larger than one post.
+func TestShipperRedactsAndDrains(t *testing.T) {
+	f := &fakeServer{}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	r := New(config.Runner{ServerURL: u, Token: "tok"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	signed := "/v1/archives/m.tar.gz?expires=1&sig=secret-signature"
+	s := newShipper(r, runnerapi.Job{RunID: "run1", LeaseID: "lease"}, func() {}, []string{signed})
+	s.Write([]byte("init " + signed[:30]))
+	s.Write([]byte(signed[30:] + " failed\n"))
+	big := strings.Repeat("x", 300<<10) + "\nthe error at the end"
+	s.Write([]byte(big))
+	s.Close()
+	got := f.logs.String()
+	if strings.Contains(got, "secret-signature") || !strings.Contains(got, "?<signed>") {
+		t.Fatalf("signed URL not masked: %.200q", got)
+	}
+	if !strings.HasSuffix(got, big) {
+		t.Fatalf("tail lost: got %d bytes, want suffix of %d", len(got), len(big))
 	}
 }

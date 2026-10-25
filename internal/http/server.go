@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"gocloud.dev/blob"
@@ -40,7 +41,8 @@ type Server struct {
 	// Organization is the one organization of the cloud API (Terraform's cloud block).
 	Organization string
 	Log          *slog.Logger
-	pages        *template.Template
+	pages        *template.Template // never executed: the base the per-request clones come from
+	clones       sync.Pool          // of executed clones of pages: html/template escapes a clone once, not per request
 }
 
 // Features are the components this instance serves; a disabled one has no routes at all.
@@ -58,7 +60,9 @@ func New(store *storage.Store, tpls *templates.Catalog, reg *registry.Registry, 
 		"features": func() Features { return f }, "duration": humanDuration, "ago": ago,
 		"provider": func(p string) string { return strings.TrimPrefix(p, "registry.terraform.io/") },
 		"status":   func(s string) string { return strings.ReplaceAll(s, "_", " ") }}).ParseFS(views, "views/*.html"))
-	return &Server{Store: store, Templates: tpls, Registry: reg, Auth: a, StateStore: state, Features: f, Log: log, pages: pages}
+	s := &Server{Store: store, Templates: tpls, Registry: reg, Auth: a, StateStore: state, Features: f, Log: log, pages: pages}
+	s.clones.New = func() any { return template.Must(s.pages.Clone()) }
+	return s
 }
 
 // CheckTemplates fails if a template needs a disabled component: with the registry off,
@@ -157,6 +161,10 @@ func (s *Server) canEdit(r *http.Request) bool {
 func (s *Server) logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		// no framing by other sites: confirm, destroy and authorize are one click (clickjacking)
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
 		next.ServeHTTP(w, r)
 		s.Log.Info("request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(start))
 	})
@@ -338,11 +346,8 @@ func templateFromForm(r *http.Request) templates.Template {
 
 func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, name string, data any) {
 	u := auth.FromContext(r.Context())
-	pages, err := s.pages.Clone() // per request, so the layout can show the signed-in user
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
+	pages := s.clones.Get().(*template.Template) // one request at a time per clone, so its funcs can show this request's user
+	defer s.clones.Put(pages)
 	// section is the first path segment, for highlighting the current nav entry.
 	section, rest, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
 	// inside a workspace the side nav is its menu; tab is the page within it

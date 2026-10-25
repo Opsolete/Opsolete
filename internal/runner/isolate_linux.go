@@ -19,15 +19,15 @@ func hardenProcess() error {
 // killJobProcesses kills whatever a job left running (a backgrounded local-exec, say), so it can't
 // read the next job's credentials, and reaps it. Only as a container's PID 1: kill(-1) signals every
 // process of the user except the caller, which outside a container would be the whole session.
-func killJobProcesses() bool {
+func killJobProcesses() {
 	if os.Getpid() != 1 {
-		return false
+		return
 	}
 	syscall.Kill(-1, syscall.SIGKILL)
 	for {
 		_, err := syscall.Wait4(-1, nil, 0, nil)
 		if err != syscall.EINTR && err != nil { // ECHILD: all reaped
-			return true
+			return
 		}
 	}
 }
