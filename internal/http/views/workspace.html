@@ -5,8 +5,7 @@
 <div class="page-head">
   <div>
     <h1>{{$w.Name}}{{if .Destroyed}} <span class="status destroyed">destroyed</span>{{end}}</h1>
-    <p class="muted">{{if $w.TemplateID}}From template <a href="/templates/{{$w.TemplateID}}">{{$w.TemplateID}}</a>{{else if $w.VCSConnectionID}}From <code>{{$w.VCSRepo}}</code> branch <code>{{$w.VCSBranch}}</code>{{else if $w.Templates}}From added templates{{else}}No configuration{{end}} · created {{$w.CreatedAt.Format "2006-01-02 15:04"}}{{with $w.CreatedBy}} by {{.}}{{end}}</p>
-    <p class="meta">{{if .Active}}<span>Locked by a run</span>{{else}}<span>Unlocked</span>{{end}}<span>Resources {{len .Resources}}</span>{{with .Versions}}{{with index . 0}}<span>State v{{.Serial}}</span><span>Updated {{.CreatedAt.Format "2006-01-02 15:04"}}</span>{{end}}{{end}}</p>
+    <p class="meta">{{if .Active}}<span>Locked by a run</span>{{else}}<span>Unlocked</span>{{end}}<span>Resources {{len .Resources}}</span>{{with .Versions}}{{with index . 0}}<span>State v{{.Serial}}</span><span title="{{.CreatedAt.Format "2006-01-02 15:04"}}">Updated {{ago .CreatedAt}}</span>{{end}}{{end}}</p>
   </div>
   {{if .CanOperate}}
   <div class="inline">
@@ -88,7 +87,7 @@
   <nav class="chips" aria-label="workspace contents">
     <a href="?show=resources"{{if eq $show "resources"}} aria-current="true"{{end}}>Resources {{len .Resources}}</a>
     <a href="?show=outputs"{{if eq $show "outputs"}} aria-current="true"{{end}}>Outputs {{len .Outputs}}</a>
-    <a href="?show=templates"{{if eq $show "templates"}} aria-current="true"{{end}}>Templates {{len .Added}}</a>
+    <a href="?show=templates"{{if eq $show "templates"}} aria-current="true"{{end}}>Templates {{.TemplateCount}}</a>
   </nav>
   {{with .Versions}}{{with index . 0}}<small>Current as of state version v{{.Serial}}: {{.CreatedAt.Format "2006-01-02 15:04"}}</small>{{end}}{{end}}
 </div>
@@ -122,11 +121,15 @@
 {{else}}<p class="muted">No outputs.</p>{{end}}
 {{else}}
 <p class="muted">Templates added to this workspace: each is a module (<code>module.&lt;name&gt;</code>) planned and applied with the rest of its configuration, in its one state. Their outputs show as <code>&lt;name&gt;__&lt;output&gt;</code>.</p>
-{{with .Added}}
+{{if or .Added $w.TemplateID}}
 <div class="card flush">
 <table>
 <tr><th>Name</th><th>Template</th><th>Module</th><th>Inputs</th>{{if $.CanOperate}}<th></th>{{end}}</tr>
-{{range .}}<tr><td><code>{{.Name}}</code></td><td><a href="/templates/{{.TemplateID}}">{{.TemplateID}}</a></td>
+{{with $w.TemplateID}}<tr><td class="muted">root</td><td><a href="/templates/{{.}}">{{.}}</a></td>
+  <td><code>{{$w.ModuleSource}}</code> <span class="tag">{{$w.ModuleRef}}</span>{{with $.Update}} <span class="tag">update: {{.Ref}}</span>{{end}}</td>
+  <td>{{range $k, $v := $w.Inputs}}<code>{{$k}} = {{$v}}</code><br>{{end}}</td>
+  {{if $.CanOperate}}<td class="nowrap">{{if and $.HasTemplate (not $.Active)}}<a class="btn secondary small" href="/workspaces/{{$w.Name}}/configure">Configure…</a>{{end}}</td>{{end}}</tr>{{end}}
+{{range .Added}}<tr><td><code>{{.Name}}</code></td><td><a href="/templates/{{.TemplateID}}">{{.TemplateID}}</a></td>
   <td><code>{{.ModuleSource}}</code> <span class="tag">{{.ModuleRef}}</span>{{with index $.Updates .Name}} <span class="tag">update: {{.}}</span>{{end}}</td>
   <td>{{range $k, $v := .Inputs}}<code>{{$k}} = {{$v}}</code><br>{{end}}</td>
   {{if $.CanOperate}}<td class="nowrap">{{if not $.Active}}<a class="btn secondary small" href="/workspaces/{{$w.Name}}/templates/{{.Name}}">Configure…</a>
@@ -424,5 +427,5 @@
     <strong>{{if eq .Action "destroy"}}Destroy{{else if eq .Action "refresh"}}Refresh state{{else if eq .Action "plan"}}Speculative plan{{with .VCSPullRequest}} · PR #{{.}}{{end}}{{else}}Plan and apply{{end}}</strong>{{if .Current}} <span class="tag">current</span>{{end}}
     <small>#{{printf "%.8s" .ID}}{{with .CreatedBy}} | <strong>{{.}}</strong> triggered{{end}}{{with .VCSCommit}} | <code>{{printf "%.7s" .}}</code>{{end}}{{with .Plan}} | <span class="plan">+{{.Add}} ~{{.Change}} −{{.Destroy}}</span>{{end}}</small>
   </span>
-  <span class="end"><span class="status {{.Status}}">{{status .Status}}</span><small>{{.CreatedAt.Format "2006-01-02 15:04"}}</small></span>
+  <span class="end"><span class="status {{.Status}}">{{status .Status}}</span><small title="{{.CreatedAt.Format "2006-01-02 15:04"}}">{{ago .CreatedAt}}</small></span>
 </a>{{end}}

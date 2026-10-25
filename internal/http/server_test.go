@@ -664,6 +664,9 @@ func TestWorkspaceFlow(t *testing.T) {
 			t.Errorf("workspace page lacks %q", want)
 		}
 	}
+	if tp := get(h, "/workspaces/"+name+"?show=templates").Body.String(); !strings.Contains(tp, "Templates 1<") || !strings.Contains(tp, `href="/templates/storage-account"`) {
+		t.Error("templates tab lacks the template the workspace was created from")
+	}
 	if strings.Contains(page, "s3cret") {
 		t.Fatal("sensitive output shown")
 	}

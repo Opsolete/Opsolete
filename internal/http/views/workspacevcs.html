@@ -1,15 +1,3 @@
-{{define "vcsfields"}}
-{{$f := .Form}}
-<label for="vcs_connection">VCS connection</label>
-<select id="vcs_connection" name="vcs_connection">
-  <option value="">none: no repository</option>
-  {{range .Conns}}<option value="{{.ID}}"{{if eq .ID (index $f "vcs_connection")}} selected{{end}}>{{.Name}} ({{.Provider}})</option>{{end}}
-</select>
-<label for="vcs_repo">Repository</label>
-<input id="vcs_repo" name="vcs_repo" list="vcs-repos" value="{{index $f "vcs_repo"}}" class="wide" placeholder="owner/repo or project/repo">
-<datalist id="vcs-repos">{{range .Repos}}<option value="{{.}}">{{end}}</datalist>
-{{template "vcsbranch" .}}
-{{end}}
 {{define "vcsbranch"}}
 {{$f := .Form}}
 <label for="vcs_branch">Branch</label>
@@ -21,17 +9,105 @@
   <span>Speculative plans for pull requests into the branch<small>A plan-only run, never applied, for each new commit of an open pull request from this repository (not from forks). It runs unreviewed code with the workspace's variables, so turning this on detaches its variable sets.</small></span></label>
 {{end}}
 {{template "top" .}}
-{{$w := .W}}
-<nav class="back" aria-label="breadcrumb"><a href="/workspaces">Workspaces</a> / <a href="/workspaces/{{$w.Name}}">{{$w.Name}}</a> / <a href="/workspaces/{{$w.Name}}/settings">Settings</a> / Version control</nav>
+{{$w := .W}}{{$f := .VCS.Form}}{{$t := index $f "type"}}{{$conn := .Conn}}
+{{$base := printf "/workspaces/%s/vcs" $w.Name}}{{$cancel := $base}}{{if not $w.VCSConnectionID}}{{$cancel = printf "/workspaces/%s/settings" $w.Name}}{{end}}
+<nav class="back" aria-label="breadcrumb"><a href="/workspaces">Workspaces</a> / <a href="/workspaces/{{$w.Name}}">{{$w.Name}}</a> / <a href="/workspaces/{{$w.Name}}/settings">Settings</a> / {{if and .Edit $w.VCSConnectionID}}<a href="{{$base}}">Version control</a> / Edit{{else}}Version control{{end}}</nav>
 <div class="page-head">
   <div>
-    <h1>Version control</h1>
+    <h1>{{if .Edit}}Version control{{else}}Edit version control{{end}}</h1>
     <p class="muted">Where {{$w.Name}}'s runs get their Terraform configuration.</p>
   </div>
 </div>
 {{with .VCS.Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
-<form method="post" class="card">
-  {{template "vcsfields" .VCS}}
-  <div class="actions"><button type="submit">Save</button><a class="btn secondary" href="/workspaces/{{$w.Name}}">Cancel</a></div>
+
+{{if not .Edit}}
+<h2>Connected to VCS</h2>
+<div class="card">
+  <dl class="kv">
+    <dt>Provider</dt><dd>{{with $conn}}{{.Provider}} ({{.Name}}){{else}}<span class="muted">its connection was deleted</span>{{end}}</dd>
+    <dt>Repository</dt><dd><code>{{$w.VCSRepo}}</code></dd>
+  </dl>
+  <p><a href="{{$base}}/edit">Change source →</a></p>
+</div>
+{{if and $conn (not .Allowed)}}<div class="alert error" role="alert">An admin no longer allows this workspace to use {{$conn.Name}}: its runs fail. Change source, or ask an admin to attach it under VCS providers.</div>{{end}}
+<form method="post" action="{{$base}}" class="settings">
+  <input type="hidden" name="vcs_connection" value="{{$w.VCSConnectionID}}">
+  <input type="hidden" name="vcs_repo" value="{{$w.VCSRepo}}">
+  <h2>VCS triggers</h2>
+  {{template "vcsbranch" .VCS}}
+  <div class="actions"><button type="submit">Update VCS settings</button></div>
 </form>
+
+{{else if not $t}}
+<h2>Choose your workflow</h2>
+<div class="grid">
+  <a class="card tile workflow" href="{{$base}}/edit?type=vcs">
+    <h3>Version control workflow</h3>
+    <p>Trigger runs based on changes to configuration in repositories.</p>
+    <small>Best for those who need traceability and transparency</small>
+  </a>
+  <a class="card tile workflow" href="{{$base}}/edit?type=cli">
+    <h3>CLI-driven workflow</h3>
+    <p>Run Terraform on your machine with the cloud block; Opsolete keeps the state.</p>
+    <small>Best for those comfortable with the Terraform CLI</small>
+  </a>
+</div>
+<div class="actions"><a class="btn secondary" href="{{$cancel}}">Cancel</a></div>
+
+{{else if eq $t "cli"}}
+<h2>CLI-driven workflow</h2>
+{{if $w.VCSConnectionID}}
+<form method="post" action="{{$base}}" class="settings">
+  <input type="hidden" name="type" value="cli">
+  <p>Disconnects <code>{{$w.VCSRepo}}</code>: runs no longer start on new commits, and come from the Terraform CLI instead.</p>
+  <div class="actions"><a href="{{$base}}/edit">‹ Previous</a><button type="submit" class="danger">Disconnect from version control</button><a class="btn secondary" href="{{$cancel}}">Cancel</a></div>
+</form>
+{{else}}
+<p class="muted">{{$w.Name}} already uses the CLI-driven workflow: point Terraform's cloud block at it.</p>
+<div class="actions"><a href="{{$base}}/edit">‹ Previous</a></div>
+{{end}}
+
+{{else if not $conn}}
+<h2>Connect to a version control provider</h2>
+<p class="muted">Choose the connection that hosts the Terraform configuration for this workspace.</p>
+{{if .VCS.Conns}}{{range $p := .Providers}}
+{{$has := false}}{{range $.VCS.Conns}}{{if eq .Provider $p.ID}}{{$has = true}}{{end}}{{end}}
+{{if $has}}
+<h3>{{$p.Label}}</h3>
+<div class="inline" style="margin-bottom:1.25rem">
+  {{range $.VCS.Conns}}{{if eq .Provider $p.ID}}<a class="btn secondary" href="{{$base}}/edit?type=vcs&conn={{.ID}}">{{.Name}}</a>{{end}}{{end}}
+</div>
+{{end}}
+{{end}}{{else}}
+<p class="hint">No VCS connection allows this workspace: an admin allows it under <a href="/vcs">VCS providers</a> (all workspaces, or attach this one).</p>
+{{end}}
+<div class="actions"><a href="{{$base}}/edit">‹ Previous</a><a class="btn secondary" href="{{$cancel}}">Cancel</a></div>
+
+{{else if not (index $f "vcs_repo")}}
+<h2>Choose a repository</h2>
+<p class="muted">Repositories of <strong>{{$conn.Name}}</strong>.</p>
+<form method="get" action="{{$base}}/edit" class="inline">
+  <input type="hidden" name="type" value="vcs"><input type="hidden" name="conn" value="{{$conn.ID}}">
+  <input name="repo" list="vcs-repos" required aria-label="repository" placeholder="owner/repo or project/repo">
+  <datalist id="vcs-repos">{{range .VCS.Repos}}<option value="{{.}}">{{end}}</datalist>
+  <button type="submit">Continue</button>
+</form>
+{{with .VCS.Repos}}
+<div class="runlist" style="margin-top:1rem">
+  {{range .}}<a class="runrow" href="{{$base}}/edit?type=vcs&conn={{$conn.ID}}&repo={{.}}">{{.}}</a>{{end}}
+</div>
+{{end}}
+<div class="actions"><a href="{{$base}}/edit?type=vcs">‹ Previous</a><a class="btn secondary" href="{{$cancel}}">Cancel</a></div>
+
+{{else}}
+<h2>Configure settings</h2>
+<form method="post" action="{{$base}}" class="settings">
+  <input type="hidden" name="type" value="vcs">
+  <input type="hidden" name="vcs_connection" value="{{$conn.ID}}">
+  <input type="hidden" name="vcs_repo" value="{{index $f "vcs_repo"}}">
+  <p>Repository: <code>{{index $f "vcs_repo"}}</code> via {{$conn.Name}}</p>
+  {{template "vcsbranch" .VCS}}
+  <div class="actions"><a href="{{$base}}/edit?type=vcs&conn={{$conn.ID}}">‹ Previous</a><button type="submit">Update VCS settings</button><a class="btn secondary" href="{{$cancel}}">Cancel</a></div>
+</form>
+{{end}}
 {{template "bottom"}}

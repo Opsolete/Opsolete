@@ -5,41 +5,54 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // VCSConnection is a VCS provider account; Token is sealed (see internal/vcs).
 type VCSConnection struct {
 	ID, Name, Provider, BaseURL string
 	Token                       []byte
-	WorkspaceRepos              string // repositories workspaces may link (see vcs.RepoAllowed)
-	Modules                     bool   // registry modules may be published from its repositories
+	WorkspaceScope              string   // workspaces that may link its repositories: "" none, "all" or "selected"
+	Workspaces                  []string // names of the selected workspaces
+	Modules                     bool     // registry modules may be published from its repositories
 	CreatedAt                   time.Time
+}
+
+// AllowsWorkspace reports whether the named workspace may link the connection's repositories.
+func (c VCSConnection) AllowsWorkspace(name string) bool {
+	return c.WorkspaceScope == "all" || c.WorkspaceScope == "selected" && slices.Contains(c.Workspaces, name)
 }
 
 // CreateVCSConnection returns the new connection's id.
 func (s *Store) CreateVCSConnection(ctx context.Context, c VCSConnection) (string, error) {
 	var id string
-	err := s.DB.QueryRowContext(ctx, `INSERT INTO vcs_connections (name, provider, base_url, token, workspace_repos)
-		VALUES ($1, $2, $3, $4, $5) RETURNING id`, c.Name, c.Provider, c.BaseURL, c.Token, c.WorkspaceRepos).Scan(&id)
+	err := s.DB.QueryRowContext(ctx, `INSERT INTO vcs_connections (name, provider, base_url, token, workspace_scope)
+		VALUES ($1, $2, $3, $4, $5) RETURNING id`, c.Name, c.Provider, c.BaseURL, c.Token, c.WorkspaceScope).Scan(&id)
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
 		return "", ErrExists
 	}
 	return id, err
 }
 
-func (s *Store) VCSConnections(ctx context.Context) ([]VCSConnection, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT id, name, provider, base_url, token, workspace_repos, modules, created_at FROM vcs_connections ORDER BY name`)
+const connCols = `c.id, c.name, c.provider, c.base_url, c.token, c.workspace_scope, c.modules, c.created_at,
+	ARRAY(SELECT w.name FROM vcs_connection_workspaces a JOIN workspaces w ON w.id = a.workspace_id
+		WHERE a.connection_id = c.id ORDER BY w.name)`
+
+func scanConns(rows *sql.Rows, err error) ([]VCSConnection, error) {
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []VCSConnection
+	types := pgtype.NewMap()
 	for rows.Next() {
 		var c VCSConnection
-		if err := rows.Scan(&c.ID, &c.Name, &c.Provider, &c.BaseURL, &c.Token, &c.WorkspaceRepos, &c.Modules, &c.CreatedAt); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Provider, &c.BaseURL, &c.Token, &c.WorkspaceScope, &c.Modules, &c.CreatedAt,
+			types.SQLScanner(&c.Workspaces)); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -47,19 +60,48 @@ func (s *Store) VCSConnections(ctx context.Context) ([]VCSConnection, error) {
 	return out, rows.Err()
 }
 
-// GetVCSConnection returns sql.ErrNoRows if the id is unknown or not a uuid.
-func (s *Store) GetVCSConnection(ctx context.Context, id string) (VCSConnection, error) {
-	var c VCSConnection
-	err := s.DB.QueryRowContext(ctx, `SELECT id, name, provider, base_url, token, workspace_repos, modules, created_at FROM vcs_connections WHERE id::text = $1`,
-		id).Scan(&c.ID, &c.Name, &c.Provider, &c.BaseURL, &c.Token, &c.WorkspaceRepos, &c.Modules, &c.CreatedAt)
-	return c, err
+func (s *Store) VCSConnections(ctx context.Context) ([]VCSConnection, error) {
+	return scanConns(s.DB.QueryContext(ctx, `SELECT `+connCols+` FROM vcs_connections c ORDER BY c.name`))
 }
 
-// SetVCSScope changes what a connection may be used for: the repositories workspaces may link,
-// and whether registry modules may be published from it.
-func (s *Store) SetVCSScope(ctx context.Context, id, patterns string, modules bool) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE vcs_connections SET workspace_repos = $2, modules = $3 WHERE id::text = $1`, id, patterns, modules)
+// GetVCSConnection returns sql.ErrNoRows if the id is unknown or not a uuid.
+func (s *Store) GetVCSConnection(ctx context.Context, id string) (VCSConnection, error) {
+	conns, err := scanConns(s.DB.QueryContext(ctx, `SELECT `+connCols+` FROM vcs_connections c WHERE c.id::text = $1`, id))
+	if err == nil && len(conns) == 0 {
+		err = sql.ErrNoRows
+	}
+	if err != nil {
+		return VCSConnection{}, err
+	}
+	return conns[0], nil
+}
+
+// SetVCSScope changes what a connection may be used for: the workspaces that may link its
+// repositories ("", "all" or "selected"), and whether registry modules may be published from it.
+func (s *Store) SetVCSScope(ctx context.Context, id, workspaceScope string, modules bool) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE vcs_connections SET workspace_scope = $2, modules = $3 WHERE id::text = $1`, id, workspaceScope, modules)
 	return err
+}
+
+// AttachVCSWorkspace selects the named workspace for a connection, or deselects it (attach=false).
+// It returns sql.ErrNoRows for an unknown workspace.
+func (s *Store) AttachVCSWorkspace(ctx context.Context, connID, workspace string, attach bool) error {
+	q := `INSERT INTO vcs_connection_workspaces (connection_id, workspace_id) SELECT $1::uuid, id FROM workspaces WHERE name = $2
+		ON CONFLICT DO NOTHING`
+	if !attach {
+		q = `DELETE FROM vcs_connection_workspaces WHERE connection_id = $1::uuid AND workspace_id = (SELECT id FROM workspaces WHERE name = $2)`
+	}
+	if _, err := s.DB.ExecContext(ctx, q, connID, workspace); err != nil {
+		return err
+	}
+	var ok bool
+	if err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM workspaces WHERE name = $1)`, workspace).Scan(&ok); err != nil {
+		return err
+	}
+	if !ok {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // DeleteVCSConnection also unlinks its modules (their published versions stay).

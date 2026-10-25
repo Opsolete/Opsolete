@@ -75,29 +75,25 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 		t.Fatalf("advanced settings step: %s", page)
 	}
 
-	// A new connection only publishes modules until an admin allows repositories for workspaces.
+	// A new connection only publishes modules until an admin allows workspaces.
 	if page := get(h, "/workspaces/new?type=vcs").Body.String(); strings.Contains(page, connName) {
 		t.Fatalf("a modules-only connection must not be offered: %s", page)
 	}
 	refused := url.Values{"name": {linked}, "vcs_connection": {connID}, "vcs_repo": {"acme/infra"}, "vcs_branch": {"main"}}
 	if rec := post(h, "/workspaces/new", refused); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "may not link") {
-		t.Fatalf("linking a repository the connection doesn't allow: %d", rec.Code)
+		t.Fatalf("linking through a connection closed to workspaces: %d", rec.Code)
 	}
-	if rec := post(h, "/vcs/"+connID+"/settings", url.Values{"workspaces": {"1"}, "workspace_repos": {"*"}}); rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("a bad pattern: %d", rec.Code)
-	}
-	wizard := url.Values{"wizard": {"1"}, "return": {"workspace"}, "workspace_scope": {"selected"}, "workspace_repos": {"acme/infra*"}, "modules": {"1"}}
+	wizard := url.Values{"wizard": {"1"}, "return": {"workspace"}, "workspace_scope": {"selected"}, "modules": {"1"}}
 	if rec := post(h, "/vcs/"+connID+"/settings", wizard); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "enable workspaces") {
 		t.Fatalf("the workspace flow needs workspaces enabled: %d", rec.Code)
 	}
 	wizard.Set("workspaces", "1")
-	wizard.Set("workspace_repos", "")
-	if rec := post(h, "/vcs/"+connID+"/settings", wizard); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "at least one repository pattern") {
-		t.Fatalf("selected repositories need a pattern: %d", rec.Code)
+	if rec := post(h, "/vcs/"+connID+"/settings", wizard); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "allow all workspaces") {
+		t.Fatalf("a new workspace can't be selected yet: %d", rec.Code)
 	}
-	wizard.Set("workspace_repos", "acme/infra*")
+	wizard.Set("workspace_scope", "all")
 	if rec := post(h, "/vcs/"+connID+"/settings", wizard); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/workspaces/new?type=vcs&conn="+connID {
-		t.Fatalf("allow repos and continue: %d %q %s", rec.Code, rec.Header().Get("Location"), rec.Body.String())
+		t.Fatalf("allow workspaces and continue: %d %q %s", rec.Code, rec.Header().Get("Location"), rec.Body.String())
 	}
 
 	// Blank: no template, no run, nothing to plan.
@@ -203,9 +199,42 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	claimVCS("apply", "# at sha3")
 	claimVCS("plan", "# at pr9") // the branch's commits all had their run
 
-	// The admin narrows the connection: the linked workspace's next run fails instead of planning.
-	if rec := post(h, "/vcs/"+connID+"/settings", url.Values{"workspaces": {"1"}, "workspace_repos": {"acme/other"}, "modules": {"1"}}); rec.Code != http.StatusSeeOther {
-		t.Fatalf("narrow repos: %d", rec.Code)
+	// The admin narrows the connection by attaching a workspace, which scopes it to selected workspaces:
+	// attached ones keep linking, the detached workspace's next run fails instead of planning.
+	if page := get(h, "/vcs/"+connID+"/settings").Body.String(); !strings.Contains(page, "<option>"+linked+"</option>") {
+		t.Fatalf("every existing workspace must be attachable: %s", page)
+	}
+	if rec := post(h, "/vcs/"+connID+"/workspaces", url.Values{"workspace": {"no-such-ws"}}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("attach an unknown workspace: %d", rec.Code)
+	}
+	if rec := post(h, "/vcs/"+connID+"/workspaces", url.Values{"workspace": {linked}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("attach: %d", rec.Code)
+	}
+	if page := get(h, "/vcs/"+connID+"/settings").Body.String(); !strings.Contains(page, `href="/workspaces/`+linked+`/vcs"`) || strings.Contains(page, "<option>"+linked+"</option>") {
+		t.Fatalf("settings page must list the attached workspace: %s", page)
+	}
+	// Workspace level, as in HCP Terraform: a linked workspace shows its source; Change source is a wizard.
+	if page := get(h, "/workspaces/"+linked+"/vcs").Body.String(); !strings.Contains(page, "Connected to VCS") ||
+		!strings.Contains(page, "acme/infra") || !strings.Contains(page, `href="/workspaces/`+linked+`/vcs/edit"`) || strings.Contains(page, "no longer allows") {
+		t.Fatalf("linked workspace vcs page: %s", page)
+	}
+	if page := get(h, "/workspaces/"+linked+"/vcs/edit").Body.String(); !strings.Contains(page, "Choose your workflow") {
+		t.Fatalf("change source: %s", page)
+	}
+	if page := get(h, "/workspaces/"+linked+"/vcs/edit?type=vcs").Body.String(); !strings.Contains(page, "conn="+connID) {
+		t.Fatalf("an attached workspace must be offered the connection: %s", page)
+	}
+	if page := get(h, "/workspaces/"+linked+"/vcs/edit?type=vcs&conn="+connID).Body.String(); !strings.Contains(page, `<option value="acme/infra">`) {
+		t.Fatalf("change source must offer the connection's repos: %s", page)
+	}
+	if page := get(h, "/workspaces/"+linked+"/vcs/edit?type=vcs&conn="+connID+"&repo=acme/infra").Body.String(); !strings.Contains(page, `name="vcs_repo" value="acme/infra"`) {
+		t.Fatalf("change source settings step: %s", page)
+	}
+	if page := get(h, "/workspaces/"+blank+"/vcs?type=vcs").Body.String(); strings.Contains(page, "conn="+connID) {
+		t.Fatalf("an unselected workspace must not be offered the connection: %s", page)
+	}
+	if rec := post(h, "/vcs/"+connID+"/workspaces", url.Values{"detach": {linked}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("detach: %d", rec.Code)
 	}
 	if rec := post(h, "/workspaces/"+linked+"/runs", url.Values{"action": {"apply"}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("start run: %d %s", rec.Code, rec.Body.String())
@@ -214,9 +243,12 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer "+runnerTok)
 	do(h, req)
 	if runs, _ := store.Runs(ctx, lw.ID, 1); len(runs) == 0 || runs[0].Status != storage.Errored {
-		t.Fatalf("a run of a repository no longer allowed must fail: %+v", runs)
+		t.Fatalf("a run of a detached workspace must fail: %+v", runs)
 	}
-	if rec := post(h, "/workspaces/"+linked+"/vcs", url.Values{}); rec.Code != http.StatusSeeOther {
+	if page := get(h, "/workspaces/"+linked+"/vcs").Body.String(); !strings.Contains(page, "no longer allows") {
+		t.Fatalf("a detached workspace must be warned: %s", page)
+	}
+	if rec := post(h, "/workspaces/"+linked+"/vcs", url.Values{"type": {"cli"}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("unlink: %d %s", rec.Code, rec.Body.String())
 	}
 	if ws, _ := store.GetWorkspace(ctx, linked); ws.HasConfig() {

@@ -16,7 +16,7 @@
   <td><a href="/vcs/{{.ID}}/settings"><strong>{{.Name}}</strong></a></td>
   <td>{{.Provider}}</td>
   <td><code>{{.BaseURL}}</code></td>
-  <td>{{if eq .WorkspaceRepos "*/*"}}All repositories{{else if .WorkspaceRepos}}<code style="white-space: pre-line">{{.WorkspaceRepos}}</code>{{else}}<span class="muted">Off</span>{{end}}</td>
+  <td>{{if eq .WorkspaceScope "all"}}All workspaces{{else if eq .WorkspaceScope "selected"}}{{len .Workspaces}} selected{{else}}<span class="muted">Off</span>{{end}}</td>
   <td>{{if .Modules}}On{{else}}<span class="muted">Off</span>{{end}}</td>
   <td class="nowrap">{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
   <td class="nowrap">

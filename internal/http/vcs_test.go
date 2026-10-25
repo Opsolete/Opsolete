@@ -76,22 +76,17 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 		t.Fatalf("bad token: %d", rec.Code)
 	}
 	conn.Set("token", "secret-pat")
-	conn.Set("workspace_repos", "acme")
-	if rec := post(h, "/vcs", conn); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "not a repository pattern") {
-		t.Fatalf("bad workspace repos pattern: %d", rec.Code)
-	}
-	conn.Set("workspace_repos", " acme/infra-* \r\n acme/app ")
 	if rec := post(h, "/vcs", conn); rec.Code != http.StatusSeeOther {
 		t.Fatalf("connect: %d %s", rec.Code, rec.Body.String())
 	}
-	var connID, repos string
+	var connID, scope string
 	var sealed []byte
-	store.DB.QueryRow(`SELECT id, token, workspace_repos FROM vcs_connections WHERE name = $1`, connName).Scan(&connID, &sealed, &repos)
-	if repos != "acme/infra-*\nacme/app" {
-		t.Fatalf("workspace repos stored as %q", repos)
+	store.DB.QueryRow(`SELECT id, token, workspace_scope FROM vcs_connections WHERE name = $1`, connName).Scan(&connID, &sealed, &scope)
+	if scope != "" {
+		t.Fatalf("a new connection must not be open to workspaces: %q", scope)
 	}
 	// from the publish wizard, advanced settings may stay empty and finishing continues publishing
-	wiz := url.Values{"wizard": {"1"}, "return": {"module"}, "workspaces": {"1"}, "workspace_repos": {repos}}
+	wiz := url.Values{"wizard": {"1"}, "return": {"module"}, "workspaces": {"1"}, "workspace_scope": {"selected"}}
 	if rec := post(h, "/vcs/"+connID+"/settings", wiz); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "enable modules") {
 		t.Fatalf("the publish flow needs modules enabled: %d", rec.Code)
 	}
@@ -125,7 +120,7 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 		t.Fatalf("registry page: %s", page)
 	}
 	// Modules off: the connection is no longer offered for publishing, and publishing through it is refused.
-	if rec := post(h, "/vcs/"+connID+"/settings", url.Values{"workspaces": {"1"}, "workspace_repos": {repos}}); rec.Code != http.StatusSeeOther {
+	if rec := post(h, "/vcs/"+connID+"/settings", url.Values{"workspaces": {"1"}, "workspace_scope": {"selected"}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("turn modules off: %d %s", rec.Code, rec.Body.String())
 	}
 	if page := get(h, "/registry/publish?type=vcs").Body.String(); strings.Contains(page, "?connection="+connID) {
@@ -196,7 +191,7 @@ func TestVCSAdminOnly(t *testing.T) {
 		}
 	}
 	for _, p := range []string{"/vcs", "/vcs/x/settings"} {
-		if rec := post(h, p, url.Values{"name": {"x"}, "workspace_repos": {"*/*"}}); rec.Code != http.StatusForbidden {
+		if rec := post(h, p, url.Values{"name": {"x"}, "workspace_scope": {"all"}}); rec.Code != http.StatusForbidden {
 			t.Errorf("POST %s for non-admin: %d", p, rec.Code)
 		}
 	}

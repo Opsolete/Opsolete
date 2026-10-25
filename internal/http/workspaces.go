@@ -42,6 +42,7 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /workspaces/new", s.newWorkspacePage)
 	mux.HandleFunc("POST /workspaces/new", s.createEmptyWorkspace)
 	mux.HandleFunc("GET /workspaces/{name}/vcs", s.workspaceVCSPage)
+	mux.HandleFunc("GET /workspaces/{name}/vcs/edit", s.workspaceVCSPage)
 	mux.HandleFunc("POST /workspaces/{name}/vcs", s.linkWorkspaceVCS)
 	mux.HandleFunc("POST /workspaces/{name}/state-versions/{version}/rollback", s.rollbackState)
 	mux.HandleFunc("GET /v1/vcs-archives/{file}", s.vcsArchive)
@@ -310,6 +311,10 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "workspace templates", err)
 		return
 	}
+	templateCount := len(added)
+	if ws.TemplateID != "" { // the template the workspace was created from counts too
+		templateCount++
+	}
 	updates := map[string]string{} // added template name -> module version its template pins now
 	for _, a := range added {
 		if t, ok := s.Templates.Get(a.TemplateID); ok && (t.Module.Source != a.ModuleSource || t.Module.Ref != a.ModuleRef) {
@@ -373,6 +378,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		"Filter": filter, "Counts": counts, "RunList": list, "Current": current,
 		"LatestPlan": latestPlan, "LatestApply": latestApply, "Metrics": metrics, "Show": r.URL.Query().Get("show"), "Page": page,
 		"Update": update, "HasTemplate": hasTemplate, "Added": added, "Updates": updates, "Catalog": s.Templates.List(),
+		"TemplateCount": templateCount,
 		"Resources": res, "Versions": versions, "Outputs": outputs, "Destroyed": destroyed, "Grants": grants,
 		"Variables": vars, "Sets": setVars, "Groups": groups, "Assessment": assessment, "StateConsumers": stateConsumers, "StateShared": stateShared,
 		"StateAddress": s.Registry.PublicURL.JoinPath(runnerapi.StatePrefix, ws.ID).String(),
@@ -649,6 +655,30 @@ func humanDuration(d time.Duration) string {
 		return "less than a minute"
 	}
 	return d.Round(time.Second).String()
+}
+
+// ago renders t relative to now, HCP style: "just now", "5 minutes ago", "3 days ago".
+func ago(t time.Time) string {
+	d := time.Since(t)
+	plural := func(n int, unit string) string {
+		if n == 1 {
+			return "1 " + unit + " ago"
+		}
+		return strconv.Itoa(n) + " " + unit + "s ago"
+	}
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return plural(int(d.Minutes()), "minute")
+	case d < 24*time.Hour:
+		return plural(int(d.Hours()), "hour")
+	case d < 30*24*time.Hour:
+		return plural(int(d.Hours()/24), "day")
+	case d < 365*24*time.Hour:
+		return plural(int(d.Hours()/24/30), "month")
+	}
+	return plural(int(d.Hours()/24/365), "year")
 }
 
 // runPhases reads the plan and apply steps from the run's status history (oldest first).

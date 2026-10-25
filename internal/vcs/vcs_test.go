@@ -183,35 +183,6 @@ func TestSealAndValidation(t *testing.T) {
 	}
 }
 
-// TestRepoAllowed: workspace repository patterns match case-insensitively; none means none.
-func TestRepoAllowed(t *testing.T) {
-	for _, c := range []struct {
-		patterns, repo string
-		want           bool
-	}{
-		{"", "acme/infra", false},
-		{"acme/infra-*", "acme/infra-prod", true},
-		{"acme/infra-*", "ACME/Infra-Prod", true},
-		{"acme/infra-*", "acme/app", false},
-		{"acme/infra-*\nacme/app", "acme/app", true},
-		{"Platform Team/*", "platform team/storage", true}, // Azure DevOps projects have spaces
-		{"*/*", "anyone/anything", true},
-		{"acme/*", "evil/acme", false},
-	} {
-		if got := RepoAllowed(c.patterns, c.repo); got != c.want {
-			t.Errorf("RepoAllowed(%q, %q) = %v", c.patterns, c.repo, got)
-		}
-	}
-	if got, err := CheckRepoPatterns(" acme/a-* \r\n\n Platform Team/b\n"); err != nil || got != "acme/a-*\nPlatform Team/b" {
-		t.Errorf("CheckRepoPatterns: %q %v", got, err)
-	}
-	for _, bad := range []string{"*", "acme", "a/b/c", "acme/[x"} {
-		if _, err := CheckRepoPatterns(bad); err == nil {
-			t.Errorf("CheckRepoPatterns(%q) must fail", bad)
-		}
-	}
-}
-
 // Polled GitHub endpoints are conditional requests: an unchanged branch is answered from the cache
 // with a 304, which costs no rate limit. Retry-After pauses polling of that provider.
 func TestConditionalRequestsAndPause(t *testing.T) {

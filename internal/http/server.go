@@ -55,7 +55,7 @@ func New(store *storage.Store, tpls *templates.Catalog, reg *registry.Registry, 
 	pages := template.Must(template.New("").Funcs(template.FuncMap{"join": strings.Join, "json": toJSON,
 		"user": func() auth.User { return auth.User{} }, "section": func() string { return "" },
 		"workspace": func() string { return "" }, "tab": func() string { return "" },
-		"features": func() Features { return f }, "duration": humanDuration,
+		"features": func() Features { return f }, "duration": humanDuration, "ago": ago,
 		"provider": func(p string) string { return strings.TrimPrefix(p, "registry.terraform.io/") },
 		"status":   func(s string) string { return strings.ReplaceAll(s, "_", " ") }}).ParseFS(views, "views/*.html"))
 	return &Server{Store: store, Templates: tpls, Registry: reg, Auth: a, StateStore: state, Features: f, Log: log, pages: pages}

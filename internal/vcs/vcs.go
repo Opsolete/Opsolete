@@ -52,40 +52,6 @@ var HTTPClient = &http.Client{Timeout: 2 * time.Minute}
 // Conn is a usable connection: provider, API root and plain token.
 type Conn struct {
 	Provider, BaseURL, Token string
-	WorkspaceRepos           string // see RepoAllowed
-}
-
-// RepoAllowed reports whether repo matches one of the path.Match patterns, one per line
-// (case-insensitive, like GitHub and Azure DevOps names). No patterns: no repository.
-func RepoAllowed(patterns, repo string) bool {
-	for _, p := range repoPatterns(patterns) {
-		if ok, _ := path.Match(strings.ToLower(p), strings.ToLower(repo)); ok {
-			return true
-		}
-	}
-	return false
-}
-
-// CheckRepoPatterns validates patterns for RepoAllowed and returns them one per line.
-func CheckRepoPatterns(patterns string) (string, error) {
-	ps := repoPatterns(patterns)
-	for _, p := range ps {
-		if _, err := path.Match(p, ""); err != nil || strings.Count(p, "/") != 1 {
-			return "", fmt.Errorf("%q is not a repository pattern like acme/infra-*", p)
-		}
-	}
-	return strings.Join(ps, "\n"), nil
-}
-
-// repoPatterns splits by line, not by space: Azure DevOps project names may contain spaces.
-func repoPatterns(s string) []string {
-	var out []string
-	for _, l := range strings.Split(s, "\n") {
-		if l = strings.TrimSpace(l); l != "" {
-			out = append(out, l)
-		}
-	}
-	return out
 }
 
 // NormalizeURL validates an API root (https, no query) and fills in the provider default.
@@ -609,7 +575,7 @@ func gcm(key []byte) (cipher.AEAD, error) {
 // ConnFor opens a stored connection's token.
 func ConnFor(key []byte, c storage.VCSConnection) (Conn, error) {
 	token, err := Open(key, c.Token)
-	return Conn{Provider: c.Provider, BaseURL: c.BaseURL, Token: token, WorkspaceRepos: c.WorkspaceRepos}, err
+	return Conn{Provider: c.Provider, BaseURL: c.BaseURL, Token: token}, err
 }
 
 // Sync publishes every semver tag of a linked repo that isn't a module version yet, and records
@@ -751,9 +717,6 @@ func TriggerRuns(ctx context.Context, st *storage.Store, key []byte, group []sto
 	if err != nil {
 		return err
 	}
-	if !RepoAllowed(c.WorkspaceRepos, ws.VCSRepo) { // narrowed since the link; manual runs fail with the reason
-		return fmt.Errorf("workspaces may no longer link %q through this connection", ws.VCSRepo)
-	}
 	if until := pausedUntil(c.BaseURL); !until.IsZero() {
 		return fmt.Errorf("%s asked to wait: polling resumes at %s", c.Provider, until.Format(time.TimeOnly))
 	}
@@ -761,6 +724,9 @@ func TriggerRuns(ctx context.Context, st *storage.Store, key []byte, group []sto
 	var prs []PullRequest
 	fetchedPRs := false
 	for _, ws := range group {
+		if !sc.AllowsWorkspace(ws.Name) { // deselected since the link; manual runs fail with the reason
+			continue
+		}
 		if ws.VCSTrigger {
 			if head == "" {
 				if head, err = c.Head(ctx, ws.VCSRepo, ws.VCSBranch); err != nil {

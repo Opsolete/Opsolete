@@ -16,7 +16,7 @@
   <td>{{if .TemplateID}}<span class="tag">{{.ModuleRef}}</span>{{else if .VCSConnectionID}}<span class="tag">{{.VCSBranch}}</span>{{end}}</td>
   <td>{{with .Latest}}<span class="status {{.Status}}">{{status .Status}}</span>{{if eq .Action "destroy"}} <small>destroy</small>{{end}}{{else}}<span class="muted">none</span>{{end}}</td>
   <td>{{.CreatedBy}}</td>
-  <td class="nowrap">{{with .Latest}}{{.UpdatedAt.Format "2006-01-02 15:04"}}{{else}}{{.CreatedAt.Format "2006-01-02 15:04"}}{{end}}</td>
+  <td class="nowrap">{{with .Latest}}<span title="{{.UpdatedAt.Format "2006-01-02 15:04"}}">{{ago .UpdatedAt}}</span>{{else}}<span title="{{.CreatedAt.Format "2006-01-02 15:04"}}">{{ago .CreatedAt}}</span>{{end}}</td>
 </tr>
 {{else}}
 <tr><td colspan="6" class="empty">No workspaces yet. <a href="/workspaces/new">Create one</a>.</td></tr>

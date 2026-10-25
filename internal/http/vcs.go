@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ func (s *Server) vcsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /vcs/{id}/delete", s.admin(s.deleteConnection))
 	mux.HandleFunc("GET /vcs/{id}/settings", s.admin(s.connectionSettings))
 	mux.HandleFunc("POST /vcs/{id}/settings", s.admin(s.saveConnectionSettings))
+	mux.HandleFunc("POST /vcs/{id}/workspaces", s.admin(s.attachConnectionWorkspace))
 	mux.HandleFunc("POST /registry/publish", s.admin(s.publishModule))
 	mux.HandleFunc("POST /registry/{ns}/{name}/{system}/sync", s.admin(s.syncModule))
 }
@@ -50,17 +52,18 @@ func (s *Server) renderVCS(w http.ResponseWriter, r *http.Request, status int, e
 }
 
 // newConnection is the add-VCS-provider wizard, like HCP Terraform's: 1 choose a provider,
-// 2 set it up (name, URL, token), 3 advanced settings (workspace repositories) of the created connection.
+// 2 set it up (name, URL, token), 3 advanced settings (which workspaces may link it) of the created connection.
 // Return is the wizard that sent the user here; finishing continues it with the new connection.
 type newConnection struct {
-	Step      int
-	Edit      bool   // step 3 alone, as the connection's settings page
-	Return    string // "workspace", "module" or ""
-	Next      string // where finishing goes
-	Providers any    // vcs.Providers
-	Conn      storage.VCSConnection
-	Error     string
-	Form      map[string]string
+	Step       int
+	Edit       bool   // step 3 alone, as the connection's settings page
+	Return     string // "workspace", "module" or ""
+	Next       string // where finishing goes
+	Providers  any    // vcs.Providers
+	Conn       storage.VCSConnection
+	Error      string
+	Form       map[string]string
+	Attachable []string // workspaces not selected yet, in step 3
 }
 
 func (s *Server) newConnectionPage(w http.ResponseWriter, r *http.Request) {
@@ -91,6 +94,19 @@ func (s *Server) renderNewConnection(w http.ResponseWriter, r *http.Request, sta
 		p.Return = ""
 	}
 	p.Providers, p.Next = vcs.Providers, finishConnection(p.Return, p.Conn.ID)
+	if p.Step == 3 {
+		// shortcut: offers the 200 most recently active workspaces, as variable sets do; add search if there are more.
+		all, err := s.Store.ListWorkspaces(r.Context(), storage.Viewer{Admin: true}) // admin-only page
+		if err != nil {
+			s.internalError(w, "list workspaces", err)
+			return
+		}
+		for _, ws := range all {
+			if ws.TemplateID == "" && !slices.Contains(p.Conn.Workspaces, ws.Name) { // template workspaces never link a repository
+				p.Attachable = append(p.Attachable, ws.Name)
+			}
+		}
+	}
 	s.render(w, r, status, "vcsnew.html", p)
 }
 
@@ -108,16 +124,11 @@ func finishConnection(ret, connID string) string {
 // addConnection checks the token against the provider (by listing repos) before storing it sealed.
 func (s *Server) addConnection(w http.ResponseWriter, r *http.Request) {
 	form := map[string]string{}
-	for _, k := range []string{"name", "provider", "base_url", "workspace_repos"} {
+	for _, k := range []string{"name", "provider", "base_url"} {
 		form[k] = strings.TrimSpace(r.PostFormValue(k))
 	}
 	fail := func(msg string) {
 		s.renderNewConnection(w, r, http.StatusUnprocessableEntity, newConnection{Step: 2, Return: r.PostFormValue("return"), Error: msg, Form: form})
-	}
-	repos, err := vcs.CheckRepoPatterns(form["workspace_repos"])
-	if err != nil {
-		fail(err.Error())
-		return
 	}
 	token := strings.TrimSpace(r.PostFormValue("token"))
 	if form["name"] == "" || len(form["name"]) > 64 || token == "" {
@@ -140,8 +151,7 @@ func (s *Server) addConnection(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "seal vcs token", err)
 		return
 	}
-	id, err := s.Store.CreateVCSConnection(r.Context(), storage.VCSConnection{Name: form["name"], Provider: form["provider"], BaseURL: baseURL, Token: sealed,
-		WorkspaceRepos: repos})
+	id, err := s.Store.CreateVCSConnection(r.Context(), storage.VCSConnection{Name: form["name"], Provider: form["provider"], BaseURL: baseURL, Token: sealed})
 	if errors.Is(err, storage.ErrExists) {
 		fail("a connection with this name already exists")
 		return
@@ -163,8 +173,39 @@ func (s *Server) connectionSettings(w http.ResponseWriter, r *http.Request) {
 	s.renderNewConnection(w, r, http.StatusOK, newConnection{Step: 3, Edit: true, Conn: sc, Form: scopeFormOf(sc)})
 }
 
-// saveConnectionSettings sets what a connection may be used for; runs of workspaces linked to a
-// repository no longer allowed fail when they start, and linked modules keep syncing.
+// attachConnectionWorkspace selects a workspace (by name) for the connection, which scopes it to
+// selected workspaces, or with detach=<name> deselects one: runs of a deselected workspace linked
+// through it fail when they start. The scope form's Attach and Detach buttons post here.
+func (s *Server) attachConnectionWorkspace(w http.ResponseWriter, r *http.Request) {
+	sc, ok := s.getConnection(w, r, r.PathValue("id"))
+	if !ok {
+		return
+	}
+	name, attach := r.PostFormValue("detach"), false
+	if name == "" {
+		name, attach = r.PostFormValue("workspace"), true
+	}
+	err := s.Store.AttachVCSWorkspace(r.Context(), sc.ID, name, attach)
+	if err == nil && attach && sc.WorkspaceScope != "selected" {
+		err = s.Store.SetVCSScope(r.Context(), sc.ID, "selected", sc.Modules)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "choose a workspace", http.StatusBadRequest)
+		return
+	} else if err != nil {
+		s.internalError(w, "attach vcs workspace", err)
+		return
+	}
+	s.Log.Info("vcs connection workspace", "id", sc.ID, "workspace", name, "attach", attach, "user", auth.FromContext(r.Context()).Email)
+	next := "/vcs/" + sc.ID + "/settings"
+	if r.PostFormValue("wizard") != "" {
+		next = "/vcs/new?connection=" + sc.ID + "&return=" + url.QueryEscape(r.PostFormValue("return"))
+	}
+	http.Redirect(w, r, next, http.StatusSeeOther)
+}
+
+// saveConnectionSettings sets what a connection may be used for; runs of linked workspaces no
+// longer allowed fail when they start, and linked modules keep syncing.
 // From the add-VCS-provider wizard (wizard=1) it finishes the wizard.
 func (s *Server) saveConnectionSettings(w http.ResponseWriter, r *http.Request) {
 	sc, ok := s.getConnection(w, r, r.PathValue("id"))
@@ -173,24 +214,19 @@ func (s *Server) saveConnectionSettings(w http.ResponseWriter, r *http.Request) 
 	}
 	wizard, ret := r.PostFormValue("wizard") != "", r.PostFormValue("return")
 	form := map[string]string{}
-	for _, k := range []string{"workspaces", "workspace_scope", "workspace_repos", "modules"} {
+	for _, k := range []string{"workspaces", "workspace_scope", "modules"} {
 		form[k] = r.PostFormValue(k)
 	}
-	var repos string
+	scope := ""
+	if form["workspaces"] != "" {
+		scope = map[bool]string{true: "all", false: "selected"}[form["workspace_scope"] == "all"]
+	}
 	var err error
 	switch {
-	case form["workspaces"] == "":
-	case form["workspace_scope"] == "all":
-		repos = "*/*"
-	default:
-		if repos, err = vcs.CheckRepoPatterns(form["workspace_repos"]); err == nil && repos == "" {
-			err = errors.New("add at least one repository pattern, or allow all repositories")
-		}
-	}
-	switch {
-	case err != nil:
-	case wizard && ret == "workspace" && repos == "":
+	case wizard && ret == "workspace" && scope == "":
 		err = errors.New("enable workspaces: your new workspace links a repository through this connection")
+	case wizard && ret == "workspace" && scope == "selected":
+		err = errors.New("allow all workspaces: your new workspace can't be selected before it exists")
 	case wizard && ret == "module" && form["modules"] == "":
 		err = errors.New("enable modules: you are publishing a module from this connection")
 	}
@@ -198,11 +234,11 @@ func (s *Server) saveConnectionSettings(w http.ResponseWriter, r *http.Request) 
 		s.renderNewConnection(w, r, http.StatusUnprocessableEntity, newConnection{Step: 3, Edit: !wizard, Return: ret, Conn: sc, Error: err.Error(), Form: form})
 		return
 	}
-	if err := s.Store.SetVCSScope(r.Context(), sc.ID, repos, form["modules"] != ""); err != nil {
+	if err := s.Store.SetVCSScope(r.Context(), sc.ID, scope, form["modules"] != ""); err != nil {
 		s.internalError(w, "set vcs scope", err)
 		return
 	}
-	s.Log.Info("vcs connection scope", "id", sc.ID, "workspace_repos", repos, "modules", form["modules"] != "", "user", auth.FromContext(r.Context()).Email)
+	s.Log.Info("vcs connection scope", "id", sc.ID, "workspace_scope", scope, "modules", form["modules"] != "", "user", auth.FromContext(r.Context()).Email)
 	next := "/vcs"
 	if wizard {
 		next = finishConnection(ret, sc.ID)
@@ -212,12 +248,9 @@ func (s *Server) saveConnectionSettings(w http.ResponseWriter, r *http.Request) 
 
 // scopeFormOf fills the advanced settings form from a connection.
 func scopeFormOf(c storage.VCSConnection) map[string]string {
-	f := map[string]string{"workspace_scope": "selected", "workspace_repos": c.WorkspaceRepos}
-	if c.WorkspaceRepos != "" {
+	f := map[string]string{"workspace_scope": c.WorkspaceScope}
+	if c.WorkspaceScope != "" {
 		f["workspaces"] = "1"
-	}
-	if c.WorkspaceRepos == "*/*" {
-		f["workspace_scope"], f["workspace_repos"] = "all", ""
 	}
 	if c.Modules {
 		f["modules"] = "1"
