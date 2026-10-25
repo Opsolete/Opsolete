@@ -90,13 +90,32 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 	if repos != "acme/infra-*\nacme/app" {
 		t.Fatalf("workspace repos stored as %q", repos)
 	}
+	// from the publish wizard, advanced settings may stay empty and finishing continues publishing
+	wiz := url.Values{"wizard": {"1"}, "return": {"module"}, "workspaces": {"1"}, "workspace_repos": {repos}}
+	if rec := post(h, "/vcs/"+connID+"/settings", wiz); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "enable modules") {
+		t.Fatalf("the publish flow needs modules enabled: %d", rec.Code)
+	}
+	wiz.Set("modules", "1")
+	if rec := post(h, "/vcs/"+connID+"/settings", wiz); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/registry/publish?connection="+connID {
+		t.Fatalf("finish to the publish wizard: %d %q", rec.Code, rec.Header().Get("Location"))
+	}
 	if strings.Contains(string(sealed), "secret-pat") || strings.Contains(get(h, "/vcs").Body.String(), "secret-pat") {
 		t.Fatal("token stored or shown in plain text")
 	}
 
-	// Publish: name and system come from the terraform-<system>-<name> repo name.
+	// Publish wizard: connection, then repo, then confirm with name and system from the terraform-<system>-<name> repo name.
+	if page := get(h, "/registry/publish").Body.String(); !strings.Contains(page, `href="?type=vcs"`) {
+		t.Fatalf("workflow choice: %s", page)
+	}
+	if page := get(h, "/registry/publish?type=vcs").Body.String(); !strings.Contains(page, `href="?connection=`+connID+`"`) {
+		t.Fatalf("connection step: %s", page)
+	}
 	if page := get(h, "/registry/publish?connection="+connID).Body.String(); !strings.Contains(page, `<option value="acme/terraform-aws-rds">`) {
 		t.Fatalf("repo picker: %s", page)
+	}
+	if page := get(h, "/registry/publish?connection="+connID+"&repo=acme/terraform-aws-rds").Body.String(); !strings.Contains(page, `id="name" name="name" value="rds"`) ||
+		!strings.Contains(page, `id="system" name="system" value="aws"`) {
+		t.Fatalf("confirm step: %s", page)
 	}
 	rec := post(h, "/registry/publish", url.Values{"connection": {connID}, "repo": {"acme/terraform-aws-rds"}, "namespace": {ns}})
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/registry/"+ns+"/rds/aws/1.0.0" {
@@ -104,6 +123,19 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 	}
 	if page := get(h, "/registry").Body.String(); !strings.Contains(page, "/registry/"+ns+"/rds/aws/sync") || !strings.Contains(page, connName) {
 		t.Fatalf("registry page: %s", page)
+	}
+	// Modules off: the connection is no longer offered for publishing, and publishing through it is refused.
+	if rec := post(h, "/vcs/"+connID+"/settings", url.Values{"workspaces": {"1"}, "workspace_repos": {repos}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("turn modules off: %d %s", rec.Code, rec.Body.String())
+	}
+	if page := get(h, "/registry/publish?type=vcs").Body.String(); strings.Contains(page, "?connection="+connID) {
+		t.Fatalf("a connection without modules must not be offered: %s", page)
+	}
+	if rec := post(h, "/registry/publish", url.Values{"connection": {connID}, "repo": {"acme/terraform-aws-rds"}, "namespace": {ns}}); rec.Code != http.StatusForbidden {
+		t.Fatalf("publish through a connection without modules: %d", rec.Code)
+	}
+	if page := get(h, "/vcs/"+connID+"/settings").Body.String(); !strings.Contains(page, `name="modules" value="1">`) || !strings.Contains(page, "Update VCS provider") {
+		t.Fatalf("settings page: %s", page)
 	}
 	page := get(h, "/registry/"+ns+"/rds/aws/1.0.0").Body.String()
 	if !strings.Contains(page, "No-code ready") || !strings.Contains(page, `href="/templates/`+tplID+`">Provision workspace`) ||
@@ -163,7 +195,7 @@ func TestVCSAdminOnly(t *testing.T) {
 			t.Errorf("GET %s for non-admin: %d", p, rec.Code)
 		}
 	}
-	for _, p := range []string{"/vcs", "/vcs/x/workspace-repos"} {
+	for _, p := range []string{"/vcs", "/vcs/x/settings"} {
 		if rec := post(h, p, url.Values{"name": {"x"}, "workspace_repos": {"*/*"}}); rec.Code != http.StatusForbidden {
 			t.Errorf("POST %s for non-admin: %d", p, rec.Code)
 		}

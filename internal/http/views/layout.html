@@ -28,12 +28,12 @@
   }
   * { box-sizing: border-box; }
   body { margin: 0; font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text);
-    display: grid; grid-template-columns: 15rem 1fr; min-height: 100vh; }
-  main.wrap { padding: 1.75rem 2.5rem 4rem; max-width: 76rem; width: 100%; min-width: 0; }
+    display: grid; grid-template: auto 1fr / 15.5rem minmax(0, 1fr); min-height: 100vh; }
+  main.wrap { padding: 1.75rem 3rem 4rem; max-width: 80rem; width: 100%; min-width: 0; }
   a { color: var(--brand); text-decoration: none; }
   a:hover { color: var(--brand-hover); text-decoration: underline; }
-  h1 { font-size: 1.6rem; line-height: 1.25; margin: 0 0 .3rem; font-weight: 600; display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
-  h2 { font-size: 1.15rem; font-weight: 600; margin: 2.2rem 0 .75rem; }
+  h1 { font-size: 1.875rem; line-height: 1.25; margin: 0 0 .3rem; font-weight: 700; display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+  h2 { font-size: 1.35rem; font-weight: 600; margin: 2.2rem 0 .75rem; }
   h3 { font-size: 1rem; font-weight: 600; margin: 0 0 .35rem; }
   p { margin: 0 0 1rem; }
   .muted, small { color: var(--muted); }
@@ -43,30 +43,32 @@
   pre.code { background: var(--code); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem 1.2rem; }
   :focus-visible { outline: 3px solid #5990ff; outline-offset: 1px; }
 
-  /* side nav */
-  .topbar { background: var(--nav); color: #fff; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
-  .topbar .wrap { display: flex; flex-direction: column; gap: 1rem; min-height: 100%; padding: 1rem .75rem; }
-  .brand { display: flex; align-items: center; gap: .6rem; color: #fff; font-weight: 600; font-size: 1rem; padding: .25rem .5rem; }
+  /* app frame: black top bar across, light side nav below it */
+  .topbar { grid-column: 1 / -1; position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 1rem;
+    min-height: 3.75rem; padding: 0 1.25rem; background: var(--nav); color: #fff; }
+  .brand { display: flex; align-items: center; gap: .6rem; color: #fff; font-weight: 600; font-size: 1rem; }
   .brand:hover { color: #fff; text-decoration: none; }
   .logo { display: grid; place-items: center; width: 1.75rem; height: 1.75rem; border-radius: 4px; font-size: .62rem; font-weight: 700;
     background: #7b42bc; color: #fff; letter-spacing: -.03em; }
-  .topbar nav { display: flex; flex-direction: column; gap: 2px; }
-  .topbar nav a { color: var(--nav-text); padding: .45rem .75rem; border-radius: 5px; font-weight: 500; }
-  .topbar nav a:hover { color: #fff; background: var(--nav-hover); text-decoration: none; }
-  .topbar nav a[aria-current="page"] { color: #fff; background: var(--nav-hover); box-shadow: inset 3px 0 0 #a067da; }
-  .nav-label { color: var(--nav-text); font-size: .8rem; font-weight: 500; padding: .9rem .75rem .3rem; }
-  .nav-head { color: #fff; font-weight: 600; padding: .9rem .75rem .3rem; overflow-wrap: anywhere; }
-  .who { margin-top: auto; display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; font-size: .8rem; color: var(--nav-text);
-    border-top: 1px solid var(--nav-hover); padding: .9rem .5rem 0; }
-  .who > span:first-child { overflow-wrap: anywhere; flex-basis: 100%; }
-  .who .tag { background: var(--nav-hover); color: #fff; }
+  .who { margin-left: auto; display: flex; align-items: center; gap: .6rem; font-size: .85rem; color: var(--nav-text); }
+  .who .tag { background: var(--nav-hover); color: #fff; border-color: var(--nav-hover); }
+  .sidenav { position: sticky; top: 3.75rem; height: calc(100vh - 3.75rem); overflow-y: auto; padding: 1.25rem 1rem;
+    border-right: 1px solid var(--border); }
+  .sidenav nav { display: flex; flex-direction: column; gap: 2px; }
+  .sidenav a { position: relative; color: var(--text); padding: .45rem .6rem; border-radius: 5px; }
+  .sidenav a:hover { background: var(--code); color: var(--text); text-decoration: none; }
+  .sidenav a[aria-current="page"] { background: var(--code); color: var(--brand); }
+  .sidenav a[aria-current="page"]::before { content: ""; position: absolute; left: -1rem; top: 0; bottom: 0; width: 4px;
+    border-radius: 0 2px 2px 0; background: var(--brand); }
+  .nav-label, .nav-head { color: var(--muted); font-size: .8rem; font-weight: 600; padding: 1rem .6rem .3rem; overflow-wrap: anywhere; }
   @media (max-width: 52rem) {
     body { display: block; }
-    .topbar { position: static; height: auto; }
-    .topbar .wrap { flex-direction: row; flex-wrap: wrap; align-items: center; }
-    .topbar nav { flex-direction: row; flex-wrap: wrap; }
-    .who { margin: 0 0 0 auto; border: 0; padding: 0; }
-    .who > span:first-child { flex-basis: auto; }
+    .topbar { position: static; }
+    .who > span:first-child { display: none; }
+    .sidenav { position: static; height: auto; padding: .5rem 1rem; border-right: 0; border-bottom: 1px solid var(--border); }
+    .sidenav nav { flex-direction: row; flex-wrap: wrap; align-items: center; }
+    .sidenav a[aria-current="page"]::before { display: none; }
+    .nav-label, .nav-head { padding: .45rem .6rem; }
     main.wrap { padding: 1.25rem 1rem 3rem; }
   }
 
@@ -75,6 +77,8 @@
     margin-bottom: 1.5rem; padding-bottom: 1.25rem; border-bottom: 1px solid var(--border); }
   .page-head p { margin: 0; }
   .back { display: inline-block; margin-bottom: .6rem; font-size: .85rem; color: var(--muted); }
+  .back a { color: var(--muted); }
+  .back a:hover { color: var(--text); }
   .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.25rem; margin-bottom: 1rem; }
   .card.flush { padding: 0; overflow-x: auto; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); gap: 1rem; }
@@ -94,10 +98,10 @@
   label { display: block; margin: 1.1rem 0 .3rem; font-weight: 600; font-size: .875rem; }
   label:first-child { margin-top: 0; }
   .req { color: var(--danger); }
-  input, select { font: inherit; color: inherit; background: var(--surface); border: 1px solid #8c909c; border-radius: 5px;
+  input, select, textarea { font: inherit; color: inherit; background: var(--surface); border: 1px solid #8c909c; border-radius: 5px;
     padding: .45rem .65rem; width: 100%; max-width: 34rem; }
-  input:hover, select:hover { border-color: var(--muted); }
-  input:focus, select:focus { outline: 3px solid #5990ff; outline-offset: 0; border-color: var(--brand); }
+  input:hover, select:hover, textarea:hover { border-color: var(--muted); }
+  input:focus, select:focus, textarea:focus { outline: 3px solid #5990ff; outline-offset: 0; border-color: var(--brand); }
   input[type="checkbox"], input[type="radio"] { width: 1rem; padding: 0; height: 1rem; accent-color: var(--brand); vertical-align: middle; }
   input[type="file"] { padding: .35rem; }
   .wide { max-width: none; }
@@ -116,7 +120,7 @@
 
   /* settings pages: one narrow column of fields, one save button */
   .settings { max-width: 32rem; }
-  .settings input:not([type="checkbox"], [type="radio"]) { max-width: none; }
+  .settings input:not([type="checkbox"], [type="radio"]), .settings textarea { max-width: none; }
   .settings .field { font-weight: 600; font-size: .875rem; margin: 1.1rem 0 .3rem; }
   .settings .field:first-child { margin-top: 0; }
   .settings fieldset { border: 0; margin: 1.75rem 0 0; padding: 0; min-width: 0; } /* else the snippet widens it */
@@ -125,6 +129,19 @@
   .check input { margin-top: .2rem; flex: none; }
   .check small { display: block; margin-top: .15rem; font-size: .8rem; }
   .indent { margin-left: 1.6rem; }
+  /* VCS provider scope: switches, and a panel that only shows while its switch is on */
+  .switch { appearance: none; flex: none; position: relative; width: 2rem !important; height: 1.1rem !important; margin: .15rem 0 0;
+    border: 0; border-radius: 1rem; background: #8c909c; cursor: pointer; transition: background .15s; }
+  .switch::before { content: ""; position: absolute; top: 2px; left: 2px; width: calc(1.1rem - 4px); height: calc(1.1rem - 4px);
+    border-radius: 50%; background: #fff; transition: transform .15s; }
+  .switch:checked { background: var(--brand); }
+  .switch:checked::before { transform: translateX(.9rem); }
+  .settings fieldset.scope { margin: 1.25rem 0 0; padding: 0 0 1.25rem; border-bottom: 1px solid var(--border); }
+  .scope > .check:first-of-type { margin-top: .4rem; }
+  .subpanel { background: var(--code); border-radius: var(--radius); padding: 1rem; margin-top: .75rem; }
+  .subpanel .field { margin-top: 0; }
+  .scope:has(.switch:not(:checked)) .subpanel, .scope:has([value="all"]:checked) .patterns { display: none; }
+  @media (prefers-reduced-motion: reduce) { .switch, .switch::before { transition: none; } }
   .picker { margin-top: .75rem; }
   .picker summary span { color: var(--muted); }
   .picker-panel { position: absolute; z-index: 1; top: calc(100% + .3rem); left: 0; right: 0; background: var(--surface);
@@ -176,6 +193,22 @@
   .choice span { flex: 1; }
   .choice:has(input:checked)::after { content: "✓"; color: var(--brand); font-weight: 700; }
   .choice small { display: block; }
+
+  /* new-workspace wizard */
+  a.workflow { color: var(--text); padding: 1.5rem; }
+  a.workflow:hover { text-decoration: none; color: var(--text); border-color: var(--brand); }
+  a.workflow h3 { font-size: 1.15rem; margin-bottom: .75rem; }
+  .stepper { display: flex; list-style: none; padding: 0; margin: 0 0 2rem; counter-reset: step; }
+  .stepper li { flex: 1; position: relative; text-align: center; padding-top: 2rem; font-size: .875rem; font-weight: 500; color: var(--muted); counter-increment: step; }
+  .stepper li::after { content: ""; position: absolute; top: .7rem; left: 0; right: 0; height: 3px; background: var(--border); }
+  .stepper li::before { content: counter(step); position: absolute; z-index: 1; top: 0; left: 50%; transform: translateX(-50%);
+    display: grid; place-items: center; width: 1.5rem; height: 1.5rem; border-radius: 50%; font-size: .75rem;
+    border: 1px solid var(--border); background: var(--surface); color: var(--muted); }
+  .stepper .done::after, .stepper .current::after { background: var(--brand); }
+  .stepper .done::before { content: "✓"; border-color: var(--brand); color: var(--brand); }
+  .stepper .current { color: var(--brand); }
+  .stepper .current::before { background: var(--brand); border-color: var(--brand); color: #fff; }
+  .stepper a { text-decoration: underline; }
 
   /* buttons */
   button, .btn { display: inline-flex; align-items: center; gap: .4rem; font: inherit; font-weight: 500; font-size: .875rem; cursor: pointer;
@@ -259,7 +292,13 @@
   .latest-foot { display: flex; align-items: flex-end; gap: 1rem; }
   .latest-foot .stats { flex: 1; margin: 0; padding: 0; }
   .tabs-row { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin: 1.5rem 0 .75rem; }
-  .tabs-row .chips { margin: 0; }
+  /* underline tabs */
+  .tabs-row { align-items: flex-end; border-bottom: 1px solid var(--border); }
+  .tabs-row small { padding-bottom: .5rem; }
+  .tabs-row .chips { margin: 0 0 -1px; gap: 0; }
+  .tabs-row .chips a { font-size: .875rem; padding: .5rem .75rem; border: 0; border-bottom: 3px solid transparent; border-radius: 0; background: none; }
+  .tabs-row .chips a:hover { border-bottom-color: var(--border); }
+  .tabs-row .chips a[aria-current="true"] { background: none; color: var(--brand); border-bottom-color: var(--brand); }
   .side h3 { margin: 1.5rem 0 .5rem; padding-top: 1rem; border-top: 1px solid var(--border); }
   .facts { list-style: none; margin: 0; padding: 0; display: grid; gap: .45rem; font-size: .875rem; }
   .metrics { display: grid; grid-template-columns: 1fr auto; gap: .45rem 1rem; margin: 0; font-size: .875rem; }
@@ -273,8 +312,16 @@
 </style>
 </head>
 <body>
-<header class="topbar"><div class="wrap">
+<header class="topbar">
   <a class="brand" href="/"><span class="logo" aria-hidden="true">OPS</span>Opsolete</a>
+  {{with user}}{{if .Email}}
+  <form class="who" method="post" action="/auth/logout">
+    <span>{{.Email}}</span>{{if .Admin}}<span class="tag">admin</span>{{end}}
+    <button type="submit" class="secondary small">Log out</button>
+  </form>
+  {{end}}{{end}}
+</header>
+<aside class="sidenav">
   {{with workspace}}{{$t := tab}}
   {{if and (or (eq $t "settings") (eq $t "vcs")) $}}{{$p := $.Page}}
   <!-- the side nav becomes the settings menu; only pages that pass their data to "top" get it -->
@@ -311,13 +358,7 @@
     {{end}}
   </nav>
   {{end}}
-  {{with user}}{{if .Email}}
-  <form class="who" method="post" action="/auth/logout">
-    <span>{{.Email}}</span>{{if .Admin}}<span class="tag">admin</span>{{end}}
-    <button type="submit" class="secondary small">Log out</button>
-  </form>
-  {{end}}{{end}}
-</div></header>
+</aside>
 <main class="wrap">
 {{end}}
 {{define "bottom"}}</main>

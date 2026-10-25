@@ -1,28 +1,116 @@
 {{template "top"}}
-<a class="back" href="/registry">← Registry</a>
+{{$conn := .Conn}}{{$repo := index .Form "repo"}}
+<nav class="back" aria-label="breadcrumb"><a href="/registry">Registry</a> / Publish module</nav>
 <div class="page-head">
   <div>
-    <h1>Publish a module</h1>
-    <p class="muted">From <strong>{{.Conn.Name}}</strong> ({{.Conn.Provider}}, <code>{{.Conn.BaseURL}}</code>).</p>
+    <h1>Add module</h1>
+    <p class="muted">Modules are published to the private registry on <code>{{.Host}}</code>.</p>
   </div>
 </div>
 {{with .Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
-<form method="post" action="/registry/publish" class="card">
-  <input type="hidden" name="connection" value="{{.Conn.ID}}">
-  <label for="repo">Repository <span class="req" aria-hidden="true">*</span></label>
-  <input id="repo" name="repo" list="repos" value="{{index .Form "repo"}}" required class="wide" aria-describedby="repo-hint"
-    placeholder="{{if eq .Conn.Provider "azure-devops"}}project/repo{{else}}owner/repo{{end}}">
-  <datalist id="repos">{{range .Repos}}<option value="{{.}}">{{end}}</datalist>
-  <p class="hint" id="repo-hint">The module must be at the repository root. Named <code>terraform-&lt;system&gt;-&lt;name&gt;</code>, name and system are filled in for you.</p>
 
+{{if .Type}}
+<ol class="stepper">
+  <li class="done"><a href="/registry/publish">Choose type</a></li>
+  {{if eq .Type "vcs"}}
+  <li class="{{if gt .Step 1}}done{{else}}current{{end}}"{{if eq .Step 1}} aria-current="step"{{end}}>{{if gt .Step 1}}<a href="?type=vcs">Connect to VCS</a>{{else}}Connect to VCS{{end}}</li>
+  <li class="{{if gt .Step 2}}done{{else if eq .Step 2}}current{{end}}"{{if eq .Step 2}} aria-current="step"{{end}}>{{if gt .Step 2}}<a href="?connection={{$conn.ID}}">Choose a repository</a>{{else}}Choose a repository{{end}}</li>
+  <li{{if eq .Step 3}} class="current" aria-current="step"{{end}}>Confirm selection</li>
+  {{else}}
+  <li class="current" aria-current="step">Upload module</li>
+  {{end}}
+</ol>
+{{end}}
+
+{{if not .Type}}
+<h2>Choose your workflow</h2>
+<div class="grid">
+  {{if .VCS}}
+  <a class="card tile workflow" href="?type=vcs">
+    <h3>Version control workflow</h3>
+    <p>Publish a module from a repository; every semver tag (<code>v1.2.0</code> or <code>1.2.0</code>) becomes a version, checked every 5 minutes.</p>
+    <small>Best for modules that are developed and released in Git</small>
+  </a>
+  {{end}}
+  {{if .Upload}}
+  <a class="card tile workflow" href="?type=upload">
+    <h3>Upload workflow</h3>
+    <p>Upload a <code>.tar.gz</code> archive of the module as one version.</p>
+    <small>Best for one-off versions or modules outside version control</small>
+  </a>
+  {{end}}
+</div>
+<div class="actions"><a class="btn secondary" href="/registry">Cancel</a></div>
+
+{{else if eq .Type "upload"}}
+<h2>Upload module</h2>
+<form method="post" action="/registry" enctype="multipart/form-data" class="settings">
   <label for="namespace">Namespace <span class="req" aria-hidden="true">*</span></label>
   <input id="namespace" name="namespace" value="{{index .Form "namespace"}}" required placeholder="platform">
-  <label for="name">Name</label>
-  <input id="name" name="name" value="{{index .Form "name"}}" placeholder="from the repo name">
-  <label for="system">System (provider)</label>
-  <input id="system" name="system" value="{{index .Form "system"}}" placeholder="azurerm">
-  <p class="hint">Published as <code>{{.Host}}/&lt;namespace&gt;/&lt;name&gt;/&lt;system&gt;</code>. Every semver tag becomes a version.</p>
-
-  <div class="actions"><button type="submit">Publish module</button><a class="btn secondary" href="/registry">Cancel</a></div>
+  <label for="name">Module name <span class="req" aria-hidden="true">*</span></label>
+  <input id="name" name="name" value="{{index .Form "name"}}" required placeholder="storage-account">
+  <label for="system">Provider name <span class="req" aria-hidden="true">*</span></label>
+  <input id="system" name="system" value="{{index .Form "system"}}" required placeholder="azurerm">
+  <label for="version">Version <span class="req" aria-hidden="true">*</span></label>
+  <input id="version" name="version" value="{{index .Form "version"}}" required placeholder="1.0.0">
+  <label for="archive">Module archive (.tar.gz, module files at the root) <span class="req" aria-hidden="true">*</span></label>
+  <input id="archive" name="archive" type="file" accept=".tar.gz,.tgz,application/gzip" required>
+  <p class="hint">Create one with <code>tar czf module.tar.gz -C path/to/module .</code> Published as <code>{{.Host}}/&lt;namespace&gt;/&lt;name&gt;/&lt;provider&gt;</code>; versions are immutable.</p>
+  <div class="actions"><a href="/registry/publish">‹ Previous</a><button type="submit">Upload module</button><a class="btn secondary" href="/registry">Cancel</a></div>
 </form>
+
+{{else if eq .Step 1}}
+<h2>Connect to a version control provider</h2>
+<p class="muted">Choose the version control provider that hosts your module source code.</p>
+{{if .Conns}}
+{{range $p := .Providers}}
+{{$has := false}}{{range $.Conns}}{{if eq .Provider $p.ID}}{{$has = true}}{{end}}{{end}}
+{{if $has}}
+<h3>{{$p.Label}}</h3>
+<div class="inline" style="margin-bottom:1.25rem">
+  {{range $.Conns}}{{if eq .Provider $p.ID}}<a class="btn secondary" href="?connection={{.ID}}">{{.Name}}</a>{{end}}{{end}}
+</div>
+{{end}}
+{{end}}
+<p><a href="/vcs/new?return=module">Connect to a different VCS</a></p>
+{{else}}
+<div class="inline">
+  {{range .Providers}}<a class="btn secondary" href="/vcs/new?provider={{.ID}}&return=module">{{.Label}}</a>{{end}}
+</div>
+<p class="hint">Adds the connection, then continues publishing this module.</p>
+{{end}}
+<div class="actions"><a href="/registry/publish">‹ Previous</a><a class="btn secondary" href="/registry">Cancel</a></div>
+
+{{else if eq .Step 2}}
+<h2>Choose a repository</h2>
+<p class="muted">Repositories of <strong>{{$conn.Name}}</strong> ({{$conn.Provider}}). The module must be at the repository root.</p>
+<form method="get" class="inline">
+  <input type="hidden" name="connection" value="{{$conn.ID}}">
+  <input name="repo" list="repos" required aria-label="repository" placeholder="{{if eq $conn.Provider "azure-devops"}}project/repo{{else}}owner/repo{{end}}">
+  <datalist id="repos">{{range .Repos}}<option value="{{.}}">{{end}}</datalist>
+  <button type="submit">Next</button>
+</form>
+{{with .Repos}}
+<div class="runlist" style="margin-top:1rem">
+  {{range .}}<a class="runrow" href="?connection={{$conn.ID}}&repo={{.}}">{{.}}</a>{{end}}
+</div>
+{{end}}
+<div class="actions"><a href="?type=vcs">‹ Previous</a><a class="btn secondary" href="/registry">Cancel</a></div>
+
+{{else}}
+<h2>Confirm selection</h2>
+<form method="post" action="/registry/publish" class="settings">
+  <input type="hidden" name="connection" value="{{$conn.ID}}">
+  <input type="hidden" name="repo" value="{{$repo}}">
+  <p>Repository: <code>{{$repo}}</code> via {{$conn.Name}}</p>
+  <label for="namespace">Namespace <span class="req" aria-hidden="true">*</span></label>
+  <input id="namespace" name="namespace" value="{{index .Form "namespace"}}" required placeholder="platform">
+  <label for="name">Module name <span class="req" aria-hidden="true">*</span></label>
+  <input id="name" name="name" value="{{index .Form "name"}}" required placeholder="storage-account">
+  <label for="system">Provider name <span class="req" aria-hidden="true">*</span></label>
+  <input id="system" name="system" value="{{index .Form "system"}}" required placeholder="azurerm">
+  <p class="hint">Filled in from a <code>terraform-&lt;provider&gt;-&lt;name&gt;</code> repository name. Published as <code>{{.Host}}/&lt;namespace&gt;/&lt;name&gt;/&lt;provider&gt;</code>.</p>
+  <div class="actions"><a href="?connection={{$conn.ID}}">‹ Previous</a><button type="submit">Publish module</button><a class="btn secondary" href="/registry">Cancel</a></div>
+</form>
+{{end}}
 {{template "bottom"}}

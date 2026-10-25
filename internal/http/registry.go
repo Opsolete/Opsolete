@@ -26,6 +26,9 @@ func (s *Server) registryRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /registry", s.registryPage)
 	mux.HandleFunc("GET /registry/{ns}/{name}/{system}/{version}", s.moduleDocs)
 	mux.HandleFunc("GET /registry/{ns}/{name}/{system}/{version}/docs.md", s.moduleDocs)
+	if s.Features.Editor || s.Features.VCS {
+		mux.HandleFunc("GET /registry/publish", s.admin(s.publishPage))
+	}
 	if s.Features.Editor {
 		mux.HandleFunc("POST /registry", s.admin(s.uploadModule))
 	}
@@ -110,14 +113,11 @@ func (s *Server) moduleArchive(w http.ResponseWriter, r *http.Request) {
 }
 
 type registryPage struct {
-	Modules     []latestModule
-	Editor      bool
-	VCS         bool // VCS publishing is on and the user is an admin
-	Connections []storage.VCSConnection
-	Linked      []storage.VCSModule
-	Host        string
-	Error       string
-	Form        map[string]string
+	Modules []latestModule
+	Editor  bool
+	VCS     bool // VCS publishing is on and the user is an admin
+	Linked  []storage.VCSModule
+	Host    string
 }
 
 // latestModule is a module's newest version and how many older ones it has.
@@ -146,34 +146,32 @@ func latestVersions(mods []storage.Module) []latestModule {
 }
 
 func (s *Server) registryPage(w http.ResponseWriter, r *http.Request) {
-	s.renderRegistry(w, r, http.StatusOK, "", nil)
-}
-
-func (s *Server) renderRegistry(w http.ResponseWriter, r *http.Request, status int, errMsg string, form map[string]string) {
 	mods, err := s.Store.ListModules(r.Context())
 	if err != nil {
 		s.Log.Error("list modules", "err", err)
 		http.Error(w, "could not load modules", http.StatusInternalServerError)
 		return
 	}
-	p := registryPage{Modules: latestVersions(mods), Editor: s.canEdit(r), Host: s.Registry.PublicURL.Host, Error: errMsg, Form: form,
+	p := registryPage{Modules: latestVersions(mods), Editor: s.canEdit(r), Host: s.Registry.PublicURL.Host,
 		VCS: s.Features.VCS && auth.FromContext(r.Context()).Admin()}
 	if p.VCS {
-		if p.Connections, err = s.Store.VCSConnections(r.Context()); err == nil {
-			p.Linked, err = s.Store.VCSModules(r.Context())
-		}
-		if err != nil {
+		if p.Linked, err = s.Store.VCSModules(r.Context()); err != nil {
 			s.internalError(w, "vcs modules", err)
 			return
 		}
 	}
-	s.render(w, r, status, "registry.html", p)
+	s.render(w, r, http.StatusOK, "registry.html", p)
+}
+
+// renderUpload is the upload step of the add-module wizard.
+func (s *Server) renderUpload(w http.ResponseWriter, r *http.Request, status int, errMsg string, form map[string]string) {
+	s.render(w, r, status, "publish.html", publishPage{Type: "upload", Host: s.Registry.PublicURL.Host, Error: errMsg, Form: form})
 }
 
 func (s *Server) uploadModule(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, registry.MaxArchiveSize+1<<20)
 	if err := r.ParseMultipartForm(1 << 20); err != nil {
-		s.renderRegistry(w, r, http.StatusRequestEntityTooLarge, fmt.Sprintf("upload too large or malformed (max %d MB)", registry.MaxArchiveSize>>20), nil)
+		s.renderUpload(w, r, http.StatusRequestEntityTooLarge, fmt.Sprintf("upload too large or malformed (max %d MB)", registry.MaxArchiveSize>>20), map[string]string{})
 		return
 	}
 	defer r.MultipartForm.RemoveAll()
@@ -181,7 +179,7 @@ func (s *Server) uploadModule(w http.ResponseWriter, r *http.Request) {
 	for _, k := range []string{"namespace", "name", "system", "version"} {
 		form[k] = strings.TrimSpace(r.FormValue(k))
 	}
-	fail := func(msg string) { s.renderRegistry(w, r, http.StatusUnprocessableEntity, msg, form) }
+	fail := func(msg string) { s.renderUpload(w, r, http.StatusUnprocessableEntity, msg, form) }
 
 	ns, name, sys, _, err := s.Registry.Address(form["namespace"], form["name"], form["system"])
 	if err != nil {

@@ -308,6 +308,16 @@ resource "terraform_data" "this" {}
 data "terraform_remote_state" "net" {
   backend = "local"
 }`})
+	// add-module wizard: upload is one of the workflows (VCS is off in this server)
+	if page := get(h, "/registry/publish").Body.String(); !strings.Contains(page, `href="?type=upload"`) || strings.Contains(page, `href="?type=vcs"`) {
+		t.Fatalf("workflow choice: %s", page)
+	}
+	if page := get(h, "/registry/publish?type=upload").Body.String(); !strings.Contains(page, `action="/registry" enctype="multipart/form-data"`) {
+		t.Fatalf("upload step: %s", page)
+	}
+	if rec := get(h, "/registry/publish?type=vcs"); rec.Code != http.StatusNotFound {
+		t.Fatalf("vcs step with VCS off: %d", rec.Code)
+	}
 	fields := map[string]string{"namespace": ns, "name": "storage", "system": "azurerm", "version": "v1.2.0"}
 	rec := upload(h, fields, archive)
 	docsURL := "/registry/" + ns + "/storage/azurerm/1.2.0"
@@ -849,7 +859,7 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 		t.Fatal("grant form must offer the groups seen at login")
 	}
 	if rec := get(owner, "/workspaces/new?template=vars"); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/templates/vars" ||
-		!strings.Contains(get(owner, "/workspaces/new").Body.String(), `<option value="vars">`) {
+		!strings.Contains(get(owner, "/workspaces/new?type=template").Body.String(), `<option value="vars">`) {
 		t.Fatalf("new workspace can start from a template: %d", rec.Code)
 	}
 	if rec := post(reader, wsURL+"/runs", url.Values{"action": {"destroy"}}); rec.Code != http.StatusForbidden {

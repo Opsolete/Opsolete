@@ -475,7 +475,7 @@ func TestVCSWorkspaceVariableSets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CreateVCSConnection(ctx, VCSConnection{Name: name, Provider: "github", Token: []byte("x")}); err != nil {
+	if _, err := s.CreateVCSConnection(ctx, VCSConnection{Name: name, Provider: "github", Token: []byte("x")}); err != nil {
 		t.Fatal(err)
 	}
 	var conn string
@@ -560,7 +560,7 @@ func TestQueueVCSRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CreateVCSConnection(ctx, VCSConnection{Name: name, Provider: "github", Token: []byte("x")}); err != nil {
+	if _, err := s.CreateVCSConnection(ctx, VCSConnection{Name: name, Provider: "github", Token: []byte("x")}); err != nil {
 		t.Fatal(err)
 	}
 	var conn string

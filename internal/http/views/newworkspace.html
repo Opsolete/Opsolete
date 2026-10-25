@@ -1,34 +1,136 @@
 {{template "top"}}
-<a class="back" href="/workspaces">← Workspaces</a>
+{{$f := .VCS.Form}}{{$t := index $f "type"}}{{$conn := .Conn}}
+{{/* step of the vcs workflow: 2 connect, 3 repository, 4 settings */}}
+{{$step := 1}}{{if eq $t "vcs"}}{{$step = 2}}{{if $conn}}{{$step = 3}}{{if index $f "vcs_repo"}}{{$step = 4}}{{end}}{{end}}{{end}}
+<nav class="back" aria-label="breadcrumb"><a href="/workspaces">Workspaces</a> / New workspace</nav>
 <div class="page-head">
   <div>
-    <h1>New workspace</h1>
+    <h1>Create a new workspace</h1>
     <p class="muted">A workspace holds one Terraform state, its variables and its runs.</p>
   </div>
 </div>
 {{with .VCS.Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
-<form method="post" class="card">
-  <h3>Blank workspace</h3>
-  <p class="muted">Empty, or with just variables; link a repository now or later to run it.</p>
-  <label for="name">Workspace name <span class="req" aria-hidden="true">*</span></label>
-  <input id="name" name="name" value="{{index .VCS.Form "name"}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}" placeholder="network-prod">
-  <p class="hint">Lowercase letters, digits and dashes.</p>
-  <label for="auto_apply"><input type="checkbox" id="auto_apply" name="auto_apply"{{if index .VCS.Form "auto_apply"}} checked{{end}}>
-    Auto-apply: apply plans without asking for confirmation</label>
-  {{if .VCS.Conns}}{{template "vcsfields" .VCS}}{{end}}
-  <div class="actions"><button type="submit">Create workspace</button><a class="btn secondary" href="/workspaces">Cancel</a></div>
+
+{{if $t}}
+<ol class="stepper">
+  <li class="done"><a href="/workspaces/new">Choose type</a></li>
+  {{if eq $t "vcs"}}
+  <li class="{{if gt $step 2}}done{{else}}current{{end}}"{{if eq $step 2}} aria-current="step"{{end}}>{{if gt $step 2}}<a href="?type=vcs">Connect to VCS</a>{{else}}Connect to VCS{{end}}</li>
+  <li class="{{if gt $step 3}}done{{else if eq $step 3}}current{{end}}"{{if eq $step 3}} aria-current="step"{{end}}>{{if gt $step 3}}<a href="?type=vcs&conn={{$conn.ID}}">Choose a repository</a>{{else}}Choose a repository{{end}}</li>
+  <li{{if eq $step 4}} class="current" aria-current="step"{{end}}>Configure settings</li>
+  {{else if eq $t "template"}}
+  <li class="current" aria-current="step">Choose a template</li>
+  <li>Fill in its form</li>
+  {{else}}
+  <li class="current" aria-current="step">Configure settings</li>
+  {{end}}
+</ol>
+{{end}}
+
+{{if not $t}}
+<h2>Choose your workflow</h2>
+<div class="grid">
+  {{if (features).VCS}}
+  <a class="card tile workflow" href="?type=vcs">
+    <h3>Version control workflow</h3>
+    <p>Trigger runs based on changes to configuration in repositories.</p>
+    <small>Best for those who need traceability and transparency</small>
+  </a>
+  {{end}}
+  <a class="card tile workflow" href="?type=cli">
+    <h3>CLI-driven workflow</h3>
+    <p>Run Terraform on your machine with the cloud block; Opsolete keeps the state. Or start blank, with just variables.</p>
+    <small>Best for those comfortable with the Terraform CLI</small>
+  </a>
+  {{if .Templates}}
+  <a class="card tile workflow" href="?type=template">
+    <h3>Template workflow</h3>
+    <p>Fill in a template's form; a runner deploys its module.</p>
+    <small>Best for self-service without writing Terraform</small>
+  </a>
+  {{end}}
+</div>
+<div class="actions"><a class="btn secondary" href="/workspaces">Cancel</a></div>
+
+{{else if eq $step 2}}
+<h2>Connect to a version control provider</h2>
+<p class="muted">Choose the version control provider that hosts the Terraform configuration for this workspace.</p>
+{{if and .VCS.Conns (not (index $f "other"))}}
+{{range $p := .Providers}}
+{{$has := false}}{{range $.VCS.Conns}}{{if eq .Provider $p.ID}}{{$has = true}}{{end}}{{end}}
+{{if $has}}
+<h3>{{$p.Label}}</h3>
+<div class="inline" style="margin-bottom:1.25rem">
+  {{range $.VCS.Conns}}{{if eq .Provider $p.ID}}<a class="btn secondary" href="?type=vcs&conn={{.ID}}">{{.Name}}</a>{{end}}{{end}}
+</div>
+{{end}}
+{{end}}
+<p><a href="?type=vcs&other=1">Connect to a different VCS</a></p>
+{{else if (user).Admin}}
+<div class="inline">
+  {{range .Providers}}<a class="btn secondary" href="/vcs/new?provider={{.ID}}&return=workspace">{{.Label}}</a>{{end}}
+</div>
+<p class="hint">Adds the connection, then continues creating this workspace.</p>
+{{if .VCS.Conns}}<p><a href="?type=vcs">Use an existing connection</a></p>{{end}}
+{{else}}
+<p class="hint">No connection allows workspaces yet: an admin adds one under VCS providers and allows its repositories for workspaces.</p>
+{{end}}
+<div class="actions"><a href="/workspaces/new">‹ Previous</a><a class="btn secondary" href="/workspaces">Cancel</a></div>
+
+{{else if eq $step 3}}
+<h2>Choose a repository</h2>
+<p class="muted">Repositories of <strong>{{$conn.Name}}</strong> that workspaces may link.</p>
+<form method="get" class="inline">
+  <input type="hidden" name="type" value="vcs"><input type="hidden" name="conn" value="{{$conn.ID}}">
+  <input name="repo" list="vcs-repos" required aria-label="repository" placeholder="owner/repo or project/repo">
+  <datalist id="vcs-repos">{{range .VCS.Repos}}<option value="{{.}}">{{end}}</datalist>
+  <button type="submit">Continue</button>
 </form>
-{{with .Templates}}
-<form method="get" class="card">
-  <h3>From a template</h3>
-  <p class="muted">Fill in a template's form; the workspace deploys its module.</p>
-  <div class="inline">
-    <select name="template" aria-label="template" required>
-      <option value="">choose a template…</option>
-      {{range .}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
-    </select>
-    <button type="submit" class="secondary">Continue</button>
-  </div>
+{{with .VCS.Repos}}
+<div class="runlist" style="margin-top:1rem">
+  {{range .}}<a class="runrow" href="?type=vcs&conn={{$conn.ID}}&repo={{.}}">{{.}}</a>{{end}}
+</div>
+{{end}}
+<div class="actions"><a href="?type=vcs">‹ Previous</a><a class="btn secondary" href="/workspaces">Cancel</a></div>
+
+{{else if eq $step 4}}
+<h2>Configure settings</h2>
+<form method="post" class="settings">
+  <input type="hidden" name="type" value="vcs">
+  <input type="hidden" name="vcs_connection" value="{{$conn.ID}}">
+  <input type="hidden" name="vcs_repo" value="{{index $f "vcs_repo"}}">
+  <p>Repository: <code>{{index $f "vcs_repo"}}</code> via {{$conn.Name}}</p>
+  {{template "wsname" $f}}
+  {{template "vcsbranch" .VCS}}
+  <div class="actions"><a href="?type=vcs&conn={{$conn.ID}}">‹ Previous</a><button type="submit">Create workspace</button><a class="btn secondary" href="/workspaces">Cancel</a></div>
+</form>
+
+{{else if eq $t "template"}}
+<h2>Choose a template</h2>
+<form method="get" class="inline">
+  <select name="template" aria-label="template" required>
+    <option value="">choose a template…</option>
+    {{range .Templates}}<option value="{{.ID}}">{{.Name}}</option>{{end}}
+  </select>
+  <button type="submit">Continue</button>
+</form>
+<div class="actions"><a href="/workspaces/new">‹ Previous</a><a class="btn secondary" href="/workspaces">Cancel</a></div>
+
+{{else}}
+<h2>Configure settings</h2>
+<form method="post" class="settings">
+  <input type="hidden" name="type" value="cli">
+  {{template "wsname" $f}}
+  <p class="hint">Point Terraform's cloud block at this workspace, or link a repository later under its settings.</p>
+  <div class="actions"><a href="/workspaces/new">‹ Previous</a><button type="submit">Create workspace</button><a class="btn secondary" href="/workspaces">Cancel</a></div>
 </form>
 {{end}}
 {{template "bottom"}}
+
+{{define "wsname"}}
+<label for="name">Workspace name <span class="req" aria-hidden="true">*</span></label>
+<input id="name" name="name" value="{{index . "name"}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}" placeholder="network-prod">
+<p class="hint">Lowercase letters, digits and dashes.</p>
+<label class="check"><input type="checkbox" id="auto_apply" name="auto_apply"{{if index . "auto_apply"}} checked{{end}}>
+  <span>Auto-apply<small>Apply plans without asking for confirmation.</small></span></label>
+{{end}}

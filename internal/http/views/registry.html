@@ -4,7 +4,7 @@
     <h1>Module registry</h1>
     <p class="muted">Private Terraform module registry on <code>{{.Host}}</code>.</p>
   </div>
-  {{if .VCS}}<a class="btn" href="#publish">Publish module</a>{{end}}
+  {{if or .VCS .Editor}}<a class="btn" href="/registry/publish">Publish module</a>{{end}}
 </div>
 
 <div class="card">
@@ -28,14 +28,13 @@
   {{if $editor}}<td class="nowrap"><a href="/templates/new?module={{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}">Create template</a></td>{{end}}
 </tr>
 {{else}}
-<tr><td colspan="5" class="empty">No modules uploaded yet.</td></tr>
+<tr><td colspan="5" class="empty">No modules published yet.{{if or .VCS .Editor}} <a href="/registry/publish">Publish a module →</a>{{end}}</td></tr>
 {{end}}
 </table>
 </div>
 
-{{if .VCS}}
-<h2 id="publish">Publish from a VCS provider</h2>
-{{with .Linked}}
+{{if .VCS}}{{with .Linked}}
+<h2>Published from VCS</h2>
 <div class="card flush">
 <table>
 <tr><th>Module</th><th>Repository</th><th>Last sync</th><th></th></tr>
@@ -50,36 +49,7 @@
 {{end}}
 </table>
 </div>
-{{end}}
-<div class="card">
-  <p>Every semver tag (<code>v1.2.0</code> or <code>1.2.0</code>) of a published repository becomes a module version, checked every 5 minutes.</p>
-  {{with .Connections}}
-  <form method="get" action="/registry/publish" class="inline">
-    <select name="connection" aria-label="VCS connection">{{range .}}<option value="{{.ID}}">{{.Name}} ({{.Provider}})</option>{{end}}</select>
-    <button type="submit">Choose repository →</button>
-  </form>
-  {{else}}
-  <p class="muted"><a href="/vcs">Connect a VCS provider</a> (GitHub or Azure DevOps) first.</p>
-  {{end}}
-</div>
-{{end}}
+<p class="hint">Every semver tag of these repositories becomes a module version, checked every 5 minutes.</p>
+{{end}}{{end}}
 
-{{if .Editor}}
-<h2>Upload a module version</h2>
-{{with .Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
-<form method="post" enctype="multipart/form-data" class="card">
-  <label for="namespace">Namespace</label>
-  <input id="namespace" name="namespace" value="{{index .Form "namespace"}}" required placeholder="platform">
-  <label for="name">Name</label>
-  <input id="name" name="name" value="{{index .Form "name"}}" required placeholder="storage-account">
-  <label for="system">System</label>
-  <input id="system" name="system" value="{{index .Form "system"}}" required placeholder="azurerm">
-  <label for="version">Version</label>
-  <input id="version" name="version" value="{{index .Form "version"}}" required placeholder="1.0.0">
-  <label for="archive">Module archive (.tar.gz, module files at the root)</label>
-  <input id="archive" name="archive" type="file" accept=".tar.gz,.tgz,application/gzip" required>
-  <p class="hint">Create one with <code>tar czf module.tar.gz -C path/to/module .</code></p>
-  <div class="actions"><button type="submit">Upload</button></div>
-</form>
-{{end}}
 {{template "bottom"}}

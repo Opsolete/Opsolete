@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -31,8 +32,9 @@ type vcsForm struct {
 	Error string
 }
 
-// loadVCSForm lists connections and their repos; with VCS off it's empty and the form hides the part.
-func (s *Server) loadVCSForm(ctx context.Context, form map[string]string, errMsg string) (vcsForm, error) {
+// loadVCSForm lists connections and the repos of reposOf ("*" = all connections, "" = none);
+// with VCS off it's empty and the form hides the part.
+func (s *Server) loadVCSForm(ctx context.Context, form map[string]string, errMsg, reposOf string) (vcsForm, error) {
 	f := vcsForm{Form: form, Error: errMsg}
 	if !s.Features.VCS {
 		return f, nil
@@ -46,6 +48,9 @@ func (s *Server) loadVCSForm(ctx context.Context, form map[string]string, errMsg
 			continue
 		}
 		f.Conns = append(f.Conns, sc)
+		if reposOf != "*" && reposOf != sc.ID {
+			continue
+		}
 		c, err := vcs.ConnFor(s.SecretKey, sc)
 		if err == nil {
 			var repos []string
@@ -66,7 +71,7 @@ func (s *Server) loadVCSForm(ctx context.Context, form map[string]string, errMsg
 
 func vcsFormValues(r *http.Request) map[string]string {
 	form := map[string]string{}
-	for _, k := range []string{"name", "auto_apply", "vcs_connection", "vcs_repo", "vcs_branch", "vcs_trigger", "vcs_pull_requests"} {
+	for _, k := range []string{"type", "name", "auto_apply", "vcs_connection", "vcs_repo", "vcs_branch", "vcs_trigger", "vcs_pull_requests"} {
 		form[k] = strings.TrimSpace(r.PostFormValue(k))
 	}
 	return form
@@ -111,28 +116,49 @@ func (s *Server) vcsConn(ctx context.Context, connID string) (vcs.Conn, error) {
 	return vcs.ConnFor(s.SecretKey, sc)
 }
 
+// newWorkspacePage is a wizard, like HCP Terraform's: ?type= picks the workflow (vcs, cli, template),
+// then for vcs ?conn= the connection and ?repo= the repository, before the settings form.
 func (s *Server) newWorkspacePage(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
 	// "From a template" goes to that template's form.
-	if id := r.URL.Query().Get("template"); id != "" {
+	if id := q.Get("template"); id != "" {
 		http.Redirect(w, r, "/templates/"+url.PathEscape(id), http.StatusSeeOther)
 		return
 	}
-	s.renderNewWorkspace(w, r, http.StatusOK, map[string]string{"vcs_branch": "main", "vcs_trigger": "1"}, "")
+	form := map[string]string{"type": q.Get("type"), "vcs_connection": q.Get("conn"), "vcs_repo": q.Get("repo"), "other": q.Get("other"),
+		"vcs_branch": "main", "vcs_trigger": "1"}
+	if repo := form["vcs_repo"]; repo != "" {
+		form["name"] = strings.ToLower(path.Base(repo)) // a suggestion; the form checks it
+	}
+	s.renderNewWorkspace(w, r, http.StatusOK, form, "")
 }
 
 func (s *Server) renderNewWorkspace(w http.ResponseWriter, r *http.Request, status int, form map[string]string, errMsg string) {
-	f, err := s.loadVCSForm(r.Context(), form, errMsg)
+	reposOf := "" // only the repository step lists repositories, of its connection
+	if form["type"] == "vcs" && form["vcs_repo"] == "" {
+		reposOf = form["vcs_connection"]
+	}
+	f, err := s.loadVCSForm(r.Context(), form, errMsg, reposOf)
 	if err != nil {
 		s.internalError(w, "vcs connections", err)
 		return
 	}
-	s.render(w, r, status, "newworkspace.html", map[string]any{"Templates": s.Templates.List(), "VCS": f})
+	data := map[string]any{"Templates": s.Templates.List(), "VCS": f, "Providers": vcs.Providers}
+	for _, c := range f.Conns {
+		if c.ID == form["vcs_connection"] {
+			data["Conn"] = c
+		}
+	}
+	s.render(w, r, status, "newworkspace.html", data)
 }
 
 // createEmptyWorkspace creates a workspace without a template, optionally linked to a branch.
 // It queues no run: the next step is usually variables or a branch.
 func (s *Server) createEmptyWorkspace(w http.ResponseWriter, r *http.Request) {
 	form := vcsFormValues(r)
+	if form["type"] == "" { // re-render a failed form at the right step
+		form["type"] = map[bool]string{true: "vcs", false: "cli"}[form["vcs_connection"] != ""]
+	}
 	fail := func(msg string) { s.renderNewWorkspace(w, r, http.StatusUnprocessableEntity, form, msg) }
 	name := form["name"]
 	if !validWorkspaceName(name) {
@@ -195,7 +221,7 @@ func (s *Server) workspaceVCSPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) renderWorkspaceVCS(w http.ResponseWriter, r *http.Request, status int, ws storage.Workspace, form map[string]string, errMsg string) {
-	f, err := s.loadVCSForm(r.Context(), form, errMsg)
+	f, err := s.loadVCSForm(r.Context(), form, errMsg, "*")
 	if err != nil {
 		s.internalError(w, "vcs connections", err)
 		return

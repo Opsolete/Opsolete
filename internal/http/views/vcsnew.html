@@ -1,0 +1,112 @@
+{{template "top"}}
+{{$p := index .Form "provider"}}{{$ret := .Return}}
+{{$back := "/vcs"}}{{if eq $ret "workspace"}}{{$back = "/workspaces/new?type=vcs"}}{{else if eq $ret "module"}}{{$back = "/registry/publish?type=vcs"}}{{end}}
+<nav class="back" aria-label="breadcrumb"><a href="/vcs">VCS providers</a> / {{if .Edit}}{{.Conn.Name}}{{else}}Add VCS provider{{end}}</nav>
+<div class="page-head">
+  <div>
+    {{if .Edit}}<h1>{{.Conn.Name}}</h1>{{else}}
+    <h1>Add VCS provider</h1>
+    <p class="muted">Connect GitHub or Azure DevOps so workspaces and registry modules can use its repositories.
+      {{if eq $ret "workspace"}}Afterwards you continue creating your workspace.{{else if eq $ret "module"}}Afterwards you continue publishing your module.{{end}}</p>{{end}}
+  </div>
+</div>
+{{with .Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
+
+{{if not .Edit}}
+<ol class="stepper">
+  <li class="{{if gt .Step 1}}done{{else}}current{{end}}"{{if eq .Step 1}} aria-current="step"{{end}}>{{if eq .Step 2}}<a href="?return={{$ret}}">Connect to VCS</a>{{else}}Connect to VCS{{end}}</li>
+  <li class="{{if gt .Step 2}}done{{else if eq .Step 2}}current{{end}}"{{if eq .Step 2}} aria-current="step"{{end}}>Set up provider</li>
+  <li{{if eq .Step 3}} class="current" aria-current="step"{{end}}>Advanced settings</li>
+</ol>
+{{end}}
+
+{{if eq .Step 1}}
+<h2>Choose a version control provider to connect</h2>
+<p class="muted">Choose the version control provider you would like to connect.</p>
+<div class="inline">
+  {{range .Providers}}<a class="btn secondary" href="?provider={{.ID}}&return={{$ret}}">{{.Label}}</a>{{end}}
+</div>
+<div class="actions"><a class="btn secondary" href="{{$back}}">Cancel</a></div>
+
+{{else if eq .Step 2}}
+<h2>Set up {{range .Providers}}{{if eq .ID $p}}{{.Label}}{{end}}{{end}}</h2>
+<div class="card">
+  {{if eq $p "github"}}
+  <p>Create a fine-grained personal access token for the account Opsolete should act as:</p>
+  <ol>
+    <li>Open <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Settings → Developer settings → Fine-grained tokens → Generate new token</a>.</li>
+    <li><strong>Repository access:</strong> <em>Only select repositories</em>, the module and workspace repositories.</li>
+    <li><strong>Permissions:</strong> <em>Contents: Read-only</em>. Nothing else is needed.</li>
+    <li>Generate the token and paste it below.</li>
+  </ol>
+  {{else}}
+  <p>Create a personal access token for the account Opsolete should act as:</p>
+  <ol>
+    <li>In Azure DevOps, open <strong>User settings → Personal access tokens → New Token</strong>.</li>
+    <li><strong>Organization:</strong> the organization with your repositories.</li>
+    <li><strong>Scopes:</strong> <em>Custom defined</em>, only <em>Code: Read</em>.</li>
+    <li>Create the token and paste it below.</li>
+  </ol>
+  {{end}}
+</div>
+<form method="post" action="/vcs" class="settings">
+  <input type="hidden" name="provider" value="{{$p}}">
+  <input type="hidden" name="return" value="{{$ret}}">
+  <label for="name">Name <span class="req" aria-hidden="true">*</span></label>
+  <input id="name" name="name" value="{{index .Form "name"}}" required maxlength="64" placeholder="{{if eq $p "github"}}github-acme{{else}}azure-acme{{end}}">
+  {{if eq $p "github"}}
+  <label for="base_url">API URL</label>
+  <input id="base_url" name="base_url" value="{{index .Form "base_url"}}" aria-describedby="base_url-hint" placeholder="https://api.github.com">
+  <p class="hint" id="base_url-hint">Leave empty for github.com, or <code>https://github.example.com/api/v3</code> for Enterprise Server.</p>
+  {{else}}
+  <label for="base_url">Organization URL <span class="req" aria-hidden="true">*</span></label>
+  <input id="base_url" name="base_url" value="{{index .Form "base_url"}}" required placeholder="https://dev.azure.com/<organization>">
+  {{end}}
+  <label for="token">Personal access token <span class="req" aria-hidden="true">*</span></label>
+  <input id="token" name="token" type="password" required autocomplete="off" aria-describedby="token-hint">
+  <p class="hint" id="token-hint">Checked now, stored encrypted and never shown again.</p>
+  <div class="actions"><a href="?return={{$ret}}">‹ Previous</a><button type="submit">Connect and continue</button><a class="btn secondary" href="{{$back}}">Cancel</a></div>
+</form>
+
+{{else}}
+{{$f := .Form}}
+{{if .Edit}}<p class="muted">{{.Conn.Provider}} · <code>{{.Conn.BaseURL}}</code> · added {{.Conn.CreatedAt.Format "2006-01-02 15:04"}}</p>{{else}}
+<h2>Advanced settings</h2>
+<p><strong>{{.Conn.Name}}</strong> is connected.</p>{{end}}
+<form method="post" action="/vcs/{{.Conn.ID}}/settings" class="settings">
+  {{if not .Edit}}<input type="hidden" name="wizard" value="1">{{end}}
+  <input type="hidden" name="return" value="{{$ret}}">
+  <h3>Scope of VCS provider</h3>
+  <p class="muted">Configure what this connection's repositories may be used for.</p>
+
+  <fieldset class="scope">
+    <legend>Workspaces</legend>
+    <label class="check"><input type="checkbox" class="switch" role="switch" name="workspaces" value="1"{{if index $f "workspaces"}} checked{{end}}>
+      <span>Enable<small>Let workspaces link repositories from this connection.</small></span></label>
+    <div class="subpanel">
+      <p class="field">Scope</p>
+      <label class="check"><input type="radio" name="workspace_scope" value="all"{{if eq (index $f "workspace_scope") "all"}} checked{{end}}>
+        <span>All repositories<small>Workspaces may link any repository the token can read.</small></span></label>
+      <label class="check"><input type="radio" name="workspace_scope" value="selected"{{if ne (index $f "workspace_scope") "all"}} checked{{end}}>
+        <span>Selected repositories<small>Only repositories that match a pattern.</small></span></label>
+      <div class="patterns indent">
+        <textarea name="workspace_repos" rows="3" aria-label="Repository patterns" aria-describedby="workspace_repos-hint" placeholder="acme/infra-*">{{index $f "workspace_repos"}}</textarea>
+        <p class="hint" id="workspace_repos-hint">One pattern per line, such as <code>acme/infra-*</code> or <code>Platform Team/*</code>.</p>
+      </div>
+      <p class="hint">Anyone who can push to a linked branch runs code with the workspace's credentials: protect those branches.</p>
+    </div>
+  </fieldset>
+
+  <fieldset class="scope">
+    <legend>Modules</legend>
+    <label class="check"><input type="checkbox" class="switch" role="switch" name="modules" value="1"{{if index $f "modules"}} checked{{end}}>
+      <span>Enable<small>Let admins publish registry modules from this connection. Modules already published keep syncing.</small></span></label>
+  </fieldset>
+
+  <div class="actions">
+    {{if .Edit}}<button type="submit">Update VCS provider</button><a class="btn secondary" href="/vcs">Cancel</a>
+    {{else}}<button type="submit">{{if $ret}}Save and continue{{else}}Save and finish{{end}}</button>{{end}}
+  </div>
+</form>
+{{end}}
+{{template "bottom"}}

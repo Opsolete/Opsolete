@@ -61,35 +61,61 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 
 	app := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true, Registry: true, VCS: true})
 	h := app.Handler()
-	if rec := post(h, "/vcs", url.Values{"name": {connName}, "provider": {"github"}, "base_url": {gh.URL}, "token": {"pat"}}); rec.Code != http.StatusSeeOther {
-		t.Fatalf("connect: %d %s", rec.Code, rec.Body.String())
+	// Add-VCS-provider wizard started from the new-workspace wizard: it ends back there with the new connection.
+	if page := get(h, "/vcs/new?provider=github&return=workspace").Body.String(); !strings.Contains(page, `name="return" value="workspace"`) {
+		t.Fatalf("set up provider step: %s", page)
 	}
-	conns, _ := store.VCSConnections(ctx)
-	var connID string
-	for _, c := range conns {
-		if c.Name == connName {
-			connID = c.ID
-		}
+	rec := post(h, "/vcs", url.Values{"name": {connName}, "provider": {"github"}, "base_url": {gh.URL}, "token": {"pat"}, "return": {"workspace"}})
+	loc := rec.Header().Get("Location")
+	if rec.Code != http.StatusSeeOther || !strings.HasPrefix(loc, "/vcs/new?connection=") || !strings.HasSuffix(loc, "&return=workspace") {
+		t.Fatalf("connect: %d %q %s", rec.Code, loc, rec.Body.String())
+	}
+	connID := strings.TrimSuffix(strings.TrimPrefix(loc, "/vcs/new?connection="), "&return=workspace")
+	if page := get(h, loc).Body.String(); !strings.Contains(page, `action="/vcs/`+connID+`/settings"`) || strings.Contains(page, "Skip and") {
+		t.Fatalf("advanced settings step: %s", page)
 	}
 
 	// A new connection only publishes modules until an admin allows repositories for workspaces.
-	if page := get(h, "/workspaces/new").Body.String(); strings.Contains(page, `<option value="acme/infra">`) || strings.Contains(page, connName) {
+	if page := get(h, "/workspaces/new?type=vcs").Body.String(); strings.Contains(page, connName) {
 		t.Fatalf("a modules-only connection must not be offered: %s", page)
 	}
 	refused := url.Values{"name": {linked}, "vcs_connection": {connID}, "vcs_repo": {"acme/infra"}, "vcs_branch": {"main"}}
 	if rec := post(h, "/workspaces/new", refused); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "may not link") {
 		t.Fatalf("linking a repository the connection doesn't allow: %d", rec.Code)
 	}
-	if rec := post(h, "/vcs/"+connID+"/workspace-repos", url.Values{"workspace_repos": {"*"}}); rec.Code != http.StatusUnprocessableEntity {
+	if rec := post(h, "/vcs/"+connID+"/settings", url.Values{"workspaces": {"1"}, "workspace_repos": {"*"}}); rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("a bad pattern: %d", rec.Code)
 	}
-	if rec := post(h, "/vcs/"+connID+"/workspace-repos", url.Values{"workspace_repos": {"acme/infra*"}}); rec.Code != http.StatusSeeOther {
-		t.Fatalf("allow repos: %d %s", rec.Code, rec.Body.String())
+	wizard := url.Values{"wizard": {"1"}, "return": {"workspace"}, "workspace_scope": {"selected"}, "workspace_repos": {"acme/infra*"}, "modules": {"1"}}
+	if rec := post(h, "/vcs/"+connID+"/settings", wizard); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "enable workspaces") {
+		t.Fatalf("the workspace flow needs workspaces enabled: %d", rec.Code)
+	}
+	wizard.Set("workspaces", "1")
+	wizard.Set("workspace_repos", "")
+	if rec := post(h, "/vcs/"+connID+"/settings", wizard); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "at least one repository pattern") {
+		t.Fatalf("selected repositories need a pattern: %d", rec.Code)
+	}
+	wizard.Set("workspace_repos", "acme/infra*")
+	if rec := post(h, "/vcs/"+connID+"/settings", wizard); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/workspaces/new?type=vcs&conn="+connID {
+		t.Fatalf("allow repos and continue: %d %q %s", rec.Code, rec.Header().Get("Location"), rec.Body.String())
 	}
 
 	// Blank: no template, no run, nothing to plan.
-	if page := get(h, "/workspaces/new").Body.String(); !strings.Contains(page, `<option value="acme/infra">`) || !strings.Contains(page, connName) {
-		t.Fatalf("new workspace page must offer connections and repos: %s", page)
+	if page := get(h, "/workspaces/new?type=vcs").Body.String(); !strings.Contains(page, `href="?type=vcs&conn=`+connID+`"`) || !strings.Contains(page, connName) {
+		t.Fatalf("new workspace wizard must offer the connection: %s", page)
+	}
+	if page := get(h, "/workspaces/new?type=vcs&other=1").Body.String(); !strings.Contains(page, `href="/vcs/new?provider=github&return=workspace"`) {
+		t.Fatalf("connect to a different VCS must offer the providers: %s", page)
+	}
+	if page := get(h, "/vcs/new?provider=azure-devops").Body.String(); !strings.Contains(page, `name="provider" value="azure-devops"`) || !strings.Contains(page, "Organization URL") {
+		t.Fatalf("the add-VCS wizard must set up the chosen provider: %s", page)
+	}
+	if page := get(h, "/workspaces/new?type=vcs&conn="+connID).Body.String(); !strings.Contains(page, `<option value="acme/infra">`) {
+		t.Fatalf("new workspace wizard must offer the connection's repos: %s", page)
+	}
+	if page := get(h, "/workspaces/new?type=vcs&conn="+connID+"&repo=acme/infra").Body.String(); !strings.Contains(page, `value="infra"`) ||
+		!strings.Contains(page, `name="vcs_repo" value="acme/infra"`) {
+		t.Fatalf("new workspace wizard settings step: %s", page)
 	}
 	if rec := post(h, "/workspaces/new", url.Values{"name": {"new"}}); rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf(`"new" is reserved: %d`, rec.Code)
@@ -119,7 +145,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	runnerTok, _ := store.CreateToken(ctx, "r", storage.ScopeRunner)
 	req := httptest.NewRequest("POST", runnerapi.Prefix+"/jobs/claim", strings.NewReader(`{"runner":"r1"}`))
 	req.Header.Set("Authorization", "Bearer "+runnerTok)
-	rec := do(h, req)
+	rec = do(h, req)
 	var job runnerapi.Job
 	if json.Unmarshal(rec.Body.Bytes(), &job); rec.Code != 200 || !strings.HasPrefix(job.ModuleSource, "/v1/vcs-archives/"+job.RunID+".tar.gz?") {
 		t.Fatalf("claim: %d %s", rec.Code, rec.Body.String())
@@ -178,7 +204,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	claimVCS("plan", "# at pr9") // the branch's commits all had their run
 
 	// The admin narrows the connection: the linked workspace's next run fails instead of planning.
-	if rec := post(h, "/vcs/"+connID+"/workspace-repos", url.Values{"workspace_repos": {"acme/other"}}); rec.Code != http.StatusSeeOther {
+	if rec := post(h, "/vcs/"+connID+"/settings", url.Values{"workspaces": {"1"}, "workspace_repos": {"acme/other"}, "modules": {"1"}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("narrow repos: %d", rec.Code)
 	}
 	if rec := post(h, "/workspaces/"+linked+"/runs", url.Values{"action": {"apply"}}); rec.Code != http.StatusSeeOther {
