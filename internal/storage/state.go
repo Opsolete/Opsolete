@@ -109,7 +109,8 @@ func (s *Store) CopyStateIndex(ctx context.Context, workspaceID string, from int
 func (s *Store) LockState(ctx context.Context, id, lockID, runID string, info []byte) (held []byte, ok bool, err error) {
 	err = s.DB.QueryRowContext(ctx, `
 		WITH taken AS (
-			UPDATE workspaces SET state_lock = ($2::jsonb - 'OpsoleteRun') || jsonb_strip_nulls(jsonb_build_object('OpsoleteRun', NULLIF($4, '')))
+			UPDATE workspaces SET state_lock = ($2::jsonb - 'OpsoleteRun') || jsonb_strip_nulls(jsonb_build_object('OpsoleteRun', NULLIF($4, ''))),
+				state_locked_at = CASE WHEN state_lock IS NULL THEN now() ELSE state_locked_at END
 			WHERE id = ops_uuid($1) AND (state_lock IS NULL OR state_lock->>'ID' = $3) RETURNING 1
 		)
 		SELECT EXISTS (SELECT 1 FROM taken), COALESCE((SELECT state_lock::text FROM workspaces WHERE id = ops_uuid($1)), '')`,
@@ -120,6 +121,41 @@ func (s *Store) LockState(ctx context.Context, id, lockID, runID string, info []
 // releaseRunLock ($1 workspace id, $2 run id) drops the state lock a run's Terraform left behind,
 // never a rollback's or a CLI's.
 const releaseRunLock = `UPDATE workspaces SET state_lock = NULL WHERE id = $1 AND state_lock->>'OpsoleteRun' = $2::text`
+
+// ReleaseOrphanedLocks drops state locks nobody can release anymore and returns the workspace ids
+// with the released LockInfo:
+//   - a run's lock once that run no longer works with a lease (it took the lock just as it was
+//     reaped or force-canceled); the run is fenced off from the state, so this is safe at once
+//   - a rollback's lock older than timeout (its server died mid-rollback; a rollback takes seconds)
+//
+// Cloud API and UI locks (CloudLockPrefix) are never touched: they are deliberate, and
+// force-unlock releases them.
+func (s *Store) ReleaseOrphanedLocks(ctx context.Context, timeout time.Duration) (map[string]string, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		WITH stale AS (
+			SELECT w.id, w.state_lock FROM workspaces w WHERE w.state_lock IS NOT NULL AND CASE
+				WHEN w.state_lock->>'OpsoleteRun' IS NOT NULL THEN NOT EXISTS (SELECT 1 FROM runs r
+					WHERE r.id::text = w.state_lock->>'OpsoleteRun' AND r.`+working+` AND r.lease_id IS NOT NULL)
+				ELSE NOT starts_with(w.state_lock->>'ID', $2)
+					AND COALESCE(w.state_locked_at, '-infinity') < now() - make_interval(secs => $1)
+			END FOR UPDATE
+		)
+		UPDATE workspaces w SET state_lock = NULL FROM stale WHERE w.id = stale.id RETURNING w.id, stale.state_lock::text`,
+		timeout.Seconds(), CloudLockPrefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var id, info string
+		if err := rows.Scan(&id, &info); err != nil {
+			return nil, err
+		}
+		out[id] = info
+	}
+	return out, rows.Err()
+}
 
 // UnlockState releases the lock if lockID holds it.
 func (s *Store) UnlockState(ctx context.Context, id, lockID string) error {

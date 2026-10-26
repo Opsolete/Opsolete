@@ -196,7 +196,7 @@ func serve(log *slog.Logger) error {
 	}
 	log.Info("components", "deployments", cfg.Deployments, "registry", cfg.Registry, "vcs", vcsOn)
 	if cfg.Deployments {
-		go reapLostRunners(ctx, store, app, log)
+		go reapLostRunners(ctx, store, app, cfg.StaleLockTimeout, log)
 	}
 
 	srv := &http.Server{Addr: cfg.Addr, Handler: app.Handler(),
@@ -220,8 +220,8 @@ func serve(log *slog.Logger) error {
 const driftInterval = 24 * time.Hour
 
 // reapLostRunners fails running jobs whose runner stopped heartbeating (crash, node loss), and
-// queues the drift checks that are due.
-func reapLostRunners(ctx context.Context, store *storage.Store, app *httpserver.Server, log *slog.Logger) {
+// releases orphaned state locks, and queues the drift checks that are due.
+func reapLostRunners(ctx context.Context, store *storage.Store, app *httpserver.Server, staleLock time.Duration, log *slog.Logger) {
 	t := time.NewTicker(15 * time.Second)
 	defer t.Stop()
 	for {
@@ -236,6 +236,13 @@ func reapLostRunners(ctx context.Context, store *storage.Store, app *httpserver.
 			for _, id := range ids {
 				log.Warn("runner lost, deployment failed", "id", id)
 				app.DeleteArtifacts(ctx, id) // its saved plan will never be applied
+			}
+			released, err := store.ReleaseOrphanedLocks(ctx, staleLock)
+			if err != nil {
+				log.Error("release orphaned state locks", "err", err)
+			}
+			for ws, info := range released {
+				log.Warn("orphaned state lock released", "workspace", ws, "lock", info)
 			}
 			if n, err := store.QueueAssessments(ctx, driftInterval); err != nil {
 				log.Error("queue drift checks", "err", err)

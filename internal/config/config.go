@@ -39,6 +39,9 @@ type Config struct {
 	SecretKey string
 	// Organization is the one organization Terraform's cloud block may name.
 	Organization string
+	// StaleLockTimeout: a rollback's state lock older than this is released as orphaned (its server
+	// died mid-rollback). Run locks go with the run's lease; CLI and UI locks never expire.
+	StaleLockTimeout time.Duration
 }
 
 func Load() (Config, error) {
@@ -64,6 +67,9 @@ func Load() (Config, error) {
 		return c, errors.New("SECRET_KEY must be at least 32 characters (e.g. openssl rand -base64 32)")
 	}
 	var err error
+	if c.StaleLockTimeout, err = time.ParseDuration(getenv("STALE_LOCK_TIMEOUT", "15m")); err != nil || c.StaleLockTimeout <= 0 {
+		return c, errors.New("STALE_LOCK_TIMEOUT must be a duration like 15m")
+	}
 	if c.Deployments, err = getbool("DEPLOYMENTS_ENABLED"); err != nil {
 		return c, err
 	}

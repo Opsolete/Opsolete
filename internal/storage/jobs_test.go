@@ -240,6 +240,44 @@ func TestFinishKeepsForeignStateLock(t *testing.T) {
 	}
 }
 
+// Orphaned locks are released: a run's once it has no lease, a rollback's after the timeout.
+// A working run's lock, a fresh rollback's and CLI/UI locks stay.
+func TestReleaseOrphanedLocks(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	working, run := newWorkspace(t, s, false)
+	if _, ok, err := s.ClaimJob(ctx, "r", time.Minute); err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	queued, queuedRun := newWorkspace(t, s, false) // its run has no lease
+	oldRB, _ := newWorkspace(t, s, false)
+	newRB, _ := newWorkspace(t, s, false)
+	cli, _ := newWorkspace(t, s, false)
+	for _, l := range []struct{ ws, id, run string }{
+		{working.ID, "l1", run.ID}, {queued.ID, "l2", queuedRun.ID}, {oldRB.ID, "rb1", ""}, {newRB.ID, "rb2", ""}, {cli.ID, CloudLockPrefix + "x", ""},
+	} {
+		if _, ok, err := s.LockState(ctx, l.ws, l.id, l.run, []byte(`{"ID":"`+l.id+`"}`)); !ok || err != nil {
+			t.Fatalf("lock %s: %v %v", l.id, ok, err)
+		}
+	}
+	if _, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET state_locked_at = now() - interval '1 hour'
+		WHERE id IN ($1, $2, $3)`, working.ID, oldRB.ID, cli.ID); err != nil {
+		t.Fatal(err)
+	}
+	released, err := s.ReleaseOrphanedLocks(ctx, 15*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for ws, want := range map[string]string{working.ID: "l1", queued.ID: "", oldRB.ID: "", newRB.ID: "rb2", cli.ID: CloudLockPrefix + "x"} {
+		if lock, _ := s.StateLockID(ctx, ws); lock != want {
+			t.Errorf("workspace %s: lock %q, want %q", ws, lock, want)
+		}
+		if _, ok := released[ws]; ok != (want == "") {
+			t.Errorf("workspace %s: reported released=%v", ws, ok)
+		}
+	}
+}
+
 // A run's state write is recorded only while it applies with a lease: not from a plan, not after a force-cancel.
 func TestStateWriteFenced(t *testing.T) {
 	s := testStore(t)
