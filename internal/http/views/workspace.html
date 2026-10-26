@@ -1,11 +1,11 @@
 {{template "top" .}}
 {{$w := .W}}{{$tab := tab}}{{$p := .Page}}
-<nav class="back" aria-label="breadcrumb"><a href="/workspaces">Workspaces</a> / <a href="/workspaces/{{$w.Name}}">{{$w.Name}}</a> / {{if eq $tab "runs"}}Runs{{else if eq $tab "states"}}States{{else if eq $tab "variables"}}Variables{{else if eq $tab "settings"}}<a href="/workspaces/{{$w.Name}}/settings">Settings</a> / {{if eq $p "health"}}Health{{else if eq $p "access"}}Team access{{else if eq $p "deletion"}}Destruction and deletion{{else}}General{{end}}{{else}}Overview{{end}}</nav>
+<nav class="back" aria-label="breadcrumb"><a href="/workspaces">Workspaces</a> / <a href="/workspaces/{{$w.Name}}">{{$w.Name}}</a> / {{if eq $tab "runs"}}Runs{{else if eq $tab "states"}}States{{else if eq $tab "variables"}}Variables{{else if eq $tab "settings"}}<a href="/workspaces/{{$w.Name}}/settings">Settings</a> / {{if eq $p "health"}}Health{{else if eq $p "lock"}}Locking{{else if eq $p "access"}}Team access{{else if eq $p "deletion"}}Destruction and deletion{{else}}General{{end}}{{else}}Overview{{end}}</nav>
 {{if ne $tab "settings"}}
 <div class="page-head">
   <div>
     <h1>{{$w.Name}}{{if .Destroyed}} <span class="status destroyed">destroyed</span>{{end}}</h1>
-    <p class="meta">{{if .Active}}<span>Locked by a run</span>{{else}}<span>Unlocked</span>{{end}}<span>Resources {{len .Resources}}</span>{{with .Versions}}{{with index . 0}}<span>State v{{.Serial}}</span><span title="{{.CreatedAt.Format "2006-01-02 15:04"}}">Updated {{ago .CreatedAt}}</span>{{end}}{{end}}</p>
+    <p class="meta">{{if and .Lock .Lock.Cloud}}<span><a href="/workspaces/{{$w.Name}}/settings/lock">Locked by {{or .Lock.Who "a user"}}</a></span>{{else if or .Active .Lock}}<span>Locked by a run</span>{{else}}<span>Unlocked</span>{{end}}<span>Resources {{len .Resources}}</span>{{with .Versions}}{{with index . 0}}<span>State v{{.Serial}}</span><span title="{{.CreatedAt.Format "2006-01-02 15:04"}}">Updated {{ago .CreatedAt}}</span>{{end}}{{end}}</p>
   </div>
   {{if .CanOperate}}
   <div class="inline">
@@ -30,6 +30,8 @@
                 <span><strong>Plan and apply (standard)</strong><small>Plans the configuration, then applies it{{if not $w.AutoApply}} after confirmation{{end}}.</small></span></label>
               <label class="choice"><input type="radio" name="action" value="refresh">
                 <span><strong>Refresh state</strong><small>Detects drift and synchronizes the state with the infrastructure, after confirmation. Changes no infrastructure.</small></span></label>
+              <label class="choice"><input type="radio" name="action" value="plan">
+                <span><strong>Plan only</strong><small>Creates a speculative plan that can't be applied. Runs even while the workspace is locked.</small></span></label>
               <label class="choice"><input type="radio" name="action" value="assess">
                 <span><strong>Check for drift</strong><small>A refresh-only plan that is never applied: reports changes made outside Terraform.</small></span></label>
             </div>
@@ -291,6 +293,42 @@
 </form>
 {{else}}<p>Drift detection {{if $w.DriftDetection}}on{{else}}off{{end}}</p>{{end}}
 <p class="muted">Last drift check: {{with .Assessment}}<a href="/workspaces/{{$w.Name}}/runs/{{.ID}}"><span class="status {{.Status}}">{{status .Status}}</span></a> {{.UpdatedAt.Format "2006-01-02 15:04"}}{{else}}never{{end}}</p>
+
+{{else if eq $p "lock"}}
+<h1>Locking</h1>
+<div style="max-width:44rem">
+{{with .Lock}}
+<p>The <strong>{{$w.Name}}</strong> workspace is locked{{with .Who}} by <strong>{{.}}</strong>{{end}}{{if .OpsoleteRun}} (a run's Terraform){{else if not .Cloud}} (a state rollback){{else if ne .Operation "locked in Opsolete"}} (Terraform's cloud block){{end}}{{with .Created}} since {{.}}{{end}}.
+  Runs wait until it is unlocked, and nobody else can take the state lock.</p>
+{{with .Info}}<div class="field">Reason</div><p>{{.}}</p>{{end}}
+{{if and $.CanOperate .Cloud}}
+<form method="post" action="/workspaces/{{$w.Name}}/lock" onsubmit="return confirm('{{if eq .UserID $.Me}}Unlock{{else}}Force unlock{{end}} {{$w.Name}}? Runs can proceed again.')">
+  {{if eq .UserID $.Me}}<input type="hidden" name="action" value="unlock"><button type="submit">Unlock workspace</button>
+  {{else}}<input type="hidden" name="action" value="force-unlock"><button type="submit" class="danger">Force unlock workspace</button>
+  <p class="hint">Someone else holds this lock: force unlocking may disturb what they are doing.</p>{{end}}
+</form>
+{{else if .Cloud}}<p class="muted">Unlocking needs operate access.</p>
+{{else}}<p class="muted">This lock is released when the run or rollback ends.</p>{{end}}
+{{else}}
+<p>The <strong>{{$w.Name}}</strong> workspace is not currently locked. All operations can proceed normally. You can manually lock this workspace to prevent Terraform runs.</p>
+{{if .CanOperate}}
+<button type="button" onclick="document.getElementById('lock-workspace').showModal()">Lock workspace</button>
+<dialog id="lock-workspace" aria-labelledby="lock-workspace-title">
+  <form method="post" action="/workspaces/{{$w.Name}}/lock"><input type="hidden" name="action" value="lock">
+    <header><h3 id="lock-workspace-title">Lock workspace</h3>
+      <button type="button" class="secondary small" aria-label="close" onclick="this.closest('dialog').close()">✕</button></header>
+    <fieldset>
+      <label for="lock-reason">Reason <span class="muted">(Optional)</span></label>
+      <textarea id="lock-reason" name="reason" rows="4" maxlength="300" placeholder="Why is this being locked?" aria-describedby="lock-reason-hint"></textarea>
+      <p class="hint" id="lock-reason-hint">300 characters allowed</p>
+    </fieldset>
+    <footer><button type="submit">Lock workspace</button>
+      <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancel</button></footer>
+  </form>
+</dialog>
+{{else}}<p class="muted">Locking needs operate access.</p>{{end}}
+{{end}}
+</div>
 
 {{else if eq $p "access"}}
 <h1>Team access</h1>

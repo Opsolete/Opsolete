@@ -245,10 +245,13 @@ func TestPlanThenApply(t *testing.T) {
 	}
 
 	// Drift check: a refresh-only plan; nothing drifted, and an assessment never keeps a plan.
+	// It takes no state lock, so it runs while someone holds one (a locked workspace).
+	f.locks["ws1"] = "someone-else"
 	if res, logs = f.do(t, r, job("assess", "plan", "assess", src, vars)); res.Status != "succeeded" || res.Plan != nil ||
 		!strings.Contains(logs, "plan -refresh-only") || f.artifacts["assess/artifacts/tfplan"] != nil {
 		t.Fatalf("assess: %+v\n%s", res, logs)
 	}
+	delete(f.locks, "ws1")
 
 	// Replace: same inputs, but the resource is planned for replacement.
 	rj := job("replace", "plan", "apply", src, vars)

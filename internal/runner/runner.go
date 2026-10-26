@@ -368,7 +368,9 @@ func (r *Runner) plan(ctx context.Context, tf *tfexec.Terraform, dir string, job
 	fail func(string, error) runnerapi.FinishRequest) runnerapi.FinishRequest {
 	destroy := job.Action == "destroy"
 	refresh := job.Action == "refresh" || job.Action == "assess"
-	opts := []tfexec.PlanOption{tfexec.Out(planFile), tfexec.Destroy(destroy), tfexec.RefreshOnly(refresh)}
+	// never applied, so they don't write state: no lock, they run in locked workspaces (storage.ClaimJob)
+	readOnly := job.Action == "plan" || job.Action == "assess"
+	opts := []tfexec.PlanOption{tfexec.Out(planFile), tfexec.Destroy(destroy), tfexec.RefreshOnly(refresh), tfexec.Lock(!readOnly)}
 	step := "plan"
 	switch {
 	case destroy:

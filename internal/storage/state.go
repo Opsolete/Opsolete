@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/opsolete/opsolete/internal/runnerapi"
@@ -132,6 +133,27 @@ func (s *Store) StateLockID(ctx context.Context, id string) (string, error) {
 	var lock sql.NullString
 	err := s.DB.QueryRowContext(ctx, `SELECT state_lock->>'ID' FROM workspaces WHERE id = ops_uuid($1)`, id).Scan(&lock)
 	return lock.String, err
+}
+
+// StateLock is the Terraform LockInfo of a workspace's state lock, plus Opsolete's own fields.
+type StateLock struct {
+	ID, Operation, Who, Created string
+	Info                        string // the reason given when locking in the UI
+	UserID                      string // cloud API and UI locks
+	OpsoleteRun                 string // the run whose Terraform holds it
+}
+
+// Cloud: taken through the cloud API or the UI, so unlock and force-unlock release it.
+func (l StateLock) Cloud() bool { return strings.HasPrefix(l.ID, CloudLockPrefix) }
+
+// GetStateLock returns the workspace's state lock, or nil if it is unlocked.
+func (s *Store) GetStateLock(ctx context.Context, id string) (*StateLock, error) {
+	var raw []byte
+	if err := s.DB.QueryRowContext(ctx, `SELECT state_lock FROM workspaces WHERE id = ops_uuid($1)`, id).Scan(&raw); err != nil || raw == nil {
+		return nil, err
+	}
+	var l StateLock
+	return &l, json.Unmarshal(raw, &l)
 }
 
 // CloudLockPrefix starts the ID of state locks taken through the cloud API (terraform with a cloud

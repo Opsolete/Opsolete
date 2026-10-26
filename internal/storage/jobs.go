@@ -32,7 +32,9 @@ type Job struct {
 
 // ClaimJob hands the longest-waiting queued phase (plan or confirmed apply) to runner, or returns
 // ok=false if there is none. SKIP LOCKED lets any number of runners claim without handing out a
-// job twice.
+// job twice. Runs of a locked workspace (a lock from the UI, the CLI or a rollback) wait until it
+// is unlocked, as in HCP Terraform; speculative plans and drift checks, never applied, go ahead
+// without taking the state lock.
 func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration) (Job, bool, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -45,8 +47,9 @@ func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration
 	err = tx.QueryRowContext(ctx, `
 		UPDATE runs SET status = CASE status WHEN 'plan_queued' THEN 'planning' ELSE 'applying' END,
 			runner = $1, lease_id = $2, lease_until = now() + make_interval(secs => $3), updated_at = now()
-		WHERE id = (SELECT id FROM runs WHERE status IN ('plan_queued', 'apply_queued')
-			ORDER BY updated_at FOR UPDATE SKIP LOCKED LIMIT 1)
+		WHERE id = (SELECT id FROM runs r WHERE status IN ('plan_queued', 'apply_queued')
+			AND (r.action IN ('plan', 'assess') OR NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.id = r.workspace_id AND w.state_lock IS NOT NULL))
+			ORDER BY updated_at FOR UPDATE OF r SKIP LOCKED LIMIT 1)
 		RETURNING id, workspace_id, action, status, replace, COALESCE(vcs_commit, '')`,
 		runner, j.LeaseID, lease.Seconds()).Scan(&j.RunID, &j.WorkspaceID, &j.Action, &status, &replace, &j.VCSCommit)
 	if errors.Is(err, sql.ErrNoRows) {

@@ -703,6 +703,15 @@ func TestWorkspaceFlow(t *testing.T) {
 	}
 	finish(`{"status":"succeeded"}`)
 
+	// Plan only (speculative): a plan with changes ends as planned, never waits for confirmation.
+	rec = post(h, "/workspaces/"+name+"/runs", url.Values{"action": {"plan"}})
+	runID = strings.TrimPrefix(rec.Header().Get("Location"), "/workspaces/"+name+"/runs/")
+	claimJob("plan")
+	finish(`{"status":"succeeded","plan":{"add":1,"change":0,"destroy":0,"changes":[{"address":"x.y","action":"create"}]}}`)
+	if p, _, _ := store.GetRun(ctx, runID); p.Action != "plan" || p.Status != storage.Planned {
+		t.Fatalf("plan only: %+v", p)
+	}
+
 	// Drift check: queued by the schedule once drift detection is on, never applied, kept out of the runs list.
 	if rec := post(h, "/workspaces/"+name+"/settings", url.Values{"drift_detection": {"on"}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("settings: %d", rec.Code)
@@ -735,7 +744,7 @@ func TestWorkspaceFlow(t *testing.T) {
 	if strings.Contains(get(h, "/workspaces/"+name).Body.String(), "Destroy…") || !strings.Contains(get(h, "/workspaces/"+name+"/settings/deletion").Body.String(), "Queue destroy plan") {
 		t.Fatal("destroy belongs on the Destruction and deletion settings page, not the overview")
 	}
-	for _, page := range []string{"", "/health", "/access", "/deletion"} { // the settings menu replaces the side nav; "</html>": rendered to the end
+	for _, page := range []string{"", "/health", "/lock", "/access", "/deletion"} { // the settings menu replaces the side nav; "</html>": rendered to the end
 		if body := get(h, "/workspaces/"+name+"/settings"+page).Body.String(); !strings.Contains(body, `aria-label="Workspace settings"`) || !strings.Contains(body, "</html>") {
 			t.Fatalf("settings%s: no settings menu or render error", page)
 		}
@@ -1106,5 +1115,71 @@ func TestRemoteStateSharing(t *testing.T) {
 	post(h, "/workspaces/"+src.Name+"/settings", url.Values{"page": {"health"}})
 	if c := state("GET", token); c != http.StatusNoContent {
 		t.Fatalf("Health save changed sharing: %d", c)
+	}
+}
+
+// Locking, like HCP Terraform's: a lock (with its reason) keeps runs queued, except plans that are
+// never applied; only its holder unlocks,
+// anyone with operate access force-unlocks.
+func TestWorkspaceLock(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
+	alice := newServerAs(t, "../../catalog", false, store, devAuth(t, store, "alice@example.com", true))
+	bob := newServerAs(t, "../../catalog", false, store, devAuth(t, store, "bob@example.com", true))
+	ws, err := store.CreateEmptyWorkspace(ctx, "lk-"+strings.ToLower(newID()[:8]), false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.DB.Exec(`DELETE FROM workspaces WHERE id::text = $1`, ws.ID) })
+	u := "/workspaces/" + ws.Name
+
+	if rec := post(alice, u+"/lock", url.Values{"action": {"lock"}, "reason": {strings.Repeat("x", 301)}}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("a reason over 300 characters: %d", rec.Code)
+	}
+	if rec := post(alice, u+"/lock", url.Values{"action": {"lock"}, "reason": {"migrating state"}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("lock: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := post(bob, u+"/lock", url.Values{"action": {"lock"}}); rec.Code != http.StatusConflict {
+		t.Fatalf("locking a locked workspace: %d", rec.Code)
+	}
+	if body := get(alice, u+"/settings/lock").Body.String(); !strings.Contains(body, "migrating state") || !strings.Contains(body, "Unlock workspace") {
+		t.Fatal("the holder sees the reason and Unlock")
+	}
+	if body := get(bob, u+"/settings/lock").Body.String(); !strings.Contains(body, "Force unlock workspace") {
+		t.Fatal("others see Force unlock")
+	}
+
+	// as in HCP Terraform, plans that are never applied run anyway; the runner plans them without the lock
+	assess, err := store.CreateRun(ctx, ws.ID, "assess", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j, ok, err := store.ClaimJob(ctx, "r", time.Minute); err != nil || !ok || j.RunID != assess.ID {
+		t.Fatalf("a drift check must run in a locked workspace: %+v %v %v", j, ok, err)
+	}
+	if _, err := store.CancelRun(ctx, assess.ID, "t", true); err != nil {
+		t.Fatal(err)
+	}
+	if l, _ := store.GetStateLock(ctx, ws.ID); l == nil {
+		t.Fatal("a drift check's end released the workspace lock")
+	}
+	run, err := store.CreateRun(ctx, ws.ID, "apply", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := store.ClaimJob(ctx, "r", time.Minute); err != nil || ok {
+		t.Fatalf("a locked workspace's run was claimed: %v %v", ok, err)
+	}
+	post(bob, u+"/lock", url.Values{"action": {"unlock"}}) // not bob's lock: no effect
+	if l, _ := store.GetStateLock(ctx, ws.ID); l == nil {
+		t.Fatal("unlock released another user's lock")
+	}
+	post(bob, u+"/lock", url.Values{"action": {"force-unlock"}})
+	if l, _ := store.GetStateLock(ctx, ws.ID); l != nil {
+		t.Fatalf("force unlock: %+v", l)
+	}
+	if j, ok, err := store.ClaimJob(ctx, "r", time.Minute); err != nil || !ok || j.RunID != run.ID {
+		t.Fatalf("the run must start once unlocked: %+v %v %v", j, ok, err)
 	}
 }

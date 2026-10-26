@@ -351,6 +351,7 @@
     <span class="nav-label">Workspace settings</span>
     <a href="/workspaces/{{.}}/settings"{{if eq $p ""}} aria-current="page"{{end}}>General</a>
     <a href="/workspaces/{{.}}/settings/health"{{if eq $p "health"}} aria-current="page"{{end}}>Health</a>
+    <a href="/workspaces/{{.}}/settings/lock"{{if eq $p "lock"}} aria-current="page"{{end}}>Locking</a>
     <a href="/workspaces/{{.}}/settings/access"{{if eq $p "access"}} aria-current="page"{{end}}>Team access</a>
     {{if and $.CanOperate (features).VCS (not $.W.TemplateID)}}<a href="/workspaces/{{.}}/vcs"{{if eq $t "vcs"}} aria-current="page"{{end}}>Version control</a>{{end}}
     {{if $.CanOperate}}<a href="/workspaces/{{.}}/settings/deletion"{{if eq $p "deletion"}} aria-current="page"{{end}}>Destruction and deletion</a>{{end}}

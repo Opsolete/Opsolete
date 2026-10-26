@@ -2,7 +2,9 @@ package httpserver
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"gocloud.dev/gcerrors"
 
@@ -56,6 +59,7 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /workspaces/{name}/settings/{page}", s.workspace)
 	mux.HandleFunc("POST /workspaces/{name}/runs", s.newRun)
 	mux.HandleFunc("POST /workspaces/{name}/settings", s.workspaceSettings)
+	mux.HandleFunc("POST /workspaces/{name}/lock", s.lockWorkspace)
 	mux.HandleFunc("GET /workspaces/{name}/configure", s.configureForm)
 	mux.HandleFunc("POST /workspaces/{name}/configure", s.configureWorkspace)
 	mux.HandleFunc("POST /workspaces/{name}/delete", s.deleteWorkspace)
@@ -226,7 +230,7 @@ func (s *Server) loadRun(w http.ResponseWriter, r *http.Request, need string) (s
 func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 	// settings sub-pages; "" is General
 	page := r.PathValue("page")
-	if !slices.Contains([]string{"", "health", "access", "deletion"}, page) {
+	if !slices.Contains([]string{"", "health", "lock", "access", "deletion"}, page) {
 		http.NotFound(w, r)
 		return
 	}
@@ -277,8 +281,13 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 	if len(runs) > 0 {
 		current = &runItem{runs[0], true}
 	}
+	lock, err := s.Store.GetStateLock(ctx, ws.ID)
+	if err != nil {
+		s.internalError(w, "state lock", err)
+		return
+	}
 	t, hasTemplate := s.Templates.Get(ws.TemplateID)
-	data := map[string]any{"W": ws, "Runs": runs, "Active": active, "Current": current, "Page": page,
+	data := map[string]any{"W": ws, "Lock": lock, "Me": auth.FromContext(ctx).ID, "Runs": runs, "Active": active, "Current": current, "Page": page,
 		"HasTemplate": hasTemplate, "Resources": res, "Versions": versions, "Outputs": outputs, "Destroyed": destroyed,
 		"Assessment": assessment, "CanOperate": level == levelOperate, "Admin": auth.FromContext(ctx).Admin()}
 
@@ -458,8 +467,8 @@ func (s *Server) syncSelection(ctx context.Context, have, want []string, attach 
 }
 
 // newRun queues a plan: action=apply (re-plan with the workspace's inputs; replace=<address> any
-// number of times plans replacing those resources), destroy, refresh (refresh-only) or assess
-// (check for drift now).
+// number of times plans replacing those resources), destroy, refresh (refresh-only), assess
+// (check for drift now) or plan (plan only: a speculative plan, never applied).
 func (s *Server) newRun(w http.ResponseWriter, r *http.Request) {
 	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
 	if !ok {
@@ -467,8 +476,8 @@ func (s *Server) newRun(w http.ResponseWriter, r *http.Request) {
 	}
 	u := auth.FromContext(r.Context())
 	action := r.PostFormValue("action")
-	if action != "apply" && action != "destroy" && action != "refresh" && action != "assess" {
-		http.Error(w, "action must be apply, destroy, refresh or assess", http.StatusBadRequest)
+	if !slices.Contains([]string{"apply", "destroy", "refresh", "assess", "plan"}, action) {
+		http.Error(w, "action must be apply, destroy, refresh, assess or plan", http.StatusBadRequest)
 		return
 	}
 	if !ws.HasConfig() {
@@ -620,6 +629,50 @@ func (s *Server) workspaceSettings(w http.ResponseWriter, r *http.Request) {
 		back += "/health"
 	}
 	http.Redirect(w, r, back, http.StatusSeeOther)
+}
+
+// lockWorkspace locks (action=lock, with an optional reason), unlocks or force-unlocks a workspace,
+// like HCP Terraform's Locking page. The lock is a state lock as the cloud block's CLI takes it, so
+// the CLI, `terraform force-unlock` and the cloud API see it too; runs wait until it is released.
+// Unlock releases only the user's own lock, force-unlock anyone's; locks of runs and rollbacks end with them.
+func (s *Server) lockWorkspace(w http.ResponseWriter, r *http.Request) {
+	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
+	if !ok {
+		return
+	}
+	ctx, u := r.Context(), auth.FromContext(r.Context())
+	switch action := r.PostFormValue("action"); action {
+	case "lock":
+		reason := strings.TrimSpace(r.PostFormValue("reason"))
+		if utf8.RuneCountInString(reason) > 300 {
+			http.Error(w, "the reason is at most 300 characters", http.StatusBadRequest)
+			return
+		}
+		lockID := storage.CloudLockPrefix + rand.Text()
+		info, _ := json.Marshal(map[string]string{"ID": lockID, "Operation": "locked in Opsolete", "Info": reason, "Who": u.Email,
+			"UserID": u.ID, "Created": time.Now().UTC().Format(time.RFC3339)})
+		if _, ok, err := s.Store.LockState(ctx, ws.ID, lockID, "", info); err != nil {
+			s.internalError(w, "lock state", err)
+			return
+		} else if !ok {
+			http.Error(w, "the workspace is already locked", http.StatusConflict)
+			return
+		}
+	case "unlock", "force-unlock":
+		holder := u.ID
+		if action == "force-unlock" {
+			holder = ""
+		}
+		if err := s.Store.UnlockCloudState(ctx, ws.ID, holder); err != nil {
+			s.internalError(w, "unlock state", err)
+			return
+		}
+	default:
+		http.Error(w, "action is lock, unlock or force-unlock", http.StatusBadRequest)
+		return
+	}
+	s.Log.Info("workspace lock", "workspace", ws.Name, "action", r.PostFormValue("action"), "user", u.Email)
+	http.Redirect(w, r, "/workspaces/"+ws.Name+"/settings/lock", http.StatusSeeOther)
 }
 
 // deleteWorkspace deletes a workspace that manages no resources, with its state files.
