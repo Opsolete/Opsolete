@@ -693,3 +693,35 @@ func TestQueueVCSRun(t *testing.T) {
 	queue("bbb", 7, false) // planned already
 	queue("bbb", 0, true)  // merged by fast-forward: the speculative plan doesn't count as its run
 }
+
+func TestConcurrentTriggers(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	w, run := newWorkspace(t, s, false)
+	if _, err := s.CancelRun(ctx, run.ID, "test", false); err != nil { // free the workspace
+		t.Fatal(err)
+	}
+	// Many users trigger at once: runs_one_active_idx lets exactly one run in.
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	won := 0
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := s.CreateRun(ctx, w.ID, "apply", "", nil)
+			if err != nil && !errors.Is(err, ErrRunActive) {
+				t.Error(err)
+			}
+			if err == nil {
+				mu.Lock()
+				won++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if won != 1 {
+		t.Fatalf("%d runs created, want 1", won)
+	}
+}
