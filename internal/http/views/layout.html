@@ -292,6 +292,10 @@
   .steps { font-size: .8rem; color: var(--muted); padding-bottom: .75rem; border-bottom: 1px solid var(--border); }
   .steps strong { color: var(--text); }
   table.changes { margin-bottom: 1rem; }
+  table.statediff td { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .85rem; overflow-wrap: anywhere; vertical-align: top; }
+  table.statediff td:first-child { width: 1%; white-space: nowrap; }
+  table.statediff del { background: var(--danger-soft); color: var(--danger); }
+  table.statediff ins { background: var(--ok-soft); color: var(--ok); text-decoration: none; }
   .log-bar { display: flex; gap: .5rem; justify-content: flex-end; margin: 1rem 0 .5rem; }
   .log-bar .btn:first-child { margin-right: auto; }
 

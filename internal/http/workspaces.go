@@ -57,6 +57,7 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 		mux.HandleFunc("GET /workspaces/{name}/"+tab, s.workspace)
 	}
 	mux.HandleFunc("GET /workspaces/{name}/settings/{page}", s.workspace)
+	mux.HandleFunc("GET /workspaces/{name}/states/{version}", s.workspace)
 	mux.HandleFunc("POST /workspaces/{name}/runs", s.newRun)
 	mux.HandleFunc("POST /workspaces/{name}/settings", s.workspaceSettings)
 	mux.HandleFunc("POST /workspaces/{name}/lock", s.lockWorkspace)
@@ -340,6 +341,43 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		maps.Copy(data, map[string]any{"Filter": filter, "Counts": counts, "RunList": list})
+
+	case "states": // one version: what it changed, and what rolling back to it would change
+		if r.PathValue("version") == "" {
+			break
+		}
+		id, err := strconv.ParseInt(r.PathValue("version"), 10, 64)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		pair, err := s.Store.StateVersionsUpTo(ctx, ws.ID, id, 2) // the version and the one before it
+		if err != nil {
+			s.internalError(w, "state versions", err)
+			return
+		}
+		if len(pair) == 0 || pair[0].ID != id {
+			http.NotFound(w, r)
+			return
+		}
+		var prev *storage.StateVersion
+		if len(pair) > 1 {
+			prev = &pair[1]
+		}
+		changes, err := s.diffVersions(ctx, prev, &pair[0])
+		if err != nil {
+			s.internalError(w, "state diff", err)
+			return
+		}
+		current := versions[0].ID == id
+		var rollback []stateChange
+		if !current {
+			if rollback, err = s.diffVersions(ctx, &versions[0], &pair[0]); err != nil {
+				s.internalError(w, "state diff", err)
+				return
+			}
+		}
+		maps.Copy(data, map[string]any{"State": pair[0], "Prev": prev, "Changes": changes, "IsCurrent": current, "RollbackChanges": rollback})
 
 	case "variables": // each applied set with its variables, read-only (sets are edited by admins on their page)
 		vars, err := s.varsBlock(ctx, storage.VarOwner{WorkspaceID: ws.ID}, "/workspaces/"+ws.Name, level == levelOperate)

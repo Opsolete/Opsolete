@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"time"
 
@@ -36,10 +37,15 @@ func (s *Store) WorkingRun(ctx context.Context, workspaceID string) (run, status
 
 // StateVersions lists a workspace's state versions, newest first.
 func (s *Store) StateVersions(ctx context.Context, workspaceID string, limit int) ([]StateVersion, error) {
+	return s.StateVersionsUpTo(ctx, workspaceID, math.MaxInt64, limit)
+}
+
+// StateVersionsUpTo lists a workspace's state versions with id up to and including upTo, newest first.
+func (s *Store) StateVersionsUpTo(ctx context.Context, workspaceID string, upTo int64, limit int) ([]StateVersion, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT v.id, v.serial, v.lineage, v.blob_key, v.md5, v.size, v.indexed,
 			(SELECT count(*) FROM state_version_resources r WHERE r.state_version_id = v.id),
 			COALESCE((SELECT o.serial FROM state_versions o WHERE o.id = v.rollback_of), 0), v.created_at
-		FROM state_versions v WHERE v.workspace_id = ops_uuid($1) ORDER BY v.id DESC LIMIT $2`, workspaceID, limit)
+		FROM state_versions v WHERE v.workspace_id = ops_uuid($1) AND v.id <= $3 ORDER BY v.id DESC LIMIT $2`, workspaceID, limit, upTo)
 	if err != nil {
 		return nil, err
 	}

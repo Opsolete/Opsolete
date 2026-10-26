@@ -819,6 +819,19 @@ func TestWorkspaceFlow(t *testing.T) {
 	if code := post(other, fmt.Sprintf("/workspaces/%s/state-versions/%d/rollback", name, vs[1].ID), nil).Code; code != http.StatusNotFound {
 		t.Fatalf("rollback by a user without access: %d", code)
 	}
+	// v2 vs the current v3 (destroyed): the rollback diff brings the output back
+	if page := get(h, fmt.Sprintf("/workspaces/%s/states/%d", name, vs[1].ID)).Body.String(); !strings.Contains(page, "Rolling back to v2 changes") ||
+		!strings.Contains(page, "output.id") || !strings.Contains(page, "Roll back</button>") {
+		t.Fatalf("state version page: %s", page)
+	}
+	for _, p := range []string{fmt.Sprint(vs[0].ID + 1000), "x"} {
+		if code := get(h, "/workspaces/"+name+"/states/"+p).Code; code != http.StatusNotFound {
+			t.Fatalf("state version %s: %d", p, code)
+		}
+	}
+	if code := get(other, fmt.Sprintf("/workspaces/%s/states/%d", name, vs[1].ID)).Code; code != http.StatusNotFound {
+		t.Fatalf("state version page for a user without access: %d", code)
+	}
 	if code := rollback(vs[1].ID); code != http.StatusSeeOther {
 		t.Fatalf("rollback: %d", code)
 	}

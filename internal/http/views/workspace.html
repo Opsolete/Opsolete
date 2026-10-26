@@ -1,6 +1,6 @@
 {{template "top" .}}
 {{$w := .W}}{{$tab := tab}}{{$p := .Page}}
-<nav class="back" aria-label="breadcrumb"><a href="/workspaces">Workspaces</a> / <a href="/workspaces/{{$w.Name}}">{{$w.Name}}</a> / {{if eq $tab "runs"}}Runs{{else if eq $tab "states"}}States{{else if eq $tab "variables"}}Variables{{else if eq $tab "settings"}}<a href="/workspaces/{{$w.Name}}/settings">Settings</a> / {{if eq $p "health"}}Health{{else if eq $p "lock"}}Locking{{else if eq $p "access"}}Team access{{else if eq $p "deletion"}}Destruction and deletion{{else}}General{{end}}{{else}}Overview{{end}}</nav>
+<nav class="back" aria-label="breadcrumb"><a href="/workspaces">Workspaces</a> / <a href="/workspaces/{{$w.Name}}">{{$w.Name}}</a> / {{if eq $tab "runs"}}Runs{{else if eq $tab "states"}}{{if .State}}<a href="/workspaces/{{$w.Name}}/states">States</a> / v{{.State.Serial}}{{else}}States{{end}}{{else if eq $tab "variables"}}Variables{{else if eq $tab "settings"}}<a href="/workspaces/{{$w.Name}}/settings">Settings</a> / {{if eq $p "health"}}Health{{else if eq $p "lock"}}Locking{{else if eq $p "access"}}Team access{{else if eq $p "deletion"}}Destruction and deletion{{else}}General{{end}}{{else}}Overview{{end}}</nav>
 {{if ne $tab "settings"}}
 <div class="page-head">
   <div>
@@ -411,22 +411,44 @@
 {{end}}
 
 {{if eq $tab "states"}}
+{{with .State}}
+<h2>State v{{.Serial}}{{if $.IsCurrent}} <span class="tag">current</span>{{end}}{{with .CopyOf}} <span class="muted">rollback to v{{.}}</span>{{end}}</h2>
+<p class="muted">Saved {{.CreatedAt.Format "2006-01-02 15:04:05"}} · {{.Size}} B · lineage <code>{{.Lineage}}</code></p>
+{{if and $.CanOperate (not $.IsCurrent)}}
+<h3>Rolling back to v{{.Serial}} changes</h3>
+{{template "statediff" $.RollbackChanges}}
+{{if $.Active}}<p class="muted">A run is active: roll back once it has finished.</p>{{else}}<p>{{template "rollback" .}}</p>{{end}}
+{{end}}
+<h3>Changes in this version{{with $.Prev}} <span class="muted">(from v{{.Serial}})</span>{{end}}</h3>
+{{template "statediff" $.Changes}}
+{{else}}
 {{with .Versions}}
 <h2>State versions</h2>
 <div class="card flush">
 <table>
 <tr><th>Version</th><th>Saved</th><th>Size</th><th>Resources</th>{{if $.CanOperate}}<th></th>{{end}}</tr>
-{{range $i, $v := .}}<tr><td><span class="tag">v{{.Serial}}</span>{{if not $i}} <span class="muted">current</span>{{end}}{{with .CopyOf}} <span class="muted">rollback to v{{.}}</span>{{end}}</td><td class="nowrap">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td>
+{{range $i, $v := .}}<tr><td><a href="/workspaces/{{$w.Name}}/states/{{.ID}}"><span class="tag">v{{.Serial}}</span></a>{{if not $i}} <span class="muted">current</span>{{end}}{{with .CopyOf}} <span class="muted">rollback to v{{.}}</span>{{end}}</td><td class="nowrap">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td>
   <td>{{.Size}} B</td><td>{{if .Indexed}}{{.Resources}}{{else}}<span class="muted">not indexed</span>{{end}}</td>
-  {{if $.CanOperate}}<td>{{if and $i (not $.Active)}}<form method="post" action="/workspaces/{{$w.Name}}/state-versions/{{.ID}}/rollback"
-    onsubmit="return confirm('Roll back to state v{{.Serial}}?\n\nA copy of v{{.Serial}} becomes the current state. Newer versions are kept, so you can roll forward again. Your infrastructure is not changed.\n\nThe state will no longer match what is deployed if anything changed since v{{.Serial}}: resources created since then are no longer tracked (the next run may try to create them again), and resources deleted since then are tracked again (the next run will recreate them). Review the next plan before applying it.')">
-    <button type="submit" class="secondary small">Roll back</button></form>{{end}}</td>{{end}}</tr>{{end}}
+  {{if $.CanOperate}}<td class="nowrap"><a class="btn secondary small" href="/workspaces/{{$w.Name}}/states/{{.ID}}">{{if $i}}Compare{{else}}Changes{{end}}</a>{{if and $i (not $.Active)}} {{template "rollback" .}}{{end}}</td>{{end}}</tr>{{end}}
 </table>
 </div>
 {{else}}<p class="muted">No state saved yet.</p>
 {{end}}
 {{end}}
+{{end}}
 {{template "bottom"}}
+
+{{define "rollback"}}<form method="post" action="/workspaces/{{workspace}}/state-versions/{{.ID}}/rollback" style="display:inline"
+    onsubmit="return confirm('Roll back to state v{{.Serial}}?\n\nA copy of v{{.Serial}} becomes the current state. Newer versions are kept, so you can roll forward again. Your infrastructure is not changed.\n\nThe state will no longer match what is deployed if anything changed since v{{.Serial}}: resources created since then are no longer tracked (the next run may try to create them again), and resources deleted since then are tracked again (the next run will recreate them). Review the next plan before applying it.')">
+    <button type="submit" class="secondary small">Roll back</button></form>{{end}}
+
+{{define "statediff"}}{{range .}}
+<details class="section"{{if eq .Action "update"}} open{{end}}>
+  <summary><span class="change {{.Action}}">{{.Action}}</span> <code>{{.Address}}</code> <span class="end muted">{{len .Attrs}} value{{if ne (len .Attrs) 1}}s{{end}}</span></summary>
+  {{with .Attrs}}<div class="body"><table class="statediff">
+  {{range .}}<tr><td><code>{{.Path}}</code></td><td>{{with .Old}}<del>{{.}}</del>{{end}}{{if and .Old .New}} → {{end}}{{with .New}}<ins>{{.}}</ins>{{end}}</td></tr>{{end}}
+  </table></div>{{end}}
+</details>{{else}}<p class="muted">No changes.</p>{{end}}{{end}}
 
 {{define "runrow"}}<!-- relative link: only used on /workspaces/{name}/runs -->
 <a class="runrow{{if .Current}} current{{end}}" href="runs/{{.ID}}">
