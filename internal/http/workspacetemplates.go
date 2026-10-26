@@ -49,7 +49,11 @@ func (s *Server) loadTemplateForm(w http.ResponseWriter, r *http.Request) (formP
 		id, inputs = added[i].TemplateID, added[i].Inputs
 		page.Cur = templates.Module{Source: added[i].ModuleSource, Ref: added[i].ModuleRef}
 	}
-	t, ok := s.Templates.Get(id)
+	t, ok, err := s.template(r.Context(), id)
+	if err != nil {
+		s.internalError(w, "template", err)
+		return page, ws, false
+	}
 	if !ok {
 		http.Error(w, "no such template", http.StatusNotFound)
 		return page, ws, false

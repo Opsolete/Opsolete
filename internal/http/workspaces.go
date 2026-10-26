@@ -110,7 +110,11 @@ type formPage struct {
 }
 
 func (s *Server) form(w http.ResponseWriter, r *http.Request) {
-	t, ok := s.Templates.Get(r.PathValue("id"))
+	t, ok, err := s.template(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.internalError(w, "template", err)
+		return
+	}
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -124,7 +128,11 @@ func (s *Server) form(w http.ResponseWriter, r *http.Request) {
 
 // createWorkspace creates a workspace from a template and queues its first plan.
 func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
-	t, ok := s.Templates.Get(r.PathValue("id"))
+	t, ok, err := s.template(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.internalError(w, "template", err)
+		return
+	}
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -612,7 +620,11 @@ func (s *Server) loadConfigure(w http.ResponseWriter, r *http.Request) (storage.
 	if !ok {
 		return ws, templates.Template{}, false
 	}
-	t, ok := s.Templates.Get(ws.TemplateID)
+	t, ok, err := s.template(r.Context(), ws.TemplateID)
+	if err != nil {
+		s.internalError(w, "template", err)
+		return ws, t, false
+	}
 	if !ok {
 		http.Error(w, "this workspace's template no longer exists", http.StatusNotFound)
 	}

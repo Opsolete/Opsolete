@@ -2,6 +2,7 @@
 package httpserver
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"embed"
@@ -81,6 +82,29 @@ func (s *Server) checkSource(t templates.Template) error {
 		return fmt.Errorf("module %s is in this registry, which is disabled (REGISTRY_ENABLED=false)", t.Module.Source)
 	}
 	return nil
+}
+
+// template returns template id with its inputs resolved from the variables of the registry module
+// version it pins (registry.Resolve), so the form can't drift from the module's variables.tf.
+func (s *Server) template(ctx context.Context, id string) (templates.Template, bool, error) {
+	t, ok := s.Templates.Get(id)
+	if !ok || !s.Features.Registry {
+		return t, ok, nil
+	}
+	// shortcut: git:: and other external sources keep their JSON inputs, since the server doesn't fetch modules. Publish them to the registry (e.g. via VCS) to get generated inputs.
+	ns, name, sys, isReg := s.Registry.ParseSource(t.Module.Source)
+	if !isReg {
+		return t, true, nil
+	}
+	m, err := s.Store.GetModule(ctx, ns, name, sys, t.Module.Ref)
+	if errors.Is(err, sql.ErrNoRows) { // saveTemplate refuses this; a hand-written JSON fails at terraform init
+		return t, true, nil
+	}
+	if err != nil {
+		return t, false, err
+	}
+	t.Inputs = registry.Resolve(t.Inputs, m.Variables)
+	return t, true, nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -211,7 +235,11 @@ func (s *Server) renderBuilder(w http.ResponseWriter, r *http.Request, status in
 func (s *Server) builder(w http.ResponseWriter, r *http.Request) {
 	p := builderPage{T: templates.Template{Module: templates.Module{Ref: "v1.0.0"}}}
 	if id := r.PathValue("id"); id != "" {
-		t, ok := s.Templates.Get(id)
+		t, ok, err := s.template(r.Context(), id)
+		if err != nil {
+			s.internalError(w, "template", err)
+			return
+		}
 		if !ok {
 			http.NotFound(w, r)
 			return

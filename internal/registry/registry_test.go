@@ -3,9 +3,12 @@ package registry
 import (
 	"fmt"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hashicorp/terraform-config-inspect/tfconfig"
 
 	"github.com/opsolete/opsolete/internal/registry/registrytest"
 	"github.com/opsolete/opsolete/internal/templates"
@@ -126,5 +129,28 @@ func TestAddressAndSigning(t *testing.T) {
 	SortVersions(vs)
 	if strings.Join(vs, ",") != "1.10.0,1.2.0,1.0.0" {
 		t.Fatalf("sort: %v", vs)
+	}
+}
+
+func TestResolve(t *testing.T) {
+	vars := []tfconfig.Variable{
+		{Name: "name", Type: "string", Required: true},
+		{Name: "location", Type: "string", Default: "westeurope"},
+		{Name: "count_x", Type: "number", Default: 1},
+		{Name: "secret", Type: "string", Sensitive: true},
+	}
+	overrides := []templates.Input{
+		{Name: "location", Label: "Region", Type: "select", Options: []string{"westeurope", "northeurope"}},
+		{Name: "gone", Type: "string", Required: true},      // no longer in the module
+		{Name: "name", Type: "number", Pattern: "^[a-z]+$"}, // wrong type in the JSON
+	}
+	got := Resolve(overrides, vars)
+	want := []templates.Input{
+		{Name: "location", Label: "Region", Type: "select", Options: []string{"westeurope", "northeurope"}, Default: "westeurope"},
+		{Name: "name", Label: "name", Type: "string", Required: true, Pattern: "^[a-z]+$"},
+		{Name: "count_x", Label: "count_x", Type: "number", Default: "1"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %+v\nwant %+v", got, want)
 	}
 }

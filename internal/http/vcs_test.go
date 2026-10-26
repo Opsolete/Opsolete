@@ -152,8 +152,7 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 	if rec := post(h, "/registry/"+ns+"/rds/aws/sync", nil); rec.Header().Get("Location") != "/registry/"+ns+"/rds/aws/1.0.1" {
 		t.Fatalf("sync: %d %q", rec.Code, rec.Header().Get("Location"))
 	}
-	tpl.Module.Ref = "1.0.1"
-	tpl.Inputs = append(tpl.Inputs, templates.Input{Name: "db_encrypted", Label: "Encrypted", Type: "bool"})
+	tpl.Module.Ref = "1.0.1" // db_encrypted isn't added to the JSON: the form takes it from the module's variables
 	if err := app.Templates.Save(tpl, true); err != nil {
 		t.Fatal(err)
 	}
