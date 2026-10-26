@@ -112,6 +112,9 @@ type Runner struct {
 	Name       string        // shown on deployments; defaults to the hostname (pod name)
 	Terraform  string        // terraform binary
 	JobTimeout time.Duration // hard limit per deployment
+	// Cost estimation with Infracost; off without an API key.
+	Infracost       string // infracost binary
+	InfracostAPIKey string
 }
 
 // LoadRunner reads OPS_* variables and then removes them from the environment, so
@@ -138,6 +141,13 @@ func LoadRunner() (Runner, error) {
 	}
 	if c.JobTimeout, err = time.ParseDuration(getenv("OPS_JOB_TIMEOUT", "1h")); err != nil || c.JobTimeout <= 0 {
 		return c, errors.New("OPS_JOB_TIMEOUT must be a duration like 45m")
+	}
+	if c.InfracostAPIKey = os.Getenv("OPS_INFRACOST_API_KEY"); c.InfracostAPIKey != "" {
+		if c.Infracost = os.Getenv("OPS_INFRACOST"); c.Infracost == "" {
+			if c.Infracost, err = exec.LookPath("infracost"); err != nil {
+				return c, errors.New("infracost not found: install it, set OPS_INFRACOST, or unset OPS_INFRACOST_API_KEY")
+			}
+		}
 	}
 	for _, kv := range os.Environ() {
 		if k, _, _ := strings.Cut(kv, "="); strings.HasPrefix(k, "OPS_") {

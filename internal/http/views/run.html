@@ -72,6 +72,9 @@
     <p class="muted">{{if eq $r.Action "refresh"}}Applying updates the state to match; it changes no infrastructure.{{else}}A drift check is never applied. Start a refresh-only run to accept these changes into state, or a new run to revert them.{{end}}</p>
     {{else}}
     <h3>Plan: <span class="plan">{{.Add}} to add, {{.Change}} to change, {{.Destroy}} to destroy</span></h3>
+    {{with .Cost}}<p><strong>Estimated monthly cost:</strong> {{.Currency}} {{printf "%.2f" .Proposed}}
+      <span class="change {{if gt .Delta 0.0}}create{{else if lt .Delta 0.0}}delete{{else}}update{{end}}">{{printf "%+.2f" .Delta}}</span>
+      <span class="muted">(was {{printf "%.2f" .Prior}}; {{.Priced}} resources priced{{with .Unsupported}}, {{.}} unsupported{{end}}; usage-based charges excluded. Estimate by Infracost.)</span></p>{{end}}
     {{if eq $r.Action "plan"}}<p class="muted">A speculative plan of a pull request is never applied. Merge the pull request to apply it.</p>{{end}}
     {{end}}
     {{with .Changes}}

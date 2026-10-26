@@ -21,6 +21,16 @@ RUN apk add --no-cache curl unzip \
  && echo "$sha  /tmp/tf.zip" | sha256sum -c - \
  && unzip -q /tmp/tf.zip terraform -d /usr/local/bin
 
+# Cost estimation; only used when the runner has OPS_INFRACOST_API_KEY.
+ARG INFRACOST_VERSION=0.10.47
+ARG INFRACOST_SHA256_amd64=df098d5565b78cc23de57e1dac9f2a02491691322cbd690dca9b197e3e02fe93
+ARG INFRACOST_SHA256_arm64=1db33dddcac989f39687fa9bf00ed9d8cce4268450578848e5bf6287ad8a7b44
+RUN case "$TARGETARCH" in amd64) sha="$INFRACOST_SHA256_amd64" ;; arm64) sha="$INFRACOST_SHA256_arm64" ;; *) exit 1 ;; esac \
+ && curl -fsSLo /tmp/ic.tgz "https://github.com/infracost/infracost/releases/download/v${INFRACOST_VERSION}/infracost-linux-${TARGETARCH}.tar.gz" \
+ && echo "$sha  /tmp/ic.tgz" | sha256sum -c - \
+ && tar -xzf /tmp/ic.tgz -C /tmp \
+ && install -m 0755 "/tmp/infracost-linux-${TARGETARCH}" /usr/local/bin/infracost
+
 FROM gcr.io/distroless/static-debian12:nonroot AS app
 COPY --from=build /out/opsolete /usr/local/bin/opsolete
 COPY catalog /catalog
@@ -36,6 +46,7 @@ RUN apk add --no-cache ca-certificates git openssh-client \
  && mkdir -p /home/runner/.terraform.d/plugin-cache \
  && chown -R runner:runner /home/runner
 COPY --from=terraform /usr/local/bin/terraform /usr/local/bin/terraform
+COPY --from=terraform /usr/local/bin/infracost /usr/local/bin/infracost
 COPY --from=build /out/opsolete /usr/local/bin/opsolete
 USER 10001
 # Provider plugins are reused across jobs (mount a volume to keep them across restarts).

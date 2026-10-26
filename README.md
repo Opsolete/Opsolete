@@ -167,6 +167,10 @@ Store the key outside the deployment, apart from the bucket and database backups
 | `OPS_RUNNER_TOKEN` | required | `opsolete token <name> runner` |
 | `OPS_JOB_TIMEOUT` | `1h` | Hard limit per run phase |
 | `OPS_RUNNER_NAME` | hostname | Shown on runs; the pod name in k8s |
+| `OPS_INFRACOST_API_KEY` | off | Turns on cost estimation (get a key with `infracost auth login`) |
+| `OPS_INFRACOST` | `infracost` on `PATH` | Infracost binary (the runner image ships 0.10.47) |
+
+**Cost estimation.** With `OPS_INFRACOST_API_KEY` set, every plan with changes (except refresh-only and drift checks) is priced with `infracost breakdown`, and the run page shows the estimated monthly cost, its change and the number of resources priced before anyone confirms the apply. It's an estimate: usage-based charges are left out, and resources Infracost doesn't support count as 0. Infracost runs on the runner with the plan's JSON and only its own key in its environment, never the job's variables. It sends price-relevant resource attributes (type, region, SKU, size) to Infracost's Cloud Pricing API, not the plan. If it fails, the run goes on without an estimate and the log says why.
 
 Provider credentials come from the workspace's [variables](#variables-and-variable-sets), set as environment variables for Terraform on top of the runner's own environment. Runners are generic: give them no cloud credentials of their own, or every workspace without variables runs with them. Runners need no state storage credentials. Module code runs on the runner with the provider credentials, so scope them to what Opsolete may deploy.
 

@@ -69,6 +69,17 @@ type Plan struct {
 	Change  int      `json:"change"`
 	Destroy int      `json:"destroy"`
 	Changes []Change `json:"changes"`
+	Cost    *Cost    `json:"cost,omitempty"` // nil: cost estimation is off or failed
+}
+
+// Cost is Infracost's estimate of a plan's monthly cost, without usage-based charges.
+type Cost struct {
+	Currency    string  `json:"currency"` // e.g. USD
+	Prior       float64 `json:"prior"`    // before the plan
+	Proposed    float64 `json:"proposed"` // after it
+	Delta       float64 `json:"delta"`
+	Priced      int     `json:"priced"`      // resources Infracost priced
+	Unsupported int     `json:"unsupported"` // resources it can't price (left out of the totals)
 }
 
 type Change struct {

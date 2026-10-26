@@ -568,12 +568,12 @@ func TestWorkspaceFlow(t *testing.T) {
 	if rec := call("POST", runnerTok, "/jobs/"+runID+"/finish", job.LeaseID, `{"status":"bogus"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid status accepted: %d", rec.Code)
 	}
-	finish(`{"status":"succeeded","plan":{"add":1,"change":0,"destroy":0,"changes":[{"address":"azurerm_storage_account.this","action":"create"}]}}`)
+	finish(`{"status":"succeeded","plan":{"add":1,"change":0,"destroy":0,"changes":[{"address":"azurerm_storage_account.this","action":"create"}],"cost":{"currency":"USD","prior":0,"proposed":12.5,"delta":12.5,"priced":1}}}`)
 	planToken := job.StateToken
 
 	// The plan waits for a human: shown with the changes, and confirmable only by the owner or an admin.
 	page := get(h, runURL).Body.String()
-	for _, want := range []string{"needs confirmation", "1 to add, 0 to change, 0 to destroy", "<code>azurerm_storage_account.this</code>", "Confirm &amp; apply", "Discard"} {
+	for _, want := range []string{"needs confirmation", "1 to add, 0 to change, 0 to destroy", "<code>azurerm_storage_account.this</code>", "Confirm &amp; apply", "Discard", "USD 12.50", "&#43;12.50"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("run page lacks %q", want)
 		}
