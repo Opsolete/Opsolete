@@ -112,6 +112,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 	mux.HandleFunc("GET /readyz", s.ready)
 	s.Auth.Routes(mux)
+	mux.HandleFunc("GET /audit", s.admin(s.auditPage))
 	mux.HandleFunc("GET /.well-known/terraform.json", s.discovery)
 	if s.Features.Registry {
 		s.registryRoutes(mux)
@@ -121,7 +122,7 @@ func (s *Server) Handler() http.Handler {
 	}
 	if !s.Features.Deployments {
 		mux.Handle("GET /{$}", http.RedirectHandler("/registry", http.StatusFound))
-		return s.logRequests(http.NewCrossOriginProtection().Handler(s.requireLogin(mux)))
+		return s.logRequests(s.audit(http.NewCrossOriginProtection().Handler(s.requireLogin(mux))))
 	}
 	mux.HandleFunc("GET /{$}", s.index)
 	if s.Features.Editor {
@@ -136,7 +137,7 @@ func (s *Server) Handler() http.Handler {
 	s.workspaceRoutes(mux)
 	s.variableRoutes(mux)
 	// CrossOriginProtection rejects cross-site browser POSTs (CSRF); token clients send no Origin and pass.
-	return s.logRequests(http.NewCrossOriginProtection().Handler(s.requireLogin(mux)))
+	return s.logRequests(s.audit(http.NewCrossOriginProtection().Handler(s.requireLogin(mux))))
 }
 
 // public paths authenticate themselves (API tokens, signed URLs) or must work without login.

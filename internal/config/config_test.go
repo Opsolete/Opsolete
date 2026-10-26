@@ -15,6 +15,11 @@ func TestLoad(t *testing.T) {
 	}
 
 	t.Setenv("DATABASE_URL", "postgres://x")
+	t.Setenv("SECRET_KEY", "")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected error without SECRET_KEY")
+	}
+	t.Setenv("SECRET_KEY", "test-secret-key-of-at-least-32-chars")
 	c, err := Load()
 	if err != nil {
 		t.Fatal(err)

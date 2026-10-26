@@ -37,6 +37,7 @@ import (
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(log) // audit entries are streamed through the default logger
 	var err error
 	switch {
 	case len(os.Args) == 1:
@@ -63,6 +64,7 @@ func openStore(ctx context.Context, cfg config.Config) (*storage.Store, error) {
 		store.DB.Close()
 		return nil, err
 	}
+	store.AuditKey = []byte(cfg.SecretKey)
 	return store, nil
 }
 
@@ -87,6 +89,10 @@ func createToken() error {
 	token, err := store.CreateToken(ctx, os.Args[2], scope)
 	if err != nil {
 		return err
+	}
+	if err := store.Audit(ctx, "cli", "create token", map[string]any{"principal": map[string]any{"type": "system"},
+		"name": os.Args[2], "scope": scope}); err != nil {
+		return fmt.Errorf("token created, but not audited: %w", err)
 	}
 	fmt.Println(token)
 	return nil
@@ -132,11 +138,10 @@ func serve(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	if cfg.SecretKey != "" { // a database dump alone must not forge sessions, state credentials or signed URLs
-		m := hmac.New(sha256.New, []byte(cfg.SecretKey))
-		m.Write(key)
-		key = m.Sum(nil)
-	}
+	// a database dump alone must not forge sessions, state credentials or signed URLs
+	m := hmac.New(sha256.New, []byte(cfg.SecretKey))
+	m.Write(key)
+	key = m.Sum(nil)
 	reg := &registry.Registry{PublicURL: cfg.PublicURL, Key: key}
 
 	// Same key as the registry: cookie MACs are domain-separated from signed archive URLs.
@@ -170,20 +175,16 @@ func serve(log *slog.Logger) error {
 		}
 	}
 
-	vcsOn := cfg.Registry && cfg.SecretKey != ""
+	vcsOn := cfg.Registry
 	app := httpserver.New(store, tpls, reg, authn, state, httpserver.Features{
 		Deployments: cfg.Deployments, Registry: cfg.Registry, Editor: cfg.TemplateEditor, VCS: vcsOn}, log)
 	app.Organization = cfg.Organization
-	if cfg.SecretKey != "" {
-		app.SecretKey = vcs.Key(cfg.SecretKey)
-		// values sealed before they were bound to their row only open after this
-		if n, err := vcs.Reseal(ctx, store, app.SecretKey); err != nil {
-			return fmt.Errorf("re-seal variables and VCS tokens: %w", err)
-		} else if n > 0 {
-			log.Info("re-sealed variables and VCS tokens", "count", n)
-		}
-	} else if cfg.Deployments {
-		log.Warn("SECRET_KEY is not set: state files and run artifacts are stored unencrypted in STATE_STORE")
+	app.SecretKey = vcs.Key(cfg.SecretKey)
+	// values sealed before they were bound to their row only open after this
+	if n, err := vcs.Reseal(ctx, store, app.SecretKey); err != nil {
+		return fmt.Errorf("re-seal variables and VCS tokens: %w", err)
+	} else if n > 0 {
+		log.Info("re-sealed variables and VCS tokens", "count", n)
 	}
 	if vcsOn {
 		go vcs.Poll(ctx, store, app.SecretKey, 5*time.Minute, log)

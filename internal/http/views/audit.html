@@ -1,0 +1,26 @@
+{{template "top"}}
+<div class="page-head">
+  <div>
+    <h1>Audit log</h1>
+    <p class="muted">Every change made in Opsolete, newest first (the latest 500). Entries can't be edited or deleted, and each one is signed with SECRET_KEY together with the one before it. Every entry is also written to the server log (stdout).</p>
+  </div>
+</div>
+{{if .Broken}}<p class="alert error" role="alert">The audit log was tampered with: entry {{.Broken}} was changed, or an entry before it removed.</p>
+{{else}}<p class="muted">Hash chain verified: intact.</p>{{end}}
+<div class="card flush">
+<table>
+<tr><th>#</th><th>When (UTC)</th><th>Who</th><th>Action</th><th>Details</th></tr>
+{{range .Entries}}
+<tr>
+  <td>{{.ID}}</td>
+  <td>{{.At.UTC.Format "2006-01-02 15:04:05"}}</td>
+  <td>{{.Actor}}</td>
+  <td><code>{{.Action}}</code></td>
+  <td><code>{{printf "%s" .Detail}}</code></td>
+</tr>
+{{else}}
+<tr><td colspan="5" class="empty">Nothing recorded yet.</td></tr>
+{{end}}
+</table>
+</div>
+{{template "bottom"}}

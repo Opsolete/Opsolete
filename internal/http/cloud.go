@@ -114,7 +114,9 @@ func (s *Server) cloudUser(next http.HandlerFunc) http.HandlerFunc {
 			writeErrors(w, http.StatusNotFound, "organization not found")
 			return
 		}
-		next(w, r.WithContext(auth.WithUser(r.Context(), auth.User{ID: id, Email: email, Role: role})))
+		u := auth.User{ID: id, Email: email, Role: role}
+		auth.SetPrincipal(r.Context(), u, "token")
+		next(w, r.WithContext(auth.WithUser(r.Context(), u)))
 	}
 }
 

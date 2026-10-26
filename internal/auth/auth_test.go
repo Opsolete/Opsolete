@@ -12,7 +12,10 @@ import (
 	"github.com/opsolete/opsolete/internal/auth/authtest"
 )
 
-var savedGroups []string // groups the last login recorded
+var (
+	savedGroups   []string  // groups the last login recorded
+	lastPrincipal Principal // who the last callback named for the audit log
+)
 
 func newOIDC(t *testing.T, is *authtest.Issuer) *Auth {
 	pub, _ := url.Parse("https://ops.example.com")
@@ -50,7 +53,9 @@ func login(t *testing.T, a *Auth, is *authtest.Issuer, next string, tamperState 
 		q.Set("state", "forged")
 		cb.RawQuery = q.Encode()
 	}
+	lastPrincipal = Principal{Type: "anonymous"}
 	req := httptest.NewRequest("GET", cb.RequestURI(), nil)
+	req = req.WithContext(WithPrincipal(req.Context(), &lastPrincipal))
 	for _, c := range cookies {
 		req.AddCookie(c)
 	}
@@ -78,6 +83,9 @@ func TestOIDCLogin(t *testing.T) {
 	}
 	if u, ok := sessionUser(a, rec); !ok || u != (User{ID: "id-dev@example.com", Email: "dev@example.com", Role: "user"}) {
 		t.Fatalf("session: %+v %v", u, ok)
+	}
+	if lastPrincipal.Email != "dev@example.com" || lastPrincipal.Type != "user" {
+		t.Fatalf("the sign-in must name its user for the audit log: %+v", lastPrincipal)
 	}
 	if strings.Join(savedGroups, ",") != "grp-a,grp-b" {
 		t.Fatalf("the IdP's groups must be recorded at login (for team access): %v", savedGroups)

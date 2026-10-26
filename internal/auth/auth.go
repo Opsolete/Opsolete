@@ -140,6 +140,26 @@ func FromContext(ctx context.Context) User {
 	return u
 }
 
+// Principal is who a request acts as, for the audit log. Type is "user" (browser session), "token"
+// (a terraform login token) or "anonymous". Handlers that authenticate a request themselves (the
+// sign-in callback, API tokens) fill in the one the audit middleware put on the context.
+type Principal struct {
+	User
+	Type string
+}
+
+type principalKey struct{}
+
+func WithPrincipal(ctx context.Context, p *Principal) context.Context {
+	return context.WithValue(ctx, principalKey{}, p)
+}
+
+func SetPrincipal(ctx context.Context, u User, typ string) {
+	if p, ok := ctx.Value(principalKey{}).(*Principal); ok {
+		*p = Principal{u, typ}
+	}
+}
+
 type loginState struct {
 	State, Nonce, Verifier, Next string
 	Exp                          int64
@@ -205,6 +225,7 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "login failed: could not save user", http.StatusInternalServerError)
 		return
 	}
+	SetPrincipal(r.Context(), u, "user")
 	a.writeCookie(w, sessionCookie, struct {
 		User
 		Exp int64 `json:"exp"`

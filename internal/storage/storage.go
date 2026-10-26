@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"sort"
@@ -15,7 +16,10 @@ import (
 //go:embed migrations/*.sql
 var migrations embed.FS
 
-type Store struct{ DB *sql.DB }
+type Store struct {
+	DB       *sql.DB
+	AuditKey []byte // signs the audit log (SECRET_KEY); entries can't be written without it
+}
 
 func Open(ctx context.Context, url string) (*Store, error) {
 	db, err := sql.Open("pgx", url)
@@ -80,4 +84,11 @@ func (s *Store) UpsertUser(ctx context.Context, email, role string, groups []str
 	err := s.DB.QueryRowContext(ctx, `INSERT INTO users (email, role, groups) VALUES ($1, $2, $3)
 		ON CONFLICT (email) DO UPDATE SET role = EXCLUDED.role, groups = EXCLUDED.groups RETURNING id`, email, role, groups).Scan(&id)
 	return id, err
+}
+
+// UserGroups returns the IdP groups recorded at the user's last login, as a JSON array.
+func (s *Store) UserGroups(ctx context.Context, id string) (json.RawMessage, error) {
+	var groups []byte
+	err := s.DB.QueryRowContext(ctx, `SELECT array_to_json(groups) FROM users WHERE id = ops_uuid($1)`, id).Scan(&groups)
+	return groups, err
 }

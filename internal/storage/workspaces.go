@@ -518,8 +518,13 @@ func (s *Store) QueueVCSRun(ctx context.Context, workspaceID, commit string, pul
 	if pullRequest > 0 {
 		action = "plan"
 	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback()
 	var id string
-	err := s.DB.QueryRowContext(ctx, `
+	err = tx.QueryRowContext(ctx, `
 		WITH r AS (
 			INSERT INTO runs (workspace_id, action, status, vcs_commit, vcs_pull_request)
 			SELECT w.id, $2, 'plan_queued', $3, NULLIF($4, 0) FROM workspaces w
@@ -534,7 +539,19 @@ func (s *Store) QueueVCSRun(ctx context.Context, workspaceID, commit string, pul
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
-	return err == nil, err
+	if err != nil {
+		return false, err
+	}
+	e, err := s.audit(ctx, tx, "vcs", "queue run", map[string]any{"principal": map[string]any{"type": "system"},
+		"run": id, "workspace_id": workspaceID, "action": action, "commit": commit, "pull_request": pullRequest})
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	e.stream()
+	return true, nil
 }
 
 // PinVCSCommit records the commit a run plans, unless one is recorded already, and returns the

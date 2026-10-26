@@ -26,6 +26,7 @@ func testStore(t *testing.T) *Store {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.DB.Close() })
+	s.AuditKey = []byte("test-audit-key") // the same in every test package: they share the log
 	if err := s.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}

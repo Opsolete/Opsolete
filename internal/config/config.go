@@ -35,7 +35,7 @@ type Config struct {
 	// (Terraform requires a dot in it and HTTPS for registry clients).
 	PublicURL *url.URL
 	// SecretKey encrypts VCS access tokens and variables in Postgres, and state files and saved plans
-	// in STATE_STORE. Empty: tokens and variables are off, state files are stored in plaintext.
+	// in STATE_STORE, and signs the audit log. Required.
 	SecretKey string
 	// Organization is the one organization Terraform's cloud block may name.
 	Organization string
@@ -63,8 +63,8 @@ func Load() (Config, error) {
 	if c.DatabaseURL == "" {
 		return c, errors.New("DATABASE_URL is required")
 	}
-	if c.SecretKey != "" && len(c.SecretKey) < 32 {
-		return c, errors.New("SECRET_KEY must be at least 32 characters (e.g. openssl rand -base64 32)")
+	if len(c.SecretKey) < 32 {
+		return c, errors.New("SECRET_KEY is required and must be at least 32 characters (e.g. openssl rand -base64 32)")
 	}
 	var err error
 	if c.StaleLockTimeout, err = time.ParseDuration(getenv("STALE_LOCK_TIMEOUT", "15m")); err != nil || c.StaleLockTimeout <= 0 {
