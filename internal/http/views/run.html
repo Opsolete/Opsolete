@@ -34,7 +34,7 @@
 <dl class="stats">
   <div><dt>Plan duration</dt><dd>{{or .Plan.Duration "—"}}</dd></div>
   <div><dt>{{if or (eq $r.Action "refresh") (eq $r.Action "assess")}}Drift{{else}}Resources to be changed{{end}}</dt>
-    <dd class="plan">{{with $r.Plan}}{{if or (eq $r.Action "refresh") (eq $r.Action "assess")}}~{{.Change}} −{{.Destroy}}{{else}}<span class="change create">+{{.Add}}</span> <span class="change update">~{{.Change}}</span> <span class="change delete">−{{.Destroy}}</span>{{end}}{{else}}+0 ~0 −0{{end}}</dd></div>
+    <dd class="plan">{{with $r.Plan}}{{if or (eq $r.Action "refresh") (eq $r.Action "assess")}}{{if or .Change .Destroy}}{{if .Change}}<span class="change update">~{{.Change}}</span>{{end}} {{if .Destroy}}<span class="change delete">−{{.Destroy}}</span>{{end}}{{else}}None{{end}}{{else}}<span class="change create">+{{.Add}}</span> <span class="change update">~{{.Change}}</span> <span class="change delete">−{{.Destroy}}</span>{{end}}{{else}}+0 ~0 −0{{end}}</dd></div>
   <div><dt>Apply duration</dt><dd>{{or .Apply.Duration "—"}}</dd></div>
   <div><dt>Triggered by</dt><dd>{{if $r.CreatedBy}}{{$r.CreatedBy}}{{else if $r.VCSPullRequest}}pull request #{{$r.VCSPullRequest}}{{else if and $r.VCSCommit (eq $r.Action "apply")}}new commit{{else}}—{{end}}</dd></div>
 </dl>
