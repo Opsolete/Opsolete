@@ -33,6 +33,8 @@ var testReg = func() *registry.Registry {
 	return &registry.Registry{PublicURL: u, Key: []byte("test-key")}
 }()
 
+const testRunnerToken = "test-runner-token-0123456789abcdef"
+
 func newTestServer(t *testing.T) http.Handler { return newServer(t, "../../catalog", false, nil) }
 
 // newServer is logged in as an admin dev user.
@@ -51,6 +53,7 @@ func newApp(t *testing.T, dir string, store *storage.Store, a *auth.Auth, f Feat
 	}
 	srv := New(store, tpls, testReg, a, memblob.OpenBucket(nil), f, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	srv.SecretKey = vcs.Key("test-secret-key")
+	srv.RunnerToken = testRunnerToken
 	return srv
 }
 
@@ -444,7 +447,7 @@ func TestWorkspaceFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runnerTok, _ := store.CreateToken(ctx, "r", storage.ScopeRunner)
+	runnerTok := testRunnerToken
 	registryTok, _ := store.CreateToken(ctx, "reg", storage.ScopeRegistry)
 	call := func(method, token, path, lease, body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(method, runnerapi.Prefix+path, strings.NewReader(body))
@@ -494,6 +497,9 @@ func TestWorkspaceFlow(t *testing.T) {
 	// Plan phase.
 	if rec := call("POST", registryTok, "/jobs/claim", "", `{"runner":"r1"}`); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("a registry token must not claim jobs: %d", rec.Code)
+	}
+	if rec := call("POST", testRunnerToken+"x", "/jobs/claim", "", `{"runner":"r1"}`); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("a wrong runner token must not claim jobs: %d", rec.Code)
 	}
 	claimJob("plan")
 	if job.Vars["name"] != "acct01" || job.Vars["retention_days"] != 7.0 || job.ModuleSource != "git::https://dev.azure.com/your-org/infra/_git/terraform-modules//storage-account?ref=v1.0.0" {
@@ -858,7 +864,6 @@ func TestWorkspaceFlow(t *testing.T) {
 // sets handed to runners, renaming and canceling, through the HTTP routes.
 func TestTeamsVariablesRenameCancel(t *testing.T) {
 	store := testStore(t)
-	ctx := context.Background()
 	claimWait = 100 * time.Millisecond
 	store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
 	dir := t.TempDir()
@@ -976,7 +981,7 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 	}
 
 	// Any runner gets the run, with the variables.
-	runnerTok, _ := store.CreateToken(ctx, "r", storage.ScopeRunner)
+	runnerTok := testRunnerToken
 	req := httptest.NewRequest("POST", runnerapi.Prefix+"/jobs/claim", strings.NewReader(`{"runner":"r"}`))
 	req.Header.Set("Authorization", "Bearer "+runnerTok)
 	rec = do(admin, req)

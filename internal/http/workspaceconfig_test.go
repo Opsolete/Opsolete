@@ -141,7 +141,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	if rec := post(h, "/workspaces/"+linked+"/runs", url.Values{"action": {"apply"}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("start run: %d %s", rec.Code, rec.Body.String())
 	}
-	runnerTok, _ := store.CreateToken(ctx, "r", storage.ScopeRunner)
+	runnerTok := testRunnerToken
 	req := httptest.NewRequest("POST", runnerapi.Prefix+"/jobs/claim", strings.NewReader(`{"runner":"r1"}`))
 	req.Header.Set("Authorization", "Bearer "+runnerTok)
 	rec = do(h, req)

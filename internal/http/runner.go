@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,15 +29,28 @@ const (
 	runnerSrcTTL    = 15 * time.Minute // signed archive URL handed to the runner; it downloads right away
 )
 
-// Runner API: runners pull work over HTTPS with a runner-scoped token, so they need no
+// Runner API: runners pull work over HTTPS with the shared RUNNER_TOKEN, so they need no
 // database access and no inbound connectivity.
 func (s *Server) runnerRoutes(mux *http.ServeMux) {
-	mux.Handle("POST "+runnerapi.Prefix+"/jobs/claim", s.requireToken(storage.ScopeRunner, s.claimJob))
-	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/logs", s.requireToken(storage.ScopeRunner, s.jobLogs))
-	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/heartbeat", s.requireToken(storage.ScopeRunner, s.jobHeartbeat))
-	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/finish", s.requireToken(storage.ScopeRunner, s.jobFinish))
-	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/artifacts/{name}", s.requireToken(storage.ScopeRunner, s.putArtifact))
-	mux.Handle("GET "+runnerapi.Prefix+"/jobs/{id}/artifacts/{name}", s.requireToken(storage.ScopeRunner, s.getArtifact))
+	mux.Handle("POST "+runnerapi.Prefix+"/jobs/claim", s.requireRunner(s.claimJob))
+	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/logs", s.requireRunner(s.jobLogs))
+	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/heartbeat", s.requireRunner(s.jobHeartbeat))
+	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/finish", s.requireRunner(s.jobFinish))
+	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/artifacts/{name}", s.requireRunner(s.putArtifact))
+	mux.Handle("GET "+runnerapi.Prefix+"/jobs/{id}/artifacts/{name}", s.requireRunner(s.getArtifact))
+}
+
+// requireRunner admits requests bearing RUNNER_TOKEN, which the operator generates and gives to
+// both the server and the runners, so a fresh deployment needs no token-creation step.
+func (s *Server) requireRunner(next http.HandlerFunc) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if !ok || s.RunnerToken == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.RunnerToken)) != 1 {
+			writeErrors(w, http.StatusUnauthorized, "missing or invalid runner token")
+			return
+		}
+		next(w, r)
+	})
 }
 
 func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {

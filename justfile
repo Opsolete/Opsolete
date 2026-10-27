@@ -74,7 +74,7 @@ seed: db-start
     req /workspaces/credentials-only/variables -d category=env -d key=ARM_CLIENT_SECRET -d value=not-a-real-secret -d sensitive=on
 
     echo "runner: applying greeting-dev, planning greeting-prod"
-    OPS_RUNNER_TOKEN=$("$bin" token "seed-runner" runner) OPS_SERVER_URL=$base "$bin" runner > "$PGHOST/seed-runner.log" 2>&1 &
+    OPS_RUNNER_TOKEN=$RUNNER_TOKEN OPS_SERVER_URL=$base "$bin" runner > "$PGHOST/seed-runner.log" 2>&1 &
     pids="$pids $!"
     for ws in greeting-dev:applied greeting-prod:needs_confirmation; do
         for _ in $(seq 180); do curl -sf "$base/workspaces/${ws%%:*}" | grep -q "status ${ws#*:}\"" && continue 2; sleep 1; done
@@ -93,16 +93,16 @@ psql: db-start
 run: db-start
     go run ./cmd/opsolete
 
-# create an API token, printed once: scope registry (TF_TOKEN_<host>) or runner
-token name scope="registry": db-start
-    @go run ./cmd/opsolete token "{{name}}" "{{scope}}"
+# create a registry API token (TF_TOKEN_<host>), printed once
+token name: db-start
+    @go run ./cmd/opsolete token "{{name}}"
 
 # run a runner on this machine against `just run`
 runner: env
     #!/usr/bin/env bash
     set -euo pipefail
-    token=$(go run ./cmd/opsolete token "local-$(hostname)" runner) # not `export X=$(...)`: that hides a failure from set -e
-    export OPS_RUNNER_TOKEN=$token
+    export OPS_RUNNER_TOKEN=$RUNNER_TOKEN
+    unset RUNNER_TOKEN # OPS_* is hidden from jobs, this isn't
     export OPS_SERVER_URL=${OPS_SERVER_URL:-http://127.0.0.1:8080}
     exec go run ./cmd/opsolete runner
 

@@ -64,7 +64,7 @@ Do not embed or reimplement the entire Terraform execution engine in the Go appl
 Decision (October 2026): deployments run on **Opsolete's own runners**. The earlier Azure Pipelines executor has been removed, leaving a single execution path.
 
 - The server owns all state. Runs in PostgreSQL double as the job queue (`FOR UPDATE SKIP LOCKED`).
-- Runners pull jobs over HTTPS with a runner-scoped token, so they need no database access and no inbound connectivity. Each claim returns a lease id (fencing token) that every later write must present. Leases expire without heartbeats, and the server then fails the job instead of retrying it.
+- Runners pull jobs over HTTPS with the shared `RUNNER_TOKEN` from the server's config, so they need no database access and no inbound connectivity. Each claim returns a lease id (fencing token) that every later write must present. Leases expire without heartbeats, and the server then fails the job instead of retrying it.
 - Runners execute Terraform through `terraform-exec` (init → plan → apply → output), one job at a time, in a throwaway working directory, as a non-root user.
 - Runners stream output to the server, which stores it and serves it to the browser via Server-Sent Events. Sensitive outputs never leave the runner.
 - A **workspace** holds one Terraform state; every change to it is a **run**: a plan phase, a human confirmation (or per-workspace auto-apply; destroys always ask), then an apply phase that applies the saved plan. Each phase is a separate job; the plan file and lock file travel between them via the state store. One active run per workspace. Runs can be canceled gracefully (runner interrupts Terraform, which still saves state) or forced.

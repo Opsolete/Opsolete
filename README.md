@@ -45,6 +45,7 @@ Requirements: Go 1.26+, PostgreSQL 13+ (it needs `gen_random_uuid()`).
 docker compose up -d            # or use any local PostgreSQL
 export DATABASE_URL=postgres://opsolete:opsolete@localhost:5432/opsolete
 export AUTH_DEV_USER=dev@localhost ADMIN_EMAILS=dev@localhost   # local only, see Login
+export SECRET_KEY=$(openssl rand -hex 32) RUNNER_TOKEN=$(openssl rand -hex 32) STATE_STORE="file://$PWD/.devdata/state-store?create_dir=1&metadata=skip"
 go run ./cmd/opsolete
 ```
 
@@ -63,13 +64,14 @@ Then open http://localhost:8080. Migrations run on startup.
 | `ADMIN_EMAILS`  |           | Comma-separated emails that get the admin role at login |
 | `AUTH_DEV_USER` |           | **Local dev only:** skip login and treat every visitor as this email (set in the nix dev shell) |
 | `SECRET_KEY`    | required  | At least 32 characters; the server and `opsolete token` refuse to start without it. It encrypts [variables](#variables-and-variable-sets) and VCS access tokens in Postgres, and [state files and saved plans](#workspaces-and-state) in `STATE_STORE`, and signs the [audit log](#teams-access-per-workspace). Keep it stable. **Back it up outside the deployment** (see [Backing up `SECRET_KEY`](#backing-up-secret_key)): without it, encrypted state can't be recovered |
+| `RUNNER_TOKEN`  | required with deployments | At least 32 characters (e.g. `openssl rand -hex 32`). Runners present it as `OPS_RUNNER_TOKEN`. You generate it, so it exists before the first deploy. To rotate it, change it on the server and the runners, then restart both |
 | `STATE_STORE`   | required with deployments | Where workspace state files live, as a [Go CDK blob URL](https://gocloud.dev/howto/blob/): `azblob://tfstate`, `s3://tfstate?region=eu-west-1` (add `&endpoint=…&use_path_style=true` for S3-compatible stores), `gs://tfstate`, `file:///path` (dev). Credentials come from the platform's usual env vars or workload identity |
 | `STALE_LOCK_TIMEOUT` | `15m` | A rollback's state lock older than this is released as orphaned (the server died mid-rollback). Run locks are released with the run or its lease; CLI and UI locks never expire (use force-unlock) |
 | `ORGANIZATION`  | `opsolete` | The one organization Terraform's [`cloud` block](#terraform-cli-cloud-block-and-terraform-login) may name |
 
 ## Login
 
-All pages require login. Health checks, the registry protocol (`/v1/…`, which uses API tokens and signed URLs), the runner API (runner tokens) and the cloud API (`/api/v2/…`, user tokens from `terraform login`) don't.
+All pages require login. Health checks, the registry protocol (`/v1/…`, which uses API tokens and signed URLs), the runner API (`RUNNER_TOKEN`) and the cloud API (`/api/v2/…`, user tokens from `terraform login`) don't.
 
 - **OIDC:** authorization code flow with PKCE, using `coreos/go-oidc` and `x/oauth2`. It works with Entra ID, Google, Keycloak, Dex and similar. Register `PUBLIC_URL/auth/callback` as the redirect URI. The user is identified by the `email` claim, falling back to `preferred_username` (Entra ID). An explicit `email_verified: false` is rejected.
 - **Roles:** emails listed in `ADMIN_EMAILS` are `admin`, everyone else is `user`. The role is recorded at every login, so editing `ADMIN_EMAILS` takes effect at the next login. Sessions are HMAC-signed cookies that last 12 hours. Logging out ends the Opsolete session, not the IdP session.
@@ -152,7 +154,7 @@ Store the key outside the deployment, apart from the bucket and database backups
 
 **How it works**
 
-- **Pull, don't push.** Runners long-poll `POST /api/runner/v1/jobs/claim` with a *runner* token. They need no database credentials and accept no inbound connections. Registry tokens can't claim jobs, and runner tokens can't use the registry.
+- **Pull, don't push.** Runners long-poll `POST /api/runner/v1/jobs/claim` with the server's `RUNNER_TOKEN`. They need no database credentials and accept no inbound connections. Registry tokens can't claim jobs, and the runner token can't use the registry. All runners share that one token, so revoking one runner means rotating it for all of them.
 - **Postgres queue.** Queued run phases are the jobs. `FOR UPDATE SKIP LOCKED` lets any number of runners claim without double-running a job.
 - **Leases and fencing.** A claim returns a lease id that every log, heartbeat and finish call must send. Log posts double as heartbeats, sent about every 30 s while idle. If a runner disappears for 2 minutes, the server fails the job ("runner stopped responding") and fences the old runner off. A 409 tells a runner it lost the job, so it interrupts Terraform. Jobs are never auto-retried, because a half-applied run needs a human.
 - **Isolation.** One job at a time per runner, in a fresh temp directory with its own `HOME`, both removed afterwards, so a job can't leave a `.terraformrc`, `.gitconfig` or provider mirror behind for the next one. Terraform runs via HashiCorp's `terraform-exec`: `init -from-module`, then `plan -out`, `apply <plan>` and `output`. Each run is capped by `OPS_JOB_TIMEOUT`.
@@ -165,7 +167,7 @@ Store the key outside the deployment, apart from the bucket and database backups
 | Env var | Default | Purpose |
 |---|---|---|
 | `OPS_SERVER_URL` | required | How the runner reaches Opsolete (in k8s: the Service URL). Registry modules are fetched from here too |
-| `OPS_RUNNER_TOKEN` | required | `opsolete token <name> runner` |
+| `OPS_RUNNER_TOKEN` | required | The server's `RUNNER_TOKEN` |
 | `OPS_JOB_TIMEOUT` | `1h` | Hard limit per run phase |
 | `OPS_RUNNER_NAME` | hostname | Shown on runs; the pod name in k8s |
 | `OPS_INFRACOST_API_KEY` | off | Turns on cost estimation (get a key with `infracost auth login`) |
@@ -179,16 +181,16 @@ Provider credentials come from the workspace's [variables](#variables-and-variab
 
 ```sh
 just image app && just image runner
-docker run -e DATABASE_URL=… -e PUBLIC_URL=https://opsolete.example.com -e OIDC_ISSUER=… -e OIDC_CLIENT_ID=… \
+export RUNNER_TOKEN=$(openssl rand -hex 32)   # keep it with your other secrets
+docker run -e DATABASE_URL=… -e RUNNER_TOKEN -e PUBLIC_URL=https://opsolete.example.com -e OIDC_ISSUER=… -e OIDC_CLIENT_ID=… \
   -e OIDC_CLIENT_SECRET=… -e ADMIN_EMAILS=you@example.com -e STATE_STORE=azblob://tfstate -e AZURE_STORAGE_ACCOUNT=… \
   -p 8080:8080 opsolete-app
-docker run --rm -e DATABASE_URL=… opsolete-app token runner-1 runner        # prints the runner token
-docker run -e OPS_SERVER_URL=http://opsolete:8080 -e OPS_RUNNER_TOKEN=… -e ARM_… opsolete-runner
+docker run -e OPS_SERVER_URL=http://opsolete:8080 -e OPS_RUNNER_TOKEN=$RUNNER_TOKEN opsolete-runner
 ```
 
 **On Kubernetes:**
 - Run two Deployments of the same images: the app, and the runners.
-- Pass the runner token as a Secret. Cloud credentials come from [variables](#variables-and-variable-sets).
+- Put the runner token in one Secret (`kubectl create secret generic opsolete-runner --from-literal=token=$(openssl rand -hex 32)`, or from sops / External Secrets). Map it to `RUNNER_TOKEN` in the app and to `OPS_RUNNER_TOKEN` in the runners with `secretKeyRef`. Start order doesn't matter: runners retry until the app is up. Cloud credentials come from [variables](#variables-and-variable-sets).
 - Scale runners with `replicas`, one job each at a time.
 - Point `OPS_SERVER_URL` at the app's Service, so registry downloads stay inside the cluster.
 - Optionally mount a volume at `TF_PLUGIN_CACHE_DIR` to keep providers between restarts.
@@ -201,11 +203,12 @@ services.opsolete = {
   publicUrl = "https://opsolete.example.com";
   secretKeyFile = config.sops.secrets.opsolete-secret-key.path;
   oidc = { issuer = "https://login.example.com"; clientId = "opsolete"; clientSecretFile = config.sops.secrets.opsolete-oidc.path; };
-  runner = { enable = true; tokenFile = config.sops.secrets.opsolete-runner-token.path; }; # terraform is unfree
+  runnerTokenFile = config.sops.secrets.opsolete-runner-token.path; # e.g. `openssl rand -hex 32`
+  runner.enable = true; # its tokenFile defaults to runnerTokenFile; terraform is unfree
 };
 ```
 
-Create tokens with `sudo opsolete-admin token <name> [registry|runner]`. The runner runs as PID 1 of its own PID namespace, so it cleans up after jobs like in a container. Test: `nix build .#checks.x86_64-linux.nixos` (NixOS VM, needs kvm).
+Create registry tokens with `sudo opsolete-admin token <name>`. A runner on another host sets `runner.tokenFile` to the same secret. The runner runs as PID 1 of its own PID namespace, so it cleans up after jobs like in a container. Test: `nix build .#checks.x86_64-linux.nixos` (NixOS VM, needs kvm).
 
 ### Variables and variable sets
 

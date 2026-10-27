@@ -41,6 +41,7 @@ type Server struct {
 	SecretKey  []byte // encrypts VCS tokens, variables and state store files; nil without SECRET_KEY
 	// Organization is the one organization of the cloud API (Terraform's cloud block).
 	Organization string
+	RunnerToken  string // RUNNER_TOKEN: the runner API's bearer token; empty rejects every runner
 	Log          *slog.Logger
 	pages        *template.Template // never executed: the base the per-request clones come from
 	clones       sync.Pool          // of executed clones of pages: html/template escapes a clone once, not per request

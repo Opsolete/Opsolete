@@ -154,11 +154,10 @@ func (s *Store) ModuleArchive(ctx context.Context, namespace, name, system, vers
 	return b, err
 }
 
-// Token scopes: registry tokens are for Terraform clients, runner tokens for execution runners,
-// user tokens (terraform login) act as a user and also work for the registry.
+// Token scopes: registry tokens are for Terraform clients, user tokens (terraform login) act as a
+// user and also work for the registry. Runners use RUNNER_TOKEN instead.
 const (
 	ScopeRegistry = "registry"
-	ScopeRunner   = "runner"
 	ScopeUser     = "user"
 )
 

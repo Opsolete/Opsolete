@@ -77,6 +77,7 @@ self: {
     cfg.secretFiles
     // dropNulls {
       SECRET_KEY = cfg.secretKeyFile;
+      RUNNER_TOKEN = cfg.runnerTokenFile;
       OIDC_CLIENT_SECRET = cfg.oidc.clientSecretFile;
       DATABASE_URL = cfg.database.urlFile;
     };
@@ -104,7 +105,7 @@ self: {
       OPS_INFRACOST_API_KEY = rcfg.infracost.apiKeyFile;
     };
 
-  # `opsolete-admin token <name> [registry|runner]` (and any other subcommand) with the server's config.
+  # `opsolete-admin token <name>` (and any other subcommand) with the server's config.
   admin = pkgs.writeShellScriptBin "opsolete-admin" ''
     set -euo pipefail
     [ "$(id -u)" = 0 ] || { echo "opsolete-admin: run as root (it reads the secret files)" >&2; exit 1; }
@@ -171,6 +172,7 @@ in {
       example = "/run/secrets/opsolete-secret-key";
       description = "File with SECRET_KEY (32+ characters, e.g. `openssl rand -base64 32`). Encrypts state, plans, variables and VCS tokens and signs the audit log: back it up, losing it loses all state.";
     };
+    runnerTokenFile = secretFile "File with RUNNER_TOKEN (32+ characters, e.g. `openssl rand -hex 32`), which runners present as OPS_RUNNER_TOKEN. Required with deployments.enable.";
     database = {
       createLocally = mkOption {
         type = types.bool;
@@ -248,9 +250,11 @@ in {
         description = "OPS_SERVER_URL.";
       };
       tokenFile = mkOption {
-        type = types.str;
+        type = types.nullOr types.str;
+        default = cfg.runnerTokenFile;
+        defaultText = lib.literalExpression "config.services.opsolete.runnerTokenFile";
         example = "/run/secrets/opsolete-runner-token";
-        description = "File with OPS_RUNNER_TOKEN (create one with `opsolete-admin token <name> runner`).";
+        description = "File with OPS_RUNNER_TOKEN: the same value as the server's RUNNER_TOKEN.";
       };
       name = nullOr types.str null "OPS_RUNNER_NAME. null: the hostname.";
       jobTimeout = mkOption {
@@ -301,6 +305,10 @@ in {
           assertion = cfg.templateEditor -> cfg.templatesDir != null;
           message = "services.opsolete.templateEditor writes into templatesDir: set it to a writable directory (the packaged catalog is in the read-only Nix store)";
         }
+        {
+          assertion = cfg.deployments.enable -> cfg.runnerTokenFile != null;
+          message = "services.opsolete.runnerTokenFile is required with deployments: a file holding a random token (e.g. `openssl rand -hex 32`) that runners present";
+        }
       ];
 
       users.users.opsolete = {
@@ -348,6 +356,12 @@ in {
     })
 
     (mkIf rcfg.enable {
+      assertions = [
+        {
+          assertion = rcfg.tokenFile != null;
+          message = "services.opsolete.runner.tokenFile: set it, or services.opsolete.runnerTokenFile when the server runs on this host";
+        }
+      ];
       # its own user: module code runs as it, so it must not share the server's (database) identity
       users.users.opsolete-runner = {
         isSystemUser = true;

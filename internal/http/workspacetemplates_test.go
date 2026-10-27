@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/opsolete/opsolete/internal/runnerapi"
-	"github.com/opsolete/opsolete/internal/storage"
 )
 
 // TestWorkspaceTemplates: any number of templates can be added to a workspace, each a module the
@@ -24,7 +23,7 @@ func TestWorkspaceTemplates(t *testing.T) {
 	ws := "wt-" + strings.ToLower(newID()[:8])
 	t.Cleanup(func() { store.DB.Exec(`DELETE FROM workspaces WHERE name = $1`, ws) })
 	h := newServer(t, "../../catalog", false, store)
-	runnerTok, _ := store.CreateToken(ctx, "r", storage.ScopeRunner)
+	runnerTok := testRunnerToken
 	claim := func() runnerapi.Job {
 		t.Helper()
 		req := httptest.NewRequest("POST", runnerapi.Prefix+"/jobs/claim", strings.NewReader(`{"runner":"r1"}`))

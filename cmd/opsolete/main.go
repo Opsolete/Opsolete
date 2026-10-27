@@ -2,7 +2,7 @@
 //
 //	opsolete                          serve the web UI, registry and runner API
 //	opsolete runner                   execute deployments (no database needed)
-//	opsolete token <name> [scope]     create an API token; scope is registry (default) or runner
+//	opsolete token <name>             create a registry API token
 package main
 
 import (
@@ -48,10 +48,10 @@ func main() {
 		err = serve(log)
 	case os.Args[1] == "runner" && len(os.Args) == 2:
 		err = runRunner(log)
-	case os.Args[1] == "token" && len(os.Args) >= 3 && len(os.Args) <= 4:
+	case os.Args[1] == "token" && len(os.Args) == 3:
 		err = createToken()
 	default:
-		err = errors.New("usage: opsolete [runner | token <name> [registry | runner]]")
+		err = errors.New("usage: opsolete [runner | token <name>]")
 	}
 	if err != nil {
 		log.Error("fatal", "err", err)
@@ -78,12 +78,6 @@ func createToken() error {
 		return err
 	}
 	scope := storage.ScopeRegistry
-	if len(os.Args) == 4 {
-		scope = os.Args[3]
-	}
-	if scope != storage.ScopeRegistry && scope != storage.ScopeRunner {
-		return errors.New("scope must be registry or runner")
-	}
 	ctx := context.Background()
 	store, err := openStore(ctx, cfg)
 	if err != nil {
@@ -166,6 +160,9 @@ func serve(log *slog.Logger) error {
 
 	var state *blob.Bucket
 	if cfg.Deployments {
+		if len(cfg.RunnerToken) < 32 {
+			return errors.New("RUNNER_TOKEN is required for deployments and must be at least 32 characters (e.g. openssl rand -hex 32); runners get the same value as OPS_RUNNER_TOKEN")
+		}
 		if cfg.StateStore == "" {
 			return errors.New("STATE_STORE is required for deployments, e.g. azblob://tfstate, s3://tfstate?region=…, gs://tfstate or file:///path")
 		}
@@ -183,6 +180,7 @@ func serve(log *slog.Logger) error {
 	app := httpserver.New(store, tpls, reg, authn, state, httpserver.Features{
 		Deployments: cfg.Deployments, Registry: cfg.Registry, Editor: cfg.TemplateEditor, VCS: vcsOn}, log)
 	app.Organization = cfg.Organization
+	app.RunnerToken = cfg.RunnerToken
 	app.SecretKey = vcs.Key(cfg.SecretKey)
 	// values sealed before they were bound to their row only open after this
 	if n, err := vcs.Reseal(ctx, store, app.SecretKey); err != nil {

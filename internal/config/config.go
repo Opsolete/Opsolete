@@ -37,6 +37,9 @@ type Config struct {
 	// SecretKey encrypts VCS access tokens and variables in Postgres, and state files and saved plans
 	// in STATE_STORE, and signs the audit log. Required.
 	SecretKey string
+	// RunnerToken authenticates runners (their OPS_RUNNER_TOKEN). The operator generates it, so it
+	// exists before the first deploy. Required by the server when deployments are on.
+	RunnerToken string
 	// Organization is the one organization Terraform's cloud block may name.
 	Organization string
 	// StaleLockTimeout: a rollback's state lock older than this is released as orphaned (its server
@@ -58,6 +61,7 @@ func Load() (Config, error) {
 		StateStore:       os.Getenv("STATE_STORE"),
 		AdminEmails:      strings.Split(os.Getenv("ADMIN_EMAILS"), ","),
 		SecretKey:        os.Getenv("SECRET_KEY"),
+		RunnerToken:      os.Getenv("RUNNER_TOKEN"),
 		Organization:     getenv("ORGANIZATION", "opsolete"),
 	}
 	if c.DatabaseURL == "" {
@@ -108,7 +112,7 @@ func getenv(key, def string) string {
 // Runner configures `opsolete runner`. It needs no database: it talks to the server API only.
 type Runner struct {
 	ServerURL  *url.URL      // how the runner reaches Opsolete (in k8s: the internal service)
-	Token      string        // runner-scoped API token
+	Token      string        // the server's RUNNER_TOKEN
 	Name       string        // shown on deployments; defaults to the hostname (pod name)
 	Terraform  string        // terraform binary
 	JobTimeout time.Duration // hard limit per deployment
@@ -132,7 +136,7 @@ func LoadRunner() (Runner, error) {
 	}
 	c.ServerURL = u
 	if c.Token == "" {
-		return c, errors.New("OPS_RUNNER_TOKEN is required (create one with: opsolete token <name> runner)")
+		return c, errors.New("OPS_RUNNER_TOKEN is required: the server's RUNNER_TOKEN")
 	}
 	if c.Terraform == "" {
 		if c.Terraform, err = exec.LookPath("terraform"); err != nil {
