@@ -111,7 +111,8 @@ func (s *Server) audit(next http.Handler) http.Handler {
 }
 
 func (s *Server) auditPage(w http.ResponseWriter, r *http.Request) {
-	entries, err := s.Store.AuditLog(r.Context(), 500)
+	access := r.URL.Query().Get("show") == "access"
+	entries, err := s.Store.AuditLog(r.Context(), 500, access)
 	if err != nil {
 		s.internalError(w, "audit log", err)
 		return
@@ -121,5 +122,5 @@ func (s *Server) auditPage(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "verify audit log", err)
 		return
 	}
-	s.render(w, r, http.StatusOK, "audit.html", map[string]any{"Entries": entries, "Broken": broken})
+	s.render(w, r, http.StatusOK, "audit.html", map[string]any{"Entries": entries, "Broken": broken, "Access": access})
 }

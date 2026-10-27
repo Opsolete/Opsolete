@@ -2,11 +2,17 @@
 <div class="page-head">
   <div>
     <h1>Audit log</h1>
-    <p class="muted">Every change made in Opsolete, newest first (the latest 500). Entries can't be edited or deleted, and each one is signed with SECRET_KEY together with the one before it. Every entry is also written to the server log (stdout).</p>
+    <p class="muted">Every change made in Opsolete, every sign-in and every refused request, newest first (the latest 500 of each). Entries can't be edited or deleted, and each one is signed with SECRET_KEY together with the one before it. Every entry is also written to the server log (stdout).</p>
   </div>
 </div>
 {{if .Broken}}<p class="alert error" role="alert">The audit log was tampered with: entry {{.Broken}} was changed, or an entry before it removed.</p>
 {{else}}<p class="muted">Hash chain verified: intact.</p>{{end}}
+<div class="tabs-row">
+  <nav class="chips" aria-label="audit log entries">
+    <a href="?show=changes"{{if not .Access}} aria-current="true"{{end}}>Changes</a>
+    <a href="?show=access"{{if .Access}} aria-current="true"{{end}}>Sign-ins and refused requests</a>
+  </nav>
+</div>
 <div class="card flush">
 <table>
 <tr><th>#</th><th>When (UTC)</th><th>Who</th><th>Action</th><th>Details</th></tr>

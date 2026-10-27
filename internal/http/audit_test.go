@@ -46,4 +46,11 @@ func TestAuditLogRecordsChanges(t *testing.T) {
 	if actor != "someone@example.com" || !strings.Contains(detail, `"error":"admins only"`) || !strings.Contains(detail, `"groups":["grp-x"]`) {
 		t.Fatalf("denied entry: %s %s", actor, detail)
 	}
+	// Refused requests are listed apart from the changes.
+	if body := get(h, "/audit").Body.String(); strings.Contains(body, "GET /audit") {
+		t.Fatalf("changes list shows a refused request: %s", body)
+	}
+	if body := get(h, "/audit?show=access").Body.String(); !strings.Contains(body, "GET /audit") || strings.Contains(body, "ARM_CLIENT_SECRET") {
+		t.Fatalf("access list: %s", body)
+	}
 }

@@ -83,9 +83,12 @@ func (e AuditEntry) stream() {
 		"detail", e.Detail, "hash", hex.EncodeToString(e.Hash))
 }
 
-// AuditLog returns the newest entries first.
-func (s *Store) AuditLog(ctx context.Context, limit int) ([]AuditEntry, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT id, at, actor, action, detail, hash FROM audit_log ORDER BY id DESC LIMIT $1`, limit)
+// AuditLog returns the newest entries first: the access events (sign-ins and requests refused with
+// 401/403) when access is set, else everything else (the changes).
+func (s *Store) AuditLog(ctx context.Context, limit int, access bool) ([]AuditEntry, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT id, at, actor, action, detail, hash FROM audit_log
+		WHERE (action = 'GET /auth/callback' OR coalesce(detail->'request'->>'status', '') IN ('401', '403')) = $2
+		ORDER BY id DESC LIMIT $1`, limit, access)
 	if err != nil {
 		return nil, err
 	}
