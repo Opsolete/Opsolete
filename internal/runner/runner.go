@@ -406,7 +406,7 @@ func (r *Runner) plan(ctx context.Context, tf *tfexec.Terraform, dir string, job
 	}
 	sum := summarize(rcs)
 	if !refresh { // a refresh-only plan changes no infrastructure, so no cost
-		sum.Cost = r.estimate(ctx, dir, p, w)
+		sum.Cost = r.estimate(ctx, dir, p, job.Currency, w)
 	}
 	switch job.Action { // never applied, so the plan isn't kept
 	case "assess":
@@ -434,7 +434,7 @@ func (r *Runner) plan(ctx context.Context, tf *tfexec.Terraform, dir string, job
 
 // estimate prices a plan with `infracost breakdown`. nil when Infracost isn't configured or
 // fails: a missing estimate never fails the run.
-func (r *Runner) estimate(ctx context.Context, dir string, p *tfjson.Plan, w io.Writer) *runnerapi.Cost {
+func (r *Runner) estimate(ctx context.Context, dir string, p *tfjson.Plan, currency string, w io.Writer) *runnerapi.Cost {
 	if r.InfracostAPIKey == "" {
 		return nil
 	}
@@ -458,6 +458,9 @@ func (r *Runner) estimate(ctx context.Context, dir string, p *tfjson.Plan, w io.
 	// so its config and cache go away with it.
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "INFRACOST_API_KEY=" + r.InfracostAPIKey,
 		"INFRACOST_SKIP_UPDATE_CHECK=true", "INFRACOST_NO_COLOR=true"}
+	if currency != "" {
+		cmd.Env = append(cmd.Env, "INFRACOST_CURRENCY="+currency)
+	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()

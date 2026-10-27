@@ -372,18 +372,28 @@
   </nav>
   {{end}}
   {{else}}
+  {{$s := section}}{{with features}}
+  {{if and (or (eq $s "organization") (eq $s "vcs") (eq $s "audit")) (user).Admin}}
+  <!-- the side nav becomes the settings menu, like a workspace's -->
+  <nav aria-label="Settings">
+    <a href="/">‹ Home</a>
+    <span class="nav-label">Settings</span>
+    {{if .Deployments}}<a href="/organization"{{if eq $s "organization"}} aria-current="page"{{end}}>Organization</a>{{end}}
+    {{if .VCS}}<a href="/vcs"{{if eq $s "vcs"}} aria-current="page"{{end}}>VCS providers</a>{{end}}
+    <a href="/audit"{{if eq $s "audit"}} aria-current="page"{{end}}>Audit log</a>
+  </nav>
+  {{else}}
   <nav aria-label="Main">
-    {{$s := section}}{{with features}}
     {{if .Deployments}}
     <a href="/"{{if or (eq $s "") (eq $s "templates")}} aria-current="page"{{end}}>Templates</a>
     <a href="/workspaces"{{if eq $s "workspaces"}} aria-current="page"{{end}}>Workspaces</a>
     {{end}}
     {{if and .Deployments (user).Admin}}<a href="/variable-sets"{{if eq $s "variable-sets"}} aria-current="page"{{end}}>Variable sets</a>{{end}}
     {{if .Registry}}<a href="/registry"{{if eq $s "registry"}} aria-current="page"{{end}}>Registry</a>{{end}}
-    {{if and .VCS (user).Admin}}<a href="/vcs"{{if eq $s "vcs"}} aria-current="page"{{end}}>VCS providers</a>{{end}}
-    {{if (user).Admin}}<a href="/audit"{{if eq $s "audit"}} aria-current="page"{{end}}>Audit log</a>{{end}}
-    {{end}}
+    {{if (user).Admin}}<a href="{{if .Deployments}}/organization{{else if .VCS}}/vcs{{else}}/audit{{end}}">Settings</a>{{end}}
   </nav>
+  {{end}}
+  {{end}}
   {{end}}
 </aside>
 <main class="wrap">

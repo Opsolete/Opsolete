@@ -57,9 +57,12 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 		}
 		if ok {
 			env, vars, err := s.runVariables(r.Context(), j.WorkspaceID, j.Inputs)
-			var src string
+			var src, currency string
 			if err == nil {
 				src, err = s.jobSource(r.Context(), j)
+			}
+			if err == nil {
+				currency, err = s.Store.Currency(r.Context())
 			}
 			var mods []runnerapi.Module
 			for _, m := range j.Modules {
@@ -78,7 +81,7 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, runnerapi.Job{
 				RunID: j.RunID, WorkspaceID: j.WorkspaceID, Phase: j.Phase, Action: j.Action, Replace: j.Replace, LeaseID: j.LeaseID,
 				LeaseSeconds: int(leaseTTL.Seconds()), StateToken: s.stateToken(j.WorkspaceID, j.RunID), Vars: vars, Env: env,
-				ModuleSource: src, Modules: mods,
+				ModuleSource: src, Modules: mods, Currency: currency,
 			})
 			return
 		}

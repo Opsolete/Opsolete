@@ -136,6 +136,8 @@ func (s *Server) Handler() http.Handler {
 	s.cloudRoutes(mux)
 	s.workspaceRoutes(mux)
 	s.variableRoutes(mux)
+	mux.HandleFunc("GET /organization", s.admin(s.organizationPage))
+	mux.HandleFunc("POST /organization", s.admin(s.saveOrganization))
 	// CrossOriginProtection rejects cross-site browser POSTs (CSRF); token clients send no Origin and pass.
 	return s.logRequests(s.audit(http.NewCrossOriginProtection().Handler(s.requireLogin(mux))))
 }

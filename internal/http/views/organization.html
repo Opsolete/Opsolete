@@ -1,0 +1,18 @@
+{{template "top"}}
+<div class="page-head">
+  <div>
+    <h1>Organization settings</h1>
+    <p class="muted">Settings for the whole <strong>{{.Name}}</strong> organization.</p>
+  </div>
+</div>
+{{if .Saved}}<p class="alert" role="status">Settings saved.</p>{{end}}
+<form class="settings" method="post" action="/organization">
+  <label for="currency">Cost estimation currency</label>
+  <select id="currency" name="currency" aria-describedby="currency-hint">
+    <option value="USD"{{if eq .Currency "USD"}} selected{{end}}>US dollar (USD)</option>
+    <option value="EUR"{{if eq .Currency "EUR"}} selected{{end}}>Euro (EUR)</option>
+  </select>
+  <p class="hint" id="currency-hint">The currency of Infracost's monthly cost estimates on plans. Applies to runs planned from now on.</p>
+  <div class="actions"><button type="submit">Save settings</button></div>
+</form>
+{{template "bottom"}}

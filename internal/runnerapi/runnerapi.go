@@ -41,6 +41,8 @@ type Job struct {
 	// Env is set for Terraform on top of the runner's own environment: the workspace's
 	// environment variables, typically cloud credentials (ARM_CLIENT_SECRET, ...).
 	Env map[string]string `json:"env,omitempty"`
+	// Currency of the cost estimate (ISO 4217, e.g. EUR); "" is Infracost's default, USD.
+	Currency string `json:"currency,omitempty"`
 }
 
 // Module is a template added to the workspace: the runner adds it as module.<Name> next to the
