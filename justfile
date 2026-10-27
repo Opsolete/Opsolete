@@ -101,7 +101,8 @@ token name scope="registry": db-start
 runner: env
     #!/usr/bin/env bash
     set -euo pipefail
-    export OPS_RUNNER_TOKEN=$(go run ./cmd/opsolete token "local-$(hostname)" runner)
+    token=$(go run ./cmd/opsolete token "local-$(hostname)" runner) # not `export X=$(...)`: that hides a failure from set -e
+    export OPS_RUNNER_TOKEN=$token
     export OPS_SERVER_URL=${OPS_SERVER_URL:-http://127.0.0.1:8080}
     exec go run ./cmd/opsolete runner
 

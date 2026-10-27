@@ -36,7 +36,11 @@ import (
 )
 
 func main() {
-	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	out := os.Stdout
+	if len(os.Args) > 1 && os.Args[1] == "token" {
+		out = os.Stderr // stdout must carry only the token: scripts capture it with $(...)
+	}
+	log := slog.New(slog.NewJSONHandler(out, nil))
 	slog.SetDefault(log) // audit entries are streamed through the default logger
 	var err error
 	switch {
