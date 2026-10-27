@@ -56,6 +56,12 @@
       };
     });
 
+    # services.opsolete and services.opsolete.runner; see nix/module.nix.
+    nixosModules.default = import ./nix/module.nix self;
+
+    # NixOS VM test of the module (needs a Linux builder with kvm).
+    checks.x86_64-linux.nixos = (pkgsFor "x86_64-linux").testers.runNixOSTest (import ./nix/test.nix self);
+
     formatter = forEachSystem (system: (pkgsFor system).alejandra);
   };
 }
