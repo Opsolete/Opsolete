@@ -1,4 +1,4 @@
-# Update PRs for Go modules, pinned actions and Dockerfile base images. PR titles follow
+# Update PRs for Go modules, and pinned actions (image contents come from flake.lock). PR titles follow
 # Conventional Commits (pr-title.yml) so they flow through Release Please.
 version: 2
 updates:
@@ -10,7 +10,3 @@ updates:
     directory: /
     schedule: { interval: weekly }
     commit-message: { prefix: "ci" }
-  - package-ecosystem: docker
-    directory: /
-    schedule: { interval: weekly }
-    commit-message: { prefix: "build(deps)" }

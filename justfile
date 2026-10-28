@@ -106,9 +106,10 @@ runner: env
     export OPS_SERVER_URL=${OPS_SERVER_URL:-http://127.0.0.1:8080}
     exec go run ./cmd/opsolete runner
 
-# build a container image: target is app or runner; set DOCKER_HOST=ssh://user@host to build remotely
+# build a container image with nix and load it into docker: target is app or runner (needs a linux builder on macOS)
 image target:
-    docker build --target {{target}} -t opsolete-{{target}} .
+    nix build -L .#packages.x86_64-linux.image-{{target}} -o result-{{target}}
+    docker load < result-{{target}}
 
 # fmt, vet and all tests including the DB tests
 test: db-start

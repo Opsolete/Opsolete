@@ -12,8 +12,7 @@
   in {
     packages = forEachSystem (system: let
       pkgs = pkgsFor system;
-    in {
-      default = pkgs.buildGoModule {
+      opsolete = pkgs.buildGoModule {
         pname = "opsolete";
         version = "0.1.0";
         src = self;
@@ -27,7 +26,103 @@
           wrapProgram $out/bin/opsolete --set-default TEMPLATES_DIR $out/share/opsolete/catalog
         '';
       };
-    });
+
+      # Container images (linux only): `nix build .#image-app`, then `docker load < result`.
+      arch =
+        {
+          x86_64-linux = "amd64";
+          aarch64-linux = "arm64";
+        }.${
+          system
+        };
+      # HashiCorp's release binary pinned by checksum: nixpkgs' terraform lags behind the version CI tests with.
+      terraform = pkgs.runCommand "terraform-1.17.0" {
+        src = pkgs.fetchurl {
+          url = "https://releases.hashicorp.com/terraform/1.17.0/terraform_1.17.0_linux_${arch}.zip";
+          sha256 =
+            {
+              amd64 = "c168cab7c637a8769fdb90089ddd19de701bc6ff8aca64dc2e2185fe46f59f67";
+              arm64 = "f32478134ffc6d710eec474bbd316652cdddc0f4e336973a3745e8d3a3309cdf";
+            }.${
+              arch
+            };
+        };
+        nativeBuildInputs = [pkgs.unzip];
+      } "mkdir -p $out/bin && unzip -q $src terraform -d $out/bin";
+      # Cost estimation; only used when the runner has OPS_INFRACOST_API_KEY.
+      infracost = pkgs.runCommand "infracost-0.10.47" {
+        src = pkgs.fetchurl {
+          url = "https://github.com/infracost/infracost/releases/download/v0.10.47/infracost-linux-${arch}.tar.gz";
+          sha256 =
+            {
+              amd64 = "df098d5565b78cc23de57e1dac9f2a02491691322cbd690dca9b197e3e02fe93";
+              arm64 = "1db33dddcac989f39687fa9bf00ed9d8cce4268450578848e5bf6287ad8a7b44";
+            }.${
+              arch
+            };
+        };
+      } "tar -xzf $src && install -Dm755 infracost-linux-${arch} $out/bin/infracost";
+      labels."org.opencontainers.image.source" = "https://github.com/Opsolete/Opsolete"; # links the ghcr package to the repo
+      rootfs = paths:
+        pkgs.buildEnv {
+          name = "rootfs";
+          paths = paths ++ [pkgs.dockerTools.caCertificates];
+          pathsToLink = ["/bin" "/etc"];
+        };
+    in
+      {default = opsolete;}
+      // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+        # Web UI, registry, runner API.
+        image-app = pkgs.dockerTools.buildImage {
+          name = "opsolete-app";
+          tag = "latest";
+          copyToRoot = rootfs [opsolete];
+          extraCommands = "mkdir -m 1777 tmp";
+          config = {
+            Entrypoint = ["/bin/opsolete"];
+            User = "65532:65532";
+            Env = ["ADDR=:8080" "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt"];
+            ExposedPorts."8080/tcp" = {};
+            Labels = labels;
+          };
+        };
+
+        # One job at a time per container; scale with replicas. git: git:: module sources; sh and
+        # coreutils: local-exec provisioners. State never stays here: it lives on the server's state store.
+        image-runner = pkgs.dockerTools.buildImage {
+          name = "opsolete-runner";
+          tag = "latest";
+          copyToRoot = rootfs [
+            opsolete
+            terraform
+            infracost
+            pkgs.git
+            pkgs.openssh
+            pkgs.coreutils
+            pkgs.dockerTools.binSh
+            # ssh refuses to run for a uid without a passwd entry
+            (pkgs.dockerTools.fakeNss.override {
+              extraPasswdLines = ["runner:x:10001:10001::/home/runner:/bin/sh"];
+              extraGroupLines = ["runner:x:10001:"];
+            })
+          ];
+          # buildImage writes everything as root; world-writable (sticky) dirs instead of a chown, since only uid 10001 runs here.
+          # Provider plugins are reused across jobs (mount a volume on the cache to keep them across restarts).
+          extraCommands = "mkdir -m 1777 tmp && mkdir -p home/runner/.terraform.d/plugin-cache && chmod -R 1777 home";
+          config = {
+            Entrypoint = ["/bin/opsolete" "runner"];
+            User = "10001:10001";
+            Env = [
+              "PATH=/bin"
+              "HOME=/home/runner"
+              "TF_PLUGIN_CACHE_DIR=/home/runner/.terraform.d/plugin-cache"
+              "TF_IN_AUTOMATION=1"
+              "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt"
+            ];
+            Labels = labels;
+          };
+        };
+      });
 
     devShells = forEachSystem (system: let
       # terraform is BSL-licensed (unfree in nixpkgs); allow just that one.

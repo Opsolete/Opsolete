@@ -29,7 +29,7 @@ just test          # gofmt check, vet, all tests incl. DB tests
 just smoke         # nix build, boot the binary, create a workspace end-to-end
 just check         # test + smoke, run before committing
 just token <name>  # registry token for Terraform clients
-just image app|runner   # container images (DOCKER_HOST=ssh://user@host to build remotely)
+just image app|runner   # container images, built with nix (also ghcr.io/opsolete/opsolete-app|runner)
 just psql | db-reset | down
 ```
 
@@ -150,7 +150,7 @@ Store the key outside the deployment, apart from the bucket and database backups
 
 ## Runners
 
-`opsolete runner` executes runs, one phase (plan or apply) at a time. It's the same binary as the server, packaged as the `runner` image: Alpine, git and Terraform 1.17.0 pinned by checksum, running as a non-root user.
+`opsolete runner` executes runs, one phase (plan or apply) at a time. It's the same binary as the server, packaged as the `runner` image (built with nix): git, ssh, coreutils and Terraform 1.17.0 pinned by checksum, running as a non-root user.
 
 **How it works**
 
@@ -240,7 +240,7 @@ Upgrading from runner pools: queued runs of workspaces that had a pool are error
 | `feat!: …` or a `BREAKING CHANGE:` footer | 0.5.0 (pre-1.0, breaking bumps minor) | major |
 | `docs:`, `chore:`, `ci:`, `test:`, `refactor:`, … | no release | no release |
 
-After each merge, release-please keeps a **release PR** open. It holds the next version and the `CHANGELOG.md` entries. Merging that PR tags `vX.Y.Z`, creates the GitHub release, and pushes `ghcr.io/opsolete/opsolete-app` and `-runner` tagged `X.Y.Z`, `X.Y` and `latest`. To ship 1.0.0, merge a commit with a `Release-As: 1.0.0` footer. The first release is computed from all of history, so make the commit introducing this MVP a `feat: …`.
+After each merge, release-please keeps a **release PR** open. It holds the next version and the `CHANGELOG.md` entries. Merging that PR tags `vX.Y.Z`, creates the GitHub release, and pushes `ghcr.io/opsolete/opsolete-app` and `-runner` tagged `X.Y.Z`, `X.Y` and `latest`. **Beta:** the first release is 0.1.0 (`initial-version`). Until 1.0.0, breaking changes only bump the minor version, and GitHub releases are marked *pre-release*. To go stable, remove `"prerelease": true` from `release-please-config.json` in a commit with a `Release-As: 1.0.0` footer.
 
 `pr-title.yml` rejects PRs whose title isn't a Conventional Commit. With squash merges the title becomes the commit on `master`, so history stays parseable.
 
