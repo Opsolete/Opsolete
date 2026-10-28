@@ -12,7 +12,15 @@
   in {
     packages = forEachSystem (system: let
       pkgs = pkgsFor system;
-      opsolete = pkgs.buildGoModule {
+      # shortcut: nixos-26.05 still ships go 1.26.8 (stdlib CVEs fixed in 1.26.10); drop this once `nix flake update` brings >= 1.26.10.
+      go = pkgs.go.overrideAttrs (_: rec {
+        version = "1.26.10";
+        src = pkgs.fetchurl {
+          url = "https://go.dev/dl/go${version}.src.tar.gz";
+          sha256 = "fd63e883ba2f2bfca93c1646b31ebef63e2b1e4d2b317c9789d976a68d81f36f";
+        };
+      });
+      opsolete = (pkgs.buildGoModule.override {inherit go;}) {
         pname = "opsolete";
         version = "0.1.0";
         src = self;

@@ -71,8 +71,10 @@ jobs:
       # shortcut: linux/amd64 only; build .#packages.aarch64-linux.image-* on an arm runner for arm nodes.
       - run: nix build -L .#image-${{ matrix.target }}
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        id: trivy
         with:
           input: result
+          trivyignores: .trivyignore.yaml
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: "1"
@@ -80,3 +82,5 @@ jobs:
       - if: ${{ !cancelled() }}
         run: |
           { echo "### Trivy: ${{ matrix.target }} image (fixable HIGH/CRITICAL)"; echo '```'; cat trivy.txt 2>/dev/null || echo "scan did not run"; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+          # the table lands here and in the job summary, not under the red Trivy step
+          if [ "${{ steps.trivy.outcome }}" = failure ]; then echo "::error::Trivy failed for the ${{ matrix.target }} image: findings are in this step's log and the run summary"; fi

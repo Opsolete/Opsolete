@@ -1,0 +1,8 @@
+# Findings in upstream release binaries we can't rebuild; each entry expires so it gets re-checked.
+vulnerabilities:
+  - id: CVE-2026-116587
+    paths:
+      - "nix/store/*-terraform-*/bin/terraform"
+      - "nix/store/*-infracost-*/bin/infracost"
+    statement: go-jose v4.1.4 vendored in terraform 1.17.0 and infracost 0.10.47 (no fixed release yet); DoS only when parsing attacker-supplied JWKs. Bump the pins in flake.nix when fixed releases ship.
+    expired_at: 2026-12-31
