@@ -14,6 +14,8 @@ import (
 
 var (
 	savedGroups   []string  // groups the last login recorded
+	savedSubject  string    // subject the last login recorded
+	emailTaken    bool      // the save callback answers ErrEmailTaken
 	lastPrincipal Principal // who the last callback named for the audit log
 )
 
@@ -21,8 +23,11 @@ func newOIDC(t *testing.T, is *authtest.Issuer) *Auth {
 	pub, _ := url.Parse("https://ops.example.com")
 	a, err := New(context.Background(), Config{Issuer: is.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret,
 		Admins: []string{" Boss@Example.com"}, PublicURL: pub}, []byte("k"),
-		func(_ context.Context, email, role string, groups []string) (string, error) {
-			savedGroups = groups
+		func(_ context.Context, subject, email, role string, groups []string) (string, error) {
+			savedGroups, savedSubject = groups, subject
+			if emailTaken {
+				return "", ErrEmailTaken
+			}
 			return "id-" + email, nil
 		})
 	if err != nil {
@@ -110,7 +115,16 @@ func TestOIDCLoginRejects(t *testing.T) {
 	if rec := login(t, a, is, "/", false); rec.Code != http.StatusForbidden {
 		t.Fatalf("unverified email: %d", rec.Code)
 	}
-	delete(is.Claims, "email_verified")
+	delete(is.Claims, "email_verified") // absent (Entra ID never sends it) is accepted
+	if rec := login(t, a, is, "/", false); rec.Code != http.StatusSeeOther || savedSubject != is.URL+" u1" {
+		t.Fatalf("login without email_verified: %d, subject %q", rec.Code, savedSubject)
+	}
+	emailTaken = true
+	rec := login(t, a, is, "/", false)
+	emailTaken = false
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("email of another subject: %d", rec.Code)
+	}
 	is.Nonce = "replayed"
 	if rec := login(t, a, is, "/", false); rec.Code != http.StatusForbidden {
 		t.Fatalf("wrong nonce: %d", rec.Code)

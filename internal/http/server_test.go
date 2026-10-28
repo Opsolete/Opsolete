@@ -58,7 +58,7 @@ func newApp(t *testing.T, dir string, store *storage.Store, a *auth.Auth, f Feat
 }
 
 func devAuth(t *testing.T, store *storage.Store, email string, admin bool, groups ...string) *auth.Auth {
-	save := func(context.Context, string, string, []string) (string, error) { return "", nil }
+	save := func(context.Context, string, string, string, []string) (string, error) { return "", nil }
 	if store != nil {
 		save = store.UpsertUser
 	}

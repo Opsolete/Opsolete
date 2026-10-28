@@ -421,9 +421,9 @@ func TestRunVariables(t *testing.T) {
 func TestAccess(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	creator, _ := s.UpsertUser(ctx, "creator@example.com", "user", nil)
-	member, _ := s.UpsertUser(ctx, "member@example.com", "user", []string{"team-a", "team-b"})
-	outsider, _ := s.UpsertUser(ctx, "outsider@example.com", "user", []string{"team-c"})
+	creator, _ := s.UpsertUser(ctx, "", "creator@example.com", "user", nil)
+	member, _ := s.UpsertUser(ctx, "", "member@example.com", "user", []string{"team-a", "team-b"})
+	outsider, _ := s.UpsertUser(ctx, "", "outsider@example.com", "user", []string{"team-c"})
 	name := "t-" + strings.ToLower(rand.Text()[:10])
 	w, _, err := s.CreateWorkspace(ctx, name, "job-test", "git::x", "v1", nil, false, creator)
 	if err != nil {

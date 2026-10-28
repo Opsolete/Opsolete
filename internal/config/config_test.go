@@ -43,11 +43,22 @@ func TestLoad(t *testing.T) {
 	t.Setenv("DEPLOYMENTS_ENABLED", "")
 	t.Setenv("REGISTRY_ENABLED", "")
 
-	for _, bad := range []string{"http://localhost:8080", "ftp://a.b", "https://a.b/sub"} {
+	for _, bad := range []string{"http://localhost:8080", "ftp://a.b", "https://a.b/sub", "https://u:p@a.b", "https://a.b?x=1", "https://a.b?", "https://a.b#f"} {
 		t.Setenv("PUBLIC_URL", bad)
 		if _, err := Load(); err == nil {
 			t.Errorf("PUBLIC_URL %q should be rejected", bad)
 		}
+	}
+	t.Setenv("PUBLIC_URL", "")
+
+	t.Setenv("TEMPLATE_EDITOR", "1")
+	t.Setenv("TEMPLATES_DIR", t.TempDir())
+	if _, err := Load(); err != nil {
+		t.Fatalf("editor with a writable catalog: %v", err)
+	}
+	t.Setenv("TEMPLATES_DIR", "/nonexistent/catalog")
+	if _, err := Load(); err == nil {
+		t.Fatal("editor with an unwritable catalog must fail at startup")
 	}
 }
 

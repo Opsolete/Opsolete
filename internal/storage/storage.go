@@ -6,11 +6,15 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"sort"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
+
+	"github.com/opsolete/opsolete/internal/auth"
 )
 
 //go:embed migrations/*.sql
@@ -75,14 +79,33 @@ func (s *Store) Migrate(ctx context.Context) error {
 	return tx.Commit()
 }
 
-// UpsertUser records a login; the role (from ADMIN_EMAILS) and the IdP groups are refreshed on every login.
-func (s *Store) UpsertUser(ctx context.Context, email, role string, groups []string) (string, error) {
+// UpsertUser records a login; the email, the role (from ADMIN_EMAILS) and the IdP groups are refreshed on every login.
+// A user is keyed by subject (OIDC issuer + sub) when there is one: a user without a subject yet is bound
+// to the first subject that logs in with its email, and a different subject with that email is refused.
+// subject "" (the dev user) keys by email.
+func (s *Store) UpsertUser(ctx context.Context, subject, email, role string, groups []string) (string, error) {
 	if groups == nil {
 		groups = []string{}
 	}
 	var id string
-	err := s.DB.QueryRowContext(ctx, `INSERT INTO users (email, role, groups) VALUES ($1, $2, $3)
-		ON CONFLICT (email) DO UPDATE SET role = EXCLUDED.role, groups = EXCLUDED.groups RETURNING id`, email, role, groups).Scan(&id)
+	if subject == "" {
+		err := s.DB.QueryRowContext(ctx, `INSERT INTO users (email, role, groups) VALUES ($1, $2, $3)
+			ON CONFLICT (email) DO UPDATE SET role = EXCLUDED.role, groups = EXCLUDED.groups RETURNING id`, email, role, groups).Scan(&id)
+		return id, err
+	}
+	err := s.DB.QueryRowContext(ctx, `UPDATE users SET subject = $1, email = $2, role = $3, groups = $4
+		WHERE subject = $1 OR (subject IS NULL AND email = $2 AND NOT EXISTS (SELECT 1 FROM users WHERE subject = $1))
+		RETURNING id`, subject, email, role, groups).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = s.DB.QueryRowContext(ctx, `INSERT INTO users (subject, email, role, groups) VALUES ($1, $2, $3, $4)
+			ON CONFLICT DO NOTHING RETURNING id`, subject, email, role, groups).Scan(&id)
+		if errors.Is(err, sql.ErrNoRows) {
+			err = auth.ErrEmailTaken
+		}
+	}
+	if pg, ok := errors.AsType[*pgconn.PgError](err); ok && pg.Code == "23505" { // the subject's new email is another user's
+		err = auth.ErrEmailTaken
+	}
 	return id, err
 }
 

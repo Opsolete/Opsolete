@@ -15,6 +15,10 @@ const (
 	// Artifacts a plan phase uploads and the apply phase downloads: POST/GET Prefix/jobs/<run>/artifacts/<name>.
 	ArtifactPlan     = "tfplan"
 	ArtifactLockfile = "lockfile" // .terraform.lock.hcl, so the apply uses the providers the plan used
+
+	// MaxJobSize bounds a claimed job's JSON (variables are ≤64 KiB each, but unlimited in number):
+	// the server fails a bigger job at claim time instead of handing the runner a body it would truncate.
+	MaxJobSize = 16 << 20
 )
 
 type ClaimRequest struct {

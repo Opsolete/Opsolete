@@ -83,6 +83,17 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 				mods = append(mods, runnerapi.Module{Name: m.Name, Inputs: m.Inputs,
 					Source: s.Registry.RunnerSource(templates.Module{Source: m.ModuleSource, Ref: m.ModuleRef}, runnerSrcTTL)})
 			}
+			var body []byte
+			if err == nil {
+				body, err = json.Marshal(runnerapi.Job{
+					RunID: j.RunID, WorkspaceID: j.WorkspaceID, Phase: j.Phase, Action: j.Action, Replace: j.Replace, LeaseID: j.LeaseID,
+					LeaseSeconds: int(leaseTTL.Seconds()), StateToken: s.stateToken(j.WorkspaceID, j.RunID), Vars: vars, Env: env,
+					ModuleSource: src, Modules: mods, Currency: currency,
+				})
+			}
+			if err == nil && len(body) > runnerapi.MaxJobSize {
+				err = fmt.Errorf("the job's variables and inputs are %d bytes, over the runner limit of %d", len(body), runnerapi.MaxJobSize)
+			}
 			if err != nil {
 				// The job is claimed: fail it rather than leave it to the lease reaper.
 				s.Log.Error("job variables", "run", j.RunID, "err", err)
@@ -92,11 +103,8 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			s.Log.Info("job claimed", "run", j.RunID, "phase", j.Phase, "action", j.Action, "runner", req.Runner)
-			writeJSON(w, runnerapi.Job{
-				RunID: j.RunID, WorkspaceID: j.WorkspaceID, Phase: j.Phase, Action: j.Action, Replace: j.Replace, LeaseID: j.LeaseID,
-				LeaseSeconds: int(leaseTTL.Seconds()), StateToken: s.stateToken(j.WorkspaceID, j.RunID), Vars: vars, Env: env,
-				ModuleSource: src, Modules: mods, Currency: currency,
-			})
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(body)
 			return
 		}
 		select {

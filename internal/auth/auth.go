@@ -49,7 +49,11 @@ type Config struct {
 }
 
 // SaveUser records a login (with the IdP's groups, for team access) and returns the user's id.
-type SaveUser func(ctx context.Context, email, role string, groups []string) (string, error)
+// subject is the OIDC issuer and sub, the stable identity ("" for the dev user); email is an attribute.
+type SaveUser func(ctx context.Context, subject, email, role string, groups []string) (string, error)
+
+// ErrEmailTaken is SaveUser's answer when the email belongs to a user bound to another subject (a reassigned address).
+var ErrEmailTaken = errors.New("this email belongs to another identity provider account")
 
 type Auth struct {
 	key    []byte
@@ -74,7 +78,7 @@ func New(ctx context.Context, c Config, key []byte, save SaveUser) (*Auth, error
 		return nil, errors.New("set either OIDC_ISSUER or AUTH_DEV_USER, not both")
 	case c.DevUser != "":
 		u := User{Email: strings.ToLower(c.DevUser), Role: a.role(c.DevUser)}
-		id, err := save(ctx, u.Email, u.Role, c.DevGroups)
+		id, err := save(ctx, "", u.Email, u.Role, c.DevGroups)
 		if err != nil {
 			return nil, err
 		}
@@ -216,12 +220,18 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	email := strings.ToLower(strings.TrimSpace(cmp.Or(c.Email, c.PreferredUsername)))
+	// A missing email_verified passes: Entra ID never sends it. Users are keyed by subject, so a
+	// reassigned address can't take over an existing account either way.
 	if !strings.Contains(email, "@") || (c.EmailVerified != nil && !*c.EmailVerified) {
 		http.Error(w, "login failed: the identity provider sent no verified email", http.StatusForbidden)
 		return
 	}
 	u := User{Email: email, Role: a.role(email)}
-	if u.ID, err = a.save(r.Context(), u.Email, u.Role, c.Groups); err != nil {
+	if u.ID, err = a.save(r.Context(), idt.Issuer+" "+idt.Subject, u.Email, u.Role, c.Groups); err != nil {
+		if errors.Is(err, ErrEmailTaken) {
+			http.Error(w, "login failed: "+err.Error(), http.StatusForbidden)
+			return
+		}
 		http.Error(w, "login failed: could not save user", http.StatusInternalServerError)
 		return
 	}

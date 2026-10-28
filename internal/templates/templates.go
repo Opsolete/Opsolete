@@ -179,6 +179,14 @@ func (t Template) check() error {
 		if in.Type == "select" && in.Default != "" && !slices.Contains(in.Options, in.Default) {
 			return fmt.Errorf("input %q: default %q is not one of the options", in.Name, in.Default)
 		}
+		if in.Type == "bool" && in.Default != "" && in.Default != "true" && in.Default != "false" {
+			return fmt.Errorf("input %q: a bool default is true or false", in.Name)
+		}
+		if in.Default != "" { // the deploy form starts with the default: it must pass the same checks
+			if _, errs := (Template{Inputs: []Input{in}}).Validate(map[string]string{in.Name: in.Default}); errs[in.Name] != "" {
+				return fmt.Errorf("input %q: default %q %s", in.Name, in.Default, errs[in.Name])
+			}
+		}
 	}
 	return nil
 }

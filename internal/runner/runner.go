@@ -639,7 +639,13 @@ func (r *Runner) call(ctx context.Context, path, lease, contentType string, body
 		return 0, nil, err
 	}
 	defer resp.Body.Close()
-	b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	b, err := io.ReadAll(io.LimitReader(resp.Body, runnerapi.MaxJobSize+1))
+	if err != nil {
+		return 0, nil, err
+	}
+	if len(b) > runnerapi.MaxJobSize {
+		return 0, nil, fmt.Errorf("%s: response is over %d bytes", path, runnerapi.MaxJobSize)
+	}
 	return resp.StatusCode, b, nil
 }
 

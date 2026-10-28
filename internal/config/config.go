@@ -85,11 +85,20 @@ func Load() (Config, error) {
 	}
 
 	pu, err := url.Parse(getenv("PUBLIC_URL", "http://opsolete.localhost:8080"))
-	if err != nil || (pu.Scheme != "http" && pu.Scheme != "https") || !strings.Contains(pu.Hostname(), ".") || pu.Path != "" && pu.Path != "/" {
-		return c, errors.New("PUBLIC_URL must be like https://opsolete.example.com (a hostname with a dot, no path)")
+	if err != nil || (pu.Scheme != "http" && pu.Scheme != "https") || !strings.Contains(pu.Hostname(), ".") || pu.Path != "" && pu.Path != "/" ||
+		pu.User != nil || pu.RawQuery != "" || pu.ForceQuery || pu.Fragment != "" {
+		return c, errors.New("PUBLIC_URL must be like https://opsolete.example.com (a hostname with a dot, no path, credentials, query or fragment)")
 	}
 	pu.Path = ""
 	c.PublicURL = pu
+	if c.TemplateEditor { // fail at startup, not at the first save (packaged catalogs are in the read-only Nix store)
+		f, err := os.CreateTemp(c.TemplatesDir, ".write-check-*")
+		if err != nil {
+			return c, fmt.Errorf("TEMPLATE_EDITOR=1 saves into TEMPLATES_DIR, which must be a writable directory: %w", err)
+		}
+		f.Close()
+		os.Remove(f.Name())
+	}
 	return c, nil
 }
 

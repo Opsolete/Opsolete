@@ -58,7 +58,7 @@ Then open http://localhost:8080. Migrations run on startup.
 | `TEMPLATES_DIR` | `catalog` | Directory of JSON template definitions |
 | `DEPLOYMENTS_ENABLED` | `true` | Templates, workspaces, runs, the runner API and the state backend. `false` makes Opsolete a module registry only |
 | `REGISTRY_ENABLED` | `true` | Module registry pages and the Terraform registry protocol. With `false`, startup fails if a template uses a registry module |
-| `TEMPLATE_EDITOR` | off    | `1` enables the template builder and module uploads for admins (on in the nix dev shell) |
+| `TEMPLATE_EDITOR` | off    | `1` enables the template builder and module uploads for admins (on in the nix dev shell). `TEMPLATES_DIR` must then be writable, or startup fails: the catalog in the container image and the Nix package is read-only, so mount a writable volume (one app instance only: saves aren't coordinated across instances) |
 | `PUBLIC_URL`    | `http://opsolete.localhost:8080` | How browsers and Terraform clients reach the app. Its host is the registry hostname, and the OIDC callback is `PUBLIC_URL/auth/callback` |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | | Login via OpenID Connect, required unless `AUTH_DEV_USER` is set |
 | `ADMIN_EMAILS`  |           | Comma-separated emails that get the admin role at login |
@@ -73,7 +73,7 @@ Then open http://localhost:8080. Migrations run on startup.
 
 All pages require login. Health checks, the registry protocol (`/v1/…`, which uses API tokens and signed URLs), the runner API (`RUNNER_TOKEN`) and the cloud API (`/api/v2/…`, user tokens from `terraform login`) don't.
 
-- **OIDC:** authorization code flow with PKCE, using `coreos/go-oidc` and `x/oauth2`. It works with Entra ID, Google, Keycloak, Dex and similar. Register `PUBLIC_URL/auth/callback` as the redirect URI. The user is identified by the `email` claim, falling back to `preferred_username` (Entra ID). An explicit `email_verified: false` is rejected.
+- **OIDC:** authorization code flow with PKCE, using `coreos/go-oidc` and `x/oauth2`. It works with Entra ID, Google, Keycloak, Dex and similar. Register `PUBLIC_URL/auth/callback` as the redirect URI. A user is keyed by the ID token's issuer and `sub`; the email (the `email` claim, falling back to `preferred_username` for Entra ID) is an attribute that follows the IdP. Users from before this are bound to the first subject that logs in with their email. A different subject with an email Opsolete already knows is refused, so a reassigned address can't take over the old account or its admin role. An explicit `email_verified: false` is rejected; a missing claim is accepted, since Entra ID never sends it. Changing `OIDC_ISSUER` changes every subject: run `UPDATE users SET subject = NULL` so users rebind by email at their next login.
 - **Roles:** emails listed in `ADMIN_EMAILS` are `admin`, everyone else is `user`. The role is recorded at every login, so editing `ADMIN_EMAILS` takes effect at the next login. Sessions are HMAC-signed cookies that last 12 hours. Logging out ends the Opsolete session, not the IdP session.
 - **Users** can create workspaces from templates and see and operate their own, plus those granted to one of their groups. **Admins** see and operate every workspace, grant access, and with `TEMPLATE_EDITOR=1` use the template builder and upload modules.
 - Cross-site form posts are rejected (`http.CrossOriginProtection`). If a proxy rewrites the `Host` header, keep it equal to the browser's origin.
