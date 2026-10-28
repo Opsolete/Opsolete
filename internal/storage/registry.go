@@ -44,7 +44,7 @@ func (s *Store) CreateModule(ctx context.Context, m Module, docs ModuleDocs, arc
 	return err
 }
 
-// ListModules returns all module versions (without archives), newest upload first.
+// ListModules returns all module versions (without archives) by module, newest upload first.
 func (s *Store) ListModules(ctx context.Context) ([]Module, error) {
 	return s.queryModules(ctx, `SELECT namespace, name, system, version, variables, uploaded_at
 		FROM modules ORDER BY namespace, name, system, uploaded_at DESC`)
@@ -175,7 +175,7 @@ func (s *Store) ValidToken(ctx context.Context, token, scope string) (bool, erro
 	h := sha256.Sum256([]byte(token))
 	var ok bool
 	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM api_tokens WHERE token_hash=$1
-		AND (scope=$2 OR ($2 = 'registry' AND scope = 'user' AND expires_at > now())))`, h[:], scope).Scan(&ok)
+		AND (scope=$2 OR ($2 = $3 AND scope = $4 AND expires_at > now())))`, h[:], scope, ScopeRegistry, ScopeUser).Scan(&ok)
 	return ok, err
 }
 
@@ -184,7 +184,7 @@ func (s *Store) CreateUserToken(ctx context.Context, userID, name string, ttl ti
 	token := "ops_" + rand.Text()
 	h := sha256.Sum256([]byte(token))
 	_, err := s.DB.ExecContext(ctx, `INSERT INTO api_tokens (name, token_hash, scope, user_id, expires_at)
-		VALUES ($1, $2, 'user', $3::uuid, now() + $4 * interval '1 second')`, name, h[:], userID, int64(ttl.Seconds()))
+		VALUES ($1, $2, $5, $3::uuid, now() + $4 * interval '1 second')`, name, h[:], userID, int64(ttl.Seconds()), ScopeUser)
 	return token, err
 }
 
@@ -193,7 +193,7 @@ func (s *Store) CreateUserToken(ctx context.Context, userID, name string, ttl ti
 func (s *Store) TokenUser(ctx context.Context, token string) (id, email, role string, err error) {
 	h := sha256.Sum256([]byte(token))
 	err = s.DB.QueryRowContext(ctx, `SELECT u.id, u.email, u.role FROM api_tokens t JOIN users u ON u.id = t.user_id
-		WHERE t.token_hash = $1 AND t.scope = 'user' AND t.expires_at > now()`, h[:]).Scan(&id, &email, &role)
+		WHERE t.token_hash = $1 AND t.scope = $2 AND t.expires_at > now()`, h[:], ScopeUser).Scan(&id, &email, &role)
 	return id, email, role, err
 }
 

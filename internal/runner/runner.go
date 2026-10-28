@@ -180,6 +180,9 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	if err != nil {
 		return fail("prepare terraform", err)
 	}
+	// After a cancel's SIGINT, Terraform finishes in-flight operations and saves state: that can take far
+	// longer than terraform-exec's 60s default before it kills the process (errors only on Windows).
+	_ = tf.SetWaitDelay(r.JobTimeout)
 	tf.SetStdout(w)
 	tf.SetStderr(w)
 	// A throwaway HOME (outside dir: init -from-module needs it empty): a job must not leave a

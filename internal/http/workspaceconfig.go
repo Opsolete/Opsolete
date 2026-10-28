@@ -465,7 +465,7 @@ func (s *Server) rollbackState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() {
-		if err := s.Store.UnlockState(context.WithoutCancel(ctx), ws.ID, lockID); err != nil {
+		if err := s.Store.UnlockState(context.WithoutCancel(ctx), ws.ID, lockID, ""); err != nil {
 			s.Log.Error("unlock state", "workspace", ws.Name, "err", err)
 		}
 	}()
@@ -514,7 +514,7 @@ func (s *Server) rollbackState(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "encode state", err)
 		return
 	}
-	if code, msg := s.saveState(ctx, ws.ID, "", body); code != http.StatusOK {
+	if code, msg := s.saveState(ctx, ws.ID, "", "", body); code != http.StatusOK {
 		http.Error(w, msg, code) // e.g. a version of another lineage
 		return
 	}

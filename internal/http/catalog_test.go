@@ -24,7 +24,7 @@ type fakeGitRepo struct {
 	branches map[string]string
 	commits  map[string]map[string]string
 	n        int
-	pulls    []string // head branches
+	pulls    []string      // head branches
 	held     chan string   // if set, the next tarball download reports its commit here...
 	release  chan struct{} // ...and waits for this
 }

@@ -47,12 +47,7 @@ var (
 	reserved = []string{"source", "version", "providers", "count", "for_each", "lifecycle", "depends_on", "locals"}
 )
 
-// LoadDir reads every *.json file in dir. Any invalid file fails the whole load.
-func LoadDir(dir string) (map[string]Template, error) {
-	m, _, err := loadDir(dir)
-	return m, err
-}
-
+// loadDir reads every *.json file in dir. Any invalid file fails the whole load.
 func loadDir(dir string) (map[string]Template, map[string]string, error) {
 	names, err := filepath.Glob(filepath.Join(dir, "*.json"))
 	if err != nil {
@@ -112,10 +107,13 @@ func Encode(t Template) ([]byte, error) {
 		return nil, err
 	}
 	b, err := json.MarshalIndent(t, "", "  ")
+	if err != nil {
+		return nil, err
+	}
 	if len(b) >= MaxFileSize { // the editor mustn't commit a file the next sync rejects
 		return nil, fmt.Errorf("the template is %d bytes: at most %d", len(b), MaxFileSize)
 	}
-	return append(b, '\n'), err
+	return append(b, '\n'), nil
 }
 
 // Catalog is the current set of templates: from a directory (Save writes new or edited ones back
@@ -254,8 +252,8 @@ func (t Template) check() error {
 		default:
 			return fmt.Errorf("input %q: unknown type %q", in.Name, in.Type)
 		}
-		if in.Pattern != "" {
-			if _, err := regexp.Compile(in.Pattern); err != nil {
+		if in.Pattern != "" { // compiled as Validate does: near the size limits, the anchored form may fail alone
+			if _, err := regexp.Compile(anchored(in.Pattern)); err != nil {
 				return fmt.Errorf("input %q: %w", in.Name, err)
 			}
 		}
@@ -273,6 +271,8 @@ func (t Template) check() error {
 	}
 	return nil
 }
+
+func anchored(pattern string) string { return "^(?:" + pattern + ")$" }
 
 // Validate turns raw form values into typed Terraform variables.
 // It returns per-field error messages; an empty map means valid.
@@ -306,7 +306,7 @@ func (t Template) Validate(raw map[string]string) (map[string]any, map[string]st
 			vals[in.Name] = v
 		default:
 			// anchored like the browser's pattern attribute: the whole value must match
-			if in.Pattern != "" && !regexp.MustCompile("^(?:"+in.Pattern+")$").MatchString(v) {
+			if in.Pattern != "" && !regexp.MustCompile(anchored(in.Pattern)).MatchString(v) {
 				errs[in.Name] = "must match " + in.Pattern
 				continue
 			}

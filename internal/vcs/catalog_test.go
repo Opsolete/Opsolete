@@ -14,17 +14,17 @@ import (
 )
 
 func TestCatalogFiles(t *testing.T) {
-	files := []file{{"acme-cat-abc/catalog/a.json", []byte("a")}, {"acme-cat-abc/catalog/sub/b.json", nil},
-		{"acme-cat-abc/catalog/README.md", nil}, {"acme-cat-abc/root.json", []byte("r")}}
-	if got := catalogFiles(GitHub, files, "catalog"); !reflect.DeepEqual(got, map[string][]byte{"catalog/a.json": []byte("a")}) {
+	files := repoFiles([]file{{"acme-cat-abc/catalog/a.json", []byte("a")}, {"acme-cat-abc/catalog/sub/b.json", nil},
+		{"acme-cat-abc/catalog/README.md", nil}, {"acme-cat-abc/root.json", []byte("r")}}, true)
+	if got := catalogFiles(files, "catalog"); !reflect.DeepEqual(got, map[string][]byte{"catalog/a.json": []byte("a")}) {
 		t.Fatalf("github, folder: %v", got)
 	}
-	if got := catalogFiles(GitHub, files, ""); !reflect.DeepEqual(got, map[string][]byte{"root.json": []byte("r")}) {
+	if got := catalogFiles(files, ""); !reflect.DeepEqual(got, map[string][]byte{"root.json": []byte("r")}) {
 		t.Fatalf("github, root: %v", got)
 	}
 	// Azure DevOps zips have no top directory: a repo holding only catalog/ must not lose it.
-	az := []file{{"/catalog/a.json", []byte("a")}}
-	if got := catalogFiles(AzureDevOps, az, "catalog"); !reflect.DeepEqual(got, map[string][]byte{"catalog/a.json": []byte("a")}) {
+	az := repoFiles([]file{{"/catalog/a.json", []byte("a")}}, false)
+	if got := catalogFiles(az, "catalog"); !reflect.DeepEqual(got, map[string][]byte{"catalog/a.json": []byte("a")}) {
 		t.Fatalf("azure devops: %v", got)
 	}
 }

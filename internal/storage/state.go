@@ -61,10 +61,16 @@ func (s *Store) StateVersionsUpTo(ctx context.Context, workspaceID string, upTo 
 	return out, rows.Err()
 }
 
+// ErrNotCloudLocked: a cloud API state upload whose user no longer holds the state lock.
+var ErrNotCloudLocked = errors.New("the workspace must be locked by you to save state")
+
 // AddStateVersion records a state file written to blob storage as the workspace's current state.
 // runID is the run whose Terraform wrote it ("" for the CLI and rollbacks): if that run no longer
 // applies with a lease (force-canceled, reaped), nothing is recorded and ErrLeaseLost returned.
-func (s *Store) AddStateVersion(ctx context.Context, id, runID string, v StateVersion) error {
+// cloudUser is the user uploading through the cloud API (else ""): if they no longer hold the state
+// lock, nothing is recorded and ErrNotCloudLocked returned. FOR SHARE makes both checks hold until
+// commit: a force-cancel or force-unlock waits for the insert, or the insert sees its result.
+func (s *Store) AddStateVersion(ctx context.Context, id, runID, cloudUser string, v StateVersion) error {
 	var out []byte
 	if v.Outputs != nil {
 		var err error
@@ -73,14 +79,18 @@ func (s *Store) AddStateVersion(ctx context.Context, id, runID string, v StateVe
 		}
 	}
 	res, err := s.DB.ExecContext(ctx, `INSERT INTO state_versions (workspace_id, serial, lineage, blob_key, md5, size, outputs)
-		SELECT $1::uuid, $2, $3, $4, $5, $6, $7::jsonb WHERE $8 = '' OR EXISTS (SELECT 1 FROM runs
-			WHERE id = ops_uuid($8) AND status = 'applying' AND lease_id IS NOT NULL)`,
-		id, v.Serial, v.Lineage, v.BlobKey, v.MD5, v.Size, nullJSON(out), runID)
+		SELECT $1::uuid, $2, $3, $4, $5, $6, $7::jsonb
+		WHERE ($8 = '' OR EXISTS (SELECT 1 FROM runs WHERE id = ops_uuid($8) AND status = 'applying' AND lease_id IS NOT NULL FOR SHARE))
+			AND ($9 = '' OR EXISTS (SELECT 1 FROM workspaces WHERE id = $1::uuid
+				AND starts_with(state_lock->>'ID', $10) AND state_lock->>'UserID' = $9 FOR SHARE))`,
+		id, v.Serial, v.Lineage, v.BlobKey, v.MD5, v.Size, nullJSON(out), runID, cloudUser, CloudLockPrefix)
 	if err != nil {
 		return err
 	}
 	if n, err := res.RowsAffected(); err != nil {
 		return err
+	} else if n == 0 && cloudUser != "" {
+		return ErrNotCloudLocked
 	} else if n == 0 {
 		return ErrLeaseLost
 	}
@@ -111,13 +121,14 @@ func (s *Store) CopyStateIndex(ctx context.Context, workspaceID string, from int
 // LockState takes the workspace's state lock for the Terraform LockInfo in info. If another lock
 // is held, it returns that lock's info and ok=false. Taking a lock you already hold succeeds.
 // runID is the run whose Terraform takes it ("" for rollbacks and the cloud API): when the run
-// ends, only a lock recorded with its id is released.
+// ends, only a lock recorded with its id is released. A held lock's ID is no credential (a 423
+// shows it to the run that tried): re-taking it also needs the same run (or none).
 func (s *Store) LockState(ctx context.Context, id, lockID, runID string, info []byte) (held []byte, ok bool, err error) {
 	err = s.DB.QueryRowContext(ctx, `
 		WITH taken AS (
 			UPDATE workspaces SET state_lock = ($2::jsonb - 'OpsoleteRun') || jsonb_strip_nulls(jsonb_build_object('OpsoleteRun', NULLIF($4, ''))),
 				state_locked_at = CASE WHEN state_lock IS NULL THEN now() ELSE state_locked_at END
-			WHERE id = ops_uuid($1) AND (state_lock IS NULL OR state_lock->>'ID' = $3) RETURNING 1
+			WHERE id = ops_uuid($1) AND (state_lock IS NULL OR state_lock->>'ID' = $3 AND `+lockOwner("$4")+`) RETURNING 1
 		)
 		SELECT EXISTS (SELECT 1 FROM taken), COALESCE((SELECT state_lock::text FROM workspaces WHERE id = ops_uuid($1)), '')`,
 		id, string(info), lockID, runID).Scan(&ok, &held)
@@ -163,11 +174,25 @@ func (s *Store) ReleaseOrphanedLocks(ctx context.Context, timeout time.Duration)
 	return out, rows.Err()
 }
 
-// UnlockState releases the lock if lockID holds it.
-func (s *Store) UnlockState(ctx context.Context, id, lockID string) error {
+// lockOwner: the lock was taken by the run in parameter p ("" none), so a run can't take over or
+// release a lock of another run, a rollback, the UI or the CLI, whose ID it saw in a 423.
+func lockOwner(p string) string {
+	return `state_lock->>'OpsoleteRun' IS NOT DISTINCT FROM NULLIF(` + p + `, '')`
+}
+
+// UnlockState releases the lock if lockID holds it and runID ("" none) took it.
+func (s *Store) UnlockState(ctx context.Context, id, lockID, runID string) error {
 	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET state_lock = NULL
-		WHERE id = ops_uuid($1) AND state_lock->>'ID' = $2`, id, lockID)
+		WHERE id = ops_uuid($1) AND state_lock->>'ID' = $2 AND `+lockOwner("$3"), id, lockID, runID)
 	return err
+}
+
+// StateLockedBy reports whether lockID holds the workspace's state lock, taken by runID ("" none).
+func (s *Store) StateLockedBy(ctx context.Context, id, lockID, runID string) (bool, error) {
+	var ok bool
+	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM workspaces WHERE id = ops_uuid($1)
+		AND state_lock->>'ID' = $2 AND `+lockOwner("$3")+`)`, id, lockID, runID).Scan(&ok)
+	return ok, err
 }
 
 // StateLockID returns the ID of the workspace's current state lock, or "" if unlocked.

@@ -46,8 +46,8 @@ func TestStaleCatalogSync(t *testing.T) {
 	if synced(staleA, "a1", "") || synced(staleA, "", "a failed") {
 		t.Fatal("a sync of the old repository was stored")
 	}
-	if err := s.CheckedTemplateCatalog(ctx, staleA); err != nil {
-		t.Fatal(err)
+	if ok, err := s.CheckedTemplateCatalog(ctx, staleA); err != nil || ok {
+		t.Fatalf("a check of the old repository was stored: %v %v", ok, err)
 	}
 	if !synced(b, "b1", "") {
 		t.Fatal("the current sync was refused")
@@ -91,8 +91,8 @@ func TestFailedCatalogSyncKeepsSyncedAt(t *testing.T) {
 	if after.SyncError != "provider unavailable" || after.SyncedAt == nil || !after.SyncedAt.Equal(*tc.SyncedAt) {
 		t.Fatalf("after a failed sync: %+v, synced at %v before", after, tc.SyncedAt)
 	}
-	if err := s.CheckedTemplateCatalog(ctx, after); err != nil { // the provider is back, branch unchanged
-		t.Fatal(err)
+	if ok, err := s.CheckedTemplateCatalog(ctx, after); err != nil || !ok { // the provider is back, branch unchanged
+		t.Fatalf("check: %v %v", ok, err)
 	}
 	if back, _ := s.GetTemplateCatalog(ctx); back.SyncError != "" || !back.SyncedAt.After(*tc.SyncedAt) {
 		t.Fatalf("after a successful check: %+v", back)

@@ -7,7 +7,7 @@ import (
 )
 
 func TestLoadCatalogAndValidate(t *testing.T) {
-	ts, err := LoadDir("../../catalog")
+	ts, _, err := loadDir("../../catalog")
 	if err != nil {
 		t.Fatal(err)
 	}

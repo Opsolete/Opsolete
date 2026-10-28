@@ -150,7 +150,7 @@ func TestRunLifecycle(t *testing.T) {
 		{Address: "azurerm_storage_account.this", Type: "azurerm_storage_account", Name: "this", Provider: "registry.terraform.io/hashicorp/azurerm"},
 		{Address: "module.net.azurerm_subnet.a[0]", Type: "azurerm_subnet", Name: "a", Provider: "registry.terraform.io/hashicorp/azurerm", Module: "module.net"},
 	}
-	if err := s.AddStateVersion(ctx, w.ID, "", StateVersion{Serial: 3, Lineage: "lin", BlobKey: "k/" + w.ID, MD5: "m", Size: 1, Outputs: map[string]any{"id": "abc"}}); err != nil {
+	if err := s.AddStateVersion(ctx, w.ID, "", "", StateVersion{Serial: 3, Lineage: "lin", BlobKey: "k/" + w.ID, MD5: "m", Size: 1, Outputs: map[string]any{"id": "abc"}}); err != nil {
 		t.Fatal(err)
 	}
 	if st, err := s.FinishJob(ctx, run.ID, apply.LeaseID, "succeeded", "", map[string]any{"id": "abc"}, nil, res); err != nil || st != Applied {
@@ -233,6 +233,22 @@ func TestFinishKeepsForeignStateLock(t *testing.T) {
 	if _, ok, err := s.LockState(ctx, w.ID, "rb", "", []byte(`{"ID":"rb","OpsoleteRun":"`+run.ID+`"}`)); !ok || err != nil {
 		t.Fatalf("lock: %v %v", ok, err)
 	}
+	// The run saw the lock's ID in a 423: that alone must not let it take over, use or release the lock.
+	if _, ok, err := s.LockState(ctx, w.ID, "rb", run.ID, []byte(`{"ID":"rb"}`)); ok || err != nil {
+		t.Fatalf("a run took over a rollback's lock: %v %v", ok, err)
+	}
+	if ok, err := s.StateLockedBy(ctx, w.ID, "rb", run.ID); ok || err != nil {
+		t.Fatalf("a run may write under a rollback's lock: %v %v", ok, err)
+	}
+	if ok, err := s.StateLockedBy(ctx, w.ID, "rb", ""); !ok || err != nil {
+		t.Fatalf("the rollback's own lock: %v %v", ok, err)
+	}
+	if err := s.UnlockState(ctx, w.ID, "rb", run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if lock, _ := s.StateLockID(ctx, w.ID); lock != "rb" {
+		t.Fatalf("a run released a rollback's lock: %q", lock)
+	}
 	if _, err := s.FinishJob(ctx, run.ID, j.LeaseID, "failed", "423", nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -288,21 +304,68 @@ func TestStateWriteFenced(t *testing.T) {
 		t.Fatalf("claim: %v %v", ok, err)
 	}
 	v := StateVersion{Serial: 1, Lineage: "lin", BlobKey: "fence/" + w.ID, MD5: "m", Size: 1}
-	if err := s.AddStateVersion(ctx, w.ID, run.ID, v); !errors.Is(err, ErrLeaseLost) {
+	if err := s.AddStateVersion(ctx, w.ID, run.ID, "", v); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("a planning run must not record state: %v", err)
 	}
 	if _, err := s.DB.ExecContext(ctx, `UPDATE runs SET status = 'applying' WHERE id = $1`, run.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddStateVersion(ctx, w.ID, run.ID, v); err != nil {
+	if err := s.AddStateVersion(ctx, w.ID, run.ID, "", v); err != nil {
 		t.Fatalf("applying run: %v", err)
 	}
 	if _, err := s.CancelRun(ctx, run.ID, "a@b.c", true); err != nil {
 		t.Fatal(err)
 	}
 	v.Serial, v.BlobKey = 2, "fence2/"+w.ID
-	if err := s.AddStateVersion(ctx, w.ID, run.ID, v); !errors.Is(err, ErrLeaseLost) {
+	if err := s.AddStateVersion(ctx, w.ID, run.ID, "", v); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("a force-canceled run must not record state: %v", err)
+	}
+}
+
+// A cloud API upload is recorded only while its user holds the state lock, checked atomically with
+// the insert: a force-unlock that commits while the insert waits for it wins.
+func TestCloudStateWriteFenced(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	w, _ := newWorkspace(t, s, false)
+	lockID := CloudLockPrefix + "x"
+	if _, ok, err := s.LockState(ctx, w.ID, lockID, "", []byte(`{"ID":"`+lockID+`","UserID":"u1"}`)); !ok || err != nil {
+		t.Fatalf("lock: %v %v", ok, err)
+	}
+	v := StateVersion{Serial: 1, Lineage: "lin", BlobKey: "cloud1/" + w.ID, MD5: "m1", Size: 1}
+	if err := s.AddStateVersion(ctx, w.ID, "", "u2", v); !errors.Is(err, ErrNotCloudLocked) {
+		t.Fatalf("another user's lock: %v", err)
+	}
+	if err := s.AddStateVersion(ctx, w.ID, "", "u1", v); err != nil {
+		t.Fatalf("own lock: %v", err)
+	}
+
+	// A force-unlock is under way (uncommitted) when the upload is recorded: the insert waits for it.
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE workspaces SET state_lock = NULL WHERE id = $1`, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- s.AddStateVersion(ctx, w.ID, "", "u1", StateVersion{Serial: 2, Lineage: "lin", BlobKey: "cloud2/" + w.ID, MD5: "m2", Size: 1})
+	}()
+	select {
+	case err := <-done:
+		t.Fatalf("the upload didn't wait for the unlock: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, ErrNotCloudLocked) {
+		t.Fatalf("an upload after the force-unlock was recorded: %v", err)
+	}
+	if vs, _ := s.StateVersions(ctx, w.ID, 10); len(vs) != 1 {
+		t.Fatalf("%d state versions, want 1", len(vs))
 	}
 }
 
@@ -516,6 +579,17 @@ func TestCancel(t *testing.T) {
 	}
 	if st, _ := s.FinishJob(ctx, run2.ID, j.LeaseID, "canceled", "", nil, nil, nil); st != Canceled {
 		t.Fatalf("finish canceled: %q", st)
+	}
+
+	// The plan finishes before the cancel reaches Terraform: the run ends, its apply is never queued.
+	run4, _ := s.CreateRun(ctx, w.ID, "apply", "", nil)
+	j = claim(t, s, "plan")
+	if _, err := s.CancelRun(ctx, run4.ID, "a@b.c", false); err != nil {
+		t.Fatal(err)
+	}
+	plan := &runnerapi.Plan{Add: 1}
+	if st, err := s.FinishJob(ctx, run4.ID, j.LeaseID, "succeeded", "", nil, plan, nil); err != nil || st != Canceled {
+		t.Fatalf("a plan finished after a cancel request: %q %v", st, err)
 	}
 
 	// Force: cut off right away; the runner's lease and state lock are gone.

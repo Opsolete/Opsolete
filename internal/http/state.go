@@ -83,7 +83,7 @@ func (s *Server) stateAuth(next http.HandlerFunc) http.HandlerFunc {
 		if user != id {
 			shared, err := s.Store.SharesState(r.Context(), id, user)
 			if err != nil {
-				s.stateError(w, "remote state sharing", err)
+				s.internalError(w, "remote state sharing", err)
 				return
 			}
 			if !shared {
@@ -99,7 +99,7 @@ func (s *Server) stateAuth(next http.HandlerFunc) http.HandlerFunc {
 func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 	vs, err := s.Store.StateVersions(r.Context(), r.PathValue("id"), 1)
 	if err != nil {
-		s.stateError(w, "list state versions", err)
+		s.internalError(w, "list state versions", err)
 		return
 	}
 	if len(vs) == 0 {
@@ -108,7 +108,7 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 	}
 	b, err := s.readBlob(r.Context(), vs[0].BlobKey)
 	if err != nil {
-		s.stateError(w, "read state", err)
+		s.internalError(w, "read state", err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -117,18 +117,20 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
 	ctx, id := r.Context(), r.PathValue("id")
-	lockID, err := s.Store.StateLockID(ctx, id)
-	if err != nil {
-		s.stateError(w, "state lock", err)
+	// the lock this run took, not just its ID: a 423 shows other locks' IDs to any run
+	if locked, err := s.Store.StateLockedBy(ctx, id, r.URL.Query().Get("ID"), r.PathValue("run")); err != nil {
+		s.internalError(w, "state lock", err)
 		return
-	}
-	if lockID == "" || r.URL.Query().Get("ID") != lockID {
+	} else if !locked {
 		http.Error(w, "the state must be locked by this run", http.StatusConflict)
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxStateSize))
-	if err != nil {
+	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 		http.Error(w, fmt.Sprintf("state larger than %d MB", maxStateSize>>20), http.StatusRequestEntityTooLarge)
+		return
+	} else if err != nil {
+		http.Error(w, "reading the state failed", http.StatusBadRequest)
 		return
 	}
 	sum := md5.Sum(body)
@@ -136,7 +138,7 @@ func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Content-MD5 mismatch", http.StatusBadRequest)
 		return
 	}
-	if code, msg := s.saveState(ctx, id, r.PathValue("run"), body); code != http.StatusOK {
+	if code, msg := s.saveState(ctx, id, r.PathValue("run"), "", body); code != http.StatusOK {
 		http.Error(w, msg, code)
 		return
 	}
@@ -144,9 +146,9 @@ func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
 }
 
 // saveState stores body as the workspace's new current state version, unless it's the same as the
-// current one. The caller holds the state lock; runID is the run writing it ("" for the CLI and
-// rollbacks). It returns 200, or an error status and message.
-func (s *Server) saveState(ctx context.Context, id, runID string, body []byte) (int, string) {
+// current one. The caller holds the state lock; runID is the run writing it, cloudUser the cloud API
+// user (see AddStateVersion; both "" for rollbacks). It returns 200, or an error status and message.
+func (s *Server) saveState(ctx context.Context, id, runID, cloudUser string, body []byte) (int, string) {
 	sum := md5.Sum(body)
 	// Only the fields needed to version the file and show its outputs; the rest is Terraform's business.
 	var head struct {
@@ -192,13 +194,16 @@ func (s *Server) saveState(ctx context.Context, id, runID string, body []byte) (
 	if err := s.writeBlob(ctx, v.BlobKey, body); err != nil {
 		return s.stateFailure("write state", err)
 	}
-	if err := s.Store.AddStateVersion(ctx, id, runID, v); err != nil {
+	if err := s.Store.AddStateVersion(ctx, id, runID, cloudUser, v); err != nil {
 		// WithoutCancel: a dropped request must not stop the cleanup and leave the file behind.
 		if derr := s.StateStore.Delete(context.WithoutCancel(ctx), v.BlobKey); derr != nil {
 			s.Log.Warn("delete unrecorded state file", "key", v.BlobKey, "err", derr)
 		}
 		if errors.Is(err, storage.ErrLeaseLost) {
 			return http.StatusConflict, "the run was canceled or lost its runner: state not saved"
+		}
+		if errors.Is(err, storage.ErrNotCloudLocked) {
+			return http.StatusConflict, err.Error()
 		}
 		return s.stateFailure("record state version", err)
 	}
@@ -257,7 +262,7 @@ func (s *Server) lockState(w http.ResponseWriter, r *http.Request) {
 	}
 	held, ok, err := s.Store.LockState(r.Context(), r.PathValue("id"), lockID, r.PathValue("run"), info)
 	if err != nil {
-		s.stateError(w, "lock state", err)
+		s.internalError(w, "lock state", err)
 		return
 	}
 	if !ok { // Terraform shows who holds the lock from this body
@@ -274,8 +279,8 @@ func (s *Server) unlockState(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.Store.UnlockState(r.Context(), r.PathValue("id"), lockID); err != nil {
-		s.stateError(w, "unlock state", err)
+	if err := s.Store.UnlockState(r.Context(), r.PathValue("id"), lockID, r.PathValue("run")); err != nil {
+		s.internalError(w, "unlock state", err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
@@ -290,9 +295,4 @@ func readLockInfo(w http.ResponseWriter, r *http.Request) ([]byte, string, bool)
 		return nil, "", false
 	}
 	return bytes.TrimSpace(b), info.ID, true
-}
-
-func (s *Server) stateError(w http.ResponseWriter, what string, err error) {
-	s.Log.Error(what, "err", err)
-	http.Error(w, "internal error", http.StatusInternalServerError)
 }

@@ -24,18 +24,14 @@ import (
 // last loaded files, so the catalog doesn't depend on the provider at startup.
 
 // catalogFiles picks the *.json files directly in dir ("" = the repository root).
-func catalogFiles(provider string, files []file, dir string) map[string][]byte {
+func catalogFiles(files []file, dir string) map[string][]byte {
 	if dir == "" {
 		dir = "."
 	}
 	out := map[string][]byte{}
 	for _, f := range files {
-		name := strings.TrimPrefix(f.name, "/")
-		if provider == GitHub { // its tarball has everything under <owner>-<repo>-<sha>/
-			_, name, _ = strings.Cut(name, "/")
-		}
-		if name = path.Clean(name); path.Dir(name) == dir && path.Ext(name) == ".json" {
-			out[name] = f.body
+		if path.Dir(f.name) == dir && path.Ext(f.name) == ".json" {
+			out[f.name] = f.body
 		}
 	}
 	return out
@@ -82,8 +78,15 @@ func SyncCatalog(ctx context.Context, st *storage.Store, key []byte, cat *templa
 	}
 	head, files, err := fetchCatalog(ctx, st, key, tc)
 	if err == nil && head == tc.Commit {
-		if err = st.CheckedTemplateCatalog(ctx, tc); err != nil {
+		ok, err := st.CheckedTemplateCatalog(ctx, tc)
+		switch {
+		case err != nil:
 			return err
+		case !ok: // synced or reconfigured meanwhile: serve that, not tc
+			return LoadCatalog(ctx, st, cat)
+		}
+		if mode, commit := cat.Source(); mode == tc.Mode && commit == tc.Commit {
+			return nil // already loaded: don't re-parse every poll
 		}
 		return loadSnapshot(cat, tc) // another instance synced it, or only the mode changed
 	}
@@ -127,6 +130,9 @@ func fetchCatalog(ctx context.Context, st *storage.Store, key []byte, tc storage
 	if err != nil {
 		return "", nil, err
 	}
+	if err := c.paused(); err != nil {
+		return "", nil, err
+	}
 	head, err := c.Head(ctx, tc.Repo, tc.Branch)
 	if err != nil || head == tc.Commit {
 		return head, nil, err
@@ -139,7 +145,7 @@ func fetchCatalog(ctx context.Context, st *storage.Store, key []byte, tc storage
 	if err != nil {
 		return "", nil, err
 	}
-	return head, catalogFiles(c.Provider, files, tc.Dir), nil
+	return head, catalogFiles(files, tc.Dir), nil
 }
 
 func catalogConn(ctx context.Context, st *storage.Store, key []byte, tc storage.TemplateCatalog) (Conn, error) {

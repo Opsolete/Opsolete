@@ -99,6 +99,8 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 				s.Log.Error("job variables", "run", j.RunID, "err", err)
 				if _, ferr := s.Store.FinishJob(r.Context(), j.RunID, j.LeaseID, "failed", err.Error(), nil, nil, nil); ferr != nil {
 					s.Log.Error("fail job", "run", j.RunID, "err", ferr)
+				} else {
+					s.DeleteArtifacts(r.Context(), j.RunID) // an apply phase's saved plan will never be applied
 				}
 				continue
 			}
@@ -165,8 +167,12 @@ func (s *Server) liveResult(w http.ResponseWriter, cancel bool, err error) {
 
 func (s *Server) jobFinish(w http.ResponseWriter, r *http.Request) {
 	var req runnerapi.FinishRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<20)).Decode(&req); err != nil ||
-		(req.Status != "succeeded" && req.Status != "failed" && req.Status != "canceled") {
+	// outputs and the resource index of a large state can be big: the same limit as a job
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, runnerapi.MaxJobSize)).Decode(&req); err != nil {
+		writeErrors(w, http.StatusBadRequest, fmt.Sprintf("invalid finish request (at most %d MB): %v", runnerapi.MaxJobSize>>20, err))
+		return
+	}
+	if req.Status != "succeeded" && req.Status != "failed" && req.Status != "canceled" {
 		writeErrors(w, http.StatusBadRequest, "status must be succeeded, failed or canceled")
 		return
 	}
@@ -241,8 +247,7 @@ func (s *Server) artifactAccess(w http.ResponseWriter, r *http.Request, phase st
 	return ok
 }
 
-// deleteArtifacts removes a run's saved plan; failures only leave a stale file behind.
-// DeleteArtifacts deletes a run's saved plan and lock file.
+// DeleteArtifacts deletes a run's saved plan and lock file; failures only leave a stale file behind.
 func (s *Server) DeleteArtifacts(ctx context.Context, runID string) {
 	for _, name := range []string{runnerapi.ArtifactPlan, runnerapi.ArtifactLockfile} {
 		if err := s.StateStore.Delete(ctx, artifactKey(runID, name)); err != nil && gcerrors.Code(err) != gcerrors.NotFound {

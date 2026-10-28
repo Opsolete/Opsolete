@@ -247,18 +247,21 @@ func TestConditionalRequestsAndPause(t *testing.T) {
 		t.Fatalf("another token must not get the cached answer: %v, %d full", err, full)
 	}
 
-	if !pausedUntil(srv.URL).IsZero() {
+	if !c.pausedUntil().IsZero() {
 		t.Fatal("paused without being asked")
 	}
 	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Retry-After": {"30"}}}
 	c.notePause(resp)
-	if until := pausedUntil(srv.URL); until.Before(time.Now().Add(29 * time.Second)) {
+	if until := c.pausedUntil(); until.Before(time.Now().Add(29 * time.Second)) {
 		t.Fatalf("Retry-After ignored: %v", until)
 	}
 	reset := time.Now().Add(time.Hour).Unix()
 	c.notePause(&http.Response{StatusCode: http.StatusForbidden, Header: http.Header{"X-Ratelimit-Remaining": {"0"},
 		"X-Ratelimit-Reset": {strconv.FormatInt(reset, 10)}}})
-	if until := pausedUntil(srv.URL); until.Unix() != reset {
+	if until := c.pausedUntil(); until.Unix() != reset {
 		t.Fatalf("exhausted rate limit: paused until %v, want %v", until, time.Unix(reset, 0))
+	}
+	if !other.pausedUntil().IsZero() {
+		t.Fatal("another token's rate limit paused this one")
 	}
 }

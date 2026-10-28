@@ -101,28 +101,39 @@ type cachedResponse struct {
 var (
 	cacheMu sync.Mutex
 	cache   = map[string]cachedResponse{}
-	pauses  = map[string]time.Time{} // API root -> when the provider wants polling to resume
+	pauses  = map[string]time.Time{} // token hash + API root -> when the provider wants polling to resume
 )
 
-// pausedUntil is when the provider at baseURL asked to be polled again; zero if it didn't.
-func pausedUntil(baseURL string) time.Time {
+// pausedUntil is when the provider asked this connection's token to wait until; zero if it didn't.
+// Keyed by token, not host: GitHub's rate limits are per token.
+func (c Conn) pausedUntil() time.Time {
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
-	if t := pauses[baseURL]; time.Now().Before(t) {
+	if t := pauses[c.pauseKey()]; time.Now().Before(t) {
 		return t
 	}
 	return time.Time{}
 }
 
+// paused is an error while the provider asked to wait: pollers skip a round instead of hammering it.
+func (c Conn) paused() error {
+	if until := c.pausedUntil(); !until.IsZero() {
+		return fmt.Errorf("%s asked to wait: polling resumes at %s", c.Provider, until.Format(time.TimeOnly))
+	}
+	return nil
+}
+
+func (c Conn) pauseKey() string {
+	return fmt.Sprintf("%x %s", sha256.Sum256([]byte(c.Token)), c.BaseURL)
+}
+
 // notePause records how long the provider wants clients to wait: Retry-After (GitHub and Azure
-// DevOps, which also sends it with a 200 when a client uses too much), GitHub's x-poll-interval,
-// and an exhausted GitHub rate limit (x-ratelimit-reset).
+// DevOps, which also sends it with a 200 when a client uses too much), and an exhausted GitHub
+// rate limit (x-ratelimit-reset).
 func (c Conn) notePause(resp *http.Response) {
 	var until time.Time
-	for _, h := range []string{"Retry-After", "X-Poll-Interval"} {
-		if n, err := strconv.Atoi(resp.Header.Get(h)); err == nil && n > 0 {
-			until = later(until, time.Now().Add(time.Duration(n)*time.Second))
-		}
+	if n, err := strconv.Atoi(resp.Header.Get("Retry-After")); err == nil && n > 0 {
+		until = time.Now().Add(time.Duration(n) * time.Second)
 	}
 	if (resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests) && resp.Header.Get("X-RateLimit-Remaining") == "0" {
 		if n, err := strconv.ParseInt(resp.Header.Get("X-RateLimit-Reset"), 10, 64); err == nil {
@@ -131,7 +142,7 @@ func (c Conn) notePause(resp *http.Response) {
 	}
 	if !until.IsZero() {
 		cacheMu.Lock()
-		pauses[c.BaseURL] = later(pauses[c.BaseURL], until)
+		pauses[c.pauseKey()] = later(pauses[c.pauseKey()], until)
 		cacheMu.Unlock()
 	}
 }
@@ -306,7 +317,7 @@ func (c Conn) Tags(ctx context.Context, repo string) ([]Tag, error) {
 	var out []Tag
 	switch c.Provider {
 	case GitHub:
-		for page := 1; page <= 10; page++ { // shortcut: the newest 1000 tags
+		for page := 1; page <= 10; page++ { // shortcut: the first 1000 tags GitHub lists (not by date); page through git refs if repos get more
 			var ts []struct {
 				Name   string `json:"name"`
 				Commit struct {
@@ -458,15 +469,14 @@ func (c Conn) Archive(ctx context.Context, repo, ref, refType string) ([]byte, e
 	if err != nil {
 		return nil, err
 	}
-	out, err := writeTarGz(stripTopDir(files))
+	out, err := writeTarGz(files)
 	if err == nil && len(out) > registry.MaxArchiveSize {
 		err = fmt.Errorf("module archive larger than %d MB", registry.MaxArchiveSize>>20)
 	}
 	return out, err
 }
 
-// download returns the files of repository a/b at a tag or commit, as the provider packs them:
-// GitHub's under one <owner>-<repo>-<sha> directory, Azure DevOps' at the root.
+// download returns the files of repository a/b at a tag or commit, named relative to the repo root.
 func (c Conn) download(ctx context.Context, a, b, tag, refType string) ([]file, error) {
 	var files []file
 	switch c.Provider {
@@ -491,7 +501,7 @@ func (c Conn) download(ctx context.Context, a, b, tag, refType string) ([]file, 
 	default:
 		return nil, fmt.Errorf("unknown VCS provider %q", c.Provider)
 	}
-	return files, nil
+	return repoFiles(files, c.Provider == GitHub), nil
 }
 
 type file struct {
@@ -551,23 +561,14 @@ func readZip(raw []byte) ([]file, error) {
 	return files, nil
 }
 
-// stripTopDir drops a directory that wraps everything (GitHub's "owner-repo-sha/"), cleans names
-// and drops entries that would escape the module root.
-func stripTopDir(files []file) []file {
-	top := ""
-	for i, f := range files {
-		dir, _, ok := strings.Cut(strings.TrimPrefix(f.name, "/"), "/")
-		if !ok || (i > 0 && dir != top) {
-			top = ""
-			break
-		}
-		top = dir
-	}
+// repoFiles names files relative to the repo root: it drops GitHub's "<owner>-<repo>-<sha>/" (top),
+// cleans names and drops entries that would escape the root. Azure DevOps zips have no top directory.
+func repoFiles(files []file, top bool) []file {
 	out := files[:0]
 	for _, f := range files {
 		name := strings.TrimPrefix(f.name, "/")
-		if top != "" {
-			name = strings.TrimPrefix(name, top+"/")
+		if top {
+			_, name, _ = strings.Cut(name, "/")
 		}
 		if name = path.Clean(name); name == "." || name == ".." || strings.HasPrefix(name, "../") || path.IsAbs(name) {
 			continue
@@ -746,6 +747,9 @@ func syncModule(ctx context.Context, st *storage.Store, key []byte, m storage.VC
 	if err != nil {
 		return nil, err
 	}
+	if err := c.paused(); err != nil {
+		return nil, err
+	}
 	tags, err := c.Tags(ctx, m.Repo)
 	if err != nil {
 		return nil, err
@@ -863,8 +867,8 @@ func TriggerRuns(ctx context.Context, st *storage.Store, key []byte, group []sto
 	if err != nil {
 		return err
 	}
-	if until := pausedUntil(c.BaseURL); !until.IsZero() {
-		return fmt.Errorf("%s asked to wait: polling resumes at %s", c.Provider, until.Format(time.TimeOnly))
+	if err := c.paused(); err != nil {
+		return err
 	}
 	// each list is fetched once per round, at first need; a failed fetch fails just its users
 	tags := sync.OnceValues(func() ([]Tag, error) { return c.Tags(ctx, ws.VCSRepo) })

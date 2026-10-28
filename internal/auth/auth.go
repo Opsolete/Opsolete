@@ -243,9 +243,10 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, st.Next, http.StatusSeeOther)
 }
 
-// localPath only allows same-site redirects after login.
+// localPath only allows same-site redirects after login. Browsers drop tabs and newlines and read
+// "\\" as "/" in URLs, so "/\t/evil.com" would leave the site.
 func localPath(p string) string {
-	if !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || strings.HasPrefix(p, "/\\") {
+	if !strings.HasPrefix(p, "/") || strings.HasPrefix(p, "//") || strings.ContainsAny(p, "\t\r\n\\") {
 		return "/"
 	}
 	return p

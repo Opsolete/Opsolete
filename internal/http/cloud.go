@@ -353,7 +353,11 @@ func (s *Server) cloudCreateState(w http.ResponseWriter, r *http.Request) {
 	}
 	// base64 state plus its JSON form
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 3*maxStateSize)).Decode(&body); err != nil {
-		writeErrors(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("not a JSON:API state version, or state larger than %d MB", maxStateSize>>20))
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+			writeErrors(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("state larger than %d MB", maxStateSize>>20))
+		} else {
+			writeErrors(w, http.StatusBadRequest, "not a JSON:API state version")
+		}
 		return
 	}
 	a := body.Data.Attributes
@@ -367,14 +371,15 @@ func (s *Server) cloudCreateState(w http.ResponseWriter, r *http.Request) {
 		writeErrors(w, http.StatusUnprocessableEntity, "state is not base64, or doesn't match its md5")
 		return
 	}
+	// the lock is checked again atomically with the save (AddStateVersion); this only spares writing the file
 	if locked, err := s.Store.CloudLocked(ctx, ws.ID, u.ID); err != nil {
 		s.cloudError(w, "state lock", err)
 		return
 	} else if !locked {
-		writeErrors(w, http.StatusConflict, "the workspace must be locked by you to save state")
+		writeErrors(w, http.StatusConflict, storage.ErrNotCloudLocked.Error())
 		return
 	}
-	if code, msg := s.saveState(ctx, ws.ID, "", state); code != http.StatusOK {
+	if code, msg := s.saveState(ctx, ws.ID, "", u.ID, state); code != http.StatusOK {
 		writeErrors(w, code, msg)
 		return
 	}

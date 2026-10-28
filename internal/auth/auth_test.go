@@ -163,3 +163,12 @@ func TestSessionCookie(t *testing.T) {
 		t.Fatal("expired session accepted")
 	}
 }
+
+func TestLocalPath(t *testing.T) {
+	for in, want := range map[string]string{"/workspaces?x=1": "/workspaces?x=1", "": "/", "https://evil.com": "/",
+		"//evil.com": "/", "/\\evil.com": "/", "/\t/evil.com": "/", "/\n/evil.com": "/"} {
+		if got := localPath(in); got != want {
+			t.Errorf("localPath(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

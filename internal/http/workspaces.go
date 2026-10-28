@@ -145,10 +145,7 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 	for _, in := range t.Inputs {
 		raw[in.Name] = r.PostForm.Get(in.Name)
 	}
-	vals, errs := t.Validate(raw)
-	if errs == nil {
-		errs = map[string]string{}
-	}
+	vals, errs := t.Validate(raw) // errs is never nil
 	name := strings.TrimSpace(r.PostForm.Get(fieldWorkspace))
 	if !validWorkspaceName(name) {
 		errs[fieldWorkspace] = workspaceNameRule
@@ -854,7 +851,7 @@ func ago(t time.Time) string {
 // runPhases reads the plan and apply steps from the run's status history (oldest first).
 func runPhases(r storage.Run, hist []storage.StatusEntry) (plan, apply phase) {
 	span := func(status string) (p phase, next string) {
-		for i, e := range hist { // the last attempt: a runner whose lease expired re-queues the run
+		for i, e := range hist { // the last entry wins
 			if e.Status == status {
 				p, next = phase{Start: e.CreatedAt}, ""
 				if i+1 < len(hist) {

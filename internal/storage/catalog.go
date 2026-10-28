@@ -65,11 +65,15 @@ func (s *Store) SyncedTemplateCatalog(ctx context.Context, prev TemplateCatalog,
 const catalogIs = `commit_sha = $1 AND connection_id = ops_uuid($2) AND repo = $3 AND branch = $4 AND dir = $5`
 
 // CheckedTemplateCatalog records a sync from prev that found the branch still at its commit: clears any
-// earlier error. A no-op if the catalog was synced or reconfigured meanwhile.
-func (s *Store) CheckedTemplateCatalog(ctx context.Context, prev TemplateCatalog) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE template_catalog SET sync_error = '', synced_at = now() WHERE `+catalogIs,
+// earlier error. It reports false, writing nothing, if the catalog was synced or reconfigured meanwhile.
+func (s *Store) CheckedTemplateCatalog(ctx context.Context, prev TemplateCatalog) (bool, error) {
+	res, err := s.DB.ExecContext(ctx, `UPDATE template_catalog SET sync_error = '', synced_at = now() WHERE `+catalogIs,
 		prev.Commit, prev.ConnectionID, prev.Repo, prev.Branch, prev.Dir)
-	return err
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 // DeleteTemplateCatalog disconnects the repository: the templates come from TEMPLATES_DIR again.

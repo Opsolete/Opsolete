@@ -203,11 +203,11 @@ func (s *Store) FinishJob(ctx context.Context, runID, lease, result, message str
 	}
 	defer tx.Rollback()
 	var status, action, workspaceID string
-	var autoApply bool
-	err = tx.QueryRowContext(ctx, `SELECT r.status, r.action, r.workspace_id, w.auto_apply FROM runs r
+	var autoApply, cancelRequested bool
+	err = tx.QueryRowContext(ctx, `SELECT r.status, r.action, r.workspace_id, w.auto_apply, r.cancel_requested FROM runs r
 		JOIN workspaces w ON w.id = r.workspace_id
 		WHERE r.id = ops_uuid($1) AND r.lease_id = $2 AND r.`+working+` FOR UPDATE OF r`, runID, lease).
-		Scan(&status, &action, &workspaceID, &autoApply)
+		Scan(&status, &action, &workspaceID, &autoApply, &cancelRequested)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrLeaseLost
 	}
@@ -229,6 +229,11 @@ func (s *Store) FinishJob(ctx context.Context, runID, lease, result, message str
 		final = ApplyQueued
 	default:
 		final = NeedsConfirmation
+	}
+	// The plan finished before a cancel reached Terraform: end the run here, or the request still
+	// standing would interrupt its apply.
+	if cancelRequested && (final == NeedsConfirmation || final == ApplyQueued) {
+		final, message = Canceled, "canceled: the plan finished before the cancel request reached the runner"
 	}
 	var planJSON, outJSON []byte
 	if plan != nil {
