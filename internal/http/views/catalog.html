@@ -20,7 +20,7 @@
     <button type="submit" class="danger small">Disconnect</button></form>
 </div>
 {{else}}
-<p class="muted">No repository yet: the {{.Count}} templates come from <code>TEMPLATES_DIR</code>, which in containers should stay empty.</p>
+<p class="muted">No repository connected yet. {{if .Count}}The {{.Count}} templates in use are loaded from the local <code>TEMPLATES_DIR</code> folder until you connect one.{{else}}Connect one below to load templates.{{end}}</p>
 {{end}}
 
 {{if .Conns}}
