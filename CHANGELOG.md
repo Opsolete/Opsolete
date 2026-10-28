@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.2.0](https://github.com/Opsolete/Opsolete/compare/v0.1.0...v0.2.0) (2026-10-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* module uploads are off until an admin enables them in Settings → Organization; TEMPLATE_EDITOR=1 no longer enables them outside development. The Nix package and container images no longer ship catalog/: configure a Git repository in Settings → Templates, or point TEMPLATES_DIR at a folder of templates.
+
+### Features
+
+* load and edit the template catalog from a Git repository ([10138e4](https://github.com/Opsolete/Opsolete/commit/10138e4678126a0debd3dcf2e2d2c03fd8156a9f))
+
+
+### Bug Fixes
+
+* clarify the catalog message shown when no repository is connected ([fabaf21](https://github.com/Opsolete/Opsolete/commit/fabaf2179cbf2dc0d1dd9bb5ff506c23567c4853))
+* fence state locks and writes, and harden runs, VCS polling and login ([ff3da68](https://github.com/Opsolete/Opsolete/commit/ff3da68a67cf57b4e7dbeb3385fa13595c813c96))
+* guard catalog syncs against stale writes and publish release images ([36bb4c1](https://github.com/Opsolete/Opsolete/commit/36bb4c11bac56029094f02ee134081ccd023c686))
+* keep catalog sync status accurate under stale syncs and failures ([66ff1b4](https://github.com/Opsolete/Opsolete/commit/66ff1b420eb1bf307d1febb5f376b6d4f89caa8a))
+* key users by OIDC subject and harden config, runner and template checks ([49095ec](https://github.com/Opsolete/Opsolete/commit/49095ec7120eeaeb9569c040d7a166a0c77a938e))
+
 ## 0.1.0 (2026-10-28)
 
 
