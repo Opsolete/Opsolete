@@ -13,7 +13,7 @@ type TemplateCatalog struct {
 	Mode                            string // off | commit | pr
 	Commit                          string
 	Files                           map[string]string // path -> content, at Commit
-	SyncedAt                        *time.Time
+	SyncedAt                        *time.Time        // the last successful sync
 	SyncError                       string
 }
 
@@ -39,8 +39,9 @@ func (s *Store) SetTemplateCatalog(ctx context.Context, c TemplateCatalog) error
 }
 
 // SyncedTemplateCatalog records a sync started from prev: the files of commit, or (syncErr set) why it
-// failed, keeping the last good files. It reports false, writing nothing, if the row is no longer prev
-// (another instance synced, or the catalog was reconfigured, meanwhile): that result is newer than this one.
+// failed, keeping the last good files and synced_at (the last success). It reports false, writing nothing,
+// if the row is no longer prev (another instance synced, or the catalog was reconfigured, meanwhile): that
+// result is newer than this one.
 func (s *Store) SyncedTemplateCatalog(ctx context.Context, prev TemplateCatalog, commit string, files map[string]string, syncErr string) (bool, error) {
 	args := []any{prev.Commit, prev.ConnectionID, prev.Repo, prev.Branch, prev.Dir, syncErr}
 	set := `sync_error = $6`
@@ -50,10 +51,9 @@ func (s *Store) SyncedTemplateCatalog(ctx context.Context, prev TemplateCatalog,
 			return false, err
 		}
 		args = append(args, commit, b)
-		set = `sync_error = $6, commit_sha = $7, files = $8`
+		set = `sync_error = $6, commit_sha = $7, files = $8, synced_at = now()`
 	}
-	res, err := s.DB.ExecContext(ctx, `UPDATE template_catalog SET `+set+`, synced_at = now()
-		WHERE commit_sha = $1 AND connection_id = ops_uuid($2) AND repo = $3 AND branch = $4 AND dir = $5`, args...)
+	res, err := s.DB.ExecContext(ctx, `UPDATE template_catalog SET `+set+` WHERE `+catalogIs, args...)
 	if err != nil {
 		return false, err
 	}
@@ -61,10 +61,14 @@ func (s *Store) SyncedTemplateCatalog(ctx context.Context, prev TemplateCatalog,
 	return n == 1, err
 }
 
-// CheckedTemplateCatalog records a sync that found the branch still at commit: clears any earlier error.
-// A no-op if another instance has meanwhile moved the catalog to another commit.
-func (s *Store) CheckedTemplateCatalog(ctx context.Context, commit string) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE template_catalog SET sync_error = '', synced_at = now() WHERE commit_sha = $1`, commit)
+// catalogIs matches the row a sync started from: $1 commit, $2-$5 connection, repo, branch, dir.
+const catalogIs = `commit_sha = $1 AND connection_id = ops_uuid($2) AND repo = $3 AND branch = $4 AND dir = $5`
+
+// CheckedTemplateCatalog records a sync from prev that found the branch still at its commit: clears any
+// earlier error. A no-op if the catalog was synced or reconfigured meanwhile.
+func (s *Store) CheckedTemplateCatalog(ctx context.Context, prev TemplateCatalog) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE template_catalog SET sync_error = '', synced_at = now() WHERE `+catalogIs,
+		prev.Commit, prev.ConnectionID, prev.Repo, prev.Branch, prev.Dir)
 	return err
 }
 

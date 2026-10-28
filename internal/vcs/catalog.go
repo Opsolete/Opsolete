@@ -82,7 +82,7 @@ func SyncCatalog(ctx context.Context, st *storage.Store, key []byte, cat *templa
 	}
 	head, files, err := fetchCatalog(ctx, st, key, tc)
 	if err == nil && head == tc.Commit {
-		if err = st.CheckedTemplateCatalog(ctx, head); err != nil {
+		if err = st.CheckedTemplateCatalog(ctx, tc); err != nil {
 			return err
 		}
 		return loadSnapshot(cat, tc) // another instance synced it, or only the mode changed

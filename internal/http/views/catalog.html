@@ -12,7 +12,7 @@
 {{with .Catalog}}
 <div class="card">
   <p><strong>{{.Repo}}</strong> · branch <code>{{.Branch}}</code> · folder <code>{{if .Dir}}{{.Dir}}{{else}}/{{end}}</code></p>
-  <p class="muted">{{$.Count}} templates{{with .Commit}} from commit <code>{{printf "%.8s" .}}</code>{{end}}{{with .SyncedAt}}, checked {{ago .}}{{end}}.</p>
+  <p class="muted">{{$.Count}} templates{{with .Commit}} from commit <code>{{printf "%.8s" .}}</code>{{end}}{{with .SyncedAt}}, last synced {{ago .}}{{end}}.</p>
   {{with .SyncError}}<div class="alert error" role="alert">Last sync failed: {{.}}</div>{{end}}
   <form method="post" action="/catalog/sync" style="display:inline"><button type="submit" class="secondary small">Sync now</button></form>
   <form method="post" action="/catalog/delete" style="display:inline"
