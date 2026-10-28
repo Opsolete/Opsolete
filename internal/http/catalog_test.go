@@ -25,6 +25,8 @@ type fakeGitRepo struct {
 	commits  map[string]map[string]string
 	n        int
 	pulls    []string // head branches
+	held     chan string   // if set, the next tarball download reports its commit here...
+	release  chan struct{} // ...and waits for this
 }
 
 func blobSHA(content string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(content))) }
@@ -63,6 +65,13 @@ func (g *fakeGitRepo) handler(t *testing.T) http.Handler {
 			}
 			json.NewEncoder(w).Encode(map[string]any{"commit": map[string]string{"sha": sha}})
 		case r.Method == "GET" && strings.HasPrefix(p, "/tarball/"):
+			if held, release := g.held, g.release; held != nil {
+				g.held = nil
+				g.mu.Unlock()
+				held <- strings.TrimPrefix(p, "/tarball/")
+				<-release
+				g.mu.Lock()
+			}
 			files := map[string]string{}
 			for k, v := range g.commits[strings.TrimPrefix(p, "/tarball/")] {
 				files["acme-catalog-x/"+k] = v
@@ -190,6 +199,40 @@ func TestTemplateCatalogInGit(t *testing.T) {
 	}
 	if tpl, _ := app.Templates.Get("web-" + id); tpl.Name != "Changed in git" {
 		t.Fatalf("a refused save reloads the catalog: %+v", tpl)
+	}
+	// An earlier failure (say, the provider was down) clears once a sync finds the branch still at the loaded commit.
+	store.DB.Exec(`UPDATE template_catalog SET sync_error = 'provider unavailable'`)
+	if rec := post(h, "/catalog/sync", nil); rec.Code != http.StatusSeeOther {
+		t.Fatalf("sync: %d", rec.Code)
+	}
+	if page := get(h, "/catalog").Body.String(); strings.Contains(page, "Last sync failed") {
+		t.Fatalf("stale sync error: %s", page)
+	}
+	// Two instances sync concurrently and the one that fetched the older commit finishes last:
+	// it must not replace the newer snapshot, and it serves the newer one too.
+	g.mu.Lock()
+	g.commit("main", map[string]string{"catalog/web.json": tplJSON("web-"+id, "Older")})
+	held, release := make(chan string), make(chan struct{})
+	g.held, g.release = held, release
+	g.mu.Unlock()
+	slow := make(chan error)
+	go func() { slow <- vcs.SyncCatalog(ctx, store, app.SecretKey, app.Templates) }()
+	older := <-held
+	g.mu.Lock()
+	g.commit("main", map[string]string{"catalog/web.json": tplJSON("web-"+id, "Newer")})
+	newer := g.branches["main"]
+	g.mu.Unlock()
+	if err := vcs.SyncCatalog(ctx, store, other.SecretKey, other.Templates); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := <-slow; err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := store.GetTemplateCatalog(ctx)
+	tpl, _ := app.Templates.Get("web-" + id)
+	if _, loaded := app.Templates.Source(); stored.Commit != newer || loaded != newer || tpl.Name != "Newer" {
+		t.Fatalf("stale write: fetched %s, stored %s, loaded %s (%q), want %s", older, stored.Commit, loaded, tpl.Name, newer)
 	}
 	// A commit with an invalid template isn't loaded: the last good one stays, the error is shown.
 	g.mu.Lock()

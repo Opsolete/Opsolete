@@ -38,17 +38,33 @@ func (s *Store) SetTemplateCatalog(ctx context.Context, c TemplateCatalog) error
 	return err
 }
 
-// SyncedTemplateCatalog records a sync: the files of commit, or (syncErr set) why it failed, keeping the last good files.
-func (s *Store) SyncedTemplateCatalog(ctx context.Context, commit string, files map[string]string, syncErr string) error {
-	if syncErr != "" {
-		_, err := s.DB.ExecContext(ctx, `UPDATE template_catalog SET sync_error = $1, synced_at = now()`, syncErr)
-		return err
+// SyncedTemplateCatalog records a sync started from prev: the files of commit, or (syncErr set) why it
+// failed, keeping the last good files. It reports false, writing nothing, if the row is no longer prev
+// (another instance synced, or the catalog was reconfigured, meanwhile): that result is newer than this one.
+func (s *Store) SyncedTemplateCatalog(ctx context.Context, prev TemplateCatalog, commit string, files map[string]string, syncErr string) (bool, error) {
+	args := []any{prev.Commit, prev.ConnectionID, prev.Repo, prev.Branch, prev.Dir, syncErr}
+	set := `sync_error = $6`
+	if syncErr == "" {
+		b, err := json.Marshal(files)
+		if err != nil {
+			return false, err
+		}
+		args = append(args, commit, b)
+		set = `sync_error = $6, commit_sha = $7, files = $8`
 	}
-	b, err := json.Marshal(files)
+	res, err := s.DB.ExecContext(ctx, `UPDATE template_catalog SET `+set+`, synced_at = now()
+		WHERE commit_sha = $1 AND connection_id = ops_uuid($2) AND repo = $3 AND branch = $4 AND dir = $5`, args...)
 	if err != nil {
-		return err
+		return false, err
 	}
-	_, err = s.DB.ExecContext(ctx, `UPDATE template_catalog SET commit_sha = $1, files = $2, sync_error = '', synced_at = now()`, commit, b)
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+// CheckedTemplateCatalog records a sync that found the branch still at commit: clears any earlier error.
+// A no-op if another instance has meanwhile moved the catalog to another commit.
+func (s *Store) CheckedTemplateCatalog(ctx context.Context, commit string) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE template_catalog SET sync_error = '', synced_at = now() WHERE commit_sha = $1`, commit)
 	return err
 }
 

@@ -67,9 +67,28 @@ func loadDir(dir string) (map[string]Template, map[string]string, error) {
 	return Parse(files)
 }
 
+// Catalog limits, checked before parsing: far above real catalogs, far below the repository archive limits.
+const (
+	MaxCount     = 500
+	MaxFileSize  = 256 << 10
+	MaxTotalSize = 8 << 20
+)
+
 // Parse decodes and checks template files (path -> JSON). Any invalid file fails the whole set.
 // It returns the templates by id, and each id's file path.
 func Parse(files map[string][]byte) (map[string]Template, map[string]string, error) {
+	if len(files) > MaxCount {
+		return nil, nil, fmt.Errorf("%d template files: at most %d", len(files), MaxCount)
+	}
+	total := 0
+	for _, f := range slices.Sorted(maps.Keys(files)) {
+		if len(files[f]) > MaxFileSize {
+			return nil, nil, fmt.Errorf("%s: %d bytes: a template file is at most %d", f, len(files[f]), MaxFileSize)
+		}
+		if total += len(files[f]); total > MaxTotalSize {
+			return nil, nil, fmt.Errorf("template files total over %d bytes", MaxTotalSize)
+		}
+	}
 	out, paths := map[string]Template{}, map[string]string{}
 	for _, f := range slices.Sorted(maps.Keys(files)) { // a stable "duplicate" error
 		var t Template
@@ -93,6 +112,9 @@ func Encode(t Template) ([]byte, error) {
 		return nil, err
 	}
 	b, err := json.MarshalIndent(t, "", "  ")
+	if len(b) >= MaxFileSize { // the editor mustn't commit a file the next sync rejects
+		return nil, fmt.Errorf("the template is %d bytes: at most %d", len(b), MaxFileSize)
+	}
 	return append(b, '\n'), err
 }
 

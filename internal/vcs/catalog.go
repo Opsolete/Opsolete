@@ -82,6 +82,9 @@ func SyncCatalog(ctx context.Context, st *storage.Store, key []byte, cat *templa
 	}
 	head, files, err := fetchCatalog(ctx, st, key, tc)
 	if err == nil && head == tc.Commit {
+		if err = st.CheckedTemplateCatalog(ctx, head); err != nil {
+			return err
+		}
 		return loadSnapshot(cat, tc) // another instance synced it, or only the mode changed
 	}
 	if err == nil {
@@ -92,23 +95,30 @@ func SyncCatalog(ctx context.Context, st *storage.Store, key []byte, cat *templa
 			for p, b := range files {
 				snap[p] = string(b)
 			}
-			if err = st.SyncedTemplateCatalog(ctx, head, snap, ""); err == nil {
-				cat.Load(m, paths, tc.Mode, head)
+			ok, err := st.SyncedTemplateCatalog(ctx, tc, head, snap, "")
+			if err != nil {
+				return err
 			}
-			return err
+			if !ok { // another instance stored a newer result while this one fetched: serve that
+				return LoadCatalog(ctx, st, cat)
+			}
+			cat.Load(m, paths, tc.Mode, head)
+			return nil
 		}
 		err = fmt.Errorf("commit %s: %w", short(head), err)
 	}
 	if ctx.Err() != nil { // shutting down: not the repository's fault
 		return err
 	}
-	if rerr := st.SyncedTemplateCatalog(ctx, "", nil, err.Error()); rerr != nil {
+	ok, rerr := st.SyncedTemplateCatalog(ctx, tc, "", nil, err.Error())
+	if rerr != nil {
 		return rerr
 	}
-	if lerr := loadSnapshot(cat, tc); lerr != nil { // the last good commit, in the current mode
-		return lerr
+	lerr := loadSnapshot(cat, tc) // the last good commit, in the current mode
+	if !ok {
+		lerr = LoadCatalog(ctx, st, cat)
 	}
-	return err
+	return errors.Join(err, lerr)
 }
 
 // fetchCatalog returns the branch head and, unless it's the commit already loaded, its template files.

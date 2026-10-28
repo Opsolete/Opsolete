@@ -1,6 +1,10 @@
 package templates
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
 
 func TestLoadCatalogAndValidate(t *testing.T) {
 	ts, err := LoadDir("../../catalog")
@@ -85,5 +89,23 @@ func TestValidateEdgeCases(t *testing.T) {
 	bad := Template{ID: "x", Name: "x", Module: Module{Source: "s", Ref: "r"}, Inputs: []Input{{Name: "source", Type: "string"}}}
 	if bad.check() == nil {
 		t.Error("an input named source must be rejected")
+	}
+}
+
+// A catalog over the limits fails before any file is parsed.
+func TestParseLimits(t *testing.T) {
+	big := map[string][]byte{"a.json": make([]byte, MaxFileSize+1)}
+	many := map[string][]byte{}
+	for i := range MaxCount + 1 {
+		many[fmt.Sprintf("%d.json", i)] = []byte("{}")
+	}
+	total := map[string][]byte{}
+	for i := range MaxTotalSize/MaxFileSize + 1 {
+		total[fmt.Sprintf("%d.json", i)] = make([]byte, MaxFileSize)
+	}
+	for name, files := range map[string]map[string][]byte{"file": big, "count": many, "total": total} {
+		if _, _, err := Parse(files); err == nil || !strings.Contains(err.Error(), "at most") && !strings.Contains(err.Error(), "total over") {
+			t.Errorf("%s limit: %v", name, err)
+		}
 	}
 }
