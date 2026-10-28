@@ -91,7 +91,7 @@ func Load() (Config, error) {
 	}
 	pu.Path = ""
 	c.PublicURL = pu
-	if c.TemplateEditor { // fail at startup, not at the first save (packaged catalogs are in the read-only Nix store)
+	if c.TemplateEditor { // fail at startup, not at the first save
 		f, err := os.CreateTemp(c.TemplatesDir, ".write-check-*")
 		if err != nil {
 			return c, fmt.Errorf("TEMPLATE_EDITOR=1 saves into TEMPLATES_DIR, which must be a writable directory: %w", err)

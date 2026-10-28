@@ -4,6 +4,7 @@ package templates
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -48,45 +49,101 @@ var (
 
 // LoadDir reads every *.json file in dir. Any invalid file fails the whole load.
 func LoadDir(dir string) (map[string]Template, error) {
-	files, err := filepath.Glob(filepath.Join(dir, "*.json"))
-	if err != nil {
-		return nil, err
-	}
-	out := map[string]Template{}
-	for _, f := range files {
-		b, err := os.ReadFile(f)
-		if err != nil {
-			return nil, err
-		}
-		var t Template
-		if err := json.Unmarshal(b, &t); err != nil {
-			return nil, fmt.Errorf("%s: %w", f, err)
-		}
-		if err := t.check(); err != nil {
-			return nil, fmt.Errorf("%s: %w", f, err)
-		}
-		if _, dup := out[t.ID]; dup {
-			return nil, fmt.Errorf("%s: duplicate template id %q", f, t.ID)
-		}
-		out[t.ID] = t
-	}
-	return out, nil
+	m, _, err := loadDir(dir)
+	return m, err
 }
 
-// Catalog is the set of templates in a directory; Save writes new or edited ones back as JSON
-// so they can be reviewed and committed to Git.
+func loadDir(dir string) (map[string]Template, map[string]string, error) {
+	names, err := filepath.Glob(filepath.Join(dir, "*.json"))
+	if err != nil {
+		return nil, nil, err
+	}
+	files := map[string][]byte{}
+	for _, f := range names {
+		if files[f], err = os.ReadFile(f); err != nil {
+			return nil, nil, err
+		}
+	}
+	return Parse(files)
+}
+
+// Parse decodes and checks template files (path -> JSON). Any invalid file fails the whole set.
+// It returns the templates by id, and each id's file path.
+func Parse(files map[string][]byte) (map[string]Template, map[string]string, error) {
+	out, paths := map[string]Template{}, map[string]string{}
+	for _, f := range slices.Sorted(maps.Keys(files)) { // a stable "duplicate" error
+		var t Template
+		if err := json.Unmarshal(files[f], &t); err != nil {
+			return nil, nil, fmt.Errorf("%s: %w", f, err)
+		}
+		if err := t.check(); err != nil {
+			return nil, nil, fmt.Errorf("%s: %w", f, err)
+		}
+		if _, dup := out[t.ID]; dup {
+			return nil, nil, fmt.Errorf("%s: duplicate template id %q", f, t.ID)
+		}
+		out[t.ID], paths[t.ID] = t, f
+	}
+	return out, paths, nil
+}
+
+// Encode checks t and returns it as a template file.
+func Encode(t Template) ([]byte, error) {
+	if err := t.check(); err != nil {
+		return nil, err
+	}
+	b, err := json.MarshalIndent(t, "", "  ")
+	return append(b, '\n'), err
+}
+
+// Catalog is the current set of templates: from a directory (Save writes new or edited ones back
+// as JSON to review and commit), or from a Git repository (Load swaps in each new commit's set).
 type Catalog struct {
-	Dir string
-	mu  sync.RWMutex
-	m   map[string]Template
+	Dir    string
+	mu     sync.RWMutex
+	m      map[string]Template
+	paths  map[string]string // id -> file path (in Dir, or in the repository)
+	mode   string            // "" the directory; a repository's editor mode: off | commit | pr
+	commit string            // the repository commit the set is from
 }
 
 func Open(dir string) (*Catalog, error) {
-	m, err := LoadDir(dir)
+	m, paths, err := loadDir(dir)
 	if err != nil {
 		return nil, err
 	}
-	return &Catalog{Dir: dir, m: m}, nil
+	return &Catalog{Dir: dir, m: m, paths: paths}, nil
+}
+
+// Load replaces the set with one from a repository commit (mode: its editor mode).
+func (c *Catalog) Load(m map[string]Template, paths map[string]string, mode, commit string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.m, c.paths, c.mode, c.commit = m, paths, mode, commit
+}
+
+// Reopen goes back to the directory's templates, when the repository is disconnected.
+func (c *Catalog) Reopen() error {
+	m, paths, err := loadDir(c.Dir)
+	if err != nil {
+		return err
+	}
+	c.Load(m, paths, "", "")
+	return nil
+}
+
+// Source returns the repository editor mode ("" = the directory) and commit of the current set.
+func (c *Catalog) Source() (mode, commit string) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.mode, c.commit
+}
+
+// Path returns the file a template was loaded from.
+func (c *Catalog) Path(id string) string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.paths[id]
 }
 
 func (c *Catalog) Get(id string) (Template, bool) {
@@ -110,15 +167,15 @@ func (c *Catalog) List() []Template {
 
 // Save validates t and writes <dir>/<id>.json. Creating an id that already exists is an error.
 func (c *Catalog) Save(t Template, overwrite bool) error {
-	if err := t.check(); err != nil {
-		return err
-	}
-	b, err := json.MarshalIndent(t, "", "  ")
+	b, err := Encode(t)
 	if err != nil {
 		return err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.mode != "" {
+		return fmt.Errorf("the catalog is a Git repository: save through it")
+	}
 	if _, exists := c.m[t.ID]; exists && !overwrite {
 		return fmt.Errorf("template %q already exists", t.ID)
 	}
@@ -128,17 +185,21 @@ func (c *Catalog) Save(t Template, overwrite bool) error {
 		return err
 	}
 	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write(append(b, '\n')); err != nil {
+	if _, err := tmp.Write(b); err != nil {
 		tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp.Name(), filepath.Join(c.Dir, t.ID+".json")); err != nil {
+	path := filepath.Join(c.Dir, t.ID+".json")
+	if p, ok := c.paths[t.ID]; ok {
+		path = p // a hand-written file may be named otherwise
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
 		return err
 	}
-	c.m[t.ID] = t
+	c.m[t.ID], c.paths[t.ID] = t, path
 	return nil
 }
 

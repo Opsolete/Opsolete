@@ -192,6 +192,14 @@ func serve(log *slog.Logger) error {
 		go vcs.Poll(ctx, store, app.SecretKey, 5*time.Minute, log)
 		if cfg.Deployments {
 			go vcs.PollRuns(ctx, store, app.SecretKey, time.Minute, log)
+			// A catalog in Git (Settings → Templates) replaces TEMPLATES_DIR: its last loaded commit now, then the branch head.
+			if err := vcs.LoadCatalog(ctx, store, tpls); err != nil {
+				return err
+			}
+			if mode, commit := tpls.Source(); mode != "" {
+				log.Info("templates loaded from git", "count", len(tpls.List()), "commit", commit, "editor", mode)
+			}
+			go vcs.PollCatalog(ctx, store, app.SecretKey, tpls, time.Minute, log)
 		}
 	}
 	if err := app.CheckTemplates(); err != nil {

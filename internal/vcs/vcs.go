@@ -152,21 +152,14 @@ func (c Conn) get(ctx context.Context, u string, limit int64, conditional bool) 
 	conditional = conditional && c.Provider == GitHub
 	key := fmt.Sprintf("%x %s", sha256.Sum256([]byte(c.Token)), u) // another token may see other data
 	var cached cachedResponse
-	switch c.Provider {
-	case GitHub:
-		req.Header.Set("Authorization", "Bearer "+c.Token)
-		req.Header.Set("Accept", "application/vnd.github+json")
-		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-		if conditional {
-			cacheMu.Lock()
-			cached = cache[key]
-			cacheMu.Unlock()
-			if cached.etag != "" {
-				req.Header.Set("If-None-Match", cached.etag)
-			}
+	c.authorize(req)
+	if conditional {
+		cacheMu.Lock()
+		cached = cache[key]
+		cacheMu.Unlock()
+		if cached.etag != "" {
+			req.Header.Set("If-None-Match", cached.etag)
 		}
-	case AzureDevOps:
-		req.SetBasicAuth("", c.Token) // PAT as the password
 	}
 	resp, err := HTTPClient.Do(req) // Go drops Authorization on redirects to other hosts (GitHub's codeload is pre-signed)
 	if err != nil {
@@ -195,6 +188,57 @@ func (c Conn) get(ctx context.Context, u string, limit int64, conditional bool) 
 		cacheMu.Unlock()
 	}
 	return b, err
+}
+
+func (c Conn) authorize(req *http.Request) {
+	switch c.Provider {
+	case GitHub:
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	case AzureDevOps:
+		req.SetBasicAuth("", c.Token) // PAT as the password
+	}
+}
+
+// StatusError is a provider's answer other than 2xx to a write.
+type StatusError struct {
+	Code int
+	Msg  string
+}
+
+func (e *StatusError) Error() string { return e.Msg }
+
+// send makes a JSON write request and decodes the answer into out (if not nil).
+func (c Conn) send(ctx context.Context, method, u string, body, out any) error {
+	b, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u, bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	c.authorize(req)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := HTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	c.notePause(resp)
+	// Azure DevOps answers a bad token with 203 and a sign-in page.
+	if resp.StatusCode < 200 || resp.StatusCode > 299 || resp.StatusCode == http.StatusNonAuthoritativeInfo {
+		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 500))
+		return &StatusError{resp.StatusCode, fmt.Sprintf("%s %s %s: %s %s", c.Provider, method, req.URL.Path, resp.Status, strings.TrimSpace(string(msg)))}
+	}
+	if out == nil {
+		return nil
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxJSON)).Decode(out); err != nil {
+		return fmt.Errorf("%s: unexpected response: %w", c.Provider, err)
+	}
+	return nil
 }
 
 // getJSON decodes u; polled endpoints (branches, pull requests, tags) set conditional (see cache).
@@ -406,11 +450,24 @@ func (c Conn) PullRequests(ctx context.Context, repo, branch string) ([]PullRequ
 // Archive downloads the repository at a tag or commit (refType "tag" | "commit") as a module
 // archive: a .tar.gz with the repo root at the archive root.
 func (c Conn) Archive(ctx context.Context, repo, ref, refType string) ([]byte, error) {
-	tag := ref
 	a, b, err := splitRepo(repo)
 	if err != nil {
 		return nil, err
 	}
+	files, err := c.download(ctx, a, b, ref, refType)
+	if err != nil {
+		return nil, err
+	}
+	out, err := writeTarGz(stripTopDir(files))
+	if err == nil && len(out) > registry.MaxArchiveSize {
+		err = fmt.Errorf("module archive larger than %d MB", registry.MaxArchiveSize>>20)
+	}
+	return out, err
+}
+
+// download returns the files of repository a/b at a tag or commit, as the provider packs them:
+// GitHub's under one <owner>-<repo>-<sha> directory, Azure DevOps' at the root.
+func (c Conn) download(ctx context.Context, a, b, tag, refType string) ([]file, error) {
 	var files []file
 	switch c.Provider {
 	case GitHub:
@@ -434,11 +491,7 @@ func (c Conn) Archive(ctx context.Context, repo, ref, refType string) ([]byte, e
 	default:
 		return nil, fmt.Errorf("unknown VCS provider %q", c.Provider)
 	}
-	out, err := writeTarGz(stripTopDir(files))
-	if err == nil && len(out) > registry.MaxArchiveSize {
-		err = fmt.Errorf("module archive larger than %d MB", registry.MaxArchiveSize>>20)
-	}
-	return out, err
+	return files, nil
 }
 
 type file struct {

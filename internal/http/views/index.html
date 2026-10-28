@@ -23,7 +23,7 @@
 {{else}}
 <div class="card empty">
   <p><strong>No templates yet.</strong></p>
-  <p>{{if .Editor}}<a href="/templates/new">Create one</a> or add{{else}}Add{{end}} JSON files to the catalog directory.</p>
+  <p>{{if .Editor}}<a href="/templates/new">Create one</a> or add{{else}}Add{{end}} JSON files to the template catalog{{if and (user).Admin (features).VCS}} (<a href="/catalog">Settings → Templates</a>){{end}}.</p>
 </div>
 {{end}}
 {{template "bottom"}}

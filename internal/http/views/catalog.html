@@ -1,0 +1,65 @@
+{{template "top"}}
+{{$f := .Form}}
+<div class="page-head">
+  <div>
+    <h1>Templates</h1>
+    <p class="muted">The template catalog is a folder of JSON files in a Git repository. Every app instance checks the branch every minute and loads each new commit; a commit with an invalid template isn't loaded.</p>
+  </div>
+</div>
+{{with .Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
+{{if .Saved}}<p class="alert" role="status">Settings saved, templates loaded.</p>{{end}}
+
+{{with .Catalog}}
+<div class="card">
+  <p><strong>{{.Repo}}</strong> · branch <code>{{.Branch}}</code> · folder <code>{{if .Dir}}{{.Dir}}{{else}}/{{end}}</code></p>
+  <p class="muted">{{$.Count}} templates{{with .Commit}} from commit <code>{{printf "%.8s" .}}</code>{{end}}{{with .SyncedAt}}, checked {{ago .}}{{end}}.</p>
+  {{with .SyncError}}<div class="alert error" role="alert">Last sync failed: {{.}}</div>{{end}}
+  <form method="post" action="/catalog/sync" style="display:inline"><button type="submit" class="secondary small">Sync now</button></form>
+  <form method="post" action="/catalog/delete" style="display:inline"
+    onsubmit="return confirm('Disconnect the repository? The templates come from TEMPLATES_DIR again.')">
+    <button type="submit" class="danger small">Disconnect</button></form>
+</div>
+{{else}}
+<p class="muted">No repository yet: the {{.Count}} templates come from <code>TEMPLATES_DIR</code>, which in containers should stay empty.</p>
+{{end}}
+
+{{if .Conns}}
+<form class="settings" method="post" action="/catalog">
+  <label for="connection">VCS connection</label>
+  <select id="connection" name="connection" onchange="location='/catalog?connection='+encodeURIComponent(this.value)">
+    <option value="">Choose…</option>
+    {{range .Conns}}<option value="{{.ID}}"{{if eq .ID (index $f "connection")}} selected{{end}}>{{.Name}} ({{.Provider}})</option>{{end}}
+  </select>
+  <label for="repo">Repository</label>
+  {{if not (index $f "connection")}}
+  <select id="repo" name="repo" disabled><option>Choose a VCS connection first</option></select>
+  {{else if .Repos}}
+  <select id="repo" name="repo" required>
+    <option value="">Choose…</option>
+    {{range .Repos}}<option value="{{.}}"{{if eq . (index $f "repo")}} selected{{end}}>{{.}}</option>{{end}}
+  </select>
+  {{else}}
+  <input id="repo" name="repo" value="{{index $f "repo"}}" placeholder="owner/repo or project/repo" required aria-describedby="repo-hint">
+  <p class="hint" id="repo-hint">{{if .ListErr}}The repositories couldn't be listed with this connection's token: type the name.{{else}}The token can't see any repository: type the name, or give the token access.{{end}}</p>
+  {{end}}
+  <label for="branch">Branch</label>
+  <input id="branch" name="branch" value="{{index $f "branch"}}" placeholder="main">
+  <label for="dir">Folder</label>
+  <input id="dir" name="dir" value="{{index $f "dir"}}" placeholder="catalog" aria-describedby="dir-hint">
+  <p class="hint" id="dir-hint">The *.json files directly in this folder are the templates. Empty: the repository root.</p>
+
+  <p class="field">Template editor</p>
+  {{$m := index $f "mode"}}
+  <label class="check"><input type="radio" name="mode" value="pr"{{if eq $m "pr"}} checked{{end}}>
+    <span>Open a pull request<small>Saving a template in the builder commits it to a new branch and opens a pull request into the branch above; the template changes once it's merged. Works with branch protection. The connection's token needs write access: GitHub <em>Contents</em> and <em>Pull requests: read and write</em>, Azure DevOps <em>Code: read &amp; write</em>.</small></span></label>
+  <label class="check"><input type="radio" name="mode" value="commit"{{if eq $m "commit"}} checked{{end}}>
+    <span>Commit to the branch<small>Saving commits straight to the branch, live right away. Fails if the branch is protected. Needs GitHub <em>Contents: read and write</em> or Azure DevOps <em>Code: read &amp; write</em>.</small></span></label>
+  <label class="check"><input type="radio" name="mode" value="off"{{if eq $m "off"}} checked{{end}}>
+    <span>Off<small>Templates are only edited in the repository. A read-only token is enough.</small></span></label>
+  <p class="hint">A token without write access shows its error at the first save. A save never overwrites a change made in Git since the catalog was loaded: the provider refuses it, and you review and save again.</p>
+  <div class="actions"><button type="submit">Save and load templates</button></div>
+</form>
+{{else}}
+<p><a class="btn" href="/vcs/new">Add a VCS provider</a> first: the catalog is read through one of its connections.</p>
+{{end}}
+{{template "bottom"}}

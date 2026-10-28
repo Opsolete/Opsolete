@@ -6,7 +6,7 @@ import (
 )
 
 func TestLoad(t *testing.T) {
-	for _, k := range []string{"ADDR", "PUBLIC_URL", "DEPLOYMENTS_ENABLED", "REGISTRY_ENABLED"} {
+	for _, k := range []string{"ADDR", "PUBLIC_URL", "DEPLOYMENTS_ENABLED", "REGISTRY_ENABLED", "TEMPLATE_EDITOR"} {
 		t.Setenv(k, "")
 	}
 	t.Setenv("DATABASE_URL", "")

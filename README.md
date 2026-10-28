@@ -55,10 +55,10 @@ Then open http://localhost:8080. Migrations run on startup.
 |-----------------|-----------|----------------------------------------|
 | `DATABASE_URL`  | required  | PostgreSQL connection string           |
 | `ADDR`          | `:8080`   | HTTP listen address                    |
-| `TEMPLATES_DIR` | `catalog` | Directory of JSON template definitions |
+| `TEMPLATES_DIR` | `catalog` | Local folder of JSON template definitions, for development and tests. In containers, keep the templates in a [Git repository](#templates) instead; the image and the Nix package ship none |
 | `DEPLOYMENTS_ENABLED` | `true` | Templates, workspaces, runs, the runner API and the state backend. `false` makes Opsolete a module registry only |
 | `REGISTRY_ENABLED` | `true` | Module registry pages and the Terraform registry protocol. With `false`, startup fails if a template uses a registry module |
-| `TEMPLATE_EDITOR` | off    | `1` enables the template builder and module uploads for admins (on in the nix dev shell). `TEMPLATES_DIR` must then be writable, or startup fails: the catalog in the container image and the Nix package is read-only, so mount a writable volume (one app instance only: saves aren't coordinated across instances) |
+| `TEMPLATE_EDITOR` | off    | Development: `1` lets the template builder write into `TEMPLATES_DIR` (which must be writable, or startup fails) and turns on module uploads (on in the nix dev shell). A Git template catalog doesn't use it: its editor is set up in **Settings → Templates**, module uploads in **Settings → Organization** |
 | `PUBLIC_URL`    | `http://opsolete.localhost:8080` | How browsers and Terraform clients reach the app. Its host is the registry hostname, and the OIDC callback is `PUBLIC_URL/auth/callback` |
 | `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` | | Login via OpenID Connect, required unless `AUTH_DEV_USER` is set |
 | `ADMIN_EMAILS`  |           | Comma-separated emails that get the admin role at login |
@@ -75,7 +75,7 @@ All pages require login. Health checks, the registry protocol (`/v1/…`, which 
 
 - **OIDC:** authorization code flow with PKCE, using `coreos/go-oidc` and `x/oauth2`. It works with Entra ID, Google, Keycloak, Dex and similar. Register `PUBLIC_URL/auth/callback` as the redirect URI. A user is keyed by the ID token's issuer and `sub`; the email (the `email` claim, falling back to `preferred_username` for Entra ID) is an attribute that follows the IdP. Users from before this are bound to the first subject that logs in with their email. A different subject with an email Opsolete already knows is refused, so a reassigned address can't take over the old account or its admin role. An explicit `email_verified: false` is rejected; a missing claim is accepted, since Entra ID never sends it. Changing `OIDC_ISSUER` changes every subject: run `UPDATE users SET subject = NULL` so users rebind by email at their next login.
 - **Roles:** emails listed in `ADMIN_EMAILS` are `admin`, everyone else is `user`. The role is recorded at every login, so editing `ADMIN_EMAILS` takes effect at the next login. Sessions are HMAC-signed cookies that last 12 hours. Logging out ends the Opsolete session, not the IdP session.
-- **Users** can create workspaces from templates and see and operate their own, plus those granted to one of their groups. **Admins** see and operate every workspace, grant access, and with `TEMPLATE_EDITOR=1` use the template builder and upload modules.
+- **Users** can create workspaces from templates and see and operate their own, plus those granted to one of their groups. **Admins** see and operate every workspace, grant access, use the template builder when it's on and upload modules when that's on (see [Templates](#templates)).
 - Cross-site form posts are rejected (`http.CrossOriginProtection`). If a proxy rewrites the `Host` header, keep it equal to the browser's origin.
 
 ### Teams: access per workspace
@@ -189,7 +189,7 @@ docker run -e OPS_SERVER_URL=http://opsolete:8080 -e OPS_RUNNER_TOKEN=$RUNNER_TO
 ```
 
 **On Kubernetes:**
-- Run two Deployments of the same images: the app, and the runners.
+- Run two Deployments of the same images: the app, and the runners. The app is stateless: everything it keeps is in Postgres and `STATE_STORE`, and the templates come from a [Git repository](#templates), so it needs no volume.
 - Put the runner token in one Secret (`kubectl create secret generic opsolete-runner --from-literal=token=$(openssl rand -hex 32)`, or from sops / External Secrets). Map it to `RUNNER_TOKEN` in the app and to `OPS_RUNNER_TOKEN` in the runners with `secretKeyRef`. Start order doesn't matter: runners retry until the app is up. Cloud credentials come from [variables](#variables-and-variable-sets).
 - Scale runners with `replicas`, one job each at a time.
 - Point `OPS_SERVER_URL` at the app's Service, so registry downloads stay inside the cluster.
@@ -263,13 +263,28 @@ TEST_DATABASE_URL=$DATABASE_URL go test ./internal/storage   # database tests
 
 ## Templates
 
-Each `catalog/*.json` file describes one existing Terraform module pinned to an approved `ref`, plus its inputs (`string`, `number`, `bool`, `select`, with optional `required`, `pattern`, `options` and `default`) See `catalog/storage-account.json`.
+Each template is a JSON file that describes one existing Terraform module pinned to an approved `ref`, plus its inputs (`string`, `number`, `bool`, `select`, with optional `required`, `pattern`, `options` and `default`, which must pass the input's own checks). See `catalog/storage-account.json`.
+
+**Where templates live.** In production, in a Git repository, so the app keeps no data on its disk:
+
+1. Add a [VCS provider](#vcs-providers-publish-modules-from-github-or-azure-devops) whose token can read the repository.
+2. In **Settings → Templates** (admins), choose the connection, repository, branch and folder. The `*.json` files directly in that folder are the catalog.
+3. Choose what the [template builder](#template-builder) does on save:
+   - **Open a pull request:** a new branch `opsolete/template-<id>-…` with the file and a pull request into the branch. The template changes once it's merged. Works with branch protection.
+   - **Commit to the branch:** live right away. The branch must allow direct pushes.
+   - **Off:** templates are only edited in Git; a read-only token is enough.
+
+   Saving needs a token with write access: GitHub fine-grained *Contents: read and write* (plus *Pull requests: read and write* for pull requests), Azure DevOps *Code: read & write*. A read-only token fails at the first save, with the provider's error.
+
+Every app instance checks the branch every minute (GitHub: a conditional request, free when nothing changed) and on **Sync now**, and loads each new commit. A commit with an invalid template isn't loaded: the page shows why, and the last good commit stays. The last loaded files are kept in Postgres, so an instance starts with the templates even while the provider is down. A save is based on the loaded commit: if the file changed in Git since (GitHub) or the branch moved (Azure DevOps), the provider refuses it and the catalog reloads, so review and save again; nothing is overwritten. That also makes saving from several replicas safe. A VCS connection the catalog uses can't be deleted; **Disconnect** goes back to `TEMPLATES_DIR`.
+
+Without a repository, templates come from `TEMPLATES_DIR` (the repo's `catalog/` in development).
 
 ## Module registry
 
 Opsolete is a private Terraform module registry, built on the standard [module registry protocol](https://developer.hashicorp.com/terraform/internals/module-registry-protocol): `/.well-known/terraform.json`, `GET /v1/modules/:ns/:name/:system/versions` and `.../:version/download`. HashiCorp's `terraform-config-inspect` reads each uploaded module's variables, `terraform-registry-address` validates addresses and `go-version` handles semver.
 
-- **Upload:** on `/registry`, *Publish module* → *Upload workflow*: pick a namespace, name, system and semver version, plus a `.tar.gz` with the module at its root (`tar czf module.tar.gz -C path/to/module .`). Versions are immutable.
+- **Upload** (once an admin turns on *Module uploads* in **Settings → Organization**): on `/registry`, *Publish module* → *Upload workflow*: pick a namespace, name, system and semver version, plus a `.tar.gz` with the module at its root (`tar czf module.tar.gz -C path/to/module .`). Versions are immutable.
 - **Use from Terraform:** run `just token my-laptop`, then `export TF_TOKEN_opsolete_example_com=<token>`, then `module "x" { source = "opsolete.example.com/platform/storage/azurerm" version = "1.0.0" }`. Terraform only talks to registries over HTTPS on a hostname with a dot, so put the app behind TLS in production.
 - **Docs:** each upload gets generated documentation at `/registry/<ns>/<name>/<system>/<version>`, similar to `terraform-docs`. It includes a usage snippet with the required inputs, Terraform and provider requirements, inputs (type, default, required), outputs, resources, data sources, module calls and the archive's `README.md` shown as plain text. A **Markdown** link (`.../docs.md`) serves HashiCorp's `tfconfig.RenderMarkdown` output to paste into a repo. Versions uploaded before docs existed show a notice; upload a new version to get docs.
 - **Downloads:** `download` returns a 10-minute HMAC-signed archive URL, because Terraform doesn't send the token to archive URLs. Runners get a fresh 15-minute signed path with each job. The signing key is kept in Postgres.
@@ -306,4 +321,4 @@ The server talks to the providers' REST APIs (no `git` binary): GitHub's tarball
 
 ## Template builder
 
-With `TEMPLATE_EDITOR=1`, open **+ New template** (`/templates/new`) or **edit** on any template. Choose **Start from a registry module** and the module source, version and one form field per variable are filled in for you. Complex variable types (list, map, object) are flagged, not generated. You can also type a `git::` source and ref by hand, then add one row per form field (variable name, label, type, required, pattern, dropdown options, default). Each new template gets a random UUID as its id. Saving runs the same validation as startup, checks that a referenced registry version exists, writes `catalog/<id>.json` and shows the generated deploy form right away. Review and commit the file like any other change. Only admins can use the builder, because a template decides which module the runners execute.
+When the builder is on (a Git catalog in pull request or commit mode, or `TEMPLATE_EDITOR=1` for `TEMPLATES_DIR`), open **+ New template** (`/templates/new`) or **edit** on any template. Choose **Start from a registry module** and the module source, version and one form field per variable are filled in for you. Complex variable types (list, map, object) are flagged, not generated. You can also type a `git::` source and ref by hand, then add one row per form field (variable name, label, type, required, pattern, dropdown options, default). Each new template gets a random UUID as its id. Saving runs the same validation as loading, checks that a referenced registry version exists, and then opens a pull request or commits `<folder>/<id>.json` (Git catalog), or writes it into `TEMPLATES_DIR` and shows the generated deploy form right away. An edited template keeps its file name. Only admins can use the builder, because a template decides which module the runners execute.

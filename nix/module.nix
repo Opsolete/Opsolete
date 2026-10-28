@@ -188,11 +188,11 @@ in {
       example = "azblob://tfstate";
       description = "STATE_STORE (Go CDK blob URL). Cloud credentials go in `secretFiles` (secrets) or `environment` (e.g. AZURE_STORAGE_ACCOUNT).";
     };
-    templatesDir = nullOr types.str null "TEMPLATES_DIR. null: the catalog shipped in the package (read-only).";
+    templatesDir = nullOr types.str null "TEMPLATES_DIR, a local template folder. null: none; keep the templates in a Git repository instead (Settings → Templates).";
     templateEditor = mkOption {
       type = types.bool;
       default = false;
-      description = "TEMPLATE_EDITOR: the admin template builder, which writes into templatesDir (must then be a directory writable by user opsolete).";
+      description = "TEMPLATE_EDITOR (development): the admin template builder writes into templatesDir (must then be a directory writable by user opsolete), and module uploads are on. Not needed for a Git template catalog, whose editor is set up in Settings → Templates.";
     };
     deployments.enable = mkOption {
       type = types.bool;
@@ -303,7 +303,7 @@ in {
         }
         {
           assertion = cfg.templateEditor -> cfg.templatesDir != null;
-          message = "services.opsolete.templateEditor writes into templatesDir: set it to a writable directory (the packaged catalog is in the read-only Nix store)";
+          message = "services.opsolete.templateEditor writes into templatesDir: set it to a writable directory";
         }
         {
           assertion = cfg.deployments.enable -> cfg.runnerTokenFile != null;

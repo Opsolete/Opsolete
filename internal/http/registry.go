@@ -26,12 +26,8 @@ func (s *Server) registryRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /registry", s.registryPage)
 	mux.HandleFunc("GET /registry/{ns}/{name}/{system}/{version}", s.moduleDocs)
 	mux.HandleFunc("GET /registry/{ns}/{name}/{system}/{version}/docs.md", s.moduleDocs)
-	if s.Features.Editor || s.Features.VCS {
-		mux.HandleFunc("GET /registry/publish", s.admin(s.publishPage))
-	}
-	if s.Features.Editor {
-		mux.HandleFunc("POST /registry", s.admin(s.uploadModule))
-	}
+	mux.HandleFunc("GET /registry/publish", s.admin(s.publishPage))
+	mux.HandleFunc("POST /registry", s.admin(s.uploadModule))
 }
 
 // requireToken checks a bearer token of the given scope (Terraform sends TF_TOKEN_<host> as one).
@@ -113,11 +109,12 @@ func (s *Server) moduleArchive(w http.ResponseWriter, r *http.Request) {
 }
 
 type registryPage struct {
-	Modules []latestModule
-	Editor  bool
-	VCS     bool // VCS publishing is on and the user is an admin
-	Linked  []storage.VCSModule
-	Host    string
+	Modules   []latestModule
+	Templates bool // the template builder is on: offer "Create template"
+	Upload    bool
+	VCS       bool // VCS publishing is on and the user is an admin
+	Linked    []storage.VCSModule
+	Host      string
 }
 
 // latestModule is a module's newest version and how many older ones it has.
@@ -152,7 +149,7 @@ func (s *Server) registryPage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not load modules", http.StatusInternalServerError)
 		return
 	}
-	p := registryPage{Modules: latestVersions(mods), Editor: s.canEdit(r), Host: s.Registry.PublicURL.Host,
+	p := registryPage{Modules: latestVersions(mods), Templates: s.canEditTemplates(r), Upload: s.canUpload(r), Host: s.Registry.PublicURL.Host,
 		VCS: s.Features.VCS && auth.FromContext(r.Context()).Admin()}
 	if p.VCS {
 		if p.Linked, err = s.Store.VCSModules(r.Context()); err != nil {
@@ -169,6 +166,10 @@ func (s *Server) renderUpload(w http.ResponseWriter, r *http.Request, status int
 }
 
 func (s *Server) uploadModule(w http.ResponseWriter, r *http.Request) {
+	if !s.canUpload(r) {
+		http.Error(w, "module uploads are off (Settings → Organization)", http.StatusForbidden)
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, registry.MaxArchiveSize+1<<20)
 	if err := r.ParseMultipartForm(1 << 20); err != nil {
 		s.renderUpload(w, r, http.StatusRequestEntityTooLarge, fmt.Sprintf("upload too large or malformed (max %d MB)", registry.MaxArchiveSize>>20), map[string]string{})
@@ -283,7 +284,7 @@ func (s *Server) moduleDocs(w http.ResponseWriter, r *http.Request) {
 	}
 	s.render(w, r, http.StatusOK, "module.html", map[string]any{
 		"Namespace": ns, "Name": name, "System": sys, "Version": ver, "Versions": versions,
-		"Source": source, "Docs": docs, "Editor": s.canEdit(r), "Linked": linked, "Templates": tpls,
+		"Source": source, "Docs": docs, "Editor": s.canEditTemplates(r), "Linked": linked, "Templates": tpls,
 		"Admin": auth.FromContext(r.Context()).Admin(),
 	})
 }

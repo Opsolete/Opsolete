@@ -26,13 +26,8 @@
         src = self;
         vendorHash = "sha256-Dj2gNDalPZy7nQ36TxDxeyR1YJKLzU+ZljZddhafcG0="; # update after go.mod changes
         subPackages = ["cmd/opsolete"];
-        nativeBuildInputs = [pkgs.makeWrapper];
-        # DB tests skip themselves without TEST_DATABASE_URL; the rest need the catalog from src.
-        postInstall = ''
-          mkdir -p $out/share/opsolete
-          cp -r catalog $out/share/opsolete/
-          wrapProgram $out/bin/opsolete --set-default TEMPLATES_DIR $out/share/opsolete/catalog
-        '';
+        # DB tests skip themselves without TEST_DATABASE_URL; the rest use catalog/ from src. The package
+        # ships no templates: they come from a Git repository (Settings → Templates), or TEMPLATES_DIR.
       };
 
       # Container images (linux only): `nix build .#image-app`, then `docker load < result`.

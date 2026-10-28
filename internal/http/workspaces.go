@@ -123,7 +123,7 @@ func (s *Server) form(w http.ResponseWriter, r *http.Request) {
 	for _, in := range t.Inputs {
 		vals[in.Name] = in.Default
 	}
-	s.render(w, r, http.StatusOK, "form.html", formPage{T: t, Editor: s.canEdit(r), Values: vals})
+	s.render(w, r, http.StatusOK, "form.html", formPage{T: t, Editor: s.canEditTemplates(r), Values: vals})
 }
 
 // createWorkspace creates a workspace from a template and queues its first plan.
@@ -153,7 +153,7 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !validWorkspaceName(name) {
 		errs[fieldWorkspace] = workspaceNameRule
 	}
-	page := formPage{T: t, Editor: s.canEdit(r), Values: raw, Errors: errs, Workspace: name,
+	page := formPage{T: t, Editor: s.canEditTemplates(r), Values: raw, Errors: errs, Workspace: name,
 		AutoApply: r.PostForm.Get(fieldAutoApply) != ""}
 	if len(errs) > 0 {
 		s.render(w, r, http.StatusUnprocessableEntity, "form.html", page)

@@ -110,9 +110,13 @@ func (s *Store) AttachVCSWorkspace(ctx context.Context, connID, workspace string
 	return nil
 }
 
-// DeleteVCSConnection also unlinks its modules (their published versions stay).
+// DeleteVCSConnection also unlinks its modules (their published versions stay). It returns
+// ErrInUse while the template catalog uses the connection.
 func (s *Store) DeleteVCSConnection(ctx context.Context, id string) error {
 	_, err := s.DB.ExecContext(ctx, `DELETE FROM vcs_connections WHERE id = ops_uuid($1)`, id)
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23503" {
+		return ErrInUse
+	}
 	return err
 }
 

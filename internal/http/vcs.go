@@ -249,7 +249,10 @@ func (s *Server) getConnection(w http.ResponseWriter, r *http.Request, id string
 }
 
 func (s *Server) deleteConnection(w http.ResponseWriter, r *http.Request) {
-	if err := s.Store.DeleteVCSConnection(r.Context(), r.PathValue("id")); err != nil {
+	if err := s.Store.DeleteVCSConnection(r.Context(), r.PathValue("id")); errors.Is(err, storage.ErrInUse) {
+		s.renderVCS(w, r, http.StatusConflict, "The template catalog uses this connection: disconnect it in Settings → Templates first.")
+		return
+	} else if err != nil {
 		s.internalError(w, "delete vcs connection", err)
 		return
 	}
@@ -281,10 +284,10 @@ func (s *Server) publishPage(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case t == "vcs" && s.Features.VCS:
 		s.renderPublish(w, r, http.StatusOK, q.Get("connection"), "", map[string]string{"repo": strings.TrimSpace(q.Get("repo"))})
-	case t == "upload" && s.canEdit(r):
+	case t == "upload" && s.canUpload(r):
 		s.renderUpload(w, r, http.StatusOK, "", map[string]string{})
-	case t == "":
-		s.render(w, r, http.StatusOK, "publish.html", publishPage{VCS: s.Features.VCS, Upload: s.canEdit(r), Host: s.Registry.PublicURL.Host})
+	case t == "" && (s.Features.VCS || s.canUpload(r)):
+		s.render(w, r, http.StatusOK, "publish.html", publishPage{VCS: s.Features.VCS, Upload: s.canUpload(r), Host: s.Registry.PublicURL.Host})
 	default:
 		http.NotFound(w, r)
 	}

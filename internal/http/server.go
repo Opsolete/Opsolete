@@ -25,6 +25,7 @@ import (
 	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
+	"github.com/opsolete/opsolete/internal/vcs"
 )
 
 //go:embed views/*.html
@@ -51,8 +52,10 @@ type Server struct {
 type Features struct {
 	Deployments bool // templates, deploy forms, deployments, runner API
 	Registry    bool // module registry pages and the Terraform registry protocol
-	Editor      bool // template builder (needs Deployments) and module uploads (needs Registry), admins only
-	VCS         bool // publish registry modules from GitHub / Azure DevOps (needs Registry and SECRET_KEY)
+	// Editor (TEMPLATE_EDITOR, for development): the template builder writes into TEMPLATES_DIR,
+	// and module uploads are on. A catalog in Git has its own editor mode, uploads their own setting.
+	Editor bool
+	VCS    bool // publish registry modules from GitHub / Azure DevOps (needs Registry and SECRET_KEY)
 }
 
 func New(store *storage.Store, tpls *templates.Catalog, reg *registry.Registry, a *auth.Auth, state *blob.Bucket, f Features, log *slog.Logger) *Server {
@@ -121,24 +124,28 @@ func (s *Server) Handler() http.Handler {
 	if s.Features.VCS {
 		s.vcsRoutes(mux)
 	}
+	mux.HandleFunc("GET /organization", s.admin(s.organizationPage))
+	mux.HandleFunc("POST /organization", s.admin(s.saveOrganization))
 	if !s.Features.Deployments {
 		mux.Handle("GET /{$}", http.RedirectHandler("/registry", http.StatusFound))
 		return s.logRequests(s.audit(http.NewCrossOriginProtection().Handler(s.requireLogin(mux))))
 	}
 	mux.HandleFunc("GET /{$}", s.index)
-	if s.Features.Editor {
-		mux.HandleFunc("GET /templates/new", s.admin(s.builder))
-		mux.HandleFunc("POST /templates/new", s.admin(s.saveTemplate))
-		mux.HandleFunc("GET /templates/{id}/edit", s.admin(s.builder))
-		mux.HandleFunc("POST /templates/{id}/edit", s.admin(s.saveTemplate))
+	mux.HandleFunc("GET /templates/new", s.admin(s.editor(s.builder)))
+	mux.HandleFunc("POST /templates/new", s.admin(s.editor(s.saveTemplate)))
+	mux.HandleFunc("GET /templates/{id}/edit", s.admin(s.editor(s.builder)))
+	mux.HandleFunc("POST /templates/{id}/edit", s.admin(s.editor(s.saveTemplate)))
+	if s.Features.VCS {
+		mux.HandleFunc("GET /catalog", s.admin(s.catalogPage))
+		mux.HandleFunc("POST /catalog", s.admin(s.saveCatalog))
+		mux.HandleFunc("POST /catalog/sync", s.admin(s.syncCatalog))
+		mux.HandleFunc("POST /catalog/delete", s.admin(s.deleteCatalog))
 	}
 	s.runnerRoutes(mux)
 	s.stateRoutes(mux)
 	s.cloudRoutes(mux)
 	s.workspaceRoutes(mux)
 	s.variableRoutes(mux)
-	mux.HandleFunc("GET /organization", s.admin(s.organizationPage))
-	mux.HandleFunc("POST /organization", s.admin(s.saveOrganization))
 	// CrossOriginProtection rejects cross-site browser POSTs (CSRF); token clients send no Origin and pass.
 	return s.logRequests(s.audit(http.NewCrossOriginProtection().Handler(s.requireLogin(mux))))
 }
@@ -181,9 +188,45 @@ func (s *Server) admin(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// canEdit: the builder and module uploads are on and the user is an admin.
-func (s *Server) canEdit(r *http.Request) bool {
-	return s.Features.Editor && auth.FromContext(r.Context()).Admin()
+// canEditTemplates: the user is an admin and the template builder is on (TEMPLATE_EDITOR for
+// TEMPLATES_DIR, or the Git catalog's editor mode).
+func (s *Server) canEditTemplates(r *http.Request) bool {
+	if !s.Features.Deployments || !auth.FromContext(r.Context()).Admin() {
+		return false
+	}
+	switch mode, _ := s.Templates.Source(); mode {
+	case "":
+		return s.Features.Editor
+	case "commit", "pr":
+		return true
+	}
+	return false
+}
+
+// editor answers 404 while the template builder is off.
+func (s *Server) editor(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.canEditTemplates(r) {
+			http.NotFound(w, r)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// canUpload: the user is an admin and module uploads are on (Organization settings, or TEMPLATE_EDITOR).
+func (s *Server) canUpload(r *http.Request) bool {
+	if !s.Features.Registry || !auth.FromContext(r.Context()).Admin() {
+		return false
+	}
+	if s.Features.Editor {
+		return true
+	}
+	on, err := s.Store.ModuleUploads(r.Context())
+	if err != nil {
+		s.Log.Error("module uploads setting", "err", err)
+	}
+	return on
 }
 
 func (s *Server) logRequests(next http.Handler) http.Handler {
@@ -208,18 +251,19 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
-	s.render(w, r, http.StatusOK, "index.html", map[string]any{"Templates": s.Templates.List(), "Editor": s.canEdit(r)})
+	s.render(w, r, http.StatusOK, "index.html", map[string]any{"Templates": s.Templates.List(), "Editor": s.canEditTemplates(r)})
 }
 
 type builderPage struct {
-	T        templates.Template
-	Rows     []templates.Input // existing inputs plus blank rows to fill in
-	Editing  bool
-	Error    string
-	Warning  string
-	Modules  []storage.Module // registry modules to start from
-	Selected string           // ns/name/system/version picked from the registry
-	Registry bool             // registry enabled: offer "start from a registry module"
+	T           templates.Template
+	Rows        []templates.Input // existing inputs plus blank rows to fill in
+	Editing     bool
+	Error       string
+	Warning     string
+	Modules     []storage.Module // registry modules to start from
+	Selected    string           // ns/name/system/version picked from the registry
+	Registry    bool             // registry enabled: offer "start from a registry module"
+	PullRequest string           // the pull request the save opened (Git catalog in pr mode)
 }
 
 func (s *Server) renderBuilder(w http.ResponseWriter, r *http.Request, status int, p builderPage) {
@@ -320,11 +364,23 @@ func (s *Server) saveTemplate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := s.Templates.Save(t, editing); err != nil {
+	if mode, _ := s.Templates.Source(); mode != "" {
+		pr, err := vcs.SaveTemplate(r.Context(), s.Store, s.SecretKey, s.Templates, t, auth.FromContext(r.Context()).Email)
+		if err != nil {
+			s.Log.Warn("save template to git", "id", t.ID, "err", err)
+			fail(err.Error())
+			return
+		}
+		if pr != "" { // the catalog changes once it's merged
+			s.Log.Info("template pull request opened", "id", t.ID, "url", pr)
+			s.renderBuilder(w, r, http.StatusOK, builderPage{T: t, Editing: editing, PullRequest: pr, Selected: r.PostForm.Get("selected")})
+			return
+		}
+	} else if err := s.Templates.Save(t, editing); err != nil {
 		fail(err.Error())
 		return
 	}
-	s.Log.Info("template saved", "id", t.ID, "dir", s.Templates.Dir)
+	s.Log.Info("template saved", "id", t.ID)
 	http.Redirect(w, r, "/templates/"+t.ID, http.StatusSeeOther)
 }
 

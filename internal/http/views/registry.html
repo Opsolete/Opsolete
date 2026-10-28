@@ -4,7 +4,7 @@
     <h1>Module registry</h1>
     <p class="muted">Private Terraform module registry on <code>{{.Host}}</code>.</p>
   </div>
-  {{if or .VCS .Editor}}<a class="btn" href="/registry/publish">Publish module</a>{{end}}
+  {{if or .VCS .Upload}}<a class="btn" href="/registry/publish">Publish module</a>{{end}}
 </div>
 
 <div class="card">
@@ -17,8 +17,8 @@
 
 <div class="card flush">
 <table>
-<tr><th>Module</th><th>Latest version</th><th>Variables</th><th>Uploaded</th>{{if .Editor}}<th></th>{{end}}</tr>
-{{$editor := .Editor}}{{$host := .Host}}
+<tr><th>Module</th><th>Latest version</th><th>Variables</th><th>Uploaded</th>{{if .Templates}}<th></th>{{end}}</tr>
+{{$editor := .Templates}}{{$host := .Host}}
 {{range .Modules}}
 <tr>
   <td><a href="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}"><code>{{$host}}/{{.Namespace}}/{{.Name}}/{{.System}}</code></a></td>
@@ -28,7 +28,7 @@
   {{if $editor}}<td class="nowrap"><a href="/templates/new?module={{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}">Create template</a></td>{{end}}
 </tr>
 {{else}}
-<tr><td colspan="5" class="empty">No modules published yet.{{if or .VCS .Editor}} <a href="/registry/publish">Publish a module →</a>{{end}}</td></tr>
+<tr><td colspan="5" class="empty">No modules published yet.{{if or .VCS .Upload}} <a href="/registry/publish">Publish a module →</a>{{end}}</td></tr>
 {{end}}
 </table>
 </div>

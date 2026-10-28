@@ -6,6 +6,7 @@
     {{if .Editing}}<p class="muted">ID <code>{{.T.ID}}</code></p>{{else}}<p class="muted">A template is a module's no-code settings: the pinned version and the form for its variables.</p>{{end}}
   </div>
 </div>
+{{with .PullRequest}}<p class="alert" role="status">Pull request opened: <a href="{{.}}" target="_blank" rel="noopener">{{.}}</a>. The catalog changes once it's merged; saving again opens another one.</p>{{end}}
 
 {{if .Registry}}
 <form method="get" class="card">

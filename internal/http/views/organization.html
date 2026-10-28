@@ -7,12 +7,18 @@
 </div>
 {{if .Saved}}<p class="alert" role="status">Settings saved.</p>{{end}}
 <form class="settings" method="post" action="/organization">
+  {{if (features).Deployments}}
   <label for="currency">Cost estimation currency</label>
   <select id="currency" name="currency" aria-describedby="currency-hint">
     <option value="USD"{{if eq .Currency "USD"}} selected{{end}}>US dollar (USD)</option>
     <option value="EUR"{{if eq .Currency "EUR"}} selected{{end}}>Euro (EUR)</option>
   </select>
   <p class="hint" id="currency-hint">The currency of Infracost's monthly cost estimates on plans. Applies to runs planned from now on.</p>
+  {{end}}
+  {{if (features).Registry}}
+  <label class="check"><input type="checkbox" name="module_uploads" value="1"{{if .Uploads}} checked{{end}}>
+    <span>Module uploads<small>Admins may publish a registry module by uploading a .tar.gz{{if .DevUploads}} (on regardless: TEMPLATE_EDITOR is set){{end}}. Publishing from a VCS repository doesn't need this.</small></span></label>
+  {{end}}
   <div class="actions"><button type="submit">Save settings</button></div>
 </form>
 {{template "bottom"}}
