@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/Opsolete/Opsolete/compare/v0.2.0...v0.3.0) (2026-10-29)
+
+
+### Features
+
+* expose Prometheus metrics on a separate METRICS_ADDR listener ([65095f3](https://github.com/Opsolete/Opsolete/commit/65095f34e52cb14a1967b967cb79abca1d632fd5))
+
 ## [0.2.0](https://github.com/Opsolete/Opsolete/compare/v0.1.0...v0.2.0) (2026-10-28)
 
 
