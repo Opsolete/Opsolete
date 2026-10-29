@@ -333,3 +333,35 @@ func (s *Store) Logs(ctx context.Context, runID string, after int64, limit int) 
 	}
 	return out, rows.Err()
 }
+
+// Stats is what the metrics endpoint reports from the database.
+type Stats struct {
+	Runs         map[string]int // runs by status, all time
+	OldestQueued time.Duration  // age of the oldest queued job, 0 without one
+	Workspaces   int
+}
+
+func (s *Store) Stats(ctx context.Context) (Stats, error) {
+	st := Stats{Runs: map[string]int{}}
+	var oldest float64
+	if err := s.DB.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM workspaces),
+		COALESCE((SELECT EXTRACT(EPOCH FROM now() - min(updated_at)) FROM runs WHERE status IN ('plan_queued', 'apply_queued')), 0)`).
+		Scan(&st.Workspaces, &oldest); err != nil {
+		return st, err
+	}
+	st.OldestQueued = time.Duration(oldest * float64(time.Second))
+	rows, err := s.DB.QueryContext(ctx, `SELECT status, count(*) FROM runs GROUP BY status`)
+	if err != nil {
+		return st, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var status string
+		var n int
+		if err := rows.Scan(&status, &n); err != nil {
+			return st, err
+		}
+		st.Runs[status] = n
+	}
+	return st, rows.Err()
+}

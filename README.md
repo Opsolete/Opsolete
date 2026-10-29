@@ -55,6 +55,7 @@ Then open http://localhost:8080. Migrations run on startup.
 |-----------------|-----------|----------------------------------------|
 | `DATABASE_URL`  | required  | PostgreSQL connection string           |
 | `ADDR`          | `:8080`   | HTTP listen address                    |
+| `METRICS_ADDR`  | off       | Listen address of Prometheus `/metrics` (any path works), e.g. `:9090`. Separate from `ADDR` and unauthenticated: don't expose it publicly. Run metrics come from the database, so every replica reports the same values (use `max`, not `sum`) |
 | `TEMPLATES_DIR` | `catalog` | Local folder of JSON template definitions, for development and tests. In containers, keep the templates in a [Git repository](#templates) instead; the image and the Nix package ship none |
 | `DEPLOYMENTS_ENABLED` | `true` | Templates, workspaces, runs, the runner API and the state backend. `false` makes Opsolete a module registry only |
 | `REGISTRY_ENABLED` | `true` | Module registry pages and the Terraform registry protocol. With `false`, startup fails if a template uses a registry module |

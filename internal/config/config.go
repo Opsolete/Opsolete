@@ -14,6 +14,7 @@ import (
 
 type Config struct {
 	Addr         string // HTTP listen address
+	MetricsAddr  string // Prometheus /metrics listen address; empty turns it off
 	DatabaseURL  string // PostgreSQL connection string
 	TemplatesDir string // directory with JSON template definitions (a Git checkout)
 	// Components; at least one must be on. Off removes its pages and API routes.
@@ -50,6 +51,7 @@ type Config struct {
 func Load() (Config, error) {
 	c := Config{
 		Addr:             getenv("ADDR", ":8080"),
+		MetricsAddr:      os.Getenv("METRICS_ADDR"),
 		DatabaseURL:      os.Getenv("DATABASE_URL"),
 		TemplatesDir:     getenv("TEMPLATES_DIR", "catalog"),
 		TemplateEditor:   os.Getenv("TEMPLATE_EDITOR") == "1",

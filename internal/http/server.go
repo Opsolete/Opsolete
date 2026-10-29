@@ -128,7 +128,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /organization", s.admin(s.saveOrganization))
 	if !s.Features.Deployments {
 		mux.Handle("GET /{$}", http.RedirectHandler("/registry", http.StatusFound))
-		return s.logRequests(s.audit(http.NewCrossOriginProtection().Handler(s.requireLogin(mux))))
+		return instrument(mux, s.logRequests(s.audit(http.NewCrossOriginProtection().Handler(s.requireLogin(mux)))))
 	}
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("GET /templates/new", s.admin(s.editor(s.builder)))
@@ -147,7 +147,7 @@ func (s *Server) Handler() http.Handler {
 	s.workspaceRoutes(mux)
 	s.variableRoutes(mux)
 	// CrossOriginProtection rejects cross-site browser POSTs (CSRF); token clients send no Origin and pass.
-	return s.logRequests(s.audit(http.NewCrossOriginProtection().Handler(s.requireLogin(mux))))
+	return instrument(mux, s.logRequests(s.audit(http.NewCrossOriginProtection().Handler(s.requireLogin(mux)))))
 }
 
 // public paths authenticate themselves (API tokens, signed URLs) or must work without login.

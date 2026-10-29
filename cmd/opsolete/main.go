@@ -210,6 +210,16 @@ func serve(log *slog.Logger) error {
 		go reapLostRunners(ctx, store, app, cfg.StaleLockTimeout, log)
 	}
 
+	if cfg.MetricsAddr != "" { // its own listener, so /metrics isn't reachable through the public ingress
+		ln, err := net.Listen("tcp", cfg.MetricsAddr)
+		if err != nil {
+			return fmt.Errorf("METRICS_ADDR: %w", err)
+		}
+		msrv := &http.Server{Handler: app.MetricsHandler(), ReadHeaderTimeout: 10 * time.Second}
+		go msrv.Serve(ln)
+		defer msrv.Close()
+		log.Info("metrics listening", "addr", cfg.MetricsAddr)
+	}
 	srv := &http.Server{Addr: cfg.Addr, Handler: app.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		// Shutdown doesn't cancel requests; this ends log streams and runner long-polls on SIGTERM.

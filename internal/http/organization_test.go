@@ -30,7 +30,7 @@ func TestOrganizationCurrency(t *testing.T) {
 func TestSettingsNav(t *testing.T) {
 	store := testStore(t)
 	h := newServer(t, "../../catalog", false, store)
-	if body := get(h, "/workspaces").Body.String(); !strings.Contains(body, `href="/organization">Settings</a>`) || strings.Contains(body, ">Audit log<") {
+	if body := get(h, "/workspaces").Body.String(); !strings.Contains(body, `href="/organization">Settings ›</a>`) || strings.Contains(body, ">Audit log<") {
 		t.Fatalf("main nav: %s", body)
 	}
 	if body := get(h, "/audit").Body.String(); !strings.Contains(body, `aria-label="Settings"`) || !strings.Contains(body, `href="/audit" aria-current="page">Audit log`) {

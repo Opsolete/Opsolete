@@ -368,7 +368,7 @@
     <a href="/workspaces/{{.}}/runs"{{if eq $t "runs"}} aria-current="page"{{end}}>Runs</a>
     <a href="/workspaces/{{.}}/states"{{if eq $t "states"}} aria-current="page"{{end}}>States</a>
     <a href="/workspaces/{{.}}/variables"{{if eq $t "variables"}} aria-current="page"{{end}}>Variables</a>
-    <a href="/workspaces/{{.}}/settings"{{if eq $t "settings"}} aria-current="page"{{end}}>Settings</a>
+    <a href="/workspaces/{{.}}/settings"{{if eq $t "settings"}} aria-current="page"{{end}}>Settings ›</a>
   </nav>
   {{end}}
   {{else}}
@@ -391,7 +391,7 @@
     {{end}}
     {{if and .Deployments (user).Admin}}<a href="/variable-sets"{{if eq $s "variable-sets"}} aria-current="page"{{end}}>Variable sets</a>{{end}}
     {{if .Registry}}<a href="/registry"{{if eq $s "registry"}} aria-current="page"{{end}}>Registry</a>{{end}}
-    {{if (user).Admin}}<a href="/organization">Settings</a>{{end}}
+    {{if (user).Admin}}<a href="/organization">Settings ›</a>{{end}}
   </nav>
   {{end}}
   {{end}}
