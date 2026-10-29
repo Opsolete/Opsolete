@@ -1,0 +1,41 @@
+# Documentation site: Hugo + Hextra. Preview with `just docs`; CI publishes it to GitHub Pages (.github/workflows/docs.yml).
+baseURL: https://opsolete.github.io/Opsolete/
+title: Opsolete
+enableGitInfo: true
+
+module:
+  imports:
+    - path: github.com/imfing/hextra
+
+markup:
+  goldmark:
+    renderer:
+      unsafe: true # raw HTML in hextra shortcodes
+  highlight:
+    noClasses: false
+
+menu:
+  main:
+    - name: Docs
+      pageRef: /docs
+      weight: 1
+    - name: Search
+      weight: 2
+      params:
+        type: search
+    - name: GitHub
+      weight: 3
+      url: https://github.com/Opsolete/Opsolete
+      params:
+        icon: github
+
+params:
+  navbar:
+    displayTitle: true
+    displayLogo: false
+  footer:
+    displayCopyright: false
+    displayPoweredBy: true
+  editURL:
+    enable: true
+    base: https://github.com/Opsolete/Opsolete/edit/master/docs/content

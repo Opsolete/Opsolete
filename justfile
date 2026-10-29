@@ -141,3 +141,7 @@ check: test smoke
 
 # stop background services
 down: db-stop
+
+# preview the documentation site (docs/) on http://localhost:1313/Opsolete/
+docs:
+    hugo server -s docs

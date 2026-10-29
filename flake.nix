@@ -136,7 +136,7 @@
       # postgres runs project-local on a unix socket in .devdata/ (no port clash); see justfile.
     in {
       default = pkgs.mkShell {
-        packages = with pkgs; [go gopls gotools postgresql_17 just curl docker-client terraform infracost];
+        packages = with pkgs; [go gopls gotools postgresql_17 just curl docker-client terraform infracost hugo];
         shellHook = ''
           export PGHOST="$PWD/.devdata"
           export PGDATA="$PGHOST/pg"
