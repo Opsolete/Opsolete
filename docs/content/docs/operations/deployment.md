@@ -18,6 +18,14 @@ docker run -e OPS_SERVER_URL=http://opsolete:8080 -e OPS_RUNNER_TOKEN=$RUNNER_TO
 
 ## Kubernetes
 
+The [Helm chart](https://github.com/Opsolete/Helm-charts) does all of the below. It runs as non-root with a read-only root filesystem, and can give the app workload identity for `STATE_STORE` (`workloadIdentity.provider: azure|aws|gcp`). Runners never get one.
+
+```sh
+helm repo add opsolete https://opsolete.github.io/Helm-charts
+helm install opsolete opsolete/opsolete --set secrets.existingSecret=opsolete \
+  --set config.PUBLIC_URL=https://opsolete.example.com --set config.STATE_STORE=azblob://tfstate …
+```
+
 - Run two Deployments of the same images: the app, and the runners. The app is stateless: everything it keeps is in Postgres and `STATE_STORE`, and the templates come from a [Git repository]({{< relref "/docs/catalog/templates#where-templates-live" >}}), so it needs no volume.
 - Put the runner token in one Secret (`kubectl create secret generic opsolete-runner --from-literal=token=$(openssl rand -hex 32)`, or from sops / External Secrets). Map it to `RUNNER_TOKEN` in the app and to `OPS_RUNNER_TOKEN` in the runners with `secretKeyRef`. Start order doesn't matter: runners retry until the app is up. Cloud credentials come from [variables]({{< relref "/docs/usage/variables" >}}).
 - Scale runners with `replicas`, one job each at a time.
