@@ -87,10 +87,6 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 	}
 	// from the publish wizard, advanced settings may stay empty and finishing continues publishing
 	wiz := url.Values{"wizard": {"1"}, "return": {"module"}, "workspaces": {"1"}, "workspace_scope": {"selected"}}
-	if rec := post(h, "/vcs/"+connID+"/settings", wiz); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "enable modules") {
-		t.Fatalf("the publish flow needs modules enabled: %d", rec.Code)
-	}
-	wiz.Set("modules", "1")
 	if rec := post(h, "/vcs/"+connID+"/settings", wiz); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/registry/publish?connection="+connID {
 		t.Fatalf("finish to the publish wizard: %d %q", rec.Code, rec.Header().Get("Location"))
 	}
@@ -138,17 +134,11 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 	if rec := post(h, "/registry/terraform-aws-rds/f"+id+"/aws/unlink", nil); rec.Code != http.StatusNotFound {
 		t.Fatalf("unlink twice: %d", rec.Code)
 	}
-	// Modules off: the connection is no longer offered for publishing, and publishing through it is refused.
-	if rec := post(h, "/vcs/"+connID+"/settings", url.Values{"workspaces": {"1"}, "workspace_scope": {"selected"}}); rec.Code != http.StatusSeeOther {
-		t.Fatalf("turn modules off: %d %s", rec.Code, rec.Body.String())
+	// Any connection publishes modules; the settings page shows what uses the connection's token.
+	if page := get(h, "/vcs").Body.String(); !strings.Contains(page, "1 module") {
+		t.Fatalf("used by: %s", page)
 	}
-	if page := get(h, "/registry/publish?type=vcs").Body.String(); strings.Contains(page, "?connection="+connID) {
-		t.Fatalf("a connection without modules must not be offered: %s", page)
-	}
-	if rec := post(h, "/registry/publish", url.Values{"connection": {connID}, "repo": {"acme/terraform-aws-rds"}, "namespace": {ns}}); rec.Code != http.StatusForbidden {
-		t.Fatalf("publish through a connection without modules: %d", rec.Code)
-	}
-	if page := get(h, "/vcs/"+connID+"/settings").Body.String(); !strings.Contains(page, `name="modules" value="1">`) || !strings.Contains(page, "Update VCS provider") {
+	if page := get(h, "/vcs/"+connID+"/settings").Body.String(); !strings.Contains(page, `action="/vcs/`+connID+`/token"`) || !strings.Contains(page, "Update VCS provider") {
 		t.Fatalf("settings page: %s", page)
 	}
 	page := get(h, "/registry/"+ns+"/rds/aws/1.0.0").Body.String()

@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/opsolete/opsolete/internal/auth"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/vcs"
 )
@@ -40,7 +39,6 @@ type catalogPage struct {
 	Count   int
 	Error   string
 	Saved   bool
-	Token   bool // the access token was just replaced
 }
 
 func (s *Server) catalogPage(w http.ResponseWriter, r *http.Request) {
@@ -59,7 +57,7 @@ func (s *Server) catalogPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) renderCatalog(w http.ResponseWriter, r *http.Request, status int, form map[string]string, errMsg string) {
-	p := catalogPage{Form: form, Error: errMsg, Count: len(s.Templates.List()), Saved: r.URL.Query().Has("saved"), Token: r.URL.Query().Has("token")}
+	p := catalogPage{Form: form, Error: errMsg, Count: len(s.Templates.List()), Saved: r.URL.Query().Has("saved")}
 	tc, err := s.Store.GetTemplateCatalog(r.Context())
 	if err == nil {
 		p.Catalog = &tc
@@ -142,46 +140,6 @@ func (s *Server) saveCatalog(w http.ResponseWriter, r *http.Request) {
 
 func catalogForm(tc storage.TemplateCatalog) map[string]string {
 	return map[string]string{"connection": tc.ConnectionID, "repo": tc.Repo, "branch": tc.Branch, "dir": tc.Dir, "mode": tc.Mode}
-}
-
-// saveCatalogToken replaces the access token of the catalog's connection, once it can read the
-// catalog's branch. The connection is shared: its modules and workspaces use the new token too.
-func (s *Server) saveCatalogToken(w http.ResponseWriter, r *http.Request) {
-	tc, err := s.Store.GetTemplateCatalog(r.Context())
-	if errors.Is(err, sql.ErrNoRows) {
-		http.NotFound(w, r)
-		return
-	}
-	var sc storage.VCSConnection
-	if err == nil {
-		sc, err = s.Store.GetVCSConnection(r.Context(), tc.ConnectionID)
-	}
-	if err != nil {
-		s.internalError(w, "template catalog connection", err)
-		return
-	}
-	token := strings.TrimSpace(r.PostFormValue("token"))
-	if token == "" {
-		s.renderCatalog(w, r, http.StatusUnprocessableEntity, catalogForm(tc), "paste the new access token")
-		return
-	}
-	if _, err := (vcs.Conn{Provider: sc.Provider, BaseURL: sc.BaseURL, Token: token}).Head(r.Context(), tc.Repo, tc.Branch); err != nil {
-		s.renderCatalog(w, r, http.StatusUnprocessableEntity, catalogForm(tc), fmt.Sprintf("the new token can't read branch %s of %q: %v", tc.Branch, tc.Repo, err))
-		return
-	}
-	sealed, err := vcs.Seal(s.SecretKey, token, vcs.TokenAD(sc))
-	if err == nil {
-		err = s.Store.ResealVCSToken(r.Context(), sc.ID, sc.Token, sealed)
-	}
-	if err != nil {
-		s.internalError(w, "replace vcs token", err)
-		return
-	}
-	s.Log.Info("vcs token replaced", "connection", sc.Name, "user", auth.FromContext(r.Context()).Email)
-	if err := vcs.SyncCatalog(r.Context(), s.Store, s.SecretKey, s.Templates); err != nil {
-		s.Log.Warn("template catalog sync", "err", err) // shown on the page as the sync error
-	}
-	http.Redirect(w, r, "/catalog?token", http.StatusSeeOther)
 }
 
 func (s *Server) syncCatalog(w http.ResponseWriter, r *http.Request) {

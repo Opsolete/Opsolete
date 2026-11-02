@@ -1,16 +1,17 @@
 {{template "top"}}
 {{$p := index .Form "provider"}}{{$ret := .Return}}
-{{$back := "/vcs"}}{{if eq $ret "workspace"}}{{$back = "/workspaces/new?type=vcs"}}{{else if eq $ret "module"}}{{$back = "/registry/publish?type=vcs"}}{{end}}
+{{$back := "/vcs"}}{{if eq $ret "workspace"}}{{$back = "/workspaces/new?type=vcs"}}{{else if eq $ret "module"}}{{$back = "/registry/publish?type=vcs"}}{{else if eq $ret "catalog"}}{{$back = "/catalog"}}{{end}}
 <nav class="back" aria-label="breadcrumb"><a href="/vcs">VCS providers</a> / {{if .Edit}}{{.Conn.Name}}{{else}}Add VCS provider{{end}}</nav>
 <div class="page-head">
   <div>
     {{if .Edit}}<h1>{{.Conn.Name}}</h1>{{else}}
     <h1>Add VCS provider</h1>
-    <p class="muted">Connect GitHub or Azure DevOps so workspaces and registry modules can use its repositories.
-      {{if eq $ret "workspace"}}Afterwards you continue creating your workspace.{{else if eq $ret "module"}}Afterwards you continue publishing your module.{{end}}</p>{{end}}
+    <p class="muted">Connect GitHub or Azure DevOps so workspaces, registry modules and the template catalog can use its repositories.
+      {{if eq $ret "workspace"}}Afterwards you continue creating your workspace.{{else if eq $ret "module"}}Afterwards you continue publishing your module.{{else if eq $ret "catalog"}}Afterwards you continue setting up the template catalog.{{end}}</p>{{end}}
   </div>
 </div>
 {{with .Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
+{{if .Token}}<p class="alert" role="status">Access token replaced.</p>{{end}}
 
 {{if not .Edit}}
 <ol class="stepper">
@@ -77,8 +78,8 @@
 <form method="post" action="/vcs/{{.Conn.ID}}/settings" class="settings">
   {{if not .Edit}}<input type="hidden" name="wizard" value="1">{{end}}
   <input type="hidden" name="return" value="{{$ret}}">
-  <h3>Scope of VCS provider</h3>
-  <p class="muted">Configure what this connection's repositories may be used for.</p>
+  <h3>Workspace scope</h3>
+  <p class="muted">Registry modules and the template catalog are set up by admins and may use any connection. Choose which workspaces may link this connection's repositories.</p>
 
   <fieldset class="scope">
     <legend>Workspaces</legend>
@@ -98,17 +99,22 @@
     </div>
   </fieldset>
 
-  <fieldset class="scope">
-    <legend>Modules</legend>
-    <label class="check"><input type="checkbox" class="switch" role="switch" name="modules" value="1"{{if index $f "modules"}} checked{{end}}>
-      <span>Enable<small>Let admins publish registry modules from this connection. Modules already published keep syncing.</small></span></label>
-  </fieldset>
-
   <div class="actions">
     {{if .Edit}}<button type="submit">Update VCS provider</button><a class="btn secondary" href="/vcs">Cancel</a>
     {{else}}<button type="submit">{{if $ret}}Save and continue{{else}}Save and finish{{end}}</button>{{end}}
   </div>
 </form>
+
+{{if .Edit}}
+<form method="post" action="/vcs/{{.Conn.ID}}/token" class="settings">
+  <h3 id="token">Access token</h3>
+  <p class="muted">Everything that uses this connection (its workspaces, modules and the template catalog) switches to the new token.</p>
+  <label for="new-token">New personal access token</label>
+  <input id="new-token" name="token" type="password" required autocomplete="off" aria-describedby="new-token-hint">
+  <p class="hint" id="new-token-hint">Checked now, as when adding the connection, stored encrypted and never shown again.{{if .Conn.Catalog}} Saving templates to Git needs write access (Settings → Templates).{{end}}</p>
+  <div class="actions"><button type="submit" class="secondary">Replace token</button></div>
+</form>
+{{end}}
 
 {{end}}
 {{template "bottom"}}

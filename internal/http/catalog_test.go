@@ -168,13 +168,17 @@ func TestTemplateCatalogInGit(t *testing.T) {
 	if page := get(h, "/catalog").Body.String(); !strings.Contains(page, `<option value="acme/catalog" selected>`) {
 		t.Fatalf("the configured repo is selected: %s", page)
 	}
-	// Replacing the connection's token: one that can't read the branch is refused, a good one is sealed anew.
+	// The connection shows what uses it; its token is replaced on its settings page: a token the
+	// provider refuses is kept out, a good one is sealed anew.
+	if page := get(h, "/vcs").Body.String(); !strings.Contains(page, `<a href="/catalog">Template catalog</a>`) {
+		t.Fatalf("used by: %s", page)
+	}
 	var before, after []byte
 	store.DB.QueryRow(`SELECT token FROM vcs_connections WHERE id = $1`, connID).Scan(&before)
-	if rec := post(h, "/catalog/token", url.Values{"token": {"wrong"}}); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "can&#39;t read branch") {
+	if rec := post(h, "/vcs/"+connID+"/token", url.Values{"token": {"wrong"}}); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "connection check failed") {
 		t.Fatalf("bad token replaced: %d", rec.Code)
 	}
-	if rec := post(h, "/catalog/token", url.Values{"token": {"pat"}}); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/catalog?token" {
+	if rec := post(h, "/vcs/"+connID+"/token", url.Values{"token": {"pat"}}); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/vcs/"+connID+"/settings?token" {
 		t.Fatalf("replace token: %d %s", rec.Code, rec.Body.String())
 	}
 	store.DB.QueryRow(`SELECT token FROM vcs_connections WHERE id = $1`, connID).Scan(&after)

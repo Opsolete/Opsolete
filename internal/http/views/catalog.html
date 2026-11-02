@@ -8,7 +8,6 @@
 </div>
 {{with .Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
 {{if .Saved}}<p class="alert" role="status">Settings saved, templates loaded.</p>{{end}}
-{{if .Token}}<p class="alert" role="status">Access token replaced.</p>{{end}}
 
 {{with .Catalog}}
 <div class="card">
@@ -19,16 +18,7 @@
   <form method="post" action="/catalog/delete" style="display:inline"
     onsubmit="return confirm('Disconnect the repository? The templates come from TEMPLATES_DIR again.')">
     <button type="submit" class="danger small">Disconnect</button></form>
-  {{$id := .ConnectionID}}
-  <details>
-    <summary>Change access token</summary>
-    <form method="post" action="/catalog/token" class="settings">
-      <label for="token">New personal access token{{range $.Conns}}{{if eq .ID $id}} of {{.Name}}{{end}}{{end}}</label>
-      <input id="token" name="token" type="password" required autocomplete="off" aria-describedby="token-hint">
-      <p class="hint" id="token-hint">Checked against the branch above, stored encrypted and never shown again. It replaces the token of the whole VCS connection: modules and workspaces linked through it use the new token too. Saving templates to Git needs write access (see Template editor below).</p>
-      <div class="actions"><button type="submit" class="secondary">Replace token</button></div>
-    </form>
-  </details>
+  <a class="btn secondary small" href="/vcs/{{.ConnectionID}}/settings#token">Change access token</a>
 </div>
 {{else}}
 <p class="muted">No repository connected yet. {{if .Count}}The {{.Count}} templates in use are loaded from the local <code>TEMPLATES_DIR</code> folder until you connect one.{{else}}Connect one below to load templates.{{end}}</p>
@@ -41,6 +31,7 @@
     <option value="">Choose…</option>
     {{range .Conns}}<option value="{{.ID}}"{{if eq .ID (index $f "connection")}} selected{{end}}>{{.Name}} ({{.Provider}})</option>{{end}}
   </select>
+  <p class="hint"><a href="/vcs/new?return=catalog">Connect a different VCS</a>, for example with its own token for the catalog.</p>
   <label for="repo">Repository</label>
   {{if not (index $f "connection")}}
   <select id="repo" name="repo" disabled><option>Choose a VCS connection first</option></select>
@@ -67,10 +58,13 @@
     <span>Commit to the branch<small>Saving commits straight to the branch, live right away. Fails if the branch is protected. Needs GitHub <em>Contents: read and write</em> or Azure DevOps <em>Code: read &amp; write</em>.</small></span></label>
   <label class="check"><input type="radio" name="mode" value="off"{{if eq $m "off"}} checked{{end}}>
     <span>Off<small>Templates are only edited in the repository. A read-only token is enough.</small></span></label>
+  {{range .Conns}}{{if and (eq .ID (index $f "connection")) .WorkspaceScope (ne $m "off")}}
+  <p class="alert" role="note"><strong>{{.Name}}</strong> is also open to workspaces. Saving templates to Git needs a token with write access; consider a separate connection for the catalog so workspaces' repositories aren't reachable with a write token.</p>
+  {{end}}{{end}}
   <p class="hint">A token without write access shows its error at the first save. A save never overwrites a change made in Git since the catalog was loaded: the provider refuses it, and you review and save again.</p>
   <div class="actions"><button type="submit">Save and load templates</button></div>
 </form>
 {{else}}
-<p><a class="btn" href="/vcs/new">Add a VCS provider</a></p>
+<p><a class="btn" href="/vcs/new?return=catalog">Add a VCS provider</a></p>
 {{end}}
 {{template "bottom"}}

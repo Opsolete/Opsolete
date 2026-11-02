@@ -2,7 +2,7 @@
 <div class="page-head">
   <div>
     <h1>VCS providers</h1>
-    <p class="muted">Connect GitHub or Azure DevOps to link workspaces to repositories and <a href="/registry/publish?type=vcs">publish registry modules</a> from them.</p>
+    <p class="muted">A connection is an access token for GitHub or Azure DevOps. Workspaces (as its workspace scope allows), <a href="/registry/publish?type=vcs">registry modules</a> and the template catalog use it. Use separate connections where they need different permissions, such as a write token for the template catalog.</p>
   </div>
   <a class="btn" href="/vcs/new">Add a VCS provider</a>
 </div>
@@ -10,20 +10,24 @@
 
 <div class="card flush">
 <table>
-<tr><th>Name</th><th>Provider</th><th>API URL</th><th>Workspaces</th><th>Modules</th><th>Added</th><th></th></tr>
+<tr><th>Name</th><th>Provider</th><th>API URL</th><th>Workspace scope</th><th>Used by</th><th>Added</th><th></th></tr>
 {{range .Connections}}
 <tr>
   <td><a href="/vcs/{{.ID}}/settings"><strong>{{.Name}}</strong></a></td>
   <td>{{.Provider}}</td>
   <td><code>{{.BaseURL}}</code></td>
   <td>{{if eq .WorkspaceScope "all"}}All workspaces{{else if eq .WorkspaceScope "selected"}}{{len .Workspaces}} selected{{else}}<span class="muted">Off</span>{{end}}</td>
-  <td>{{if .Modules}}On{{else}}<span class="muted">Off</span>{{end}}</td>
+  <td>{{if or .LinkedWorkspaces .LinkedModules .Catalog}}
+    {{- with .LinkedWorkspaces}}{{.}} workspace{{if gt . 1}}s{{end}}{{end}}
+    {{- if and .LinkedWorkspaces .LinkedModules}} · {{end}}{{with .LinkedModules}}{{.}} module{{if gt . 1}}s{{end}}{{end}}
+    {{- if and .Catalog (or .LinkedWorkspaces .LinkedModules)}} · {{end}}{{if .Catalog}}<a href="/catalog">Template catalog</a>{{end}}
+    {{- else}}<span class="muted">Nothing</span>{{end}}</td>
   <td class="nowrap">{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
   <td class="nowrap">
     <a class="btn secondary small" href="/vcs/{{.ID}}/settings">Settings</a>
-    {{if .Modules}}<a class="btn secondary small" href="/registry/publish?connection={{.ID}}">Publish module</a>{{end}}
+    <a class="btn secondary small" href="/registry/publish?connection={{.ID}}">Publish module</a>
     <form method="post" action="/vcs/{{.ID}}/delete" style="display:inline"
-      onsubmit="return confirm('Delete this connection? Its modules stop syncing; published versions stay.')">
+      onsubmit="return confirm('Delete this connection? Its workspaces are unlinked and its modules stop syncing; published versions stay.')">
       <button type="submit" class="danger small">Delete</button></form>
   </td>
 </tr>

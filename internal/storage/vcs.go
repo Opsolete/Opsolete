@@ -18,8 +18,10 @@ type VCSConnection struct {
 	Token                       []byte
 	WorkspaceScope              string   // workspaces that may link its repositories: "" none, "all" or "selected"
 	Workspaces                  []string // names of the selected workspaces
-	Modules                     bool     // registry modules may be published from its repositories
 	CreatedAt                   time.Time
+	// what uses it, for the VCS providers page
+	LinkedWorkspaces, LinkedModules int
+	Catalog                         bool // the template catalog's repository
 }
 
 // AllowsWorkspace reports whether the named workspace may link the connection's repositories.
@@ -44,9 +46,12 @@ func (s *Store) CreateVCSConnection(ctx context.Context, c VCSConnection) (strin
 	return id, err
 }
 
-const connCols = `c.id, c.name, c.provider, c.base_url, c.token, c.workspace_scope, c.modules, c.created_at,
+const connCols = `c.id, c.name, c.provider, c.base_url, c.token, c.workspace_scope, c.created_at,
 	ARRAY(SELECT w.name FROM vcs_connection_workspaces a JOIN workspaces w ON w.id = a.workspace_id
-		WHERE a.connection_id = c.id ORDER BY w.name)`
+		WHERE a.connection_id = c.id ORDER BY w.name),
+	(SELECT count(*) FROM workspaces w WHERE w.vcs_connection_id = c.id),
+	(SELECT count(*) FROM vcs_modules m WHERE m.connection_id = c.id),
+	EXISTS (SELECT 1 FROM template_catalog t WHERE t.connection_id = c.id)`
 
 func scanConns(rows *sql.Rows, err error) ([]VCSConnection, error) {
 	if err != nil {
@@ -57,8 +62,8 @@ func scanConns(rows *sql.Rows, err error) ([]VCSConnection, error) {
 	types := pgtype.NewMap()
 	for rows.Next() {
 		var c VCSConnection
-		if err := rows.Scan(&c.ID, &c.Name, &c.Provider, &c.BaseURL, &c.Token, &c.WorkspaceScope, &c.Modules, &c.CreatedAt,
-			types.SQLScanner(&c.Workspaces)); err != nil {
+		if err := rows.Scan(&c.ID, &c.Name, &c.Provider, &c.BaseURL, &c.Token, &c.WorkspaceScope, &c.CreatedAt,
+			types.SQLScanner(&c.Workspaces), &c.LinkedWorkspaces, &c.LinkedModules, &c.Catalog); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -82,10 +87,9 @@ func (s *Store) GetVCSConnection(ctx context.Context, id string) (VCSConnection,
 	return conns[0], nil
 }
 
-// SetVCSScope changes what a connection may be used for: the workspaces that may link its
-// repositories ("", "all" or "selected"), and whether registry modules may be published from it.
-func (s *Store) SetVCSScope(ctx context.Context, id, workspaceScope string, modules bool) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE vcs_connections SET workspace_scope = $2, modules = $3 WHERE id = ops_uuid($1)`, id, workspaceScope, modules)
+// SetVCSScope sets the workspaces that may link a connection's repositories: "", "all" or "selected".
+func (s *Store) SetVCSScope(ctx context.Context, id, workspaceScope string) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE vcs_connections SET workspace_scope = $2 WHERE id = ops_uuid($1)`, id, workspaceScope)
 	return err
 }
 

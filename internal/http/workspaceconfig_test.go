@@ -86,7 +86,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	if rec := post(h, "/workspaces/new", refused); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "may not link") {
 		t.Fatalf("linking through a connection closed to workspaces: %d", rec.Code)
 	}
-	wizard := url.Values{"wizard": {"1"}, "return": {"workspace"}, "workspace_scope": {"selected"}, "modules": {"1"}}
+	wizard := url.Values{"wizard": {"1"}, "return": {"workspace"}, "workspace_scope": {"selected"}}
 	if rec := post(h, "/vcs/"+connID+"/settings", wizard); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "enable workspaces") {
 		t.Fatalf("the workspace flow needs workspaces enabled: %d", rec.Code)
 	}
