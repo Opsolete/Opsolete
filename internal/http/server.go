@@ -139,6 +139,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /catalog", s.admin(s.catalogPage))
 		mux.HandleFunc("POST /catalog", s.admin(s.saveCatalog))
 		mux.HandleFunc("POST /catalog/sync", s.admin(s.syncCatalog))
+		mux.HandleFunc("POST /catalog/token", s.admin(s.saveCatalogToken))
 		mux.HandleFunc("POST /catalog/delete", s.admin(s.deleteCatalog))
 	}
 	s.runnerRoutes(mux)

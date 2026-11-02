@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -166,6 +167,19 @@ func TestTemplateCatalogInGit(t *testing.T) {
 	}
 	if page := get(h, "/catalog").Body.String(); !strings.Contains(page, `<option value="acme/catalog" selected>`) {
 		t.Fatalf("the configured repo is selected: %s", page)
+	}
+	// Replacing the connection's token: one that can't read the branch is refused, a good one is sealed anew.
+	var before, after []byte
+	store.DB.QueryRow(`SELECT token FROM vcs_connections WHERE id = $1`, connID).Scan(&before)
+	if rec := post(h, "/catalog/token", url.Values{"token": {"wrong"}}); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "can&#39;t read branch") {
+		t.Fatalf("bad token replaced: %d", rec.Code)
+	}
+	if rec := post(h, "/catalog/token", url.Values{"token": {"pat"}}); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/catalog?token" {
+		t.Fatalf("replace token: %d %s", rec.Code, rec.Body.String())
+	}
+	store.DB.QueryRow(`SELECT token FROM vcs_connections WHERE id = $1`, connID).Scan(&after)
+	if bytes.Equal(before, after) || strings.Contains(string(after), "pat") {
+		t.Fatal("the new token must be stored sealed")
 	}
 	edit := url.Values{"name": {"Web site"}, "module_source": {"git::https://example.com/m.git"}, "module_ref": {"v2"}, "in_name": {"n"}, "in_type": {"string"}}
 	if rec := post(h, "/templates/web-"+id+"/edit", edit); rec.Code != http.StatusSeeOther {

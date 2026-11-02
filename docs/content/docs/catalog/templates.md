@@ -16,7 +16,7 @@ In production, in a Git repository, so the app keeps no data on its disk:
    - **Commit to the branch:** live right away. The branch must allow direct pushes.
    - **Off:** templates are only edited in Git; a read-only token is enough.
 
-   Saving needs a token with write access: GitHub fine-grained *Contents: read and write* (plus *Pull requests: read and write* for pull requests), Azure DevOps *Code: read & write*. A read-only token fails at the first save, with the provider's error.
+   Saving needs a token with write access: GitHub fine-grained *Contents: read and write* (plus *Pull requests: read and write* for pull requests), Azure DevOps *Code: read & write*. A read-only token fails at the first save, with the provider's error. To give the connection a token with more (or fewer) permissions, use *Change access token* in **Settings → Templates**: the new token is checked against the catalog branch and replaces the token of the whole connection, so its modules and workspaces use it too.
 
 Every app instance checks the branch every minute (GitHub: a conditional request, free when nothing changed) and on **Sync now**, and loads each new commit. A commit with an invalid template isn't loaded: the page shows why, and the last good commit stays. The last loaded files are kept in Postgres, so an instance starts with the templates even while the provider is down.
 

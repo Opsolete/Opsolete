@@ -8,6 +8,7 @@
 </div>
 {{with .Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
 {{if .Saved}}<p class="alert" role="status">Settings saved, templates loaded.</p>{{end}}
+{{if .Token}}<p class="alert" role="status">Access token replaced.</p>{{end}}
 
 {{with .Catalog}}
 <div class="card">
@@ -18,6 +19,16 @@
   <form method="post" action="/catalog/delete" style="display:inline"
     onsubmit="return confirm('Disconnect the repository? The templates come from TEMPLATES_DIR again.')">
     <button type="submit" class="danger small">Disconnect</button></form>
+  {{$id := .ConnectionID}}
+  <details>
+    <summary>Change access token</summary>
+    <form method="post" action="/catalog/token" class="settings">
+      <label for="token">New personal access token{{range $.Conns}}{{if eq .ID $id}} of {{.Name}}{{end}}{{end}}</label>
+      <input id="token" name="token" type="password" required autocomplete="off" aria-describedby="token-hint">
+      <p class="hint" id="token-hint">Checked against the branch above, stored encrypted and never shown again. It replaces the token of the whole VCS connection: modules and workspaces linked through it use the new token too. Saving templates to Git needs write access (see Template editor below).</p>
+      <div class="actions"><button type="submit" class="secondary">Replace token</button></div>
+    </form>
+  </details>
 </div>
 {{else}}
 <p class="muted">No repository connected yet. {{if .Count}}The {{.Count}} templates in use are loaded from the local <code>TEMPLATES_DIR</code> folder until you connect one.{{else}}Connect one below to load templates.{{end}}</p>

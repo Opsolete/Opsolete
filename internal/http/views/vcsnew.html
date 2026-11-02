@@ -35,8 +35,9 @@
   <p>Create a fine-grained personal access token for the account Opsolete should act as:</p>
   <ol>
     <li>Open <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Settings → Developer settings → Fine-grained tokens → Generate new token</a>.</li>
-    <li><strong>Repository access:</strong> <em>Only select repositories</em>, the module and workspace repositories.</li>
-    <li><strong>Permissions:</strong> <em>Contents: Read-only</em>. Nothing else is needed.</li>
+    <li><strong>Repository access:</strong> <em>Only select repositories</em>, the module, workspace and template catalog repositories.</li>
+    <li><strong>Permissions:</strong> <em>Contents: Read-only</em> for modules, workspaces and a template catalog edited only in Git.
+      If templates saved in Opsolete go to Git (Settings → Templates): <em>Contents: Read and write</em>, plus <em>Pull requests: Read and write</em> to open pull requests.</li>
     <li>Generate the token and paste it below.</li>
   </ol>
   {{else}}
@@ -44,7 +45,7 @@
   <ol>
     <li>In Azure DevOps, open <strong>User settings → Personal access tokens → New Token</strong>.</li>
     <li><strong>Organization:</strong> the organization with your repositories.</li>
-    <li><strong>Scopes:</strong> <em>Custom defined</em>, only <em>Code: Read</em>.</li>
+    <li><strong>Scopes:</strong> <em>Custom defined</em>, only <em>Code: Read</em>; <em>Code: Read &amp; write</em> if templates saved in Opsolete go to Git (Settings → Templates).</li>
     <li>Create the token and paste it below.</li>
   </ol>
   {{end}}
