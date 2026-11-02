@@ -83,7 +83,7 @@
 
 {{else if eq .Step 2}}
 <h2>Choose a repository</h2>
-<p class="muted">Repositories of <strong>{{$conn.Name}}</strong> ({{$conn.Provider}}). The module must be at the repository root.</p>
+<p class="muted">Repositories of <strong>{{$conn.Name}}</strong> ({{$conn.Provider}}). The module is at the repository root or in a folder you choose next.</p>
 <form method="get" class="inline">
   <input type="hidden" name="connection" value="{{$conn.ID}}">
   <input name="repo" list="repos" required aria-label="repository" placeholder="{{if eq $conn.Provider "azure-devops"}}project/repo{{else}}owner/repo{{end}}">
@@ -103,13 +103,16 @@
   <input type="hidden" name="connection" value="{{$conn.ID}}">
   <input type="hidden" name="repo" value="{{$repo}}">
   <p>Repository: <code>{{$repo}}</code> via {{$conn.Name}}</p>
+  <label for="dir">Folder</label>
+  <input id="dir" name="dir" value="{{index .Form "dir"}}" placeholder="modules/storage-account" aria-describedby="dir-hint">
+  <p class="hint" id="dir-hint">Folder of the module's <code>.tf</code> files, for a repository with several modules. Empty: the repository root.</p>
   <label for="namespace">Namespace <span class="req" aria-hidden="true">*</span></label>
   <input id="namespace" name="namespace" value="{{index .Form "namespace"}}" required placeholder="platform">
   <label for="name">Module name <span class="req" aria-hidden="true">*</span></label>
   <input id="name" name="name" value="{{index .Form "name"}}" required placeholder="storage-account">
   <label for="system">Provider name <span class="req" aria-hidden="true">*</span></label>
   <input id="system" name="system" value="{{index .Form "system"}}" required placeholder="azurerm">
-  <p class="hint">Filled in from a <code>terraform-&lt;provider&gt;-&lt;name&gt;</code> repository name. Published as <code>{{.Host}}/&lt;namespace&gt;/&lt;name&gt;/&lt;provider&gt;</code>.</p>
+  <p class="hint">The namespace defaults to the repository name; name and provider are filled in from a <code>terraform-&lt;provider&gt;-&lt;name&gt;</code> repository name. Published as <code>{{.Host}}/&lt;namespace&gt;/&lt;name&gt;/&lt;provider&gt;</code>.</p>
   <div class="actions"><a href="?connection={{$conn.ID}}">‹ Previous</a><button type="submit">Publish module</button><a class="btn secondary" href="/registry">Cancel</a></div>
 </form>
 {{end}}

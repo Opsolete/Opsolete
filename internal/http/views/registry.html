@@ -41,15 +41,18 @@
 {{range .}}
 <tr>
   <td><code>{{.Namespace}}/{{.Name}}/{{.System}}</code></td>
-  <td><span class="tag">{{.Connection}}</span> {{.Repo}}</td>
+  <td><span class="tag">{{.Connection}}</span> {{.Repo}}{{with .Dir}} <code>/{{.}}</code>{{end}}</td>
   <td>{{with .SyncedAt}}{{.Format "2006-01-02 15:04"}}{{else}}<span class="muted">never</span>{{end}}
     {{with .SyncError}}<p class="err">{{.}}</p>{{end}}</td>
-  <td><form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/sync"><button type="submit" class="secondary small">Sync now</button></form></td>
+  <td class="nowrap"><form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/sync" style="display:inline"><button type="submit" class="secondary small">Sync now</button></form>
+    <form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/unlink" style="display:inline"
+      onsubmit="return confirm('Unlink this module from its repository? New tags are no longer published; published versions stay.')">
+      <button type="submit" class="danger small">Unlink</button></form></td>
 </tr>
 {{end}}
 </table>
 </div>
-<p class="hint">Every semver tag of these repositories becomes a module version, checked every 5 minutes.</p>
+<p class="hint">Every semver tag of these repositories becomes a module version, checked every 5 minutes. To change a module's repository or folder, unlink it and publish it again.</p>
 {{end}}{{end}}
 
 {{template "bottom"}}

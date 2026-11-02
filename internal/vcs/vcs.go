@@ -459,8 +459,8 @@ func (c Conn) PullRequests(ctx context.Context, repo, branch string) ([]PullRequ
 }
 
 // Archive downloads the repository at a tag or commit (refType "tag" | "commit") as a module
-// archive: a .tar.gz with the repo root at the archive root.
-func (c Conn) Archive(ctx context.Context, repo, ref, refType string) ([]byte, error) {
+// archive: a .tar.gz with folder dir of the repo ("" = the root) at the archive root.
+func (c Conn) Archive(ctx context.Context, repo, ref, refType, dir string) ([]byte, error) {
 	a, b, err := splitRepo(repo)
 	if err != nil {
 		return nil, err
@@ -468,6 +468,12 @@ func (c Conn) Archive(ctx context.Context, repo, ref, refType string) ([]byte, e
 	files, err := c.download(ctx, a, b, ref, refType)
 	if err != nil {
 		return nil, err
+	}
+	if dir != "" {
+		files = subdir(files, dir)
+		if len(files) == 0 {
+			return nil, fmt.Errorf("no folder %q in the repository", dir)
+		}
 	}
 	out, err := writeTarGz(files)
 	if err == nil && len(out) > registry.MaxArchiveSize {
@@ -574,6 +580,17 @@ func repoFiles(files []file, top bool) []file {
 			continue
 		}
 		out = append(out, file{name, f.body})
+	}
+	return out
+}
+
+// subdir keeps the files under dir (a clean relative path), named relative to it.
+func subdir(files []file, dir string) []file {
+	var out []file
+	for _, f := range files {
+		if name, ok := strings.CutPrefix(f.name, dir+"/"); ok {
+			out = append(out, file{name, f.body})
+		}
 	}
 	return out
 }
@@ -771,7 +788,7 @@ func syncModule(ctx context.Context, st *storage.Store, key []byte, m storage.VC
 			continue // not a release tag, or already published (v1.0.0 and 1.0.0 are one version)
 		}
 		have[ver] = true
-		archive, err := c.Archive(ctx, m.Repo, tag, "tag")
+		archive, err := c.Archive(ctx, m.Repo, tag, "tag", m.Dir)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("tag %s: %w", tag, err))
 			continue

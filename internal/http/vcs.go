@@ -29,6 +29,7 @@ func (s *Server) vcsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /vcs/{id}/settings", s.admin(s.saveConnectionSettings))
 	mux.HandleFunc("POST /registry/publish", s.admin(s.publishModule))
 	mux.HandleFunc("POST /registry/{ns}/{name}/{system}/sync", s.admin(s.syncModule))
+	mux.HandleFunc("POST /registry/{ns}/{name}/{system}/unlink", s.admin(s.unlinkModule))
 }
 
 type vcsPage struct {
@@ -339,7 +340,11 @@ func (s *Server) renderPublish(w http.ResponseWriter, r *http.Request, status in
 // Terraform's module repo naming convention (terraform-<system>-<name>); used to fill in name and system when left empty.
 var tfRepoRe = regexp.MustCompile(`^terraform-([a-z0-9]+)-([a-z0-9][a-z0-9_-]*)$`)
 
+// fillFromRepo fills in what is left empty: the namespace is the repository's name, name and system follow its naming convention.
 func fillFromRepo(form map[string]string) {
+	if form["namespace"] == "" && form["repo"] != "" {
+		form["namespace"] = strings.ToLower(path.Base(form["repo"]))
+	}
 	if m := tfRepoRe.FindStringSubmatch(strings.ToLower(path.Base(form["repo"]))); m != nil {
 		if form["system"] == "" {
 			form["system"] = m[1]
@@ -353,7 +358,7 @@ func fillFromRepo(form map[string]string) {
 // publishModule links a repo to a registry module and publishes its tags right away.
 func (s *Server) publishModule(w http.ResponseWriter, r *http.Request) {
 	form := map[string]string{}
-	for _, k := range []string{"repo", "namespace", "name", "system"} {
+	for _, k := range []string{"repo", "dir", "namespace", "name", "system"} {
 		form[k] = strings.TrimSpace(r.PostFormValue(k))
 	}
 	connID := r.PostFormValue("connection")
@@ -374,7 +379,12 @@ func (s *Server) publishModule(w http.ResponseWriter, r *http.Request) {
 		fail("choose a repository")
 		return
 	}
-	m := storage.VCSModule{Namespace: ns, Name: name, System: sys, ConnectionID: connID, Repo: form["repo"]}
+	dir, ok := repoDir(form["dir"])
+	if !ok {
+		fail(fmt.Sprintf("%q is not a folder of the repository", form["dir"]))
+		return
+	}
+	m := storage.VCSModule{Namespace: ns, Name: name, System: sys, ConnectionID: connID, Repo: form["repo"], Dir: dir}
 	if err := s.Store.LinkVCSModule(r.Context(), m); errors.Is(err, storage.ErrExists) {
 		fail(fmt.Sprintf("%s/%s/%s is already published from a repository", ns, name, sys))
 		return
@@ -382,7 +392,7 @@ func (s *Server) publishModule(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "link vcs module", err)
 		return
 	}
-	s.Log.Info("module linked to vcs", "module", ns+"/"+name+"/"+sys, "repo", m.Repo, "user", auth.FromContext(r.Context()).Email)
+	s.Log.Info("module linked to vcs", "module", ns+"/"+name+"/"+sys, "repo", m.Repo, "dir", m.Dir, "user", auth.FromContext(r.Context()).Email)
 	s.syncAndRedirect(w, r, m)
 }
 
@@ -397,6 +407,21 @@ func (s *Server) syncModule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.syncAndRedirect(w, r, m)
+}
+
+// unlinkModule stops publishing a module from its repository; its published versions stay.
+// Changing the repository or folder is unlinking and publishing again.
+func (s *Server) unlinkModule(w http.ResponseWriter, r *http.Request) {
+	ns, name, sys := r.PathValue("ns"), r.PathValue("name"), r.PathValue("system")
+	if err := s.Store.UnlinkVCSModule(r.Context(), ns, name, sys); errors.Is(err, sql.ErrNoRows) {
+		http.NotFound(w, r)
+		return
+	} else if err != nil {
+		s.internalError(w, "unlink vcs module", err)
+		return
+	}
+	s.Log.Info("module unlinked from vcs", "module", ns+"/"+name+"/"+sys, "user", auth.FromContext(r.Context()).Email)
+	http.Redirect(w, r, "/registry", http.StatusSeeOther)
 }
 
 // syncAndRedirect goes to the newest version it published, else to the registry, which shows sync errors.

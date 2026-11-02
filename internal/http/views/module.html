@@ -3,10 +3,13 @@
 <div class="page-head">
   <div>
     <h1>{{.Namespace}}/{{.Name}}/{{.System}} <span class="tag">{{.Version}}</span>{{if .Templates}} <span class="status no_changes">No-code ready</span>{{end}}</h1>
-    <p class="muted"><code>{{.Source}}</code>{{with .Linked}} · published from <span class="tag">{{.Connection}}</span> {{.Repo}}{{end}}</p>
+    <p class="muted"><code>{{.Source}}</code>{{with .Linked}} · published from <span class="tag">{{.Connection}}</span> {{.Repo}}{{with .Dir}} <code>/{{.}}</code>{{end}}{{end}}</p>
   </div>
   <div class="inline">
-    {{with .Linked}}{{if $.Admin}}<form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/sync"><button type="submit" class="secondary">Sync now</button></form>{{end}}{{end}}
+    {{with .Linked}}{{if $.Admin}}<form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/sync"><button type="submit" class="secondary">Sync now</button></form>
+    <form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/unlink"
+      onsubmit="return confirm('Unlink this module from its repository? New tags are no longer published; published versions stay.')">
+      <button type="submit" class="danger">Unlink</button></form>{{end}}{{end}}
     {{if .Editor}}<a class="btn secondary" href="/templates/new?module={{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}">Create template</a>{{end}}
     {{range .Templates}}<a class="btn" href="/templates/{{.ID}}">Provision workspace{{if gt (len $.Templates) 1}}: {{.Name}}{{end}}</a>{{end}}
   </div>

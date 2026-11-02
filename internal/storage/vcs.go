@@ -126,26 +126,27 @@ type VCSModule struct {
 	ConnectionID            string
 	Connection, Provider    string // name and provider of the connection, for display
 	Repo                    string
+	Dir                     string // folder of the module in the repository; "" = the root
 	SyncedAt                *time.Time
 	SyncError               string
 }
 
 // LinkVCSModule returns ErrExists if the module is already linked to a repo.
 func (s *Store) LinkVCSModule(ctx context.Context, m VCSModule) error {
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO vcs_modules (namespace, name, system, connection_id, repo) VALUES ($1, $2, $3, $4::uuid, $5)`,
-		m.Namespace, m.Name, m.System, m.ConnectionID, m.Repo)
+	_, err := s.DB.ExecContext(ctx, `INSERT INTO vcs_modules (namespace, name, system, connection_id, repo, dir) VALUES ($1, $2, $3, $4::uuid, $5, $6)`,
+		m.Namespace, m.Name, m.System, m.ConnectionID, m.Repo, m.Dir)
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
 		return ErrExists
 	}
 	return err
 }
 
-const vcsModuleQuery = `SELECT m.namespace, m.name, m.system, m.connection_id, c.name, c.provider, m.repo, m.synced_at, m.sync_error
+const vcsModuleQuery = `SELECT m.namespace, m.name, m.system, m.connection_id, c.name, c.provider, m.repo, m.dir, m.synced_at, m.sync_error
 	FROM vcs_modules m JOIN vcs_connections c ON c.id = m.connection_id`
 
 func scanVCSModule(row interface{ Scan(...any) error }) (VCSModule, error) {
 	var m VCSModule
-	err := row.Scan(&m.Namespace, &m.Name, &m.System, &m.ConnectionID, &m.Connection, &m.Provider, &m.Repo, &m.SyncedAt, &m.SyncError)
+	err := row.Scan(&m.Namespace, &m.Name, &m.System, &m.ConnectionID, &m.Connection, &m.Provider, &m.Repo, &m.Dir, &m.SyncedAt, &m.SyncError)
 	return m, err
 }
 
@@ -170,6 +171,21 @@ func (s *Store) VCSModules(ctx context.Context) ([]VCSModule, error) {
 func (s *Store) GetVCSModule(ctx context.Context, namespace, name, system string) (VCSModule, error) {
 	return scanVCSModule(s.DB.QueryRowContext(ctx, vcsModuleQuery+` WHERE m.namespace=$1 AND m.name=$2 AND m.system=$3`,
 		namespace, name, system))
+}
+
+// UnlinkVCSModule stops publishing a module from its repository; published versions stay.
+// It returns sql.ErrNoRows if the module isn't linked.
+func (s *Store) UnlinkVCSModule(ctx context.Context, namespace, name, system string) error {
+	res, err := s.DB.ExecContext(ctx, `DELETE FROM vcs_modules WHERE namespace=$1 AND name=$2 AND system=$3`, namespace, name, system)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 // SetVCSSync records the outcome of a sync; syncErr "" means it succeeded.

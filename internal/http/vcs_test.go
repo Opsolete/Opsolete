@@ -119,6 +119,25 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 	if page := get(h, "/registry").Body.String(); !strings.Contains(page, "/registry/"+ns+"/rds/aws/sync") || !strings.Contains(page, connName) {
 		t.Fatalf("registry page: %s", page)
 	}
+	// A module in a folder, with the namespace left to default to the repository name; then unlinked.
+	t.Cleanup(func() { store.DB.Exec(`DELETE FROM vcs_modules WHERE name = $1`, "f"+id) })
+	folder := url.Values{"connection": {connID}, "repo": {"acme/terraform-aws-rds"}, "name": {"f" + id}, "dir": {"../x"}}
+	if rec := post(h, "/registry/publish", folder); rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("a folder outside the repository: %d", rec.Code)
+	}
+	folder.Set("dir", "/nope/")
+	if rec := post(h, "/registry/publish", folder); rec.Code != http.StatusSeeOther {
+		t.Fatalf("publish from a folder: %d %s", rec.Code, rec.Body.String())
+	}
+	if m, err := store.GetVCSModule(ctx, "terraform-aws-rds", "f"+id, "aws"); err != nil || m.Dir != "nope" || !strings.Contains(m.SyncError, `no folder "nope"`) {
+		t.Fatalf("linked from a folder: %+v %v", m, err)
+	}
+	if rec := post(h, "/registry/terraform-aws-rds/f"+id+"/aws/unlink", nil); rec.Code != http.StatusSeeOther {
+		t.Fatalf("unlink: %d", rec.Code)
+	}
+	if rec := post(h, "/registry/terraform-aws-rds/f"+id+"/aws/unlink", nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("unlink twice: %d", rec.Code)
+	}
 	// Modules off: the connection is no longer offered for publishing, and publishing through it is refused.
 	if rec := post(h, "/vcs/"+connID+"/settings", url.Values{"workspaces": {"1"}, "workspace_scope": {"selected"}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("turn modules off: %d %s", rec.Code, rec.Body.String())

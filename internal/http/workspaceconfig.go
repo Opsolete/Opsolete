@@ -429,7 +429,7 @@ func (s *Server) vcsArchive(w http.ResponseWriter, r *http.Request) {
 	c, err := s.vcsConn(ctx, ws.VCSConnectionID, ws.Name)
 	var b []byte
 	if err == nil {
-		b, err = c.Archive(ctx, ws.VCSRepo, run.VCSCommit, "commit")
+		b, err = c.Archive(ctx, ws.VCSRepo, run.VCSCommit, "commit", "")
 	}
 	if err != nil {
 		s.Log.Warn("vcs archive", "run", run.ID, "repo", ws.VCSRepo, "err", err)

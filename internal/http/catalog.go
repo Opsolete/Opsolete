@@ -19,6 +19,17 @@ import (
 
 var dirRe = regexp.MustCompile(`^[A-Za-z0-9._/-]{0,255}$`)
 
+// repoDir cleans a folder of a repository ("" = its root); ok is false if it isn't one.
+func repoDir(raw string) (dir string, ok bool) {
+	if dir = strings.Trim(strings.TrimSpace(raw), "/"); dir != "" {
+		dir = path.Clean(dir)
+	}
+	if dir == "." {
+		dir = ""
+	}
+	return dir, dirRe.MatchString(dir) && dir != ".." && !strings.HasPrefix(dir, "../")
+}
+
 type catalogPage struct {
 	Catalog *storage.TemplateCatalog // nil: TEMPLATES_DIR
 	Conns   []storage.VCSConnection
@@ -83,13 +94,10 @@ func (s *Server) saveCatalog(w http.ResponseWriter, r *http.Request) {
 	for _, k := range []string{"connection", "repo", "branch", "dir", "mode"} {
 		form[k] = strings.TrimSpace(r.PostFormValue(k))
 	}
-	tc := storage.TemplateCatalog{ConnectionID: form["connection"], Repo: form["repo"], Branch: form["branch"],
-		Dir: strings.Trim(form["dir"], "/"), Mode: form["mode"]}
+	dir, dirOK := repoDir(form["dir"])
+	tc := storage.TemplateCatalog{ConnectionID: form["connection"], Repo: form["repo"], Branch: form["branch"], Dir: dir, Mode: form["mode"]}
 	if tc.Branch == "" {
 		tc.Branch = "main"
-	}
-	if tc.Dir != "" {
-		tc.Dir = path.Clean(tc.Dir)
 	}
 	fail := func(msg string) { s.renderCatalog(w, r, http.StatusUnprocessableEntity, form, msg) }
 	switch {
@@ -99,7 +107,7 @@ func (s *Server) saveCatalog(w http.ResponseWriter, r *http.Request) {
 	case !branchRe.MatchString(tc.Branch) || strings.Contains(tc.Branch, ".."):
 		fail(fmt.Sprintf("%q is not a branch name", tc.Branch))
 		return
-	case !dirRe.MatchString(tc.Dir) || tc.Dir == ".." || strings.HasPrefix(tc.Dir, "../"):
+	case !dirOK:
 		fail(fmt.Sprintf("%q is not a folder of the repository", form["dir"]))
 		return
 	}

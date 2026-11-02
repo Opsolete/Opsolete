@@ -138,7 +138,7 @@ func TestProviders(t *testing.T) {
 		if err != nil || !slices.ContainsFunc(tags, func(t Tag) bool { return t.Name == tc.tag && t.Commit != "" }) {
 			t.Fatalf("%s tags: %v %v", tc.conn.Provider, tags, err)
 		}
-		archive, err := tc.conn.Archive(ctx, tc.repo, tc.tag, "tag")
+		archive, err := tc.conn.Archive(ctx, tc.repo, tc.tag, "tag", "")
 		if err != nil {
 			t.Fatalf("%s archive: %v", tc.conn.Provider, err)
 		}
@@ -154,6 +154,15 @@ func TestProviders(t *testing.T) {
 		slices.Sort(names)
 		if !slices.Equal(names, tc.wantFiles) {
 			t.Errorf("%s files: %v, want %v", tc.conn.Provider, names, tc.wantFiles)
+		}
+		// a module in a folder: that folder at the archive root; a missing folder is an error
+		if sub, err := tc.conn.Archive(ctx, tc.repo, tc.tag, "tag", "sub"); tc.conn.Provider == AzureDevOps {
+			if files, _ := readTarGz(sub); err != nil || len(files) != 1 || files[0].name != "x.tf" {
+				t.Errorf("%s folder sub: %v %v", tc.conn.Provider, files, err)
+			}
+		}
+		if _, err := tc.conn.Archive(ctx, tc.repo, tc.tag, "tag", "nope"); err == nil {
+			t.Errorf("%s: a missing folder must fail", tc.conn.Provider)
 		}
 	}
 }
