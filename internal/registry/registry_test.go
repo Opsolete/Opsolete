@@ -154,3 +154,13 @@ func TestResolve(t *testing.T) {
 		t.Fatalf("got  %+v\nwant %+v", got, want)
 	}
 }
+
+// A module variable declared sensitive is a sensitive input once the template lists it, without a default.
+func TestResolveSensitive(t *testing.T) {
+	vars := []tfconfig.Variable{{Name: "secret", Type: "string", Sensitive: true, Default: "x"}, {Name: "pw", Type: "string"}}
+	got := Resolve([]templates.Input{{Name: "secret", Type: "string"}, {Name: "pw", Type: "string", Sensitive: true}}, vars)
+	want := []templates.Input{{Name: "secret", Label: "secret", Type: "string", Sensitive: true}, {Name: "pw", Label: "pw", Type: "string", Sensitive: true}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %+v\nwant %+v", got, want)
+	}
+}

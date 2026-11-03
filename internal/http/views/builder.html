@@ -52,7 +52,7 @@
   <p class="muted">Each row becomes a form field and a Terraform variable. Clear a row's variable name to remove it. Options are comma-separated (dropdowns only).</p>
   <div class="card flush">
   <table id="fields">
-    <tr><th>Variable</th><th>Label</th><th>Type</th><th>Required</th><th>Pattern</th><th>Options</th><th>Default</th></tr>
+    <tr><th>Variable</th><th>Label</th><th>Type</th><th>Required</th><th>Sensitive</th><th>Pattern</th><th>Options</th><th>Default</th></tr>
     {{range .Rows}}
     <tr>
       <td><input name="in_name" value="{{.Name}}" aria-label="variable name" style="min-width:7rem"></td>
@@ -65,6 +65,9 @@
       </select></td>
       <td><select name="in_required" aria-label="required">
         <option value="no">no</option><option value="yes"{{if .Required}} selected{{end}}>yes</option>
+      </select></td>
+      <td><select name="in_sensitive" aria-label="sensitive" title="Stored encrypted, typed in a password field, never shown">
+        <option value="no">no</option><option value="yes"{{if .Sensitive}} selected{{end}}>yes</option>
       </select></td>
       <td><input name="in_pattern" value="{{.Pattern}}" aria-label="regex pattern" style="min-width:6rem"></td>
       <td><input name="in_options" value="{{join .Options ", "}}" aria-label="options" style="min-width:6rem"></td>

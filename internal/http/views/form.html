@@ -56,6 +56,11 @@
       {{$cur := index $v .Name}}
       {{range .Options}}<option{{if eq . $cur}} selected{{end}}>{{.}}</option>{{end}}
     </select>
+    {{else if .Sensitive}}{{$set := index $.Set .Name}}
+    <!-- never filled in: the stored value is sealed; left empty, it's kept -->
+    <input id="{{.Name}}" name="secret.{{.Name}}" type="password" autocomplete="new-password"
+      {{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if and .Required (not $set)}} required{{end}} aria-describedby="{{.Name}}-hint">
+    <p class="hint" id="{{.Name}}-hint">Sensitive: stored encrypted and never shown.{{if $set}} A value is set; leave empty to keep it.{{end}}</p>
     {{else}}
     <input id="{{.Name}}" name="{{.Name}}" value="{{index $v .Name}}"
       {{if eq .Type "number"}}type="number" step="any"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}>

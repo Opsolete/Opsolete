@@ -63,6 +63,7 @@ func New(store *storage.Store, tpls *templates.Catalog, reg *registry.Registry, 
 		"user": func() auth.User { return auth.User{} }, "section": func() string { return "" },
 		"workspace": func() string { return "" }, "tab": func() string { return "" },
 		"features": func() Features { return f }, "duration": humanDuration, "ago": ago,
+		"sealed":   isSealed,
 		"provider": func(p string) string { return strings.TrimPrefix(p, "registry.terraform.io/") },
 		"status":   func(s string) string { return strings.ReplaceAll(s, "_", " ") }}).ParseFS(views, "views/*.html"))
 	s := &Server{Store: store, Templates: tpls, Registry: reg, Auth: a, StateStore: state, Features: f, Log: log, pages: pages}
@@ -453,7 +454,8 @@ func templateFromForm(r *http.Request) templates.Template {
 			continue
 		}
 		in := templates.Input{Name: name, Label: at("in_label", i), Type: at("in_type", i),
-			Required: at("in_required", i) == "yes", Pattern: at("in_pattern", i), Default: at("in_default", i)}
+			Required: at("in_required", i) == "yes", Pattern: at("in_pattern", i), Default: at("in_default", i),
+			Sensitive: at("in_sensitive", i) == "yes"}
 		for _, o := range strings.Split(at("in_options", i), ",") {
 			if o = strings.TrimSpace(o); o != "" {
 				in.Options = append(in.Options, o)

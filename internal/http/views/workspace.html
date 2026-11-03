@@ -169,7 +169,7 @@
   </ul>
   {{if $w.TemplateID}}
   <h3>Inputs</h3>
-  <ul class="facts">{{range $k, $v := $w.Inputs}}<li><code>{{$k}} = {{$v}}</code></li>{{else}}<li class="muted">none</li>{{end}}</ul>
+  <ul class="facts">{{range $k, $v := $w.Inputs}}<li><code>{{$k}} = {{if sealed $v}}(sensitive){{else}}{{$v}}{{end}}</code></li>{{else}}<li class="muted">none</li>{{end}}</ul>
   {{end}}
   <h3>Metrics <small>(last {{.Metrics.Runs}} runs)</small></h3>
   <dl class="metrics">
@@ -464,4 +464,4 @@
   <span class="end"><span class="status {{.Status}}">{{status .Status}}</span><small title="{{.CreatedAt.Format "2006-01-02 15:04"}}">{{ago .CreatedAt}}</small></span>
 </a>{{end}}
 {{define "inputs"}}{{if .}}<details class="inputs"><summary>{{len .}} input{{if ne (len .) 1}}s{{end}}</summary>
-<dl>{{range $k, $v := .}}<dt><code>{{$k}}</code></dt><dd><code>{{$v}}</code></dd>{{end}}</dl></details>{{else}}<span class="muted">none</span>{{end}}{{end}}
+<dl>{{range $k, $v := .}}<dt><code>{{$k}}</code></dt><dd>{{if sealed $v}}<span class="muted">(sensitive)</span>{{else}}<code>{{$v}}</code>{{end}}</dd>{{end}}</dl></details>{{else}}<span class="muted">none</span>{{end}}{{end}}

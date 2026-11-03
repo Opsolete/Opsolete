@@ -278,9 +278,13 @@ func Inputs(vars []tfconfig.Variable) (inputs []templates.Input, skipped []strin
 // Resolve makes a template's form match the module version it pins: one input per module variable,
 // with name, type and required-ness from variables.tf. The template's JSON inputs only add a label,
 // pattern, select options or default, and keep their order. JSON inputs the module doesn't declare are
-// dropped. Sensitive variables appear only if the JSON lists them, because form inputs are stored unsealed.
+// dropped. Sensitive variables appear only if the JSON lists them; listed, they are sensitive inputs.
 func Resolve(overrides []templates.Input, vars []tfconfig.Variable) []templates.Input {
 	gen, _ := Inputs(vars)
+	sensitive := map[string]bool{}
+	for _, v := range vars {
+		sensitive[v.Name] = v.Sensitive
+	}
 	byName := map[string]templates.Input{}
 	for _, in := range gen {
 		byName[in.Name] = in
@@ -302,6 +306,10 @@ func Resolve(overrides []templates.Input, vars []tfconfig.Variable) []templates.
 			in.Default = o.Default
 		}
 		in.Pattern, in.Required = o.Pattern, in.Required || o.Required
+		in.Sensitive = o.Sensitive || sensitive[o.Name] && (in.Type == "string" || in.Type == "number")
+		if in.Sensitive {
+			in.Default = "" // never echoed into the form
+		}
 		out = append(out, in)
 	}
 	for _, v := range vars {

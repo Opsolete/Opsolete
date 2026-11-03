@@ -94,7 +94,7 @@ func (s *Server) audit(next http.Handler) http.Handler {
 		if len(r.PostForm) > 0 {
 			form := map[string]any{}
 			for k, v := range r.PostForm {
-				if secretFields[k] {
+				if secretFields[k] || strings.HasPrefix(k, secretPrefix) {
 					form[k] = "(redacted)"
 				} else {
 					form[k] = v

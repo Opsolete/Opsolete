@@ -68,6 +68,8 @@ func TestCatalogSave(t *testing.T) {
 		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "n", Type: "number", Default: "NaN"}}},
 		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "s", Type: "string", Pattern: "[a-z]+", Default: "ABC"}}},
 		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "b", Type: "bool", Default: "yes"}}},
+		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "b", Type: "bool", Sensitive: true}}},
+		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "p", Type: "string", Sensitive: true, Default: "hunter2"}}},
 	}
 	for _, b := range bad {
 		if err := c.Save(b, false); err == nil {

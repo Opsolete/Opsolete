@@ -172,18 +172,19 @@ func scanRun(row interface{ Scan(...any) error }) (Run, error) {
 }
 
 // CreateWorkspace creates a workspace from a template and queues its first plan. createdBy is a user id, or empty.
-func (s *Store) CreateWorkspace(ctx context.Context, name, templateID, moduleSource, moduleRef string,
+// id is the new workspace's id ("" = a random one): set when inputs are sealed to it beforehand.
+func (s *Store) CreateWorkspace(ctx context.Context, id, name, templateID, moduleSource, moduleRef string,
 	inputs map[string]any, autoApply bool, createdBy string) (Workspace, Run, error) {
-	return s.createWorkspace(ctx, name, templateID, moduleSource, moduleRef, inputs, autoApply, createdBy, true)
+	return s.createWorkspace(ctx, id, name, templateID, moduleSource, moduleRef, inputs, autoApply, createdBy, true)
 }
 
 // CreateEmptyWorkspace creates a workspace without configuration and without a run.
 func (s *Store) CreateEmptyWorkspace(ctx context.Context, name string, autoApply bool, createdBy string) (Workspace, error) {
-	w, _, err := s.createWorkspace(ctx, name, "", "", "", map[string]any{}, autoApply, createdBy, false)
+	w, _, err := s.createWorkspace(ctx, "", name, "", "", "", map[string]any{}, autoApply, createdBy, false)
 	return w, err
 }
 
-func (s *Store) createWorkspace(ctx context.Context, name, templateID, moduleSource, moduleRef string,
+func (s *Store) createWorkspace(ctx context.Context, id, name, templateID, moduleSource, moduleRef string,
 	inputs map[string]any, autoApply bool, createdBy string, plan bool) (Workspace, Run, error) {
 	raw, err := json.Marshal(inputs)
 	if err != nil {
@@ -194,13 +195,12 @@ func (s *Store) createWorkspace(ctx context.Context, name, templateID, moduleSou
 		return Workspace{}, Run{}, err
 	}
 	defer tx.Rollback()
-	var id string
 	err = tx.QueryRowContext(ctx, `
-		WITH id AS (SELECT gen_random_uuid() AS v)
+		WITH id AS (SELECT COALESCE(NULLIF($8, '')::uuid, gen_random_uuid()) AS v)
 		INSERT INTO workspaces (id, name, template_id, module_source, module_ref, inputs, state_key, auto_apply, created_by)
 		SELECT v, $1, NULLIF($2, ''), NULLIF($3, ''), NULLIF($4, ''), $5,
 			'opsolete/' || COALESCE(NULLIF($2, ''), 'workspaces') || '/' || v || '.tfstate', $6, NULLIF($7, '')::uuid FROM id
-		RETURNING id`, name, templateID, moduleSource, moduleRef, raw, autoApply, createdBy).Scan(&id)
+		RETURNING id`, name, templateID, moduleSource, moduleRef, raw, autoApply, createdBy, id).Scan(&id)
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
 		return Workspace{}, Run{}, ErrNameTaken
 	}

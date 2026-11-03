@@ -3,7 +3,6 @@ package httpserver
 import (
 	"database/sql"
 	"errors"
-	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
@@ -76,13 +75,8 @@ func (s *Server) loadTemplateForm(w http.ResponseWriter, r *http.Request) (formP
 	if page.Adding {
 		page.Module = moduleName(t.Name)
 	}
-	page.T, page.Values = t, map[string]string{}
-	for _, in := range t.Inputs {
-		page.Values[in.Name] = in.Default
-		if v, ok := inputs[in.Name]; ok {
-			page.Values[in.Name] = fmt.Sprint(v)
-		}
-	}
+	page.T, page.old = t, inputs
+	page.Values, page.Set = formDefaults(t, inputs)
 	return page, ws, true
 }
 
@@ -104,9 +98,7 @@ func (s *Server) saveWorkspaceTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t := page.T
-	for _, in := range t.Inputs {
-		page.Values[in.Name] = r.PostForm.Get(in.Name)
-	}
+	page.Values = formValues(r, t)
 	var vals map[string]any
 	vals, page.Errors = t.Validate(page.Values)
 	if page.Adding {
@@ -115,7 +107,10 @@ func (s *Server) saveWorkspaceTemplate(w http.ResponseWriter, r *http.Request) {
 			page.Errors[fieldModule] = moduleNameRule
 		}
 	}
-	if len(page.Errors) > 0 {
+	if err := s.sealInputs(t, vals, page.old, page.Errors, ws.ID, page.Module); err != nil {
+		page.Error = err.Error()
+	}
+	if len(page.Errors) > 0 || page.Error != "" {
 		s.render(w, r, http.StatusUnprocessableEntity, "form.html", page)
 		return
 	}

@@ -109,6 +109,8 @@ type formPage struct {
 	Adding    bool
 	Cur       templates.Module // with Configure: the module version it runs now
 	Error     string
+	Set       map[string]bool // sensitive inputs with a stored value: left empty, it's kept
+	old       map[string]any  // the stored inputs, with Configure
 }
 
 func (s *Server) form(w http.ResponseWriter, r *http.Request) {
@@ -121,10 +123,7 @@ func (s *Server) form(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	vals := map[string]string{}
-	for _, in := range t.Inputs {
-		vals[in.Name] = in.Default
-	}
+	vals, _ := formDefaults(t, nil)
 	s.render(w, r, http.StatusOK, "form.html", formPage{T: t, Editor: s.canEditTemplates(r), Values: vals})
 }
 
@@ -143,10 +142,7 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
 	}
-	raw := map[string]string{}
-	for _, in := range t.Inputs {
-		raw[in.Name] = r.PostForm.Get(in.Name)
-	}
+	raw := formValues(r, t)
 	vals, errs := t.Validate(raw) // errs is never nil
 	name := strings.TrimSpace(r.PostForm.Get(fieldWorkspace))
 	if !validWorkspaceName(name) {
@@ -154,12 +150,16 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	page := formPage{T: t, Editor: s.canEditTemplates(r), Values: raw, Errors: errs, Workspace: name,
 		AutoApply: r.PostForm.Get(fieldAutoApply) != ""}
-	if len(errs) > 0 {
+	id := newID() // sensitive inputs are sealed to the workspace's id
+	if err := s.sealInputs(t, vals, nil, errs, id, ""); err != nil {
+		page.Error = err.Error()
+	}
+	if len(errs) > 0 || page.Error != "" {
 		s.render(w, r, http.StatusUnprocessableEntity, "form.html", page)
 		return
 	}
 	u := auth.FromContext(r.Context())
-	ws, run, err := s.Store.CreateWorkspace(r.Context(), name, t.ID, t.Module.Source, t.Module.Ref, vals, page.AutoApply, u.ID)
+	ws, run, err := s.Store.CreateWorkspace(r.Context(), id, name, t.ID, t.Module.Source, t.Module.Ref, vals, page.AutoApply, u.ID)
 	if errors.Is(err, storage.ErrNameTaken) {
 		errs[fieldWorkspace] = err.Error()
 		s.render(w, r, http.StatusUnprocessableEntity, "form.html", page)
@@ -629,14 +629,8 @@ func (s *Server) configureForm(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	vals := map[string]string{}
-	for _, in := range t.Inputs {
-		vals[in.Name] = in.Default
-		if v, ok := ws.Inputs[in.Name]; ok {
-			vals[in.Name] = fmt.Sprint(v)
-		}
-	}
-	s.render(w, r, http.StatusOK, "form.html", formPage{T: t, Values: vals, Configure: &ws,
+	vals, set := formDefaults(t, ws.Inputs)
+	s.render(w, r, http.StatusOK, "form.html", formPage{T: t, Values: vals, Set: set, Configure: &ws,
 		Cur: templates.Module{Source: ws.ModuleSource, Ref: ws.ModuleRef}})
 }
 
@@ -650,13 +644,14 @@ func (s *Server) configureWorkspace(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
 	}
-	raw := map[string]string{}
-	for _, in := range t.Inputs {
-		raw[in.Name] = r.PostForm.Get(in.Name)
-	}
+	raw := formValues(r, t)
 	vals, errs := t.Validate(raw)
-	page := formPage{T: t, Values: raw, Errors: errs, Configure: &ws, Cur: templates.Module{Source: ws.ModuleSource, Ref: ws.ModuleRef}}
-	if len(errs) > 0 {
+	_, set := formDefaults(t, ws.Inputs)
+	page := formPage{T: t, Values: raw, Set: set, Errors: errs, Configure: &ws, Cur: templates.Module{Source: ws.ModuleSource, Ref: ws.ModuleRef}}
+	if err := s.sealInputs(t, vals, ws.Inputs, errs, ws.ID, ""); err != nil {
+		page.Error = err.Error()
+	}
+	if len(errs) > 0 || page.Error != "" {
 		s.render(w, r, http.StatusUnprocessableEntity, "form.html", page)
 		return
 	}

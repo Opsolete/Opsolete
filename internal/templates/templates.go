@@ -37,6 +37,8 @@ type Input struct {
 	Pattern  string   `json:"pattern,omitempty"`
 	Options  []string `json:"options,omitempty"`
 	Default  string   `json:"default,omitempty"`
+	// Sensitive values are stored sealed with SECRET_KEY, typed in a password field and never shown.
+	Sensitive bool `json:"sensitive,omitempty"`
 }
 
 var (
@@ -270,6 +272,12 @@ func (t Template) check() error {
 			}
 		default:
 			return fmt.Errorf("input %q: unknown type %q", in.Name, in.Type)
+		}
+		if in.Sensitive && in.Type != "string" && in.Type != "number" {
+			return fmt.Errorf("input %q: only string and number inputs can be sensitive", in.Name)
+		}
+		if in.Sensitive && in.Default != "" { // the template file is plain text
+			return fmt.Errorf("input %q: a sensitive input can't have a default", in.Name)
 		}
 		if in.Pattern != "" { // compiled as Validate does: near the size limits, the anchored form may fail alone
 			if _, err := regexp.Compile(anchored(in.Pattern)); err != nil {

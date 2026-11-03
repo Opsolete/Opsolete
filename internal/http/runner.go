@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"cmp"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -70,7 +71,12 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if ok {
-			env, vars, err := s.runVariables(r.Context(), j.WorkspaceID, j.Inputs)
+			inputs, err := s.openInputs(j.Inputs, j.WorkspaceID, "")
+			var env map[string]string
+			var vars map[string]any
+			if err == nil {
+				env, vars, err = s.runVariables(r.Context(), j.WorkspaceID, inputs)
+			}
 			var src, currency string
 			if err == nil {
 				src, err = s.jobSource(r.Context(), j)
@@ -80,7 +86,9 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 			}
 			var mods []runnerapi.Module
 			for _, m := range j.Modules {
-				mods = append(mods, runnerapi.Module{Name: m.Name, Inputs: m.Inputs,
+				in, oerr := s.openInputs(m.Inputs, j.WorkspaceID, m.Name)
+				err = cmp.Or(err, oerr)
+				mods = append(mods, runnerapi.Module{Name: m.Name, Inputs: in,
 					Source: s.Registry.RunnerSource(templates.Module{Source: m.ModuleSource, Ref: m.ModuleRef}, runnerSrcTTL)})
 			}
 			var body []byte
