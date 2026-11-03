@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.4.0](https://github.com/Opsolete/Opsolete/compare/v0.3.0...v0.4.0) (2026-11-03)
+
+
+### Features
+
+* delete templates from the catalog ([a84ed4b](https://github.com/Opsolete/Opsolete/commit/a84ed4bca84f40e81b1fb771088eadc8919479a6))
+* **templates:** conditional inputs and labelled select options ([86e22a8](https://github.com/Opsolete/Opsolete/commit/86e22a85e2af8e28612506d3b9d4478115033a6e))
+* **templates:** sensitive template inputs ([36ec2e5](https://github.com/Opsolete/Opsolete/commit/36ec2e547d1c3c57e2db5f859ca27f1b5803a4ce))
+* **workspaces:** group resources by module and rename Replace to Recreate ([92f010e](https://github.com/Opsolete/Opsolete/commit/92f010e47b5ce20348bd799ac0772b4f510d10e2))
+* **workspaces:** show template names and collapse inputs on the templates tab ([f9678b7](https://github.com/Opsolete/Opsolete/commit/f9678b7d5940d2270a6dae0d369e607233b8b41e))
+
+
+### Bug Fixes
+
+* **catalog:** reset repository, branch and folder when switching VCS connection ([f949770](https://github.com/Opsolete/Opsolete/commit/f949770d99b84e7e7844f20b02b496011068b1c7))
+* **registry:** skip monorepo tags from before a module's folder existed ([3af513d](https://github.com/Opsolete/Opsolete/commit/3af513d4782fe8cda3f0d58a7ebe0a22b68b6859))
+* **workspaces:** destroy a removed template's resources with -target ([b99259d](https://github.com/Opsolete/Opsolete/commit/b99259d2f682ac733dcecf8337d537678247d9e3))
+
 ## [0.3.0](https://github.com/Opsolete/Opsolete/compare/v0.2.0...v0.3.0) (2026-11-03)
 
 
