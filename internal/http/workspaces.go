@@ -151,7 +151,7 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 	page := formPage{T: t, Editor: s.canEditTemplates(r), Values: raw, Errors: errs, Workspace: name,
 		AutoApply: r.PostForm.Get(fieldAutoApply) != ""}
 	id := newID() // sensitive inputs are sealed to the workspace's id
-	if err := s.sealInputs(t, vals, nil, errs, id, ""); err != nil {
+	if err := s.sealInputs(t, raw, vals, nil, errs, id, ""); err != nil {
 		page.Error = err.Error()
 	}
 	if len(errs) > 0 || page.Error != "" {
@@ -648,7 +648,7 @@ func (s *Server) configureWorkspace(w http.ResponseWriter, r *http.Request) {
 	vals, errs := t.Validate(raw)
 	_, set := formDefaults(t, ws.Inputs)
 	page := formPage{T: t, Values: raw, Set: set, Errors: errs, Configure: &ws, Cur: templates.Module{Source: ws.ModuleSource, Ref: ws.ModuleRef}}
-	if err := s.sealInputs(t, vals, ws.Inputs, errs, ws.ID, ""); err != nil {
+	if err := s.sealInputs(t, raw, vals, ws.Inputs, errs, ws.ID, ""); err != nil {
 		page.Error = err.Error()
 	}
 	if len(errs) > 0 || page.Error != "" {

@@ -253,7 +253,7 @@ func TestTemplateBuilder(t *testing.T) {
 	if rec.Code != http.StatusSeeOther || len(id) != 36 {
 		t.Fatalf("create: %d %q %s", rec.Code, loc, rec.Body.String())
 	}
-	if rec := get(h, loc); !strings.Contains(rec.Body.String(), `<option selected>westeurope</option>`) ||
+	if rec := get(h, loc); !strings.Contains(rec.Body.String(), `<option value="westeurope" selected>westeurope</option>`) ||
 		!strings.Contains(rec.Body.String(), `value="10.0.0.0/16"`) {
 		t.Fatalf("generated form wrong: %s", rec.Body.String())
 	}

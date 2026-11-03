@@ -38,11 +38,12 @@ func formValues(r *http.Request, t templates.Template) map[string]string {
 	return raw
 }
 
-// sealInputs seals t's sensitive inputs in validated vals for workspace wsID's module. One left
-// empty keeps its stored value in old (sealing it if it was stored before it became sensitive).
-func (s *Server) sealInputs(t templates.Template, vals, old map[string]any, errs map[string]string, wsID, module string) error {
+// sealInputs seals t's sensitive inputs in vals, validated from the form values raw, for workspace
+// wsID's module. One left empty keeps its stored value in old (sealing it if it was stored before it
+// became sensitive); one the form hides is dropped.
+func (s *Server) sealInputs(t templates.Template, raw map[string]string, vals, old map[string]any, errs map[string]string, wsID, module string) error {
 	for _, in := range t.Inputs {
-		if !in.Sensitive {
+		if !in.Sensitive || !t.Match(in.ShowIf, raw) {
 			continue
 		}
 		v, ok := vals[in.Name]

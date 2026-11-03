@@ -26,7 +26,7 @@
   {{if .Editor}}<a class="btn secondary" href="/templates/{{.T.ID}}/edit">Edit template</a>{{end}}
 </div>
 {{end}}
-<form method="post" class="card">
+<form method="post" class="card" id="template-form">
 {{$v := .Values}}{{$e := .Errors}}
 {{if .Adding}}
   <label for="ops-module">Name in the workspace <span class="req" aria-hidden="true">*</span></label>
@@ -46,6 +46,7 @@
   <hr style="border:0;border-top:1px solid var(--border);margin:1.4rem 0 .4rem">
 {{end}}
 {{range .T.Inputs}}
+  {{with .ShowIf}}<fieldset class="show-if" data-show-if="{{json .}}"{{if not ($.T.Match . $v)}} hidden disabled{{end}}>{{end}}
   {{if eq .Type "bool"}}
     <label for="{{.Name}}"><input type="checkbox" id="{{.Name}}" name="{{.Name}}"{{if eq (index $v .Name) "on" "true"}} checked{{end}}>
       {{or .Label .Name}}</label>
@@ -54,7 +55,7 @@
     {{if eq .Type "select"}}
     <select id="{{.Name}}" name="{{.Name}}">
       {{$cur := index $v .Name}}
-      {{range .Options}}<option{{if eq . $cur}} selected{{end}}>{{.}}</option>{{end}}
+      {{range .Options}}<option value="{{.Value}}"{{if eq .Value $cur}} selected{{end}}{{with .ShowIf}} data-show-if="{{json .}}"{{if not ($.T.Match . $v)}} hidden disabled{{end}}{{end}}>{{.Text}}</option>{{end}}
     </select>
     {{else if .Sensitive}}{{$set := index $.Set .Name}}
     <!-- never filled in: the stored value is sealed; left empty, it's kept -->
@@ -67,6 +68,7 @@
     {{end}}
   {{end}}
   {{with index $e .Name}}<p class="err" role="alert">{{.}}</p>{{end}}
+  {{if .ShowIf}}</fieldset>{{end}}
 {{end}}
   <p class="hint">Deploys <code>{{.T.Module.Source}}</code> at <code>{{.T.Module.Ref}}</code>.</p>
   <div class="actions">
@@ -79,4 +81,28 @@
     {{end}}
   </div>
 </form>
+<script>
+  // show_if: hide and disable the fields and options whose condition fails (disabled ones aren't posted);
+  // the server applies the same rules. Document order puts each condition's input first.
+  (() => {
+    const form = document.getElementById("template-form");
+    const value = name => {
+      const el = form.elements[name];
+      return !el || el.matches(":disabled") ? null : el.type === "checkbox" ? String(el.checked) : el.value;
+    };
+    const update = () => {
+      for (const el of form.querySelectorAll("[data-show-if]")) {
+        const c = JSON.parse(el.dataset.showIf);
+        el.hidden = el.disabled = !c.equals.includes(value(c.input));
+        const sel = el.parentElement;
+        if (el.tagName === "OPTION" && sel.selectedOptions[0]?.disabled) {
+          const first = [...sel.options].find(o => !o.disabled);
+          if (first) first.selected = true;
+        }
+      }
+    };
+    form.addEventListener("change", update);
+    update(); // the browser may have restored other values
+  })();
+</script>
 {{template "bottom"}}

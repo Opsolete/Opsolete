@@ -140,13 +140,13 @@ func TestResolve(t *testing.T) {
 		{Name: "secret", Type: "string", Sensitive: true},
 	}
 	overrides := []templates.Input{
-		{Name: "location", Label: "Region", Type: "select", Options: []string{"westeurope", "northeurope"}},
+		{Name: "location", Label: "Region", Type: "select", Options: []templates.Option{{Value: "westeurope"}, {Value: "northeurope"}}},
 		{Name: "gone", Type: "string", Required: true},      // no longer in the module
 		{Name: "name", Type: "number", Pattern: "^[a-z]+$"}, // wrong type in the JSON
 	}
 	got := Resolve(overrides, vars)
 	want := []templates.Input{
-		{Name: "location", Label: "Region", Type: "select", Options: []string{"westeurope", "northeurope"}, Default: "westeurope"},
+		{Name: "location", Label: "Region", Type: "select", Options: []templates.Option{{Value: "westeurope"}, {Value: "northeurope"}}, Default: "westeurope"},
 		{Name: "name", Label: "name", Type: "string", Required: true, Pattern: "^[a-z]+$"},
 		{Name: "count_x", Label: "count_x", Type: "number", Default: "1"},
 	}

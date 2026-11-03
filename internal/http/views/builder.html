@@ -49,13 +49,14 @@
   </div>
 
   <h2>Form fields</h2>
-  <p class="muted">Each row becomes a form field and a Terraform variable. Clear a row's variable name to remove it. Options are comma-separated (dropdowns only).</p>
+  <p class="muted">Each row becomes a form field and a Terraform variable. Clear a row's variable name to remove it. Options are comma-separated (dropdowns only); write <code>Label=value</code> to show a friendly name. Conditions (<code>show_if</code>) are set in the template's JSON and kept when you save here.</p>
   <div class="card flush">
   <table id="fields">
     <tr><th>Variable</th><th>Label</th><th>Type</th><th>Required</th><th>Sensitive</th><th>Pattern</th><th>Options</th><th>Default</th></tr>
     {{range .Rows}}
     <tr>
-      <td><input name="in_name" value="{{.Name}}" aria-label="variable name" style="min-width:7rem"></td>
+      <td><input name="in_name" value="{{.Name}}" aria-label="variable name" style="min-width:7rem">
+        {{with .ShowIf}}<p class="hint">if {{.Input}} = {{join .Equals " or "}}</p>{{end}}</td>
       <td><input name="in_label" value="{{.Label}}" aria-label="label" style="min-width:8rem"></td>
       <td><select name="in_type" aria-label="type">
         <option>string</option>
@@ -70,7 +71,7 @@
         <option value="no">no</option><option value="yes"{{if .Sensitive}} selected{{end}}>yes</option>
       </select></td>
       <td><input name="in_pattern" value="{{.Pattern}}" aria-label="regex pattern" style="min-width:6rem"></td>
-      <td><input name="in_options" value="{{join .Options ", "}}" aria-label="options" style="min-width:6rem"></td>
+      <td><input name="in_options" value="{{range $i, $o := .Options}}{{if $i}}, {{end}}{{with $o.Label}}{{.}}={{end}}{{$o.Value}}{{end}}" aria-label="options" style="min-width:6rem"></td>
       <td><input name="in_default" value="{{.Default}}" aria-label="default" style="min-width:5rem"></td>
     </tr>
     {{end}}

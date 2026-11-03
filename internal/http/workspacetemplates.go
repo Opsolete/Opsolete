@@ -107,7 +107,7 @@ func (s *Server) saveWorkspaceTemplate(w http.ResponseWriter, r *http.Request) {
 			page.Errors[fieldModule] = moduleNameRule
 		}
 	}
-	if err := s.sealInputs(t, vals, page.old, page.Errors, ws.ID, page.Module); err != nil {
+	if err := s.sealInputs(t, page.Values, vals, page.old, page.Errors, ws.ID, page.Module); err != nil {
 		page.Error = err.Error()
 	}
 	if len(page.Errors) > 0 || page.Error != "" {

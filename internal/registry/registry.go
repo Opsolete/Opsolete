@@ -305,7 +305,7 @@ func Resolve(overrides []templates.Input, vars []tfconfig.Variable) []templates.
 		if o.Default != "" {
 			in.Default = o.Default
 		}
-		in.Pattern, in.Required = o.Pattern, in.Required || o.Required
+		in.Pattern, in.Required, in.ShowIf = o.Pattern, in.Required || o.Required, o.ShowIf
 		in.Sensitive = o.Sensitive || sensitive[o.Name] && (in.Type == "string" || in.Type == "number")
 		if in.Sensitive {
 			in.Default = "" // never echoed into the form

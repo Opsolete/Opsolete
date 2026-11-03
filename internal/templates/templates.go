@@ -2,6 +2,7 @@
 package templates
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -35,10 +36,55 @@ type Input struct {
 	Type     string   `json:"type"` // string | number | bool | select
 	Required bool     `json:"required"`
 	Pattern  string   `json:"pattern,omitempty"`
-	Options  []string `json:"options,omitempty"`
+	Options  []Option `json:"options,omitempty"`
 	Default  string   `json:"default,omitempty"`
 	// Sensitive values are stored sealed with SECRET_KEY, typed in a password field and never shown.
 	Sensitive bool `json:"sensitive,omitempty"`
+	// ShowIf hides the input unless an earlier input has one of the listed values. A hidden input is
+	// not sent to Terraform: the module's default applies.
+	ShowIf *ShowIf `json:"show_if,omitempty"`
+}
+
+// ShowIf holds when the earlier select or bool input Input is shown and has one of the Equals values
+// ("true"/"false" for a bool).
+type ShowIf struct {
+	Input  string   `json:"input"`
+	Equals []string `json:"equals"`
+}
+
+func (c *ShowIf) holds(shown map[string]bool, cur map[string]string) bool {
+	return c == nil || shown[c.Input] && slices.Contains(c.Equals, cur[c.Input])
+}
+
+// Option is a select choice: Label is shown, Value goes to Terraform. In JSON a plain string is
+// both; an option with a show_if is offered only while it holds.
+type Option struct {
+	Label  string  `json:"label,omitempty"`
+	Value  string  `json:"value"`
+	ShowIf *ShowIf `json:"show_if,omitempty"`
+}
+
+type plainOption Option // without the methods, so they don't recurse
+
+func (o *Option) UnmarshalJSON(b []byte) error {
+	if json.Unmarshal(b, &o.Value) == nil {
+		return nil
+	}
+	return json.Unmarshal(b, (*plainOption)(o))
+}
+
+func (o Option) MarshalJSON() ([]byte, error) {
+	if o.Label == "" && o.ShowIf == nil {
+		return json.Marshal(o.Value)
+	}
+	return json.Marshal(plainOption(o))
+}
+
+// Text is what the form shows.
+func (o Option) Text() string { return cmp.Or(o.Label, o.Value) }
+
+func hasValue(opts []Option, v string) bool {
+	return slices.ContainsFunc(opts, func(o Option) bool { return o.Value == v })
 }
 
 var (
@@ -254,12 +300,11 @@ func (t Template) check() error {
 	if t.Module.Source == "" || t.Module.Ref == "" {
 		return fmt.Errorf("module.source and module.ref are required")
 	}
-	seen := map[string]bool{}
+	before := map[string]Input{} // show_if may only refer to these
 	for _, in := range t.Inputs {
-		if seen[in.Name] {
+		if _, dup := before[in.Name]; dup {
 			return fmt.Errorf("duplicate input %q", in.Name)
 		}
-		seen[in.Name] = true
 		if !nameRe.MatchString(in.Name) || slices.Contains(reserved, in.Name) {
 			return fmt.Errorf("invalid input name %q (a Terraform variable name: lowercase, digits, underscores; not %s)",
 				in.Name, strings.Join(reserved, ", "))
@@ -284,28 +329,87 @@ func (t Template) check() error {
 				return fmt.Errorf("input %q: %w", in.Name, err)
 			}
 		}
-		if in.Type == "select" && in.Default != "" && !slices.Contains(in.Options, in.Default) {
+		if err := in.ShowIf.check(before); err != nil {
+			return fmt.Errorf("input %q: %w", in.Name, err)
+		}
+		for _, o := range in.Options {
+			if o.Value == "" {
+				return fmt.Errorf("input %q: an option needs a value", in.Name)
+			}
+			if err := o.ShowIf.check(before); err != nil {
+				return fmt.Errorf("input %q option %q: %w", in.Name, o.Value, err)
+			}
+		}
+		if in.Type == "select" && in.Default != "" && !hasValue(in.Options, in.Default) {
 			return fmt.Errorf("input %q: default %q is not one of the options", in.Name, in.Default)
 		}
 		if in.Type == "bool" && in.Default != "" && in.Default != "true" && in.Default != "false" {
 			return fmt.Errorf("input %q: a bool default is true or false", in.Name)
 		}
-		if in.Default != "" { // the deploy form starts with the default: it must pass the same checks
-			if _, errs := (Template{Inputs: []Input{in}}).Validate(map[string]string{in.Name: in.Default}); errs[in.Name] != "" {
+		if in.Default != "" && in.Type != "select" { // the deploy form starts with the default: it must pass the same checks
+			d := in
+			d.ShowIf = nil // alone, its condition's input is missing
+			if _, errs := (Template{Inputs: []Input{d}}).Validate(map[string]string{in.Name: in.Default}); errs[in.Name] != "" {
 				return fmt.Errorf("input %q: default %q %s", in.Name, in.Default, errs[in.Name])
 			}
+		}
+		before[in.Name] = in
+	}
+	return nil
+}
+
+func (c *ShowIf) check(before map[string]Input) error {
+	if c == nil {
+		return nil
+	}
+	in, ok := before[c.Input]
+	switch {
+	case !ok:
+		return fmt.Errorf("show_if: %q is not an earlier input", c.Input)
+	case in.Type != "select" && in.Type != "bool":
+		return fmt.Errorf("show_if: %q is not a select or bool input", c.Input)
+	case len(c.Equals) == 0:
+		return fmt.Errorf("show_if: equals is empty")
+	}
+	for _, v := range c.Equals {
+		if in.Type == "bool" && v != "true" && v != "false" || in.Type == "select" && !hasValue(in.Options, v) {
+			return fmt.Errorf("show_if: %q is not a value of %q", v, c.Input)
 		}
 	}
 	return nil
 }
 
+// eval returns which inputs the form values raw show, and their values (a bool's as "true"/"false").
+func (t Template) eval(raw map[string]string) (shown map[string]bool, cur map[string]string) {
+	shown, cur = map[string]bool{}, map[string]string{}
+	for _, in := range t.Inputs {
+		v := strings.TrimSpace(raw[in.Name])
+		if in.Type == "bool" {
+			v = strconv.FormatBool(v == "on" || v == "true")
+		}
+		cur[in.Name] = v
+		shown[in.Name] = in.ShowIf.holds(shown, cur)
+	}
+	return shown, cur
+}
+
+// Match reports whether the show_if c (nil: none) holds for the form values raw.
+func (t Template) Match(c *ShowIf, raw map[string]string) bool {
+	shown, cur := t.eval(raw)
+	return c.holds(shown, cur)
+}
+
 func anchored(pattern string) string { return "^(?:" + pattern + ")$" }
 
 // Validate turns raw form values into typed Terraform variables.
-// It returns per-field error messages; an empty map means valid.
+// It returns per-field error messages; an empty map means valid. Hidden inputs are left out.
 func (t Template) Validate(raw map[string]string) (map[string]any, map[string]string) {
 	vals, errs := map[string]any{}, map[string]string{}
+	shown, cur := t.eval(raw)
 	for _, in := range t.Inputs {
+		if !shown[in.Name] {
+			continue
+		}
 		v := strings.TrimSpace(raw[in.Name])
 		if in.Type == "bool" {
 			vals[in.Name] = v == "on" || v == "true"
@@ -326,7 +430,7 @@ func (t Template) Validate(raw map[string]string) (map[string]any, map[string]st
 			}
 			vals[in.Name] = n
 		case "select":
-			if !slices.Contains(in.Options, v) {
+			if !slices.ContainsFunc(in.Options, func(o Option) bool { return o.Value == v && o.ShowIf.holds(shown, cur) }) {
 				errs[in.Name] = "not an allowed option"
 				continue
 			}

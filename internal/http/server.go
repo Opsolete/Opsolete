@@ -345,6 +345,8 @@ func (s *Server) saveTemplate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		t.ID = r.PathValue("id") // the id is the file name; it can't change on edit
+		old, _ := s.Templates.Get(t.ID)
+		keepShowIf(t, old)
 	} else {
 		t.ID = newID()
 	}
@@ -417,6 +419,24 @@ func (s *Server) deleteTemplate(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
+// keepShowIf copies the show_if conditions, which the builder doesn't edit, from the saved version
+// old onto t's inputs (by name) and options (by value).
+func keepShowIf(t, old templates.Template) {
+	for i, in := range t.Inputs {
+		j := slices.IndexFunc(old.Inputs, func(o templates.Input) bool { return o.Name == in.Name })
+		if j < 0 {
+			continue
+		}
+		t.Inputs[i].ShowIf = old.Inputs[j].ShowIf
+		for k, o := range in.Options {
+			// shortcut: with an option value listed twice, both get the first one's condition; edit the JSON for that
+			if l := slices.IndexFunc(old.Inputs[j].Options, func(x templates.Option) bool { return x.Value == o.Value }); l >= 0 {
+				t.Inputs[i].Options[k].ShowIf = old.Inputs[j].Options[l].ShowIf
+			}
+		}
+	}
+}
+
 // toJSON renders a value (e.g. a variable default) compactly for display.
 func toJSON(v any) string {
 	b, err := json.Marshal(v)
@@ -456,9 +476,16 @@ func templateFromForm(r *http.Request) templates.Template {
 		in := templates.Input{Name: name, Label: at("in_label", i), Type: at("in_type", i),
 			Required: at("in_required", i) == "yes", Pattern: at("in_pattern", i), Default: at("in_default", i),
 			Sensitive: at("in_sensitive", i) == "yes"}
-		for _, o := range strings.Split(at("in_options", i), ",") {
-			if o = strings.TrimSpace(o); o != "" {
-				in.Options = append(in.Options, o)
+		for _, o := range strings.Split(at("in_options", i), ",") { // "value" or "Label=value"
+			label, value, ok := strings.Cut(o, "=")
+			if !ok {
+				label, value = "", label
+			}
+			if label, value = strings.TrimSpace(label), strings.TrimSpace(value); value != "" {
+				if label == value {
+					label = ""
+				}
+				in.Options = append(in.Options, templates.Option{Label: label, Value: value})
 			}
 		}
 		t.Inputs = append(t.Inputs, in)

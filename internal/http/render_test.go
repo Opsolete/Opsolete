@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/opsolete/opsolete/internal/auth"
+	"github.com/opsolete/opsolete/internal/templates"
 )
 
 // Pooled template clones are rebound per request: concurrent renders show their own user only.
@@ -34,5 +35,28 @@ func BenchmarkRender(b *testing.B) {
 	s := New(nil, nil, nil, nil, nil, Features{}, nil)
 	for b.Loop() {
 		s.render(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil), 200, "authorize.html", map[string]any{"Email": "a@b", "Days": 30})
+	}
+}
+
+// The deploy form renders show_if fields and options hidden and disabled while their condition fails.
+func TestRenderShowIf(t *testing.T) {
+	os := &templates.ShowIf{Input: "os", Equals: []string{"windows"}}
+	tpl := templates.Template{ID: "vm", Name: "VM", Inputs: []templates.Input{
+		{Name: "os", Type: "select", Options: []templates.Option{{Value: "windows"}, {Value: "linux"}}},
+		{Name: "image", Type: "select", Options: []templates.Option{{Label: "Windows Server 2022", Value: "win2022", ShowIf: os}, {Value: "ubuntu"}}},
+		{Name: "admin_password", Type: "string", Sensitive: true, ShowIf: os},
+	}}
+	s := New(nil, nil, nil, nil, nil, Features{}, nil)
+	for osv, hidden := range map[string]bool{"linux": true, "windows": false} {
+		w := httptest.NewRecorder()
+		s.render(w, httptest.NewRequest("GET", "/", nil), 200, "form.html", formPage{T: tpl, Values: map[string]string{"os": osv}})
+		body := w.Body.String()
+		if !strings.Contains(body, `<option value="win2022"`) || !strings.Contains(body, ">Windows Server 2022</option>") ||
+			!strings.Contains(body, `name="secret.admin_password"`) {
+			t.Fatalf("%s: fields missing:\n%s", osv, body)
+		}
+		if got := strings.Count(body, " hidden disabled"); got != map[bool]int{true: 2, false: 0}[hidden] {
+			t.Errorf("%s: %d hidden, want hidden=%v", osv, got, hidden)
+		}
 	}
 }
