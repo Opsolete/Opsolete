@@ -148,7 +148,7 @@ func TestTemplateCatalogInGit(t *testing.T) {
 	connName := "cat-" + id
 	t.Cleanup(func() {
 		store.DB.Exec(`DELETE FROM template_catalog`)
-		store.DB.Exec(`DELETE FROM vcs_connections WHERE name = $1`, connName)
+		store.DB.Exec(`DELETE FROM vcs_connections WHERE name IN ($1, $2)`, connName, connName+"-b")
 	})
 	g := &fakeGitRepo{branches: map[string]string{}, commits: map[string]map[string]string{}}
 	g.commit("main", map[string]string{"catalog/web.json": tplJSON("web-"+id, "Web"), "README.md": "not a template"})
@@ -185,6 +185,16 @@ func TestTemplateCatalogInGit(t *testing.T) {
 	}
 	if page := get(h, "/catalog").Body.String(); !strings.Contains(page, `<option value="acme/catalog" selected>`) {
 		t.Fatalf("the configured repo is selected: %s", page)
+	}
+	// Switching to another connection drops the saved repo, branch and folder.
+	if rec := post(h, "/vcs", url.Values{"name": {connName + "-b"}, "provider": {"github"}, "base_url": {gh.URL}, "token": {"pat"}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("connect another: %d %s", rec.Code, rec.Body.String())
+	}
+	var otherID string
+	store.DB.QueryRow(`SELECT id FROM vcs_connections WHERE name = $1`, connName+"-b").Scan(&otherID)
+	if page := get(h, "/catalog?connection="+otherID).Body.String(); strings.Contains(page, `<option value="acme/catalog" selected>`) ||
+		strings.Contains(page, `id="dir" name="dir" value="catalog"`) {
+		t.Fatalf("saved settings carried to another connection: %s", page)
 	}
 	// The connection shows what uses it; its token is replaced on its settings page: a token the
 	// provider refuses is kept out, a good one is sealed anew.

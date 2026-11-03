@@ -50,8 +50,9 @@ func (s *Server) catalogPage(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "template catalog", err)
 		return
 	}
-	if c := r.URL.Query().Get("connection"); c != "" {
-		form["connection"] = c
+	// another connection: the saved repo, branch and folder belong to the old one
+	if c := r.URL.Query().Get("connection"); c != "" && c != form["connection"] {
+		form = map[string]string{"connection": c, "mode": form["mode"]}
 	}
 	s.renderCatalog(w, r, http.StatusOK, form, "")
 }
