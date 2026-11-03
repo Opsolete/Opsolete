@@ -313,8 +313,16 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 			templateCount++
 		}
 		updates := map[string]string{} // added template name -> module version its template pins now
+		names := map[string]string{}   // template id -> display name; a deleted template shows its id
+		if hasTemplate {
+			names[t.ID] = t.Name
+		}
 		for _, a := range added {
-			if t, ok := s.Templates.Get(a.TemplateID); ok && (t.Module.Source != a.ModuleSource || t.Module.Ref != a.ModuleRef) {
+			t, ok := s.Templates.Get(a.TemplateID)
+			if ok {
+				names[t.ID] = t.Name
+			}
+			if ok && (t.Module.Source != a.ModuleSource || t.Module.Ref != a.ModuleRef) {
 				updates[a.Name] = t.Module.Ref
 			}
 		}
@@ -332,7 +340,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 			s.internalError(w, "run metrics", err)
 			return
 		}
-		maps.Copy(data, map[string]any{"Added": added, "TemplateCount": templateCount, "Updates": updates, "Catalog": s.Templates.List(),
+		maps.Copy(data, map[string]any{"Added": added, "TemplateCount": templateCount, "Updates": updates, "TemplateNames": names, "Catalog": s.Templates.List(),
 			"LatestPlan": latestPlan, "LatestApply": latestApply, "Metrics": metrics, "Show": r.URL.Query().Get("show")})
 
 	case "runs": // status filters, counted over the runs listed

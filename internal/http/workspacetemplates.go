@@ -19,6 +19,21 @@ import (
 // moduleNameRe is a Terraform module call name; "new" is the add route.
 var moduleNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
 
+// moduleName suggests a module name from a template's display name: "Virtual machine (Windows)" → "virtual_machine_windows".
+func moduleName(name string) string {
+	s := strings.Trim(nonModuleChars.ReplaceAllString(strings.ToLower(name), "_"), "_")
+	if s == "" || s[0] < 'a' || s[0] > 'z' {
+		s = "t_" + s
+	}
+	s = strings.TrimRight(s[:min(len(s), 63)], "_")
+	if s == "new" || !moduleNameRe.MatchString(s) {
+		return "template"
+	}
+	return s
+}
+
+var nonModuleChars = regexp.MustCompile(`[^a-z0-9]+`)
+
 const moduleNameRule = "1–63 lowercase letters, digits, dashes and underscores, starting with a letter (not \"new\")"
 
 // loadTemplateForm loads the form to add a template (?template=<id>) to the {name} workspace, or
@@ -59,7 +74,7 @@ func (s *Server) loadTemplateForm(w http.ResponseWriter, r *http.Request) (formP
 		return page, ws, false
 	}
 	if page.Adding {
-		page.Module = t.ID
+		page.Module = moduleName(t.Name)
 	}
 	page.T, page.Values = t, map[string]string{}
 	for _, in := range t.Inputs {

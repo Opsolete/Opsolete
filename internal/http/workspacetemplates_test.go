@@ -41,7 +41,7 @@ func TestWorkspaceTemplates(t *testing.T) {
 	if rec := post(h, "/workspaces/new", url.Values{"name": {ws}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
 	}
-	if page := get(h, base+"new?template=greeting").Body.String(); !strings.Contains(page, `name="ops-module" value="greeting"`) {
+	if page := get(h, base+"new?template=greeting").Body.String(); !strings.Contains(page, `name="ops-module" value="greeting_example"`) { // from the name "Greeting (example)"
 		t.Fatalf("add form: %s", page)
 	}
 	if rec := get(h, base+"new?template=nope"); rec.Code != http.StatusNotFound {
@@ -108,7 +108,8 @@ func TestWorkspaceTemplates(t *testing.T) {
 	if rec := post(h, base+"two/remove", nil); rec.Code != http.StatusNotFound {
 		t.Fatalf("removing twice: %d", rec.Code)
 	}
-	if page := get(h, "/workspaces/"+ws+"?show=templates").Body.String(); !strings.Contains(page, base+"one") || strings.Contains(page, base+"two") {
+	if page := get(h, "/workspaces/"+ws+"?show=templates").Body.String(); !strings.Contains(page, base+"one") || strings.Contains(page, base+"two") ||
+		!strings.Contains(page, ">Greeting (example)</a>") || !strings.Contains(page, "<summary>2 inputs</summary>") {
 		t.Fatalf("workspace page: %s", page)
 	}
 	destroy("one", 0) // the last one too
@@ -162,5 +163,14 @@ func TestDeleteWorkspace(t *testing.T) {
 	}
 	if rec := get(h, url0); rec.Code != http.StatusNotFound {
 		t.Fatalf("deleted workspace: %d", rec.Code)
+	}
+}
+
+func TestModuleName(t *testing.T) {
+	for name, want := range map[string]string{"Greeting (example)": "greeting_example", "Virtual machine – Windows": "virtual_machine_windows",
+		"2 VMs": "t_2_vms", "": "t", "New": "template", strings.Repeat("a ", 40): strings.Repeat("a_", 31) + "a"} {
+		if got := moduleName(name); got != want || !moduleNameRe.MatchString(got) && got != "template" {
+			t.Errorf("moduleName(%q) = %q, want %q", name, got, want)
+		}
 	}
 }
