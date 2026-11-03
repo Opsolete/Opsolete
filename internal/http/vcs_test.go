@@ -50,7 +50,12 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 			}
 			json.NewEncoder(w).Encode(list)
 		case strings.HasPrefix(p, "/repos/acme/terraform-aws-rds/tarball/"):
-			w.Write(registrytest.TarGz(t, map[string]string{"acme-rds-1/main.tf": tags[strings.TrimPrefix(p, "/repos/acme/terraform-aws-rds/tarball/")]}))
+			tag := strings.TrimPrefix(p, "/repos/acme/terraform-aws-rds/tarball/")
+			files := map[string]string{"acme-rds-1/main.tf": tags[tag]}
+			if tag == "v1.1.0" { // a monorepo: the vm folder only exists from this tag on
+				files["acme-rds-1/vm/main.tf"] = `variable "size" { type = string }`
+			}
+			w.Write(registrytest.TarGz(t, files))
 		default:
 			http.NotFound(w, r)
 		}
@@ -188,6 +193,20 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 	if ws, _ := store.GetWorkspace(ctx, wsName); ws.Inputs["db_name"] != "nocode" {
 		t.Fatal("rejected configure changed the inputs")
 	}
+
+	// A folder added in a later tag: older tags without it are skipped, not a sync error.
+	mu.Lock()
+	tags["v1.1.0"] = tags["v1.0.1"]
+	mu.Unlock()
+	t.Cleanup(func() { store.DB.Exec(`DELETE FROM modules WHERE name = $1`, "vm"+id) })
+	vm := url.Values{"connection": {connID}, "repo": {"acme/terraform-aws-rds"}, "name": {"vm" + id}, "dir": {"vm"}}
+	if rec := post(h, "/registry/publish", vm); rec.Header().Get("Location") != "/registry/terraform-aws-rds/vm"+id+"/aws/1.1.0" {
+		t.Fatalf("publish a folder added later: %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	if m, err := store.GetVCSModule(ctx, "terraform-aws-rds", "vm"+id, "aws"); err != nil || m.SyncError != "" {
+		t.Fatalf("tags before the folder existed: %+v %v", m, err)
+	}
+	store.UnlinkVCSModule(ctx, "terraform-aws-rds", "vm"+id, "aws")
 }
 
 func TestVCSAdminOnly(t *testing.T) {

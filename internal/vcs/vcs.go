@@ -458,6 +458,9 @@ func (c Conn) PullRequests(ctx context.Context, repo, branch string) ([]PullRequ
 	return out, nil
 }
 
+// ErrNoFolder is a module's folder missing at a ref, e.g. a monorepo tag from before the module existed.
+var ErrNoFolder = errors.New("folder missing at this ref")
+
 // Archive downloads the repository at a tag or commit (refType "tag" | "commit") as a module
 // archive: a .tar.gz with folder dir of the repo ("" = the root) at the archive root.
 func (c Conn) Archive(ctx context.Context, repo, ref, refType, dir string) ([]byte, error) {
@@ -472,7 +475,7 @@ func (c Conn) Archive(ctx context.Context, repo, ref, refType, dir string) ([]by
 	if dir != "" {
 		files = subdir(files, dir)
 		if len(files) == 0 {
-			return nil, fmt.Errorf("no folder %q in the repository", dir)
+			return nil, fmt.Errorf("no folder %q in the repository: %w", dir, ErrNoFolder)
 		}
 	}
 	out, err := writeTarGz(files)
@@ -495,7 +498,8 @@ func (c Conn) download(ctx context.Context, a, b, tag, refType string) ([]file, 
 			return nil, err
 		}
 	case AzureDevOps:
-		q := url.Values{"path": {"/"}, "recursionLevel": {"full"}, "$format": {"zip"}, "download": {"true"},
+		// a zip of a folder path is always recursive; Azure rejects recursionLevel alongside path
+		q := url.Values{"path": {"/"}, "$format": {"zip"}, "download": {"true"},
 			"versionDescriptor.version": {tag}, "versionDescriptor.versionType": {refType}, "api-version": {"7.1"}}
 		raw, err := c.get(ctx, fmt.Sprintf("%s/%s/_apis/git/repositories/%s/items?%s", c.BaseURL, a, b, q.Encode()), maxDownload, false)
 		if err != nil {
@@ -780,7 +784,7 @@ func syncModule(ctx context.Context, st *storage.Store, key []byte, m storage.VC
 		have[v] = true
 	}
 	var added []string
-	var errs []error
+	var errs, noFolder []error
 	for _, t := range tags {
 		tag := t.Name
 		ver, err := registry.CanonicalVersion(tag)
@@ -789,6 +793,10 @@ func syncModule(ctx context.Context, st *storage.Store, key []byte, m storage.VC
 		}
 		have[ver] = true
 		archive, err := c.Archive(ctx, m.Repo, tag, "tag", m.Dir)
+		if errors.Is(err, ErrNoFolder) {
+			noFolder = append(noFolder, fmt.Errorf("tag %s: %w", tag, err))
+			continue
+		}
 		if err != nil {
 			errs = append(errs, fmt.Errorf("tag %s: %w", tag, err))
 			continue
@@ -808,6 +816,10 @@ func syncModule(ctx context.Context, st *storage.Store, key []byte, m storage.VC
 			continue
 		}
 		added = append(added, ver)
+	}
+	// in a monorepo, tags from before the module's folder existed aren't its versions; only a folder no tag has is an error
+	if len(existing) == 0 && len(added) == 0 {
+		errs = append(errs, noFolder...)
 	}
 	return added, errors.Join(errs...)
 }
