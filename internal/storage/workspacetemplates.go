@@ -9,10 +9,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// ErrLastConfig: the workspace's other configuration went while removing a template; retrying
-// takes the last-template path.
-var ErrLastConfig = errors.New("the workspace's configuration changed meanwhile: try again")
-
 // WorkspaceTemplate is a template added to a workspace: the module block module.<Name>, pinned to
 // a module version, with its inputs.
 type WorkspaceTemplate struct {
@@ -69,10 +65,11 @@ func (s *Store) SetWorkspaceTemplate(ctx context.Context, workspaceID string, t 
 	return s.changeTemplates(ctx, workspaceID, createdBy, q, workspaceID, t.Name, t.TemplateID, t.ModuleSource, t.ModuleRef, raw)
 }
 
-// RemoveWorkspaceTemplate removes an added template and queues the plan that destroys its resources.
-// The last configuration of a workspace can't be removed by a plan (nothing would be left to plan
-// with): if its state manages resources, a destroy run is queued that removes the template once
-// applied; if not, it is removed right away and no run is queued (Run.ID "").
+// RemoveWorkspaceTemplate removes an added template. A template's module may configure its own
+// providers, so dropping its block before its resources are gone leaves Terraform unable to destroy
+// them ("Provider configuration not present"): if the state manages resources, a destroy run
+// targeting module.<name> is queued that removes the template once applied; if not, it is removed
+// right away and no run is queued (Run.ID "").
 func (s *Store) RemoveWorkspaceTemplate(ctx context.Context, workspaceID, name, createdBy string) (Run, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -80,21 +77,15 @@ func (s *Store) RemoveWorkspaceTemplate(ctx context.Context, workspaceID, name, 
 	}
 	defer tx.Rollback()
 	// FOR UPDATE: templates can't be added meanwhile (their FK check waits for the lock).
-	var exists, last bool
+	var exists bool
 	if err := tx.QueryRowContext(ctx, `SELECT
-			EXISTS (SELECT 1 FROM workspace_templates t WHERE t.workspace_id = w.id AND t.name = $2),
-			module_source IS NULL AND vcs_connection_id IS NULL
-				AND NOT EXISTS (SELECT 1 FROM workspace_templates t WHERE t.workspace_id = w.id AND t.name <> $2)
-		FROM workspaces w WHERE w.id = $1::uuid FOR UPDATE`, workspaceID, name).Scan(&exists, &last); err != nil {
+			EXISTS (SELECT 1 FROM workspace_templates t WHERE t.workspace_id = w.id AND t.name = $2)
+		FROM workspaces w WHERE w.id = $1::uuid FOR UPDATE`, workspaceID, name).Scan(&exists); err != nil {
 		return Run{}, err
 	}
 	switch err := requireIdle(ctx, tx, workspaceID); {
 	case !exists:
 		return Run{}, sql.ErrNoRows
-	case !last:
-		tx.Rollback()
-		return s.changeTemplates(ctx, workspaceID, createdBy, `DELETE FROM workspace_templates
-			WHERE workspace_id = $1::uuid AND name = $2`, workspaceID, name)
 	case errors.Is(err, ErrHasResources):
 		r, err := createRun(ctx, tx, workspaceID, "destroy", createdBy)
 		if err != nil {
@@ -132,15 +123,6 @@ func (s *Store) changeTemplates(ctx context.Context, workspaceID, createdBy, q s
 		return Run{}, err
 	} else if n == 0 {
 		return Run{}, sql.ErrNoRows
-	}
-	var hasConfig bool
-	if err := tx.QueryRowContext(ctx, `SELECT module_source IS NOT NULL OR vcs_connection_id IS NOT NULL
-		OR EXISTS (SELECT 1 FROM workspace_templates t WHERE t.workspace_id = w.id) FROM workspaces w WHERE w.id = $1::uuid`,
-		workspaceID).Scan(&hasConfig); err != nil {
-		return Run{}, err
-	}
-	if !hasConfig { // the last other template went meanwhile
-		return Run{}, ErrLastConfig
 	}
 	r, err := createRun(ctx, tx, workspaceID, "apply", createdBy)
 	if err != nil {

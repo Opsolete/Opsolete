@@ -73,46 +73,45 @@ func TestWorkspaceTemplates(t *testing.T) {
 		t.Fatalf("job: %+v", j)
 	}
 
-	// Configure one, remove the other; the last one can't go.
+	// Configure one.
 	if rec := post(h, base+"one", url.Values{"greeting": {"hey"}, "name": {"x"}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("configure: %d %s", rec.Code, rec.Body.String())
 	}
 	if j := claim(); len(j.Modules) != 2 || j.Modules[0].Inputs["greeting"] != "hey" {
 		t.Fatalf("configured job: %+v", j)
 	}
-	if rec := post(h, base+"two/remove", nil); rec.Code != http.StatusSeeOther {
-		t.Fatalf("remove: %d %s", rec.Code, rec.Body.String())
-	}
-	if j := claim(); len(j.Modules) != 1 {
-		t.Fatalf("job after remove: %+v", j)
-	}
-	if rec := post(h, base+"two/remove", nil); rec.Code != http.StatusNotFound {
-		t.Fatalf("removing twice: %d", rec.Code)
-	}
-	if page := get(h, "/workspaces/"+ws+"?show=templates").Body.String(); !strings.Contains(page, base+"one") || strings.Contains(page, base+"two") {
-		t.Fatalf("workspace page: %s", page)
-	}
-
-	// The last one, deployed: a destroy run that keeps the template until its destroy is applied.
+	// Deployed: a destroy run limited to its module, which keeps it (and its providers) in the
+	// configuration until the destroy is applied.
 	var vid int64
 	if err := store.DB.QueryRow(`INSERT INTO state_versions (workspace_id, serial, lineage, blob_key, md5, size, indexed)
 		SELECT id, 1, 'l', 'wt/' || id || '.tfstate', 'm', 2, true FROM workspaces WHERE name = $1 RETURNING id`, ws).Scan(&vid); err != nil {
 		t.Fatal(err)
 	}
 	store.DB.Exec(`INSERT INTO state_version_resources (state_version_id, address, type, name, provider) VALUES ($1, 'module.one.a.b', 'a', 'b', 'p')`, vid)
-	if rec := post(h, base+"one/remove", nil); rec.Code != http.StatusSeeOther || !strings.Contains(rec.Header().Get("Location"), "/runs/") {
-		t.Fatalf("removing the last template of a deployed workspace: %d %q", rec.Code, rec.Header().Get("Location"))
+	destroy := func(name string, left int) {
+		t.Helper()
+		if rec := post(h, base+name+"/remove", nil); rec.Code != http.StatusSeeOther || !strings.Contains(rec.Header().Get("Location"), "/runs/") {
+			t.Fatalf("remove %s: %d %q", name, rec.Code, rec.Header().Get("Location"))
+		}
+		dj, ok, err := store.ClaimJob(ctx, "r1", time.Minute)
+		if err != nil || !ok || dj.Action != "destroy" || len(dj.Modules) != left+1 || len(dj.Target) != 1 || dj.Target[0] != "module."+name {
+			t.Fatalf("destroy job: %+v %v %v", dj, ok, err)
+		}
+		if _, err := store.FinishJob(ctx, dj.RunID, dj.LeaseID, "succeeded", "", nil, nil, nil); err != nil { // nothing to destroy
+			t.Fatal(err)
+		}
+		if added, _ := store.WorkspaceTemplates(ctx, dj.WorkspaceID); len(added) != left {
+			t.Fatalf("templates after removing %s: %+v", name, added)
+		}
 	}
-	dj, ok, err := store.ClaimJob(ctx, "r1", time.Minute)
-	if err != nil || !ok || dj.Action != "destroy" || len(dj.Modules) != 1 {
-		t.Fatalf("destroy job: %+v %v %v", dj, ok, err)
+	destroy("two", 1)
+	if rec := post(h, base+"two/remove", nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("removing twice: %d", rec.Code)
 	}
-	if _, err := store.FinishJob(ctx, dj.RunID, dj.LeaseID, "succeeded", "", nil, nil, nil); err != nil { // nothing to destroy
-		t.Fatal(err)
+	if page := get(h, "/workspaces/"+ws+"?show=templates").Body.String(); !strings.Contains(page, base+"one") || strings.Contains(page, base+"two") {
+		t.Fatalf("workspace page: %s", page)
 	}
-	if added, _ := store.WorkspaceTemplates(ctx, dj.WorkspaceID); len(added) != 0 {
-		t.Fatalf("template left after its destroy: %+v", added)
-	}
+	destroy("one", 0) // the last one too
 
 	// Nothing deployed: it goes right away, without a run.
 	store.DB.Exec(`DELETE FROM state_version_resources WHERE state_version_id = $1`, vid)

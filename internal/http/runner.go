@@ -86,7 +86,7 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 			var body []byte
 			if err == nil {
 				body, err = json.Marshal(runnerapi.Job{
-					RunID: j.RunID, WorkspaceID: j.WorkspaceID, Phase: j.Phase, Action: j.Action, Replace: j.Replace, LeaseID: j.LeaseID,
+					RunID: j.RunID, WorkspaceID: j.WorkspaceID, Phase: j.Phase, Action: j.Action, Replace: j.Replace, Target: j.Target, LeaseID: j.LeaseID,
 					LeaseSeconds: int(leaseTTL.Seconds()), StateToken: s.stateToken(j.WorkspaceID, j.RunID), Vars: vars, Env: env,
 					ModuleSource: src, Modules: mods, Currency: currency,
 				})

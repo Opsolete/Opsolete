@@ -387,6 +387,10 @@ func (r *Runner) plan(ctx context.Context, tf *tfexec.Terraform, dir string, job
 		opts = append(opts, tfexec.Replace(a))
 		step += " -replace=" + a
 	}
+	for _, a := range job.Target {
+		opts = append(opts, tfexec.Target(a))
+		step += " -target=" + a
+	}
 	fmt.Fprintf(w, "\n==> terraform %s\n", step)
 	changes, err := tf.Plan(ctx, opts...)
 	if err != nil {

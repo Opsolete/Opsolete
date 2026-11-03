@@ -140,7 +140,7 @@ func (s *Server) removeWorkspaceTemplate(w http.ResponseWriter, r *http.Request)
 	case errors.Is(err, sql.ErrNoRows):
 		http.NotFound(w, r)
 		return
-	case errors.Is(err, storage.ErrRunActive), errors.Is(err, storage.ErrLastConfig), errors.Is(err, storage.ErrLocalExecution):
+	case errors.Is(err, storage.ErrRunActive), errors.Is(err, storage.ErrLocalExecution):
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	case err != nil:

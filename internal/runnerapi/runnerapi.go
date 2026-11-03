@@ -36,6 +36,7 @@ type Job struct {
 	// plan of a pull request: never applied either)
 	Action       string         `json:"action"`
 	Replace      []string       `json:"replace,omitempty"` // resource addresses the plan replaces (-replace)
+	Target       []string       `json:"target,omitempty"`  // addresses the plan is limited to (-target)
 	LeaseID      string         `json:"lease_id"`
 	LeaseSeconds int            `json:"lease_seconds"`
 	ModuleSource string         `json:"module_source"` // go-getter address; a leading "/" is relative to the server URL; "" = none
