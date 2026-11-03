@@ -95,19 +95,24 @@
 </div>
 
 {{if eq $show "resources"}}
-{{with .Resources}}
+{{with .ResourceGroups}}
 {{$replace := and $.CanOperate (not $.Active) $w.HasConfig (eq $w.ExecutionMode "remote")}}
 <input type="search" placeholder="Filter resources" aria-label="filter resources" style="max-width:20rem;margin-bottom:.75rem"
-  oninput="const q=this.value.toLowerCase();document.querySelectorAll('#resources tr[data-row]').forEach(tr=>tr.hidden=!tr.textContent.toLowerCase().includes(q))">
-<form method="post" action="/workspaces/{{$w.Name}}/runs"><input type="hidden" name="action" value="apply">
-<div class="card flush">
-<table id="resources">
-<tr>{{if $replace}}<th>Replace</th>{{end}}<th>Name</th><th>Provider</th><th>Type</th><th>Module</th></tr>
-{{range .}}<tr data-row>{{if $replace}}<td style="width:2rem"><input type="checkbox" name="replace" value="{{.Address}}" aria-label="replace {{.Address}}"></td>{{end}}
-  <td><code>{{.Address}}</code></td><td>{{provider .Provider}}</td><td>{{.Type}}</td><td>{{or .Module "root"}}</td></tr>{{end}}
-</table>
-</div>
-{{if $replace}}<div class="actions"><button type="submit" class="secondary">Plan replacing selected</button></div>{{end}}
+  oninput="const q=this.value.toLowerCase();document.querySelectorAll('#resources tr[data-row]').forEach(tr=>tr.hidden=!tr.textContent.toLowerCase().includes(q));document.querySelectorAll('#resources details').forEach(d=>d.hidden=!d.querySelector('tr[data-row]:not([hidden])'))">
+<form method="post" action="/workspaces/{{$w.Name}}/runs" id="resources"><input type="hidden" name="action" value="apply">
+{{range .}}
+<details class="section" open>
+  <summary>{{with .Module}}<code>{{.}}</code>{{else}}<span class="muted">root</span>{{end}}{{with .Template}} · {{.}}{{end}}{{with .Ref}} <span class="tag">{{.}}</span>{{end}}
+    <span class="end muted">{{len .Rows}} resource{{if ne (len .Rows) 1}}s{{end}}</span></summary>
+  <table>
+  <tr>{{if $replace}}<th>Recreate</th>{{end}}<th>Name</th><th>Type</th><th>Provider</th></tr>
+  {{range .Rows}}<tr data-row>{{if $replace}}<td style="width:2rem"><input type="checkbox" name="replace" value="{{.Address}}" aria-label="recreate {{.Address}}"></td>{{end}}
+    <td><code title="{{.Address}}">{{.Short}}</code></td><td>{{.Type}}</td><td title="{{provider .Resource.Provider}}">{{.Provider}}</td></tr>{{end}}
+  </table>
+</details>
+{{end}}
+{{if $replace}}<div class="actions"><button type="submit" class="secondary">Plan recreating selected</button></div>
+<p class="hint">Recreate destroys the selected resources and creates them again with the same configuration, e.g. a broken VM. You review the plan first. To remove resources for good, remove their template or change its inputs.</p>{{end}}
 </form>
 {{else}}
 <p class="muted">{{if not .Versions}}No state saved yet.{{else if not (index .Versions 0).Indexed}}The current state version isn't indexed yet (the run couldn't read it back); the next apply indexes it.{{else}}The current state holds no resources.{{end}}</p>

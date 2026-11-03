@@ -682,7 +682,7 @@ func TestWorkspaceFlow(t *testing.T) {
 
 	// Workspace page, with its resources (and outputs, in their tab).
 	page = get(h, "/workspaces/"+name).Body.String() + get(h, "/workspaces/"+name+"?show=outputs").Body.String()
-	for _, want := range []string{"<code>&#34;abc&#34;</code>", "<code>&#34;(sensitive)&#34;</code>", "<code>azurerm_storage_account.this</code>", "v2", "applied", "New run"} {
+	for _, want := range []string{"<code>&#34;abc&#34;</code>", "<code>&#34;(sensitive)&#34;</code>", `<code title="azurerm_storage_account.this">azurerm_storage_account.this</code>`, "v2", "applied", "New run"} {
 		if !strings.Contains(page, want) {
 			t.Errorf("workspace page lacks %q", want)
 		}

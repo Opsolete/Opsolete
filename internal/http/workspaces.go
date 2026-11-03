@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -10,6 +11,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"path"
 	"regexp"
 	"slices"
 	"strconv"
@@ -341,7 +343,8 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		maps.Copy(data, map[string]any{"Added": added, "TemplateCount": templateCount, "Updates": updates, "TemplateNames": names, "Catalog": s.Templates.List(),
-			"LatestPlan": latestPlan, "LatestApply": latestApply, "Metrics": metrics, "Show": r.URL.Query().Get("show")})
+			"ResourceGroups": groupResources(res, ws, added, names),
+			"LatestPlan":     latestPlan, "LatestApply": latestApply, "Metrics": metrics, "Show": r.URL.Query().Get("show")})
 
 	case "runs": // status filters, counted over the runs listed
 		filter := r.URL.Query().Get("filter")
@@ -515,6 +518,58 @@ func (s *Server) syncSelection(ctx context.Context, have, want []string, attach 
 		}
 	}
 	return nil
+}
+
+// resourceGroup is the resources of one top-level module ("" = root), with the template it comes from.
+type resourceGroup struct {
+	Module, Template, Ref string
+	Rows                  []resourceRow
+}
+
+type resourceRow struct {
+	storage.Resource
+	Short    string // the address inside the group's module
+	Provider string // e.g. azurerm
+}
+
+// groupResources groups resources by top-level module (nested modules stay in their parent's group),
+// modules by name and the root last.
+func groupResources(res []storage.Resource, ws storage.Workspace, added []storage.WorkspaceTemplate, names map[string]string) []resourceGroup {
+	var groups []resourceGroup
+	idx := map[string]int{}
+	for _, r := range res {
+		top, _, _ := strings.Cut(r.Module, ".module.")
+		i, ok := idx[top]
+		if !ok {
+			g := resourceGroup{Module: top}
+			if top == "" && ws.TemplateID != "" {
+				g.Template, g.Ref = cmp.Or(names[ws.TemplateID], ws.TemplateID), ws.ModuleRef
+			}
+			call, _, _ := strings.Cut(strings.TrimPrefix(top, "module."), "[") // module.vm["a"] is the call vm
+			for _, a := range added {
+				if top != "" && a.Name == call {
+					g.Template, g.Ref = cmp.Or(names[a.TemplateID], a.TemplateID), a.ModuleRef
+				}
+			}
+			i, idx[top] = len(groups), len(groups)
+			groups = append(groups, g)
+		}
+		short := r.Address
+		if top != "" {
+			short = strings.TrimPrefix(r.Address, top+".")
+		}
+		groups[i].Rows = append(groups[i].Rows, resourceRow{r, short, path.Base(r.Provider)})
+	}
+	slices.SortFunc(groups, func(a, b resourceGroup) int {
+		switch { // group keys are unique: at most one root
+		case a.Module == "":
+			return 1
+		case b.Module == "":
+			return -1
+		}
+		return cmp.Compare(a.Module, b.Module)
+	})
+	return groups
 }
 
 // newRun queues a plan: action=apply (re-plan with the workspace's inputs; replace=<address> any

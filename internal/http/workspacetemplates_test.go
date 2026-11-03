@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/opsolete/opsolete/internal/runnerapi"
+	"github.com/opsolete/opsolete/internal/storage"
 )
 
 // TestWorkspaceTemplates: any number of templates can be added to a workspace, each a module the
@@ -172,5 +173,21 @@ func TestModuleName(t *testing.T) {
 		if got := moduleName(name); got != want || !moduleNameRe.MatchString(got) && got != "template" {
 			t.Errorf("moduleName(%q) = %q, want %q", name, got, want)
 		}
+	}
+}
+
+func TestGroupResources(t *testing.T) {
+	r := func(addr, mod string) storage.Resource {
+		return storage.Resource{Resource: runnerapi.Resource{Address: addr, Module: mod, Provider: "registry.terraform.io/hashicorp/azurerm"}}
+	}
+	res := []storage.Resource{r("azurerm_resource_group.rg", ""), r("module.vm.azurerm_nic.self", "module.vm"),
+		r(`module.app["a"].module.net.azurerm_subnet.s`, `module.app["a"].module.net`), r("module.vm.azurerm_vm.self[0]", "module.vm")}
+	ws := storage.Workspace{TemplateID: "root-id", ModuleRef: "1.0.0"}
+	added := []storage.WorkspaceTemplate{{Name: "vm", TemplateID: "vm-id", ModuleRef: "3.0.0"}, {Name: "app", TemplateID: "gone", ModuleRef: "2.0.0"}}
+	g := groupResources(res, ws, added, map[string]string{"root-id": "Base", "vm-id": "Virtual machine"})
+	if len(g) != 3 || g[0].Module != `module.app["a"]` || g[0].Template != "gone" || g[0].Rows[0].Short != "module.net.azurerm_subnet.s" ||
+		g[1].Module != "module.vm" || g[1].Template != "Virtual machine" || g[1].Ref != "3.0.0" || len(g[1].Rows) != 2 || g[1].Rows[1].Short != "azurerm_vm.self[0]" ||
+		g[2].Module != "" || g[2].Template != "Base" || g[2].Rows[0].Short != "azurerm_resource_group.rg" || g[2].Rows[0].Provider != "azurerm" {
+		t.Fatalf("groups: %+v", g)
 	}
 }
