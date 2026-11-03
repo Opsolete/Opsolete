@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.3.0](https://github.com/Opsolete/Opsolete/compare/v0.2.0...v0.3.0) (2026-11-03)
+
+
+### Features
+
+* change the template catalog's access token and fix the token permission text ([a3fde68](https://github.com/Opsolete/Opsolete/commit/a3fde6864501906d8b21abf60acf092243538d1d))
+* expose Prometheus metrics on a separate METRICS_ADDR listener ([65095f3](https://github.com/Opsolete/Opsolete/commit/65095f34e52cb14a1967b967cb79abca1d632fd5))
+* publish VCS modules from a folder and unlink them from the registry ([aa42db3](https://github.com/Opsolete/Opsolete/commit/aa42db34cfa50c4cd860a99cf26b496674d3fdc5))
+* treat VCS connections as shared credentials for workspaces, modules and templates ([7026a0d](https://github.com/Opsolete/Opsolete/commit/7026a0d99ef981688f0f6c4d52ca98f624e6689a))
+
+
+### Bug Fixes
+
+* **image:** write runner passwd/group as plain files ([8b21518](https://github.com/Opsolete/Opsolete/commit/8b215180b26a19365f25e7f784715bbd2ff9d5dd))
+
 ## [0.2.0](https://github.com/Opsolete/Opsolete/compare/v0.1.0...v0.2.0) (2026-10-28)
 
 
