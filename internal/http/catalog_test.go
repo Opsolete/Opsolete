@@ -101,6 +101,24 @@ func (g *fakeGitRepo) handler(t *testing.T) http.Handler {
 				w.WriteHeader(http.StatusCreated)
 				w.Write([]byte(`{}`))
 			}
+		case r.Method == "DELETE" && strings.HasPrefix(p, "/contents/"):
+			var req struct{ Branch, SHA string }
+			json.NewDecoder(r.Body).Decode(&req)
+			file := strings.TrimPrefix(p, "/contents/")
+			if cur, ok := g.commits[g.branches[req.Branch]][file]; !ok || req.SHA != blobSHA(cur) {
+				http.Error(w, `{"message":"does not match"}`, http.StatusConflict)
+				return
+			}
+			next := map[string]string{}
+			for k, v := range g.commits[g.branches[req.Branch]] {
+				if k != file {
+					next[k] = v
+				}
+			}
+			g.n++
+			sha := fmt.Sprintf("c%039d", g.n)
+			g.commits[sha], g.branches[req.Branch] = next, sha
+			w.Write([]byte(`{}`))
 		case r.Method == "POST" && p == "/git/refs":
 			var req struct{ Ref, SHA string }
 			json.NewDecoder(r.Body).Decode(&req)
@@ -268,6 +286,17 @@ func TestTemplateCatalogInGit(t *testing.T) {
 	g.mu.Lock()
 	g.commit("main", map[string]string{"catalog/bad.json": tplJSON("fixed-"+id, "Fixed")})
 	g.mu.Unlock()
+
+	// Deleting in commit mode removes the file on the branch and reloads the catalog.
+	if rec := post(h, "/templates/web-"+id+"/delete", nil); rec.Code != http.StatusSeeOther {
+		t.Fatalf("delete in git: %d %s", rec.Code, rec.Body.String())
+	}
+	g.mu.Lock()
+	_, onMain := g.commits[g.branches["main"]]["catalog/web.json"]
+	g.mu.Unlock()
+	if _, ok := app.Templates.Get("web-" + id); ok || onMain {
+		t.Fatalf("deleted template: loaded %v, on main %v", ok, onMain)
+	}
 
 	// Pull request mode: a new template goes to a new branch and a pull request; the catalog waits for the merge.
 	set.Set("mode", "pr")

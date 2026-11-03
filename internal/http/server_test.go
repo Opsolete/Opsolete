@@ -269,6 +269,12 @@ func TestTemplateBuilder(t *testing.T) {
 	if rec := get(newServer(t, dir, false, store), "/"); !strings.Contains(rec.Body.String(), "VNet") {
 		t.Fatalf("not persisted: %s", rec.Body.String())
 	}
+	if rec := post(h, loc+"/delete", nil); rec.Code != http.StatusSeeOther {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := get(newServer(t, dir, false, store), loc); rec.Code != http.StatusNotFound {
+		t.Fatalf("deleted template still served: %d", rec.Code)
+	}
 }
 
 func upload(h http.Handler, fields map[string]string, archive []byte) *httptest.ResponseRecorder {

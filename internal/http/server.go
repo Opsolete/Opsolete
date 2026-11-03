@@ -135,6 +135,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /templates/new", s.admin(s.editor(s.saveTemplate)))
 	mux.HandleFunc("GET /templates/{id}/edit", s.admin(s.editor(s.builder)))
 	mux.HandleFunc("POST /templates/{id}/edit", s.admin(s.editor(s.saveTemplate)))
+	mux.HandleFunc("POST /templates/{id}/delete", s.admin(s.editor(s.deleteTemplate)))
 	if s.Features.VCS {
 		mux.HandleFunc("GET /catalog", s.admin(s.catalogPage))
 		mux.HandleFunc("POST /catalog", s.admin(s.saveCatalog))
@@ -382,6 +383,37 @@ func (s *Server) saveTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Log.Info("template saved", "id", t.ID)
 	http.Redirect(w, r, "/templates/"+t.ID, http.StatusSeeOther)
+}
+
+// deleteTemplate removes a template from the catalog. Workspaces created from it keep running
+// their pinned module; they just can't be reconfigured from it.
+func (s *Server) deleteTemplate(w http.ResponseWriter, r *http.Request) {
+	t, ok := s.Templates.Get(r.PathValue("id"))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	fail := func(msg string) {
+		s.renderBuilder(w, r, http.StatusUnprocessableEntity, builderPage{T: t, Editing: true, Error: msg})
+	}
+	if mode, _ := s.Templates.Source(); mode != "" {
+		pr, err := vcs.DeleteTemplate(r.Context(), s.Store, s.SecretKey, s.Templates, t.ID, auth.FromContext(r.Context()).Email)
+		if err != nil {
+			s.Log.Warn("delete template in git", "id", t.ID, "err", err)
+			fail(err.Error())
+			return
+		}
+		if pr != "" { // the template goes once it's merged
+			s.Log.Info("template removal pull request opened", "id", t.ID, "url", pr)
+			s.renderBuilder(w, r, http.StatusOK, builderPage{T: t, Editing: true, PullRequest: pr})
+			return
+		}
+	} else if err := s.Templates.Delete(t.ID); err != nil {
+		fail(err.Error())
+		return
+	}
+	s.Log.Info("template deleted", "id", t.ID)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 // toJSON renders a value (e.g. a variable default) compactly for display.

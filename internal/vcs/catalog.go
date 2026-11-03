@@ -176,6 +176,24 @@ func PollCatalog(ctx context.Context, st *storage.Store, key []byte, cat *templa
 // (then reloads the catalog), or a pull request (returned: its URL). The commit is based on the loaded
 // one, so the provider refuses to overwrite a change made in Git since it was loaded.
 func SaveTemplate(ctx context.Context, st *storage.Store, key []byte, cat *templates.Catalog, t templates.Template, by string) (string, error) {
+	body, err := templates.Encode(t)
+	if err != nil {
+		return "", err
+	}
+	return writeTemplate(ctx, st, key, cat, t.ID, t.Name, body, by)
+}
+
+// DeleteTemplate removes template id's file from the catalog's repository, like SaveTemplate.
+func DeleteTemplate(ctx context.Context, st *storage.Store, key []byte, cat *templates.Catalog, id, by string) (string, error) {
+	t, ok := cat.Get(id)
+	if !ok {
+		return "", fmt.Errorf("template %q does not exist", id)
+	}
+	return writeTemplate(ctx, st, key, cat, id, t.Name, nil, by)
+}
+
+// writeTemplate commits body as template id's file; a nil body deletes it.
+func writeTemplate(ctx context.Context, st *storage.Store, key []byte, cat *templates.Catalog, id, name string, body []byte, by string) (string, error) {
 	tc, err := st.GetTemplateCatalog(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", errors.New("the template catalog is not a Git repository")
@@ -190,23 +208,24 @@ func SaveTemplate(ctx context.Context, st *storage.Store, key []byte, cat *templ
 	if base == "" {
 		return "", errors.New("the catalog isn't loaded from the repository yet: see Settings → Templates")
 	}
-	body, err := templates.Encode(t)
-	if err != nil {
-		return "", err
-	}
 	c, err := catalogConn(ctx, st, key, tc)
 	if err != nil {
 		return "", err
 	}
-	file, isNew, verb := cat.Path(t.ID), false, "Update"
-	if file == "" {
-		file, isNew, verb = path.Join(tc.Dir, t.ID+".json"), true, "Add"
+	file, isNew, verb := cat.Path(id), false, "Update"
+	switch {
+	case body == nil && file == "":
+		return "", fmt.Errorf("template %q does not exist", id)
+	case body == nil:
+		verb = "Remove"
+	case file == "":
+		file, isNew, verb = path.Join(tc.Dir, id+".json"), true, "Add"
 	}
-	title := fmt.Sprintf("%s template %s", verb, t.Name)
-	msg := fmt.Sprintf("%s\n\nSaved in Opsolete by %s (template %s).", title, by, t.ID)
+	title := fmt.Sprintf("%s template %s", verb, name)
+	msg := fmt.Sprintf("%s\n\nSaved in Opsolete by %s (template %s).", title, by, id)
 	branch := tc.Branch
 	if tc.Mode == "pr" { // shortcut: a branch whose commit then fails is left behind; delete it in the provider
-		branch = "opsolete/template-" + t.ID[:min(len(t.ID), 8)] + "-" + strings.ToLower(rand.Text()[:6])
+		branch = "opsolete/template-" + id[:min(len(id), 8)] + "-" + strings.ToLower(rand.Text()[:6])
 		if err := c.createBranch(ctx, tc.Repo, branch, base); err != nil {
 			return "", fmt.Errorf("create branch %s: %w", branch, err)
 		}
@@ -255,7 +274,7 @@ func (c Conn) createBranch(ctx context.Context, repo, branch, commit string) err
 	return fmt.Errorf("unknown VCS provider %q", c.Provider)
 }
 
-// commitFile commits one file to branch, whose current commit must be base.
+// commitFile commits one file to branch, whose current commit must be base. A nil body deletes the file.
 func (c Conn) commitFile(ctx context.Context, repo, branch, base, file string, body []byte, isNew bool, msg string) error {
 	a, b, err := splitRepo(repo)
 	if err != nil {
@@ -264,7 +283,10 @@ func (c Conn) commitFile(ctx context.Context, repo, branch, base, file string, b
 	switch c.Provider {
 	case GitHub:
 		u := fmt.Sprintf("%s/repos/%s/%s/contents/%s", c.BaseURL, a, b, (&url.URL{Path: file}).EscapedPath())
-		req := map[string]string{"message": msg, "content": base64.StdEncoding.EncodeToString(body), "branch": branch}
+		req, method := map[string]string{"message": msg, "branch": branch}, http.MethodDelete
+		if body != nil {
+			req["content"], method = base64.StdEncoding.EncodeToString(body), http.MethodPut
+		}
 		if !isNew { // the file's blob at base: GitHub answers 409 if the branch has another version by now
 			var cur struct {
 				SHA string `json:"sha"`
@@ -274,17 +296,21 @@ func (c Conn) commitFile(ctx context.Context, repo, branch, base, file string, b
 			}
 			req["sha"] = cur.SHA
 		}
-		return c.send(ctx, http.MethodPut, u, req, nil)
+		return c.send(ctx, method, u, req, nil)
 	case AzureDevOps:
-		change := "edit"
+		change := map[string]any{"changeType": "edit", "item": map[string]string{"path": "/" + file},
+			"newContent": map[string]string{"content": string(body), "contentType": "rawtext"}}
 		if isNew {
-			change = "add"
+			change["changeType"] = "add"
+		}
+		if body == nil {
+			change["changeType"] = "delete"
+			delete(change, "newContent")
 		}
 		// oldObjectId: Azure DevOps refuses the push (409) if the branch moved since base.
 		return c.send(ctx, http.MethodPost, fmt.Sprintf("%s/%s/_apis/git/repositories/%s/pushes?api-version=7.1", c.BaseURL, a, b), map[string]any{
 			"refUpdates": []map[string]string{{"name": "refs/heads/" + branch, "oldObjectId": base}},
-			"commits": []map[string]any{{"comment": msg, "changes": []map[string]any{{"changeType": change, "item": map[string]string{"path": "/" + file},
-				"newContent": map[string]string{"content": string(body), "contentType": "rawtext"}}}}},
+			"commits":    []map[string]any{{"comment": msg, "changes": []map[string]any{change}}},
 		}, nil)
 	}
 	return fmt.Errorf("unknown VCS provider %q", c.Provider)

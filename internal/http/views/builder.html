@@ -5,6 +5,9 @@
     <h1>{{if .Editing}}Edit {{.T.Name}}{{else}}New template{{end}}</h1>
     {{if .Editing}}<p class="muted">ID <code>{{.T.ID}}</code></p>{{else}}<p class="muted">A template is a module's no-code settings: the pinned version and the form for its variables.</p>{{end}}
   </div>
+  {{if .Editing}}<form method="post" action="/templates/{{.T.ID}}/delete"
+    onsubmit="return confirm('Delete this template? Workspaces created from it keep their module, but can no longer be configured from it.')">
+    <button type="submit" class="danger">Delete</button></form>{{end}}
 </div>
 {{with .PullRequest}}<p class="alert" role="status">Pull request opened: <a href="{{.}}" target="_blank" rel="noopener">{{.}}</a>. The catalog changes once it's merged; saving again opens another one.</p>{{end}}
 

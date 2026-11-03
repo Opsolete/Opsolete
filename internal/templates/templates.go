@@ -223,6 +223,25 @@ func (c *Catalog) Save(t Template, overwrite bool) error {
 	return nil
 }
 
+// Delete removes template id's file from the directory.
+func (c *Catalog) Delete(id string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.mode != "" {
+		return fmt.Errorf("the catalog is a Git repository: delete through it")
+	}
+	p, ok := c.paths[id]
+	if !ok {
+		return fmt.Errorf("template %q does not exist", id)
+	}
+	if err := os.Remove(p); err != nil {
+		return err
+	}
+	delete(c.m, id)
+	delete(c.paths, id)
+	return nil
+}
+
 func (t Template) check() error {
 	if !idRe.MatchString(t.ID) || t.ID == "new" { // "new" is the builder route
 		return fmt.Errorf("invalid id %q (lowercase letters, digits and dashes)", t.ID)
