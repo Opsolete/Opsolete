@@ -103,15 +103,19 @@
             pkgs.openssh
             pkgs.coreutils
             pkgs.dockerTools.binSh
-            # ssh refuses to run for a uid without a passwd entry
-            (pkgs.dockerTools.fakeNss.override {
-              extraPasswdLines = ["runner:x:10001:10001::/home/runner:/bin/sh"];
-              extraGroupLines = ["runner:x:10001:"];
-            })
           ];
           # buildImage writes everything as root; world-writable (sticky) dirs instead of a chown, since only uid 10001 runs here.
           # Provider plugins are reused across jobs (mount a volume on the cache to keep them across restarts).
-          extraCommands = "mkdir -m 1777 tmp && mkdir -p home/runner/.terraform.d/plugin-cache && chmod -R 1777 home";
+          # passwd/group (ssh refuses to run for a uid without a passwd entry) are written as plain files, not
+          # symlinks into /nix/store (as fakeNss would give): containerd reads them from the host side to resolve
+          # the user's groups and rejects symlinks that leave the rootfs ("path escapes from parent").
+          extraCommands = ''
+            mkdir -m 1777 tmp && mkdir -p home/runner/.terraform.d/plugin-cache && chmod -R 1777 home
+            if [ -L etc ]; then t=$(readlink -f etc); rm etc; mkdir etc; cp -RP "$t"/. etc/; fi
+            chmod u+w etc
+            printf '%s\n' 'root:x:0:0::/root:/bin/sh' 'runner:x:10001:10001::/home/runner:/bin/sh' > etc/passwd
+            printf '%s\n' 'root:x:0:' 'runner:x:10001:' > etc/group
+          '';
           config = {
             Entrypoint = ["/bin/opsolete" "runner"];
             User = "10001:10001";
