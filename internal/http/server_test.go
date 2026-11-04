@@ -246,7 +246,9 @@ func TestTemplateBuilder(t *testing.T) {
 		"in_type":        {"string", "select", "string", "string"},
 		"in_required":    {"0"},
 		"in_pattern":     {"", "", "", ""},
-		"in_options":     {"stale=x", "westeurope, North=northeurope", "", ""},
+		"in_opt_value_0": {"stale"},
+		"in_opt_value_1": {"westeurope", "northeurope", ""}, // the blank row posts too
+		"in_opt_label_1": {"", "North, Europe", ""},         // a comma in a label stays one option
 		"in_default":     {"10.0.0.0/16", "westeurope", "", ""},
 		"in_show_input":  {"", "", "region", ""},
 		"in_show_equals": {"", "", "northeurope", ""},
@@ -262,12 +264,14 @@ func TestTemplateBuilder(t *testing.T) {
 		t.Fatalf("generated form wrong: %s", rec.Body.String())
 	}
 	saved, _ := os.ReadFile(filepath.Join(dir, id+".json"))
-	if s := string(saved); !strings.Contains(s, `"show_if": {`) || strings.Contains(s, "stale") || !strings.Contains(s, `"required": true`) {
+	if s := string(saved); !strings.Contains(s, `"show_if": {`) || strings.Contains(s, "stale") || !strings.Contains(s, `"required": true`) ||
+		!strings.Contains(s, `"label": "North, Europe"`) {
 		t.Fatalf("saved template wrong:\n%s", s)
 	}
-	// the builder shows the condition again
-	if rec := get(h, loc+"/edit"); !strings.Contains(rec.Body.String(), `<option value="region" selected>when region is</option>`) {
-		t.Fatalf("builder lost the condition: %s", rec.Body.String())
+	// the builder shows the condition and the option rows again
+	if body := get(h, loc+"/edit").Body.String(); !strings.Contains(body, `<option value="region" selected>when region is</option>`) ||
+		!strings.Contains(body, `name="in_opt_label_1" value="North, Europe"`) {
+		t.Fatalf("builder lost the condition or options: %s", body)
 	}
 	// a condition on a dropdown below the field is refused with a readable error
 	bad := url.Values{}

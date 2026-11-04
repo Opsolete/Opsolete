@@ -79,8 +79,16 @@
           </div>
         </div>
         <div class="fcard-body">
-          <label class="f span2 only-select"><span class="f-head">Options{{template "tip" "The choices, comma-separated. Write Label=value to show a friendly name, for example: Windows=windows, Linux=linux."}}</span>
-            <input name="in_options" value="{{range $j, $o := .Options}}{{if $j}}, {{end}}{{with $o.Label}}{{.}}={{end}}{{$o.Value}}{{end}}" placeholder="Windows=windows, Linux=linux"></label>
+          <div class="f opts only-select" role="group" aria-label="Dropdown options"><span class="f-head">Options{{template "tip" "One row per choice. Value is what Terraform gets, for example Standard_D2s_v5. Shown as is the optional friendly name end users see, for example Small (2 vCPU, 8 GB). Clear a value to remove its row."}}</span>
+            <div class="opt-rows">
+            {{range .Options}}<div class="opt-row">
+              <input name="in_opt_value_{{$i}}" value="{{.Value}}" class="mono" placeholder="Value: westeurope" aria-label="Option value" autocomplete="off" spellcheck="false">
+              <input name="in_opt_label_{{$i}}" value="{{.Label}}" placeholder="Shown as (optional): West Europe" aria-label="Option shown as">
+              <button type="button" class="icon" data-act="opt-remove" aria-label="Remove option" title="Remove option" hidden>✕</button>
+            </div>{{end}}
+            </div>
+            <button type="button" class="icon opt-add" data-act="opt-add" hidden>+ Add option</button>
+          </div>
           <label class="f"><span class="f-head">Default{{template "tip" "Filled in when the form opens. A dropdown's default is one of its option values; a Yes / no default is true or false."}}</span>
             <input name="in_default" value="{{.Default}}" placeholder="none"></label>
           <label class="f only-string"><span class="f-head">Pattern{{template "tip" "A regular expression the whole value must match, for example [a-z0-9]{3,24}. Leave empty to accept any text."}}</span>
@@ -119,13 +127,14 @@
     const list = document.getElementById("fields"), add = document.getElementById("add-field");
     const cards = () => [...list.querySelectorAll(".fcard")];
     const split = s => s.split(",").map(v => v.trim()).filter(Boolean);
-    const optionValues = card => split(card.querySelector("[name=in_options]").value).map(o => o.slice(o.indexOf("=") + 1).trim());
-    // Renumber the checkboxes (they post their card's index), offer each card the dropdowns above it,
-    // and show the chosen dropdown's values as chips to click.
+    const optionValues = card => [...card.querySelectorAll(".opt-row [aria-label='Option value']")].map(el => el.value.trim()).filter(Boolean);
+    // Renumber the checkboxes and option rows (they post their card's index), offer each card the
+    // dropdowns above it, and show the chosen dropdown's values as chips to click.
     const refresh = () => {
       const above = new Map();
       cards().forEach((card, i) => {
         for (const box of card.querySelectorAll("[type=checkbox]")) box.value = i;
+        for (const el of card.querySelectorAll(".opt-row input")) el.name = el.name.replace(/\d*$/, i);
         const sel = card.querySelector(".show-input"), cur = sel.value, names = [...above.keys()];
         if (cur && !names.includes(cur)) names.push(cur); // keep a stale choice: the save explains it
         if (sel.options.length !== names.length + 1 || names.some((n, j) => sel.options[j + 1].value !== n))
@@ -146,6 +155,15 @@
       if (chip) {
         const eq = chip.parentElement.parentElement.querySelector(".show-equals"), vs = split(eq.value), v = chip.dataset.v;
         eq.value = (vs.includes(v) ? vs.filter(x => x !== v) : [...vs, v]).join(", ");
+      } else if (act?.dataset.act === "opt-add") {
+        const rows = act.previousElementSibling, row = rows.lastElementChild.cloneNode(true);
+        for (const el of row.querySelectorAll("input")) el.value = "";
+        rows.append(row);
+        row.querySelector("input").focus();
+      } else if (act?.dataset.act === "opt-remove") {
+        const row = act.closest(".opt-row"), rows = row.parentElement;
+        if (rows.children.length > 1) row.remove(); else for (const el of row.querySelectorAll("input")) el.value = "";
+        rows.querySelector("input").focus();
       } else if (act) {
         const card = act.closest(".fcard");
         if (act.dataset.act === "up") card.previousElementSibling?.before(card);
@@ -157,6 +175,7 @@
       refresh();
     });
     const reset = card => {
+      for (const row of [...card.querySelectorAll(".opt-row")].slice(1)) row.remove();
       for (const el of card.querySelectorAll("input")) el.type === "checkbox" ? el.checked = false : el.value = "";
       for (const el of card.querySelectorAll("select")) el.selectedIndex = 0;
     };
@@ -169,7 +188,7 @@
     };
     list.addEventListener("input", refresh);
     list.addEventListener("change", refresh);
-    for (const el of [add, ...document.querySelectorAll(".fcard-tools")]) el.hidden = false;
+    for (const el of [add, ...document.querySelectorAll(".fcard-tools, [data-act^=opt]")]) el.hidden = false;
     refresh();
   })();
 </script>

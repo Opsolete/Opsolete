@@ -295,6 +295,10 @@ func (s *Server) renderBuilder(w http.ResponseWriter, r *http.Request, status in
 		p.Modules = mods
 	}
 	p.Rows = append(slices.Clone(p.T.Inputs), templates.Input{}) // a blank card to fill in (and for "+ Add field" to clone)
+	// and a blank option row per card; Clip so the template's own slice is never written
+	for i := range p.Rows {
+		p.Rows[i].Options = append(slices.Clip(p.Rows[i].Options), templates.Option{})
+	}
 	s.render(w, r, status, "builder.html", p)
 }
 
@@ -480,12 +484,8 @@ func templateFromForm(r *http.Request) templates.Template {
 		if typ == "string" || typ == "number" {
 			in.Sensitive = slices.Contains(f["in_sensitive"], idx)
 		}
-		for _, o := range strings.Split(at("in_options", i), ",") { // "value" or "Label=value"
-			label, value, ok := strings.Cut(o, "=")
-			if !ok {
-				label, value = "", label
-			}
-			if label, value = strings.TrimSpace(label), strings.TrimSpace(value); value != "" && typ == "select" {
+		for j := range f["in_opt_value_"+idx] { // option rows post per card, named by its index like the checkboxes
+			if value, label := at("in_opt_value_"+idx, j), at("in_opt_label_"+idx, j); value != "" && typ == "select" {
 				if label == value {
 					label = ""
 				}
