@@ -84,7 +84,7 @@ func TestCloudLoginAndState(t *testing.T) {
 	sv := fmt.Sprintf(`{"data":{"type":"state-versions","attributes":{"serial":1,"md5":%q,"state":%q}}}`,
 		hex.EncodeToString(m[:]), base64.StdEncoding.EncodeToString([]byte(state)))
 	if rec := api("POST", "/workspaces/"+id+"/state-versions", `{"data":{"attributes":{"serial":1}}}`); rec.Code != 422 ||
-		!strings.Contains(rec.Body.String(), "param is missing or the value is empty: state") {
+		!strings.Contains(rec.Body.String(), `"title":"param is missing or the value is empty: state"`) { // go-tfe < 1.104 reads only JSON:API titles
 		t.Fatalf("upload-URL flow must fall back: %d %s", rec.Code, rec.Body)
 	}
 	if rec := api("POST", "/workspaces/"+id+"/state-versions", sv); rec.Code != http.StatusConflict {
@@ -122,6 +122,9 @@ func TestCloudLoginAndState(t *testing.T) {
 	}
 	if rec := api("POST", "/workspaces/"+id+"/actions/lock", ""); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "remote execution") {
 		t.Fatalf("lock of a remote workspace: %d %s", rec.Code, rec.Body)
+	}
+	if rec := api("POST", "/workspaces/"+id+"/state-versions", sv); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "remote execution") {
+		t.Fatalf("state upload to a remote workspace: %d %s", rec.Code, rec.Body)
 	}
 
 	// Another (non-admin) user's workspace is invisible.

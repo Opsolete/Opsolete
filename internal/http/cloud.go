@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/md5"
 	"crypto/rand"
@@ -91,9 +92,17 @@ func writeAPI(w http.ResponseWriter, status int, data any) {
 	json.NewEncoder(w).Encode(map[string]any{"data": data})
 }
 
+// writeAPIError uses JSON:API error objects: go-tfe before v1.104 (Terraform < 1.15.3) reads only
+// their titles, and needs them to recognise e.g. "is locked by Run" or a missing upload URL.
+func writeAPIError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/vnd.api+json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]any{"errors": []map[string]string{{"status": strconv.Itoa(status), "title": msg}}})
+}
+
 func (s *Server) cloudError(w http.ResponseWriter, what string, err error) {
 	s.Log.Error(what, "err", err)
-	writeErrors(w, http.StatusInternalServerError, "internal error")
+	writeAPIError(w, http.StatusInternalServerError, "internal error")
 }
 
 // cloudUser authenticates a user token (terraform login) and puts its user on the request. Any
@@ -103,7 +112,7 @@ func (s *Server) cloudUser(next http.HandlerFunc) http.HandlerFunc {
 		token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		id, email, role, err := s.Store.TokenUser(r.Context(), token)
 		if errors.Is(err, sql.ErrNoRows) {
-			writeErrors(w, http.StatusUnauthorized, "missing, invalid or expired token: run terraform login "+s.Registry.PublicURL.Host)
+			writeAPIError(w, http.StatusUnauthorized, "missing, invalid or expired token: run terraform login "+s.Registry.PublicURL.Host)
 			return
 		}
 		if err != nil {
@@ -111,7 +120,7 @@ func (s *Server) cloudUser(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if org := r.PathValue("org"); org != "" && org != s.Organization {
-			writeErrors(w, http.StatusNotFound, "organization not found")
+			writeAPIError(w, http.StatusNotFound, "organization not found")
 			return
 		}
 		u := auth.User{ID: id, Email: email, Role: role}
@@ -137,11 +146,11 @@ func (s *Server) cloudWorkspace(w http.ResponseWriter, r *http.Request, need str
 	}
 	switch {
 	case errors.Is(err, sql.ErrNoRows) || err == nil && level == "":
-		writeErrors(w, http.StatusNotFound, "workspace not found")
+		writeAPIError(w, http.StatusNotFound, "workspace not found")
 	case err != nil:
 		s.cloudError(w, "get workspace", err)
 	case need == levelOperate && level != levelOperate:
-		writeErrors(w, http.StatusForbidden, "you have read-only access to this workspace")
+		writeAPIError(w, http.StatusForbidden, "you have read-only access to this workspace")
 	default:
 		return ws, true
 	}
@@ -181,18 +190,18 @@ func (s *Server) cloudCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
-		writeErrors(w, http.StatusBadRequest, "body must be a JSON:API workspace")
+		writeAPIError(w, http.StatusBadRequest, "body must be a JSON:API workspace")
 		return
 	}
 	name := body.Data.Attributes.Name
 	if !validWorkspaceName(name) {
-		writeErrors(w, http.StatusUnprocessableEntity, "workspace name: "+workspaceNameRule)
+		writeAPIError(w, http.StatusUnprocessableEntity, "workspace name: "+workspaceNameRule)
 		return
 	}
 	u := auth.FromContext(r.Context())
 	ws, err := s.Store.CreateEmptyWorkspace(r.Context(), name, false, u.ID)
 	if errors.Is(err, storage.ErrNameTaken) {
-		writeErrors(w, http.StatusUnprocessableEntity, err.Error())
+		writeAPIError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
 	if err != nil {
@@ -200,6 +209,10 @@ func (s *Server) cloudCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.Store.SetExecutionMode(r.Context(), ws.ID, "local"); err != nil {
+		// a remote-mode leftover would refuse this CLI its lock; let the retry create it again
+		if _, derr := s.Store.DeleteWorkspace(context.WithoutCancel(r.Context()), ws.ID, true); derr != nil {
+			s.Log.Error("delete half-created workspace", "workspace", ws.Name, "err", derr)
+		}
 		s.cloudError(w, "execution mode", err)
 		return
 	}
@@ -220,7 +233,7 @@ func (s *Server) cloudLock(w http.ResponseWriter, r *http.Request) {
 	switch r.PathValue("action") {
 	case "lock":
 		if ws.ExecutionMode != "local" {
-			writeErrors(w, http.StatusConflict, "workspace "+ws.Name+" uses remote execution: Opsolete runners plan and apply it. "+
+			writeAPIError(w, http.StatusConflict, "workspace "+ws.Name+" uses remote execution: Opsolete runners plan and apply it. "+
 				"Set its execution mode to local in the workspace's settings to run Terraform on your machine")
 			return
 		}
@@ -233,7 +246,7 @@ func (s *Server) cloudLock(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !ok {
-			writeErrors(w, http.StatusConflict, "workspace already locked")
+			writeAPIError(w, http.StatusConflict, "workspace already locked")
 			return
 		}
 	case "unlock", "force-unlock":
@@ -252,14 +265,14 @@ func (s *Server) cloudLock(w http.ResponseWriter, r *http.Request) {
 		}
 		// go-tfe turns these phrases into its "locked by" errors.
 		if strings.HasPrefix(lock, storage.CloudLockPrefix) {
-			writeErrors(w, http.StatusConflict, "workspace is locked by User: another user's terraform holds it (force-unlock releases it)")
+			writeAPIError(w, http.StatusConflict, "workspace is locked by User: another user's terraform holds it (force-unlock releases it)")
 			return
 		} else if lock != "" {
-			writeErrors(w, http.StatusConflict, "workspace is locked by Run: a Opsolete run or rollback holds it")
+			writeAPIError(w, http.StatusConflict, "workspace is locked by Run: a Opsolete run or rollback holds it")
 			return
 		}
 	default:
-		writeErrors(w, http.StatusNotFound, "unknown action")
+		writeAPIError(w, http.StatusNotFound, "unknown action")
 		return
 	}
 	s.writeWorkspace(w, r, http.StatusOK, ws)
@@ -281,7 +294,7 @@ func (s *Server) cloudCurrentState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(vs) == 0 {
-		writeErrors(w, http.StatusNotFound, "the workspace has no state yet")
+		writeAPIError(w, http.StatusNotFound, "the workspace has no state yet")
 		return
 	}
 	writeAPI(w, http.StatusOK, stateVersionObject(ws.ID, vs[0]))
@@ -313,12 +326,12 @@ func (s *Server) cloudDownloadState(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := strconv.ParseInt(r.PathValue("version"), 10, 64)
 	if err != nil {
-		writeErrors(w, http.StatusNotFound, "state version not found")
+		writeAPIError(w, http.StatusNotFound, "state version not found")
 		return
 	}
 	key, err := s.Store.StateVersionBlob(r.Context(), ws.ID, id)
 	if errors.Is(err, sql.ErrNoRows) {
-		writeErrors(w, http.StatusNotFound, "state version not found")
+		writeAPIError(w, http.StatusNotFound, "state version not found")
 		return
 	}
 	if err != nil {
@@ -341,6 +354,10 @@ func (s *Server) cloudCreateState(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if ws.ExecutionMode != "local" { // a UI lock passes CloudLocked too: only runs write a remote workspace's state
+		writeAPIError(w, http.StatusConflict, "workspace "+ws.Name+" uses remote execution: only its runs save state")
+		return
+	}
 	ctx, u := r.Context(), auth.FromContext(r.Context())
 	var body struct {
 		Data struct {
@@ -354,21 +371,25 @@ func (s *Server) cloudCreateState(w http.ResponseWriter, r *http.Request) {
 	// base64 state plus its JSON form
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 3*maxStateSize)).Decode(&body); err != nil {
 		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
-			writeErrors(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("state larger than %d MB", maxStateSize>>20))
+			writeAPIError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("state larger than %d MB", maxStateSize>>20))
 		} else {
-			writeErrors(w, http.StatusBadRequest, "not a JSON:API state version")
+			writeAPIError(w, http.StatusBadRequest, "not a JSON:API state version")
 		}
 		return
 	}
 	a := body.Data.Attributes
 	if a.State == "" {
-		writeErrors(w, http.StatusUnprocessableEntity, "param is missing or the value is empty: state")
+		writeAPIError(w, http.StatusUnprocessableEntity, "param is missing or the value is empty: state")
 		return
 	}
 	state, err := base64.StdEncoding.DecodeString(a.State)
 	sum := md5.Sum(state)
 	if err != nil || a.MD5 != "" && a.MD5 != hex.EncodeToString(sum[:]) {
-		writeErrors(w, http.StatusUnprocessableEntity, "state is not base64, or doesn't match its md5")
+		writeAPIError(w, http.StatusUnprocessableEntity, "state is not base64, or doesn't match its md5")
+		return
+	}
+	if len(state) > maxStateSize { // the body limit leaves room for json-state; the state itself has the http backend's limit
+		writeAPIError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("state larger than %d MB", maxStateSize>>20))
 		return
 	}
 	// the lock is checked again atomically with the save (AddStateVersion); this only spares writing the file
@@ -376,11 +397,11 @@ func (s *Server) cloudCreateState(w http.ResponseWriter, r *http.Request) {
 		s.cloudError(w, "state lock", err)
 		return
 	} else if !locked {
-		writeErrors(w, http.StatusConflict, storage.ErrNotCloudLocked.Error())
+		writeAPIError(w, http.StatusConflict, storage.ErrNotCloudLocked.Error())
 		return
 	}
 	if code, msg := s.saveState(ctx, ws.ID, "", u.ID, state); code != http.StatusOK {
-		writeErrors(w, code, msg)
+		writeAPIError(w, code, msg)
 		return
 	}
 	// The JSON state lists the resources, so the workspace page shows them as after a run.
