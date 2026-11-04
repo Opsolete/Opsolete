@@ -131,7 +131,7 @@ func (r *Registry) RunnerSource(m templates.Module, ttl time.Duration) string {
 
 // Inspection is what Inspect learns from a module archive.
 type Inspection struct {
-	Module    *tfconfig.Module    // everything terraform-config-inspect reads: inputs, outputs, providers, resources...
+	Module    *tfconfig.Module // everything terraform-config-inspect reads: inputs, outputs, providers, resources...
 	Variables []Variable       // Module.Variables in source order, for form generation
 	Readme    string           // README.md at the archive root, if any
 }
