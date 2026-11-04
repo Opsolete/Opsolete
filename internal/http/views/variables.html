@@ -15,9 +15,7 @@
 </table>
 </div>
 {{end}}
-{{if .CanEdit}}{{if .NoKey}}
-<p class="muted">Adding variables needs <code>SECRET_KEY</code> to be set on the server.</p>
-{{else}}
+{{if .CanEdit}}
 <details class="add">
 <summary class="btn secondary">+ Add variable</summary>
 <form method="post" action="{{.Base}}/variables" class="card inline">
@@ -29,5 +27,5 @@
 </form>
 <p class="hint">Saving a key that exists (same category) replaces it. Sensitive values can't be read back, only replaced.</p>
 </details>
-{{end}}{{end}}
+{{end}}
 {{end}}

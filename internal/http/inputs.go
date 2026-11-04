@@ -3,7 +3,6 @@ package httpserver
 import (
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"net/http"
@@ -56,9 +55,6 @@ func (s *Server) sealInputs(t templates.Template, raw map[string]string, vals, o
 		if isSealed(v) {
 			vals[in.Name] = v
 			continue
-		}
-		if s.SecretKey == nil {
-			return errors.New("sensitive inputs are stored encrypted: set SECRET_KEY first")
 		}
 		plain, err := json.Marshal(v)
 		if err != nil {

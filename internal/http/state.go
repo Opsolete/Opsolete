@@ -215,16 +215,14 @@ func (s *Server) saveState(ctx context.Context, id, runID, cloudUser string, bod
 // (written before SECRET_KEY was set) and are still read as is.
 const sealedPrefix = "opsolete-sealed-v1\n"
 
-// writeBlob stores a state file or run artifact, encrypted (AES-256-GCM) when SECRET_KEY is set:
+// writeBlob stores a state file or run artifact, encrypted (AES-256-GCM) with SECRET_KEY:
 // they hold secrets, so bucket read access alone must not expose them.
 func (s *Server) writeBlob(ctx context.Context, key string, body []byte) error {
-	if s.SecretKey != nil {
-		sealed, err := vcs.Seal(s.SecretKey, string(body), blobAD(key))
-		if err != nil {
-			return err
-		}
-		body = append([]byte(sealedPrefix), sealed...)
+	sealed, err := vcs.Seal(s.SecretKey, string(body), blobAD(key))
+	if err != nil {
+		return err
 	}
+	body = append([]byte(sealedPrefix), sealed...)
 	return s.StateStore.WriteAll(ctx, key, body, &blob.WriterOptions{ContentType: "application/octet-stream"})
 }
 
@@ -233,9 +231,6 @@ func (s *Server) readBlob(ctx context.Context, key string) ([]byte, error) {
 	b, err := s.StateStore.ReadAll(ctx, key)
 	if err != nil || !bytes.HasPrefix(b, []byte(sealedPrefix)) {
 		return b, err
-	}
-	if s.SecretKey == nil {
-		return nil, fmt.Errorf("%s is encrypted, but SECRET_KEY is not set", key)
 	}
 	plain, err := vcs.Open(s.SecretKey, b[len(sealedPrefix):], blobAD(key))
 	if err != nil { // sealed before files were bound to their key

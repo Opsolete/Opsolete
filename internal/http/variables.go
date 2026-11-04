@@ -60,9 +60,6 @@ func reservedEnv(key string) bool {
 
 // variableFromForm validates and seals a posted variable of o.
 func (s *Server) variableFromForm(r *http.Request, o storage.VarOwner) (storage.Variable, error) {
-	if s.SecretKey == nil {
-		return storage.Variable{}, errors.New("variables need SECRET_KEY to be set on the server")
-	}
 	cat, key, val := r.PostFormValue("category"), strings.TrimSpace(r.PostFormValue("key")), r.PostFormValue("value")
 	switch {
 	case cat != "env" && cat != "terraform":
@@ -86,7 +83,6 @@ type varsBlock struct {
 	Base    string // URL the add and delete forms post under
 	Vars    []varView
 	CanEdit bool
-	NoKey   bool
 }
 
 // setView is a variable set applied to a workspace, with its variables.
@@ -102,7 +98,7 @@ type varView struct {
 
 func (s *Server) varsBlock(ctx context.Context, o storage.VarOwner, base string, canEdit bool) (varsBlock, error) {
 	vars, err := s.Store.Variables(ctx, o)
-	b := varsBlock{Base: base, CanEdit: canEdit, NoKey: s.SecretKey == nil}
+	b := varsBlock{Base: base, CanEdit: canEdit}
 	for _, v := range vars {
 		vv := varView{ID: v.ID, Category: v.Category, Key: v.Key, Sensitive: v.Sensitive}
 		if !v.Sensitive {

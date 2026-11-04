@@ -40,7 +40,7 @@ type Server struct {
 	// StateStore holds the workspaces' Terraform state files (any gocloud.dev/blob URL).
 	StateStore *blob.Bucket
 	Features   Features
-	SecretKey  []byte // encrypts VCS tokens, variables and state store files; nil without SECRET_KEY
+	SecretKey  []byte // from SECRET_KEY (required): encrypts VCS tokens, variables and state store files
 	// Organization is the one organization of the cloud API (Terraform's cloud block).
 	Organization string
 	RunnerToken  string // RUNNER_TOKEN: the runner API's bearer token; empty rejects every runner
