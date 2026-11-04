@@ -153,11 +153,11 @@ func diffStates(a, b []byte) ([]stateChange, error) {
 	if err != nil {
 		return nil, err
 	}
-	show := func(l leaf, ok bool) string {
+	show := func(l leaf, ok, secret bool) string {
 		switch {
 		case !ok:
 			return ""
-		case l.secret:
+		case secret:
 			return "(sensitive)"
 		}
 		return l.val
@@ -176,7 +176,8 @@ func diffStates(a, b []byte) ([]stateChange, error) {
 			x, okA := f[p]
 			y, okB := t[p]
 			if okA != okB || x.val != y.val {
-				c.Attrs = append(c.Attrs, attrChange{Path: p, Old: show(x, okA), New: show(y, okB)})
+				secret := x.secret || y.secret // sensitive on either side: an attribute that became sensitive hides its old value too
+				c.Attrs = append(c.Attrs, attrChange{Path: p, Old: show(x, okA, secret), New: show(y, okB, secret)})
 			}
 		}
 		if c.Action != "update" || len(c.Attrs) > 0 {

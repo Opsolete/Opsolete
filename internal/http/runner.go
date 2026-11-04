@@ -108,7 +108,7 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 				if _, ferr := s.Store.FinishJob(r.Context(), j.RunID, j.LeaseID, "failed", err.Error(), nil, nil, nil); ferr != nil {
 					s.Log.Error("fail job", "run", j.RunID, "err", ferr)
 				} else {
-					s.DeleteArtifacts(r.Context(), j.RunID) // an apply phase's saved plan will never be applied
+					s.DeleteArtifacts(context.WithoutCancel(r.Context()), j.RunID) // an apply phase's saved plan will never be applied
 				}
 				continue
 			}
@@ -154,7 +154,7 @@ func (s *Server) jobLogs(w http.ResponseWriter, r *http.Request) {
 		writeErrors(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("log chunks are limited to %d KB", maxLogChunk>>10))
 		return
 	}
-	cancel, err := s.Store.AppendLog(r.Context(), r.PathValue("id"), r.Header.Get(runnerapi.LeaseHeader), strings.ToValidUTF8(string(b), "\uFFFD"), leaseTTL, maxLogBytes)
+	cancel, err := s.Store.AppendLog(r.Context(), r.PathValue("id"), r.Header.Get(runnerapi.LeaseHeader), strings.ReplaceAll(strings.ToValidUTF8(string(b), "\uFFFD"), "\x00", "\uFFFD"), leaseTTL, maxLogBytes)
 	s.liveResult(w, cancel, err)
 }
 
@@ -190,7 +190,7 @@ func (s *Server) jobFinish(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		s.Log.Info("job finished", "run", id, "result", req.Status, "status", status)
 		if status != storage.NeedsConfirmation && status != storage.ApplyQueued {
-			s.DeleteArtifacts(r.Context(), id) // the saved plan has been applied, or will never be
+			s.DeleteArtifacts(context.WithoutCancel(r.Context()), id) // the saved plan has been applied, or will never be
 		}
 	}
 	s.leaseResult(w, err)

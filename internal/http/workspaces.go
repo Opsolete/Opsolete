@@ -398,7 +398,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		}
 		current := versions[0].ID == id
 		var rollback []stateChange
-		if !current {
+		if !current && level == levelOperate { // only operators see it, with the rollback button
 			if rollback, err = s.diffVersions(ctx, &versions[0], &pair[0]); err != nil {
 				s.internalError(w, "state diff", err)
 				return
@@ -429,16 +429,19 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		maps.Copy(data, map[string]any{"Variables": vars, "Sets": setVars})
 
 	case "settings":
-		grants, err := s.Store.Grants(ctx, ws.ID)
-		if err != nil {
-			s.internalError(w, "workspace grants", err)
-			return
-		}
+		var grants []storage.Grant
 		var groups []string
-		if auth.FromContext(ctx).Admin() {
-			if groups, err = s.Store.KnownGroups(ctx); err != nil {
-				s.internalError(w, "known groups", err)
+		if page == "access" {
+			var err error
+			if grants, err = s.Store.Grants(ctx, ws.ID); err != nil {
+				s.internalError(w, "workspace grants", err)
 				return
+			}
+			if auth.FromContext(ctx).Admin() {
+				if groups, err = s.Store.KnownGroups(ctx); err != nil {
+					s.internalError(w, "known groups", err)
+					return
+				}
 			}
 		}
 		// General: workspaces to share the state with, the ones it already does first: they stay
@@ -514,11 +517,9 @@ func (s *Server) syncSelection(ctx context.Context, have, want []string, attach 
 	} else if !ok {
 		return sql.ErrNoRows
 	}
-	for _, n := range want {
-		if !slices.Contains(have, n) {
-			if err := attach(n, true); err != nil {
-				return err
-			}
+	for _, n := range added {
+		if err := attach(n, true); err != nil {
+			return err
 		}
 	}
 	for _, n := range have {
@@ -704,6 +705,11 @@ func (s *Server) workspaceSettings(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	mode := r.PostFormValue("execution_mode")                    // General page only
+	if !slices.Contains([]string{"", "remote", "local"}, mode) { // before any write: a bad form saves nothing
+		http.Error(w, "execution mode is remote or local", http.StatusBadRequest)
+		return
+	}
 	if name := strings.TrimSpace(r.PostFormValue("name")); name != "" && name != ws.Name {
 		if !validWorkspaceName(name) {
 			http.Error(w, "a workspace name is "+workspaceNameRule, http.StatusBadRequest)
@@ -723,16 +729,11 @@ func (s *Server) workspaceSettings(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "workspace settings", err)
 		return
 	}
-	switch mode := r.PostFormValue("execution_mode"); mode { // General page only
-	case "":
-	case "remote", "local":
+	if mode != "" {
 		if err := s.Store.SetExecutionMode(r.Context(), ws.ID, mode); err != nil {
 			s.internalError(w, "execution mode", err)
 			return
 		}
-	default:
-		http.Error(w, "execution mode is remote or local", http.StatusBadRequest)
-		return
 	}
 	if mode := r.PostFormValue("remote_state"); mode != "" { // General page only
 		if err := s.Store.SetRemoteStateSharing(r.Context(), ws.ID, mode == "all", r.PostForm["remote_state_consumers"]); err != nil {
@@ -756,8 +757,8 @@ func (s *Server) lockWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	ctx, u := r.Context(), auth.FromContext(r.Context())
-	switch action := r.PostFormValue("action"); action {
+	ctx, u, action := r.Context(), auth.FromContext(r.Context()), r.PostFormValue("action")
+	switch action {
 	case "lock":
 		reason := strings.TrimSpace(r.PostFormValue("reason"))
 		if utf8.RuneCountInString(reason) > 300 {
@@ -787,7 +788,7 @@ func (s *Server) lockWorkspace(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "action is lock, unlock or force-unlock", http.StatusBadRequest)
 		return
 	}
-	s.Log.Info("workspace lock", "workspace", ws.Name, "action", r.PostFormValue("action"), "user", u.Email)
+	s.Log.Info("workspace lock", "workspace", ws.Name, "action", action, "user", u.Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/settings/lock", http.StatusSeeOther)
 }
 
@@ -812,7 +813,7 @@ func (s *Server) deleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, k := range keys { // failures only leave an unreferenced file behind
-		if err := s.StateStore.Delete(r.Context(), k); err != nil && gcerrors.Code(err) != gcerrors.NotFound {
+		if err := s.StateStore.Delete(context.WithoutCancel(r.Context()), k); err != nil && gcerrors.Code(err) != gcerrors.NotFound {
 			s.Log.Warn("delete state file", "workspace", ws.Name, "key", k, "err", err)
 		}
 	}
@@ -983,7 +984,7 @@ func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if status == storage.Canceled {
-		s.DeleteArtifacts(r.Context(), run.ID)
+		s.DeleteArtifacts(context.WithoutCancel(r.Context()), run.ID)
 	}
 	s.Log.Info("run cancel", "workspace", ws.Name, "run", run.ID, "status", status, "user", u.Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID, http.StatusSeeOther)
@@ -1014,7 +1015,7 @@ func (s *Server) decideRun(w http.ResponseWriter, r *http.Request, confirm bool)
 		return
 	}
 	if !confirm {
-		s.DeleteArtifacts(r.Context(), run.ID)
+		s.DeleteArtifacts(context.WithoutCancel(r.Context()), run.ID)
 	}
 	s.Log.Info("run decided", "workspace", ws.Name, "run", run.ID, "confirmed", confirm, "user", u.Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID, http.StatusSeeOther)

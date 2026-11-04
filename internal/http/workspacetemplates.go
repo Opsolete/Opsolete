@@ -27,7 +27,7 @@ func moduleName(name string) string {
 		s = "t_" + s
 	}
 	s = strings.TrimRight(s[:min(len(s), 63)], "_")
-	if s == "new" || !moduleNameRe.MatchString(s) {
+	if s == "new" { // otherwise s already matches moduleNameRe
 		return "template"
 	}
 	return s

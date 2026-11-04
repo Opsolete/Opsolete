@@ -34,7 +34,7 @@ type vcsForm struct {
 }
 
 // loadVCSForm lists the connections the workspace (by name, "" = a new one) may link and the repos
-// of reposOf ("*" = all connections, "" = none); with VCS off it's empty and the form hides the part.
+// of reposOf (a connection id, "" = none); with VCS off it's empty and the form hides the part.
 func (s *Server) loadVCSForm(ctx context.Context, form map[string]string, errMsg, workspace, reposOf string) (vcsForm, error) {
 	f := vcsForm{Form: form, Error: errMsg}
 	if !s.Features.VCS {
@@ -49,7 +49,7 @@ func (s *Server) loadVCSForm(ctx context.Context, form map[string]string, errMsg
 			continue
 		}
 		f.Conns = append(f.Conns, sc)
-		if reposOf != "*" && reposOf != sc.ID {
+		if reposOf != sc.ID {
 			continue
 		}
 		c, err := vcs.ConnFor(s.SecretKey, sc)
@@ -195,7 +195,8 @@ func (s *Server) createEmptyWorkspace(w http.ResponseWriter, r *http.Request) {
 		fail("Workspace name: " + workspaceNameRule)
 		return
 	}
-	connID, repo, branch, tags, err := s.vcsLink(r.Context(), name, form)
+	// "": selected-scope connections list existing workspaces, so a new one only gets "all" connections
+	connID, repo, branch, tags, err := s.vcsLink(r.Context(), "", form)
 	if err != nil {
 		fail(err.Error())
 		return
@@ -213,6 +214,11 @@ func (s *Server) createEmptyWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	if err == nil && connID != "" {
 		err = s.Store.SetWorkspaceVCS(r.Context(), ws.ID, connID, repo, branch, tags, baseline, form["vcs_trigger"] != "" || tags != "", form["vcs_pull_requests"] != "" && tags == "")
+		if err != nil { // don't leave a half-made workspace whose name blocks the retry
+			if _, derr := s.Store.DeleteWorkspace(context.WithoutCancel(r.Context()), ws.ID, true); derr != nil {
+				s.Log.Error("delete half-created workspace", "workspace", ws.Name, "err", derr)
+			}
+		}
 	}
 	if err != nil {
 		s.internalError(w, "create workspace", err)
@@ -222,8 +228,8 @@ func (s *Server) createEmptyWorkspace(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/workspaces/"+ws.Name, http.StatusSeeOther)
 }
 
-// loadLinkable loads a workspace whose repository link may change: operate access, no template,
-// and no active run (its apply must fetch from the repository its plan used).
+// loadLinkable loads a workspace whose repository link may change: operate access and no template
+// (SetWorkspaceVCS refuses it during an active run: its apply must fetch from the repository its plan used).
 func (s *Server) loadLinkable(w http.ResponseWriter, r *http.Request) (storage.Workspace, bool) {
 	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
 	if !ok {

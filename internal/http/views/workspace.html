@@ -405,21 +405,24 @@
 <h2>Delete workspace</h2>
 <div style="max-width:44rem">
 <p><strong>Warning!</strong> Deleting this workspace permanently removes all of its variables, settings, run history and Terraform state.</p>
-{{if or .Resources .Active}}
+{{$unindexed := and .Versions (not (index .Versions 0).Indexed)}}
+{{if or .Resources .Active $unindexed}}
 <ul>
+  {{if $unindexed}}<li>The current state version <strong>isn't indexed</strong>, so Opsolete can't tell which resources it manages. Destroy them first, or delete anyway: any that still exist are then no longer managed by Terraform.</li>{{end}}
   {{with .Resources}}<li>This workspace <strong>manages {{len .}} resource{{if ne (len .) 1}}s{{end}}</strong>. Destroy them first (queue a destroy plan above), or delete anyway: they are then no longer managed by Terraform and must be cleaned up by hand.</li>{{end}}
   {{if .Active}}<li>A run is in progress: cancel it before deleting.</li>{{end}}
 </ul>
 {{end}}
 </div>
-<button type="button" class="danger"{{if .Active}} disabled{{end}} onclick="document.getElementById('delete-workspace').showModal()">Delete workspace{{if .Resources}} anyway{{end}}</button>
+<button type="button" class="danger"{{if .Active}} disabled{{end}} onclick="document.getElementById('delete-workspace').showModal()">Delete workspace{{if or .Resources $unindexed}} anyway{{end}}</button>
 <dialog id="delete-workspace" class="danger-dialog" aria-labelledby="delete-workspace-title">
   <form method="post" action="/workspaces/{{$w.Name}}/delete">
     <header><h3 id="delete-workspace-title">⚠ Delete workspace</h3>
       <button type="button" class="secondary small" aria-label="close" onclick="this.closest('dialog').close()">✕</button></header>
     <fieldset>
       <p style="margin-top:0">Deleting <strong>{{$w.Name}}</strong> workspace will permanently remove its variables, settings, run history and Terraform state.<br>
-        {{with .Resources}}<strong>Its state still lists {{len .}} resource{{if ne (len .) 1}}s{{end}}: any that still exist will be orphaned.</strong>
+        {{if .Resources}}<strong>Its state still lists {{len .Resources}} resource{{if ne (len .Resources) 1}}s{{end}}: any that still exist will be orphaned.</strong>
+        <input type="hidden" name="force" value="1">{{else if $unindexed}}<strong>Its state isn't indexed: any resources it still manages will be orphaned.</strong>
         <input type="hidden" name="force" value="1">{{else}}This workspace has no run in progress and is not managing any resources.{{end}}</p>
       <label for="delete-confirm">To confirm deletion, enter "delete"</label>
       <input id="delete-confirm" required pattern="delete" autocomplete="off">
