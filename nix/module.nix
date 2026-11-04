@@ -268,7 +268,7 @@ in {
       jobTimeout = mkOption {
         type = types.str;
         default = "1h";
-        description = "OPS_JOB_TIMEOUT (Go duration): hard limit per run phase. Also how long a stop waits for the current job.";
+        description = "OPS_JOB_TIMEOUT (Go duration, also valid as a systemd time span: e.g. 1h, 90m): hard limit per run phase. A stop waits for the current job up to this plus 5 minutes.";
       };
       terraformPackage = mkOption {
         type = types.package;
@@ -396,9 +396,10 @@ in {
             PrivatePIDs = true;
             # for the launcher only (read secret files of any owner, drop to the user); gone after setpriv
             CapabilityBoundingSet = "CAP_SETUID CAP_SETGID CAP_DAC_READ_SEARCH";
-            # Stop = SIGTERM to the runner only: it stops claiming and finishes the current job.
+            # Stop = SIGTERM to the runner only: it stops claiming and finishes the current job. A job that
+            # hits its own timeout is interrupted then, and gets the 5 minutes to save its state and report.
             KillMode = "mixed";
-            TimeoutStopSec = rcfg.jobTimeout;
+            TimeoutStopSec = "${rcfg.jobTimeout} 5min";
           };
       };
     })
