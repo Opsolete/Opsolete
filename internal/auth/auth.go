@@ -25,8 +25,8 @@ import (
 const (
 	sessionCookie = "ops_session"
 	loginCookie   = "ops_login"
-	// shortcut: role and identity live in the cookie, so role changes and IdP removals apply at the
-	// next login (≤ sessionTTL); add a server-side session table if you need instant revocation.
+	// shortcut: identity lives in the cookie, so IdP removals apply at the next login (≤ sessionTTL);
+	// add a server-side session table if you need instant revocation. The role follows ADMIN_EMAILS.
 	sessionTTL = 12 * time.Hour
 	loginTTL   = 10 * time.Minute
 )
@@ -77,7 +77,7 @@ func New(ctx context.Context, c Config, key []byte, save SaveUser) (*Auth, error
 	case c.DevUser != "" && c.Issuer != "":
 		return nil, errors.New("set either OIDC_ISSUER or AUTH_DEV_USER, not both")
 	case c.DevUser != "":
-		u := User{Email: strings.ToLower(c.DevUser), Role: a.role(c.DevUser)}
+		u := User{Email: strings.ToLower(c.DevUser), Role: a.Role(c.DevUser)}
 		id, err := save(ctx, "", u.Email, u.Role, c.DevGroups)
 		if err != nil {
 			return nil, err
@@ -100,7 +100,8 @@ func New(ctx context.Context, c Config, key []byte, save SaveUser) (*Auth, error
 
 func (a *Auth) Dev() bool { return a.dev != nil }
 
-func (a *Auth) role(email string) string {
+// Role is the role ADMIN_EMAILS gives email; sessions and API tokens take it from here, not from what they recorded.
+func (a *Auth) Role(email string) string {
 	if slices.Contains(a.admins, strings.ToLower(email)) {
 		return "admin"
 	}
@@ -129,6 +130,7 @@ func (a *Auth) User(r *http.Request) (User, bool) {
 	if !a.readCookie(r, sessionCookie, &s) || time.Now().Unix() > s.Exp {
 		return User{}, false
 	}
+	s.Role = a.Role(s.Email) // not the cookie's: an admin removed from ADMIN_EMAILS loses it at the restart
 	return s.User, true
 }
 
@@ -226,7 +228,7 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "login failed: the identity provider sent no verified email", http.StatusForbidden)
 		return
 	}
-	u := User{Email: email, Role: a.role(email)}
+	u := User{Email: email, Role: a.Role(email)}
 	if u.ID, err = a.save(r.Context(), idt.Issuer+" "+idt.Subject, u.Email, u.Role, c.Groups); err != nil {
 		if errors.Is(err, ErrEmailTaken) {
 			http.Error(w, "login failed: "+err.Error(), http.StatusForbidden)

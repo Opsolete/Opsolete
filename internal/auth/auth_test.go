@@ -162,6 +162,14 @@ func TestSessionCookie(t *testing.T) {
 	if _, ok := a.User(req); ok {
 		t.Fatal("expired session accepted")
 	}
+	// A session signed while the user was an admin: removed from ADMIN_EMAILS, it no longer is.
+	stale := httptest.NewRecorder()
+	a.writeCookie(stale, sessionCookie, map[string]any{"email": "a@b.c", "role": "admin", "exp": 1 << 40}, "/", sessionTTL)
+	req = httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(stale.Result().Cookies()[0])
+	if u, ok := a.User(req); !ok || u.Admin() {
+		t.Fatalf("the role must follow ADMIN_EMAILS, not the cookie: %+v", u)
+	}
 }
 
 func TestLocalPath(t *testing.T) {

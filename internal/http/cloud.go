@@ -110,7 +110,7 @@ func (s *Server) cloudError(w http.ResponseWriter, what string, err error) {
 func (s *Server) cloudUser(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		id, email, role, err := s.Store.TokenUser(r.Context(), token)
+		id, email, err := s.Store.TokenUser(r.Context(), token)
 		if errors.Is(err, sql.ErrNoRows) {
 			writeAPIError(w, http.StatusUnauthorized, "missing, invalid or expired token: run terraform login "+s.Registry.PublicURL.Host)
 			return
@@ -123,7 +123,7 @@ func (s *Server) cloudUser(next http.HandlerFunc) http.HandlerFunc {
 			writeAPIError(w, http.StatusNotFound, "organization not found")
 			return
 		}
-		u := auth.User{ID: id, Email: email, Role: role}
+		u := auth.User{ID: id, Email: email, Role: s.Auth.Role(email)}
 		auth.SetPrincipal(r.Context(), u, "token")
 		next(w, r.WithContext(auth.WithUser(r.Context(), u)))
 	}
