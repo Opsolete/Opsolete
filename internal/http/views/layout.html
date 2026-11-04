@@ -333,14 +333,12 @@
     font-weight: 500; white-space: nowrap; background: var(--code); color: var(--muted); vertical-align: middle; text-transform: capitalize; }
   .status::before { content: ""; width: .5rem; height: .5rem; border-radius: 50%; background: currentColor; }
   h1 .status { font-size: .85rem; }
-  .status.queued, .status.plan_queued, .status.apply_queued { background: var(--code); color: var(--muted); }
   .status.needs_confirmation, .status.drifted { background: var(--warn-soft); color: var(--warn); }
   .status.running, .status.planning, .status.applying { background: var(--brand-soft); color: var(--brand); }
   .status.running::before, .status.planning::before, .status.applying::before { animation: pulse 1.2s ease-in-out infinite; }
   .status.succeeded, .status.applied, .status.planned { background: var(--ok-soft); color: var(--ok); }
   .status.no_changes { background: var(--tf-soft); color: var(--tf); }
   .status.failed, .status.errored { background: var(--danger-soft); color: var(--danger); }
-  .status.canceled, .status.discarded, .status.destroyed { background: var(--code); color: var(--muted); }
   .plan { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9em; }
   .change { font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
   .change.create { color: var(--ok); }
@@ -402,9 +400,9 @@
   .section-head h2, .overview > div > h2:first-child { margin-top: 0; }
   .latest-foot { display: flex; align-items: flex-end; gap: 1rem; }
   .latest-foot .stats { flex: 1; margin: 0; padding: 0; }
-  .tabs-row { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; margin: 1.5rem 0 .75rem; }
   /* underline tabs */
-  .tabs-row { align-items: flex-end; border-bottom: 1px solid var(--border); }
+  .tabs-row { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; flex-wrap: wrap; margin: 1.5rem 0 .75rem;
+    border-bottom: 1px solid var(--border); }
   .tabs-row small { padding-bottom: .5rem; }
   .tabs-row .chips { margin: 0 0 -1px; gap: 0; }
   .tabs-row .chips a { font-size: .875rem; padding: .5rem .75rem; border: 0; border-bottom: 3px solid transparent; border-radius: 0; background: none; }
