@@ -6,7 +6,7 @@ toolchain go1.26.10
 
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0
-	github.com/go-jose/go-jose/v4 v4.1.6
+	github.com/go-jose/go-jose/v4 v4.1.7
 	github.com/hashicorp/go-tfe v1.94.0 // test only, pinned: Terraform 1.14's, the strictest error decoder (cloud_gotfe_test.go)
 	github.com/hashicorp/go-version v1.9.0
 	github.com/hashicorp/hcl/v2 v2.20.1
