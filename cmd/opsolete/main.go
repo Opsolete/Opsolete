@@ -224,7 +224,9 @@ func serve(log *slog.Logger) error {
 		ReadHeaderTimeout: 10 * time.Second,
 		// Shutdown doesn't cancel requests; this ends log streams and runner long-polls on SIGTERM.
 		BaseContext: func(net.Listener) context.Context { return ctx }}
+	drained := make(chan struct{})
 	go func() {
+		defer close(drained)
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -234,6 +236,7 @@ func serve(log *slog.Logger) error {
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
+	<-drained // ListenAndServe returns as soon as Shutdown starts; keep the store open until requests finish
 	return nil
 }
 
