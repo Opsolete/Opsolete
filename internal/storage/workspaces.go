@@ -216,7 +216,7 @@ func (s *Store) createWorkspace(ctx context.Context, id, name, templateID, modul
 	if err := tx.Commit(); err != nil {
 		return Workspace{}, Run{}, err
 	}
-	w, err := s.GetWorkspace(ctx, name)
+	w, err := s.GetWorkspaceByID(ctx, id)
 	return w, run, err
 }
 

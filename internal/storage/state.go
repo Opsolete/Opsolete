@@ -132,6 +132,9 @@ func (s *Store) LockState(ctx context.Context, id, lockID, runID string, info []
 		)
 		SELECT EXISTS (SELECT 1 FROM taken), COALESCE((SELECT state_lock::text FROM workspaces WHERE id = ops_uuid($1)), '')`,
 		id, string(info), lockID, runID).Scan(&ok, &held)
+	if err == nil && !ok && len(held) == 0 { // lost a race: the statement's snapshot predates the winner's commit
+		err = s.DB.QueryRowContext(ctx, `SELECT COALESCE((SELECT state_lock::text FROM workspaces WHERE id = ops_uuid($1)), '')`, id).Scan(&held)
+	}
 	return held, ok, err
 }
 

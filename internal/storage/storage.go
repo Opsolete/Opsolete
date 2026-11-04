@@ -98,10 +98,8 @@ func (s *Store) UpsertUser(ctx context.Context, subject, email, role string, gro
 		RETURNING id`, subject, email, role, groups).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = s.DB.QueryRowContext(ctx, `INSERT INTO users (subject, email, role, groups) VALUES ($1, $2, $3, $4)
-			ON CONFLICT DO NOTHING RETURNING id`, subject, email, role, groups).Scan(&id)
-		if errors.Is(err, sql.ErrNoRows) {
-			err = auth.ErrEmailTaken
-		}
+			ON CONFLICT (subject) DO UPDATE SET email = EXCLUDED.email, role = EXCLUDED.role, groups = EXCLUDED.groups
+			RETURNING id`, subject, email, role, groups).Scan(&id) // a concurrent first login of the same subject wins the insert
 	}
 	if pg, ok := errors.AsType[*pgconn.PgError](err); ok && pg.Code == "23505" { // the subject's new email is another user's
 		err = auth.ErrEmailTaken
