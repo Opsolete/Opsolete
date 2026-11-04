@@ -8,12 +8,15 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage"
+	"github.com/opsolete/opsolete/internal/templates"
 )
 
 // TestWorkspaceTemplates: any number of templates can be added to a workspace, each a module the
@@ -44,7 +47,7 @@ func TestWorkspaceTemplates(t *testing.T) {
 	if rec := post(h, "/workspaces/new", url.Values{"name": {ws}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
 	}
-	if page := get(h, base+"new?template=greeting").Body.String(); !strings.Contains(page, `name="ops-module" value="greeting_example"`) { // from the name "Greeting (example)"
+	if page := get(h, base+"new?template=greeting").Body.String(); !strings.Contains(page, `name="ops-module" value="" placeholder="world"`) { // from the key input's default
 		t.Fatalf("add form: %s", page)
 	}
 	if rec := get(h, base+"new?template=nope"); rec.Code != http.StatusNotFound {
@@ -132,6 +135,26 @@ func TestWorkspaceTemplates(t *testing.T) {
 	if rec := post(h, base+"three/remove", nil); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/workspaces/"+ws {
 		t.Fatalf("removing the last template of an empty workspace: %d %q", rec.Code, rec.Header().Get("Location"))
 	}
+
+	// Without a name: from the key input "Who to greet", then with a random hex suffix while taken.
+	add.Set("ops-module", "")
+	add.Set("name", "Big Room")
+	for range 2 {
+		if rec := post(h, base+"new?template=greeting", add); rec.Code != http.StatusSeeOther {
+			t.Fatalf("add: %d %s", rec.Code, rec.Body.String())
+		}
+		claim()
+	}
+	w, _ := store.GetWorkspace(ctx, ws)
+	added, _ := store.WorkspaceTemplates(ctx, w.ID)
+	names := []string{}
+	for _, a := range added {
+		names = append(names, a.Name)
+	}
+	slices.Sort(names) // "big_room" sorts before "big_room_…"
+	if len(names) != 2 || names[0] != "big_room" || !regexp.MustCompile(`^big_room_[0-9a-f]{4}$`).MatchString(names[1]) {
+		t.Fatalf("added: %v", names)
+	}
 }
 
 // TestDeleteWorkspace: a workspace managing resources is only deleted, with its state files, when forced.
@@ -183,6 +206,27 @@ func TestModuleName(t *testing.T) {
 	}
 }
 
+func TestDefaultModule(t *testing.T) {
+	keyed := templates.Template{Name: "Virtual machine", Inputs: []templates.Input{{Name: "vm", Type: "string", Key: true}}}
+	long := strings.Repeat("a", 63)
+	taken := []storage.WorkspaceTemplate{{Name: "web_prod_01"}, {Name: "virtual_machine"}, {Name: long}}
+	for _, c := range []struct {
+		t    templates.Template
+		raw  map[string]string
+		want string // a regexp
+	}{
+		{keyed, map[string]string{"vm": "Web-Prod 01"}, `web_prod_01_[0-9a-f]{4}`},
+		{keyed, map[string]string{"vm": "db"}, `db`},
+		{keyed, map[string]string{"vm": " "}, `virtual_machine_[0-9a-f]{4}`}, // empty key: the template's name
+		{templates.Template{Name: "Virtual machine"}, nil, `virtual_machine_[0-9a-f]{4}`},
+		{keyed, map[string]string{"vm": long}, `a{58}_[0-9a-f]{4}`},
+	} {
+		if got := defaultModule(c.t, c.raw, taken); !regexp.MustCompile("^"+c.want+"$").MatchString(got) || !moduleNameRe.MatchString(got) {
+			t.Errorf("defaultModule(%v) = %q, want %s", c.raw, got, c.want)
+		}
+	}
+}
+
 func TestGroupResources(t *testing.T) {
 	r := func(addr, mod string) storage.Resource {
 		return storage.Resource{Resource: runnerapi.Resource{Address: addr, Module: mod, Provider: "registry.terraform.io/hashicorp/azurerm"}}
@@ -211,7 +255,7 @@ func TestSensitiveInputs(t *testing.T) {
 	t.Cleanup(func() { store.DB.Exec(`DELETE FROM workspaces WHERE name IN ($1, $2)`, ws, root) })
 	dir := t.TempDir()
 	tpl, _ := os.ReadFile("../../catalog/greeting.json")
-	tpl = []byte(strings.Replace(string(tpl), `"required": true, "pattern": "^[A-Za-z0-9 ]{1,40}$", "default": "world"`, `"required": true, "sensitive": true`, 1))
+	tpl = []byte(strings.Replace(string(tpl), `"required": true, "pattern": "^[A-Za-z0-9 ]{1,40}$", "default": "world", "key": true`, `"required": true, "sensitive": true`, 1))
 	os.WriteFile(filepath.Join(dir, "greeting.json"), tpl, 0o644)
 	h := newServer(t, dir, false, store)
 	claim := func() runnerapi.Job {

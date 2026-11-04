@@ -98,6 +98,8 @@
               <span class="f-head">Required{{template "tip" "End users must fill it in. A hidden field is never required."}}</span></label>
             <label class="check only-secret"><input type="checkbox" class="switch" name="in_sensitive" value="{{$i}}"{{if .Sensitive}} checked{{end}}>
               <span class="f-head">Sensitive{{template "tip" "For passwords and keys: typed in a password field, stored encrypted and never shown again. Can't have a default."}}</span></label>
+            <label class="check not-bool"><input type="checkbox" class="switch" name="in_key" value="{{$i}}"{{if .Key}} checked{{end}}>
+              <span class="f-head">Key{{template "tip" "At most one field: its value names the template in a workspace, e.g. vm_web_prod_01. The name is fixed once added. Not for sensitive fields."}}</span></label>
           </div>
         </div>
         <div class="fcard-cond">

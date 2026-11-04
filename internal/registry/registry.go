@@ -399,6 +399,7 @@ func Resolve(overrides []templates.Input, vars []Variable) []templates.Input {
 		if in.Sensitive {
 			in.Default = "" // never echoed into the form
 		}
+		in.Key = o.Key && !in.Sensitive && in.Type != "bool"
 		out = append(out, in)
 	}
 	for _, v := range vars {

@@ -43,6 +43,19 @@ type Input struct {
 	// ShowIf hides the input unless an earlier select has one of the listed values. A hidden input is
 	// not sent to Terraform: the module's default applies.
 	ShowIf *ShowIf `json:"show_if,omitempty"`
+	// Key: at most one input per template; its value names the template when it's added to a workspace
+	// (module.<name>). The name is fixed then: changing the value later doesn't rename it.
+	Key bool `json:"key,omitempty"`
+}
+
+// KeyInput returns the template's key input, nil without one.
+func (t Template) KeyInput() *Input {
+	for i := range t.Inputs {
+		if t.Inputs[i].Key {
+			return &t.Inputs[i]
+		}
+	}
+	return nil
 }
 
 // ShowIf holds when the earlier select input Input is shown and has one of the Equals values.
@@ -317,6 +330,12 @@ func (t Template) check() error {
 		}
 		if in.Sensitive && in.Type != "string" && in.Type != "number" {
 			return fmt.Errorf("input %q: only string and number inputs can be sensitive", in.Name)
+		}
+		if in.Key && (in.Type == "bool" || in.Sensitive) { // a name shows its value
+			return fmt.Errorf("input %q: the key can't be a yes / no or sensitive input", in.Name)
+		}
+		if k := t.KeyInput(); in.Key && k.Name != in.Name {
+			return fmt.Errorf("input %q: only one input can be the key, %q is", in.Name, k.Name)
 		}
 		if in.Sensitive && in.Default != "" { // the template file is plain text
 			return fmt.Errorf("input %q: a sensitive input can't have a default", in.Name)
