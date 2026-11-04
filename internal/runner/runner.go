@@ -150,6 +150,9 @@ func (r *Runner) Execute(hard context.Context, job runnerapi.Job) {
 		res.Status, res.Message = "failed", fmt.Sprintf("timed out after %s", r.JobTimeout)
 	}
 	res.Message = ship.redact.Replace(res.Message) // Terraform's stderr may quote a signed URL
+	if m := []rune(res.Message); len(m) > 2000 {   // after redacting: a cut must not split a signed URL
+		res.Message = string(m[:2000]) + "…"
+	}
 	r.finish(log, job, res)
 }
 
@@ -165,11 +168,7 @@ const (
 func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w io.Writer) (res runnerapi.FinishRequest) {
 	fail := func(step string, err error) runnerapi.FinishRequest {
 		fmt.Fprintf(w, "\n==> %s failed\n", step)
-		m := step + ": " + err.Error()
-		if len(m) > 2000 {
-			m = m[:2000] + "…"
-		}
-		return runnerapi.FinishRequest{Status: "failed", Message: m}
+		return runnerapi.FinishRequest{Status: "failed", Message: step + ": " + err.Error()}
 	}
 	dir, err := os.MkdirTemp("", "ops-job-*")
 	if err != nil {
@@ -550,18 +549,17 @@ func inventory(ctx context.Context, tf *tfexec.Terraform) []runnerapi.Resource {
 	return runnerapi.Inventory(st)
 }
 
-// backendOptions points Terraform's http backend at the workspace's state on the server. The
-// password only works while this run is planning or applying. Terraform keeps it in .terraform/ and
-// in the saved plan (module code could read it during the run): it only reaches this workspace's state
-// and, read-only, the states shared with it.
+// backendOptions points Terraform's http backend at the workspace's state on the server. Its
+// credentials come from TF_HTTP_USERNAME/TF_HTTP_PASSWORD (see terraform), so the token stays off the
+// command line, .terraform/ and the saved plan. It only works while this run is planning or applying
+// (module code can read it from the env): it reaches this workspace's state and, read-only, the states
+// shared with it.
 func (r *Runner) backendOptions(job runnerapi.Job) []tfexec.InitOption {
 	addr := r.ServerURL.JoinPath(runnerapi.StatePrefix, job.WorkspaceID).String()
 	return []tfexec.InitOption{
 		tfexec.BackendConfig("address=" + addr),
 		tfexec.BackendConfig("lock_address=" + addr),
 		tfexec.BackendConfig("unlock_address=" + addr),
-		tfexec.BackendConfig("username=" + job.WorkspaceID),
-		tfexec.BackendConfig("password=" + job.StateToken),
 	}
 }
 
