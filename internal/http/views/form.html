@@ -55,7 +55,7 @@
     {{if eq .Type "select"}}
     <select id="{{.Name}}" name="{{.Name}}">
       {{$cur := index $v .Name}}
-      {{range .Options}}<option value="{{.Value}}"{{if eq .Value $cur}} selected{{end}}{{with .ShowIf}} data-show-if="{{json .}}"{{if not ($.T.Match . $v)}} hidden disabled{{end}}{{end}}>{{.Text}}</option>{{end}}
+      {{range .Options}}<option value="{{.Value}}"{{if eq .Value $cur}} selected{{end}}>{{.Text}}</option>{{end}}
     </select>
     {{else if .Sensitive}}{{$set := index $.Set .Name}}
     <!-- never filled in: the stored value is sealed; left empty, it's kept -->
@@ -82,23 +82,14 @@
   </div>
 </form>
 <script>
-  // show_if: hide and disable the fields and options whose condition fails (disabled ones aren't posted);
-  // the server applies the same rules. Document order puts each condition's input first.
+  // show_if: hide and disable the fields whose dropdown above doesn't have one of their values (disabled
+  // ones aren't posted); the server applies the same rules. Document order puts each dropdown first.
   (() => {
     const form = document.getElementById("template-form");
-    const value = name => {
-      const el = form.elements[name];
-      return !el || el.matches(":disabled") ? null : el.type === "checkbox" ? String(el.checked) : el.value;
-    };
     const update = () => {
       for (const el of form.querySelectorAll("[data-show-if]")) {
-        const c = JSON.parse(el.dataset.showIf);
-        el.hidden = el.disabled = !c.equals.includes(value(c.input));
-        const sel = el.parentElement;
-        if (el.tagName === "OPTION" && sel.selectedOptions[0]?.disabled) {
-          const first = [...sel.options].find(o => !o.disabled);
-          if (first) first.selected = true;
-        }
+        const c = JSON.parse(el.dataset.showIf), src = form.elements[c.input];
+        el.hidden = el.disabled = !src || src.matches(":disabled") || !c.equals.includes(src.value);
       }
     };
     form.addEventListener("change", update);

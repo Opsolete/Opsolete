@@ -7,30 +7,23 @@ Each template is a JSON file that describes one existing Terraform module pinned
 
 Mark a `string` or `number` input `"sensitive": true` for passwords and keys. It is typed in a password field, stored encrypted with `SECRET_KEY`, shown as *(sensitive)*, left out of the audit log, and kept when left empty on reconfigure. It can't have a `default`. A module variable declared `sensitive` in Terraform becomes a sensitive input when the template lists it. Values saved before an input was marked sensitive are encrypted the next time the template is configured.
 
-## Conditional inputs and options
+## Conditional inputs
 
-Add `"show_if": {"input": "<name>", "equals": ["<value>", ...]}` to an input to show it only while an earlier `select` or `bool` input (`"true"`/`"false"`) has one of the values. Conditions can be chained, and a hidden input hides the inputs that depend on it. A hidden input isn't validated or sent to Terraform, so the module's own default applies. Switching a workspace away from a condition drops that input's stored value, sensitive ones included.
+Add `"show_if": {"input": "<name>", "equals": ["<value>", ...]}` to an input to show it only while an earlier `select` input has one of the values. In the [template builder]({{< relref "template-builder" >}}) this is a field's **Show when … is …** row. Conditions can be chained (a hidden dropdown hides the inputs that depend on it). A hidden input isn't validated or sent to Terraform, so the module's own default applies. Switching a workspace away from a condition drops that input's stored value, sensitive ones included.
 
-A `select` option is either a string or an object `{"label": "...", "value": "...", "show_if": {...}}`. The form shows the label and Terraform gets the value. An option with `show_if` is offered only while its condition holds:
+A `select` option is either a string or an object `{"label": "...", "value": "..."}`: the form shows the label and Terraform gets the value.
 
 ```json
-{ "name": "os", "label": "Operating system", "type": "select", "options": ["windows", "linux"], "default": "linux" },
-{ "name": "image", "label": "Image", "type": "select", "required": true, "options": [
-  { "label": "Windows Server 2022", "value": "MicrosoftWindowsServer:WindowsServer:2022-datacenter:latest", "show_if": { "input": "os", "equals": ["windows"] } },
-  { "label": "Ubuntu 24.04 LTS", "value": "Canonical:ubuntu-24_04-lts:server:latest", "show_if": { "input": "os", "equals": ["linux"] } } ] },
+{ "name": "os", "label": "Operating system", "type": "select", "options": [{ "label": "Windows", "value": "windows" }, { "label": "Linux", "value": "linux" }], "default": "linux" },
 { "name": "admin_password", "label": "Admin password", "type": "string", "sensitive": true, "required": true, "show_if": { "input": "os", "equals": ["windows"] } },
 { "name": "ssh_public_key", "label": "SSH public key", "type": "string", "required": true, "show_if": { "input": "os", "equals": ["linux"] } }
 ```
 
-In the template builder, options are written as `Label=value`. Conditions are set only in the JSON, and the builder keeps them when you save (inputs matched by name, options by value).
-
 Things to know:
 
 - **Module variables need a default.** Every variable behind a conditional input needs one (e.g. `default = null`). Without it, Terraform fails with a missing variable whenever that input is hidden.
-- **Registry modules drop unknown inputs.** For a template on a [registry]({{< relref "module-registry" >}}) module, the form follows the module's variables, and JSON inputs the module doesn't declare are dropped. If the input a `show_if` refers to (such as `os`) isn't a module variable, every input that depends on it stays hidden. Add it to the module as a variable.
-- **Renaming an option in the builder drops its condition.** Options are matched by value, so an option whose value you change loses its `show_if`, and so does a removed input. If a condition still refers to it, saving fails with an error.
-- **Repeated option values share one condition.** When the same value is listed twice under different conditions, saving in the builder gives both the first one's condition. Edit such templates in the JSON.
-- **Safari on iOS greys out options instead of hiding them.** It ignores `hidden` on dropdown options, so options that don't apply show greyed out and can't be selected.
+- **Registry modules drop unknown inputs.** For a template on a [registry]({{< relref "module-registry" >}}) module, the form follows the module's variables, and JSON inputs the module doesn't declare are dropped. If the dropdown a `show_if` refers to (such as `os`) isn't a module variable, every input that depends on it stays hidden. Add it to the module as a variable.
+- **A dropdown without a value counts as its first option**, the one the browser shows selected.
 - **Without JavaScript, the form doesn't update while you type.** It shows the fields that fit the values it was loaded with. After you change a value and submit, the page reloads with the fields and errors for the new value.
 
 ## Where templates live

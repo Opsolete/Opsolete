@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -238,14 +240,16 @@ func TestTemplateBuilder(t *testing.T) {
 	h := newServer(t, dir, true, store)
 	form := url.Values{
 		"name": {"Virtual network"}, "module_source": {"git::x"}, "module_ref": {"v1"},
-		// two filled rows and one blank row, like the page submits
-		"in_name":     {"cidr", "region", ""},
-		"in_label":    {"Address space", "", ""},
-		"in_type":     {"string", "select", "string"},
-		"in_required": {"yes", "no", "no"},
-		"in_pattern":  {"", "", ""},
-		"in_options":  {"", "westeurope, northeurope", ""},
-		"in_default":  {"10.0.0.0/16", "westeurope", ""},
+		// three filled cards and the blank one, like the page submits; checkboxes post their card's index
+		"in_name":        {"cidr", "region", "zone", ""},
+		"in_label":       {"Address space", "", "", ""},
+		"in_type":        {"string", "select", "string", "string"},
+		"in_required":    {"0"},
+		"in_pattern":     {"", "", "", ""},
+		"in_options":     {"stale=x", "westeurope, North=northeurope", "", ""},
+		"in_default":     {"10.0.0.0/16", "westeurope", "", ""},
+		"in_show_input":  {"", "", "region", ""},
+		"in_show_equals": {"", "", "northeurope", ""},
 	}
 	rec := post(h, "/templates/new", form)
 	loc := rec.Header().Get("Location")
@@ -254,8 +258,23 @@ func TestTemplateBuilder(t *testing.T) {
 		t.Fatalf("create: %d %q %s", rec.Code, loc, rec.Body.String())
 	}
 	if rec := get(h, loc); !strings.Contains(rec.Body.String(), `<option value="westeurope" selected>westeurope</option>`) ||
-		!strings.Contains(rec.Body.String(), `value="10.0.0.0/16"`) {
+		!strings.Contains(rec.Body.String(), `value="10.0.0.0/16"`) || !strings.Contains(rec.Body.String(), `class="show-if"`) {
 		t.Fatalf("generated form wrong: %s", rec.Body.String())
+	}
+	saved, _ := os.ReadFile(filepath.Join(dir, id+".json"))
+	if s := string(saved); !strings.Contains(s, `"show_if": {`) || strings.Contains(s, "stale") || !strings.Contains(s, `"required": true`) {
+		t.Fatalf("saved template wrong:\n%s", s)
+	}
+	// the builder shows the condition again
+	if rec := get(h, loc+"/edit"); !strings.Contains(rec.Body.String(), `<option value="region" selected>when region is</option>`) {
+		t.Fatalf("builder lost the condition: %s", rec.Body.String())
+	}
+	// a condition on a dropdown below the field is refused with a readable error
+	bad := url.Values{}
+	maps.Copy(bad, form)
+	bad["in_show_input"] = []string{"region", "", "", ""}
+	if rec := post(h, "/templates/new", bad); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "not a dropdown above this field") {
+		t.Fatalf("bad condition: %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := post(h, "/templates/new", form); rec.Header().Get("Location") == loc {
 		t.Fatal("each new template must get its own id")

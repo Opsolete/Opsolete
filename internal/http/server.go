@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -268,6 +269,21 @@ type builderPage struct {
 	PullRequest string           // the pull request the save opened (Git catalog in pr mode)
 }
 
+// ShowOptions lists the dropdowns row i's "show when" can pick: the select rows above it, plus its
+// current choice (so an invalid one is shown with the save error, not silently dropped).
+func (p builderPage) ShowOptions(i int) []string {
+	var names []string
+	for _, in := range p.Rows[:i] {
+		if in.Type == "select" && in.Name != "" {
+			names = append(names, in.Name)
+		}
+	}
+	if c := p.Rows[i].ShowIf; c != nil && !slices.Contains(names, c.Input) {
+		names = append(names, c.Input)
+	}
+	return names
+}
+
 func (s *Server) renderBuilder(w http.ResponseWriter, r *http.Request, status int, p builderPage) {
 	if p.Registry = s.Features.Registry; p.Registry {
 		mods, err := s.Store.ListModules(r.Context())
@@ -278,7 +294,7 @@ func (s *Server) renderBuilder(w http.ResponseWriter, r *http.Request, status in
 		}
 		p.Modules = mods
 	}
-	p.Rows = append(slices.Clone(p.T.Inputs), make([]templates.Input, 3)...)
+	p.Rows = append(slices.Clone(p.T.Inputs), templates.Input{}) // a blank card to fill in (and for "+ Add field" to clone)
 	s.render(w, r, status, "builder.html", p)
 }
 
@@ -345,8 +361,6 @@ func (s *Server) saveTemplate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		t.ID = r.PathValue("id") // the id is the file name; it can't change on edit
-		old, _ := s.Templates.Get(t.ID)
-		keepShowIf(t, old)
 	} else {
 		t.ID = newID()
 	}
@@ -419,24 +433,6 @@ func (s *Server) deleteTemplate(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
-// keepShowIf copies the show_if conditions, which the builder doesn't edit, from the saved version
-// old onto t's inputs (by name) and options (by value).
-func keepShowIf(t, old templates.Template) {
-	for i, in := range t.Inputs {
-		j := slices.IndexFunc(old.Inputs, func(o templates.Input) bool { return o.Name == in.Name })
-		if j < 0 {
-			continue
-		}
-		t.Inputs[i].ShowIf = old.Inputs[j].ShowIf
-		for k, o := range in.Options {
-			// shortcut: with an option value listed twice, both get the first one's condition; edit the JSON for that
-			if l := slices.IndexFunc(old.Inputs[j].Options, func(x templates.Option) bool { return x.Value == o.Value }); l >= 0 {
-				t.Inputs[i].Options[k].ShowIf = old.Inputs[j].Options[l].ShowIf
-			}
-		}
-	}
-}
-
 // toJSON renders a value (e.g. a variable default) compactly for display.
 func toJSON(v any) string {
 	b, err := json.Marshal(v)
@@ -455,7 +451,8 @@ func newID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 
-// templateFromForm reads the builder form; input rows are parallel in_* lists and rows without a name are dropped.
+// templateFromForm reads the builder form. Field cards are parallel in_* lists, rows without a name are
+// dropped; the in_required/in_sensitive checkboxes post their card's index, since unchecked ones post nothing.
 func templateFromForm(r *http.Request) templates.Template {
 	f := r.PostForm
 	get := func(key string) string { return strings.TrimSpace(f.Get(key)) }
@@ -473,19 +470,34 @@ func templateFromForm(r *http.Request) templates.Template {
 		if name = strings.TrimSpace(name); name == "" {
 			continue
 		}
-		in := templates.Input{Name: name, Label: at("in_label", i), Type: at("in_type", i),
-			Required: at("in_required", i) == "yes", Pattern: at("in_pattern", i), Default: at("in_default", i),
-			Sensitive: at("in_sensitive", i) == "yes"}
+		idx, typ := strconv.Itoa(i), at("in_type", i)
+		in := templates.Input{Name: name, Label: at("in_label", i), Type: typ, Default: at("in_default", i),
+			Required: typ != "bool" && slices.Contains(f["in_required"], idx)}
+		// the card hides the settings its type doesn't use; drop what they still post
+		if typ == "string" {
+			in.Pattern = at("in_pattern", i)
+		}
+		if typ == "string" || typ == "number" {
+			in.Sensitive = slices.Contains(f["in_sensitive"], idx)
+		}
 		for _, o := range strings.Split(at("in_options", i), ",") { // "value" or "Label=value"
 			label, value, ok := strings.Cut(o, "=")
 			if !ok {
 				label, value = "", label
 			}
-			if label, value = strings.TrimSpace(label), strings.TrimSpace(value); value != "" {
+			if label, value = strings.TrimSpace(label), strings.TrimSpace(value); value != "" && typ == "select" {
 				if label == value {
 					label = ""
 				}
 				in.Options = append(in.Options, templates.Option{Label: label, Value: value})
+			}
+		}
+		if src := at("in_show_input", i); src != "" {
+			in.ShowIf = &templates.ShowIf{Input: src}
+			for _, v := range strings.Split(at("in_show_equals", i), ",") {
+				if v = strings.TrimSpace(v); v != "" {
+					in.ShowIf.Equals = append(in.ShowIf.Equals, v)
+				}
 			}
 		}
 		t.Inputs = append(t.Inputs, in)

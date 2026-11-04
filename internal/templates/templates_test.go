@@ -64,10 +64,11 @@ func TestCatalogSave(t *testing.T) {
 		{ID: "new", Name: "x", Module: tpl.Module},
 		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "a", Type: "string"}, {Name: "a", Type: "string"}}},
 		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "r", Type: "select", Options: []Option{{Value: "a"}}, Default: "b"}}},
-		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "s", Type: "string", ShowIf: &ShowIf{Input: "later", Equals: []string{"x"}}}, {Name: "later", Type: "bool"}}},
+		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "s", Type: "string", ShowIf: &ShowIf{Input: "later", Equals: []string{"a"}}}, {Name: "later", Type: "select", Options: []Option{{Value: "a"}}}}},
 		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "t", Type: "string"}, {Name: "s", Type: "string", ShowIf: &ShowIf{Input: "t", Equals: []string{"x"}}}}},
-		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "b", Type: "bool"}, {Name: "s", Type: "string", ShowIf: &ShowIf{Input: "b", Equals: []string{"yes"}}}}},
-		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "r", Type: "select", Options: []Option{{Value: "a", ShowIf: &ShowIf{Input: "r", Equals: []string{"a"}}}}}}},
+		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "b", Type: "bool"}, {Name: "s", Type: "string", ShowIf: &ShowIf{Input: "b", Equals: []string{"true"}}}}},
+		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "r", Type: "select", Options: []Option{{Value: "a"}}}, {Name: "s", Type: "string", ShowIf: &ShowIf{Input: "r", Equals: []string{"b"}}}}},
+		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "r", Type: "select", Options: []Option{{Value: "a"}}}, {Name: "s", Type: "string", ShowIf: &ShowIf{Input: "r"}}}},
 		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "n", Type: "number", Default: "seven"}}},
 		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "n", Type: "number", Default: "NaN"}}},
 		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "s", Type: "string", Pattern: "[a-z]+", Default: "ABC"}}},
@@ -100,41 +101,38 @@ func TestValidateEdgeCases(t *testing.T) {
 
 func TestShowIf(t *testing.T) {
 	files := map[string][]byte{"vm.json": []byte(`{"id": "vm", "name": "VM", "module": {"source": "s", "ref": "r"}, "inputs": [
-		{"name": "os", "type": "select", "options": ["windows", "linux"], "default": "linux"},
-		{"name": "image", "type": "select", "required": true, "options": [
-			{"label": "Windows Server 2022", "value": "win2022", "show_if": {"input": "os", "equals": ["windows"]}},
-			{"label": "Ubuntu 24.04", "value": "ubuntu2404", "show_if": {"input": "os", "equals": ["linux"]}},
-			"shared"]},
+		{"name": "os", "type": "select", "options": [{"label": "Windows", "value": "windows"}, "linux"], "default": "linux"},
 		{"name": "admin_password", "type": "string", "required": true, "sensitive": true, "show_if": {"input": "os", "equals": ["windows"]}},
 		{"name": "ssh_key", "type": "string", "required": true, "show_if": {"input": "os", "equals": ["linux"]}},
-		{"name": "monitoring", "type": "bool", "show_if": {"input": "os", "equals": ["linux"]}},
-		{"name": "workspace_id", "type": "string", "required": true, "show_if": {"input": "monitoring", "equals": ["true"]}}]}`)}
+		{"name": "monitoring", "type": "select", "options": ["off", "on"], "show_if": {"input": "os", "equals": ["linux"]}},
+		{"name": "workspace_id", "type": "string", "required": true, "show_if": {"input": "monitoring", "equals": ["on"]}}]}`)}
 	ts, _, err := Parse(files)
 	if err != nil {
 		t.Fatal(err)
 	}
 	vm := ts["vm"]
 
-	vals, errs := vm.Validate(map[string]string{"os": "linux", "image": "ubuntu2404", "ssh_key": "k", "admin_password": "ignored"})
-	if len(errs) != 0 || fmt.Sprint(vals) != "map[image:ubuntu2404 monitoring:false os:linux ssh_key:k]" {
+	vals, errs := vm.Validate(map[string]string{"os": "linux", "ssh_key": "k", "admin_password": "ignored", "monitoring": "off"})
+	if len(errs) != 0 || fmt.Sprint(vals) != "map[monitoring:off os:linux ssh_key:k]" {
 		t.Errorf("linux: %v %v", vals, errs)
 	}
-	// windows: its image and password; ssh_key and monitoring (and so workspace_id) are hidden
-	vals, errs = vm.Validate(map[string]string{"os": "windows", "image": "ubuntu2404", "ssh_key": "k", "monitoring": "on"})
-	if errs["image"] == "" || errs["admin_password"] != "required" || len(errs) != 2 || vals["ssh_key"] != nil || vals["monitoring"] != nil {
+	// windows: the password; ssh_key and monitoring (and so workspace_id) are hidden
+	vals, errs = vm.Validate(map[string]string{"os": "windows", "ssh_key": "k", "monitoring": "on"})
+	if errs["admin_password"] != "required" || len(errs) != 1 || vals["ssh_key"] != nil || vals["monitoring"] != nil {
 		t.Errorf("windows: %v %v", vals, errs)
 	}
-	if _, errs = vm.Validate(map[string]string{"os": "windows", "image": "shared", "admin_password": "p"}); len(errs) != 0 {
-		t.Errorf("an option without show_if is always allowed: %v", errs)
-	}
 	// a chain: workspace_id shows only with monitoring on, which shows only on linux
-	if _, errs = vm.Validate(map[string]string{"os": "linux", "image": "shared", "ssh_key": "k", "monitoring": "on"}); errs["workspace_id"] != "required" {
+	if _, errs = vm.Validate(map[string]string{"os": "linux", "ssh_key": "k", "monitoring": "on"}); errs["workspace_id"] != "required" {
 		t.Errorf("chain: %v", errs)
+	}
+	// an empty dropdown counts as its first option, as the browser shows it
+	if _, errs = vm.Validate(map[string]string{}); errs["admin_password"] != "required" || errs["ssh_key"] != "" {
+		t.Errorf("empty dropdown: %v", errs)
 	}
 
 	// Plain options stay plain strings when written back.
 	b, err := Encode(vm)
-	if err != nil || !strings.Contains(string(b), `"shared"`) || !strings.Contains(string(b), `"label": "Ubuntu 24.04"`) {
+	if err != nil || !strings.Contains(string(b), `"linux"`) || !strings.Contains(string(b), `"label": "Windows"`) {
 		t.Errorf("encode: %v\n%s", err, b)
 	}
 }

@@ -3,7 +3,7 @@
 <div class="page-head">
   <div>
     <h1>{{if .Editing}}Edit {{.T.Name}}{{else}}New template{{end}}</h1>
-    {{if .Editing}}<p class="muted">ID <code>{{.T.ID}}</code></p>{{else}}<p class="muted">A template is a module's no-code settings: the pinned version and the form for its variables.</p>{{end}}
+    {{if .Editing}}<p class="muted">ID <code>{{.T.ID}}</code></p>{{else}}<p class="muted">A template turns a Terraform module into a simple form: pick the module, then design the fields end users fill in.</p>{{end}}
   </div>
   {{if .Editing}}<form method="post" action="/templates/{{.T.ID}}/delete"
     onsubmit="return confirm('Delete this template? Workspaces created from it keep their module, but can no longer be configured from it.')">
@@ -12,11 +12,11 @@
 {{with .PullRequest}}<p class="alert" role="status">Pull request opened: <a href="{{.}}" target="_blank" rel="noopener">{{.}}</a>. The catalog changes once it's merged; saving again opens another one.</p>{{end}}
 
 {{if .Registry}}
-<form method="get" class="card">
-  <label for="module">Start from a registry module</label>
+<form method="get" class="card bstep">
+  <h2><span class="num" aria-hidden="true">↯</span>Start from a registry module <span class="muted">(optional)</span></h2>
   {{$sel := .Selected}}
   <div class="inline">
-    <select id="module" name="module">
+    <select id="module" name="module" aria-label="Registry module version">
       <option value="">choose a module version…</option>
       {{range .Modules}}{{$v := printf "%s/%s/%s/%s" .Namespace .Name .System .Version}}
       <option value="{{$v}}"{{if eq $v $sel}} selected{{end}}>{{.Namespace}}/{{.Name}}/{{.System}} {{.Version}}</option>
@@ -24,71 +24,154 @@
     </select>
     <button type="submit" class="secondary">Use module</button>
   </div>
-  <p class="hint">Sets the module source and version and generates a form field per module variable{{if .Editing}} (replaces the fields below){{end}}. Upload modules in the <a href="/registry">registry</a>.</p>
+  <p class="hint">Fills in the module source and version, and generates a field per module variable{{if .Editing}} (replaces the fields below){{end}}. Upload modules in the <a href="/registry">registry</a>.</p>
 </form>
 {{end}}
 
 {{with .Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
 {{with .Warning}}<div class="alert warn" role="status">{{.}}</div>{{end}}
-<form method="post">
-  <div class="card">
-    <input type="hidden" name="selected" value="{{.Selected}}">
-    <label for="name">Name <span class="req" aria-hidden="true">*</span></label>
-    <input id="name" name="name" value="{{.T.Name}}" required>
+<form method="post" id="builder">
+  <input type="hidden" name="selected" value="{{.Selected}}">
+  <section class="card bstep">
+    <h2><span class="num" aria-hidden="true">1</span>About this template</h2>
+    <div class="bgrid">
+      <label class="f"><span class="f-head">Name <span class="req" aria-hidden="true">*</span>{{template "tip" "The title end users see in the template catalog."}}</span>
+        <input name="name" value="{{.T.Name}}" required placeholder="Windows or Linux VM"></label>
+      <label class="f span2"><span class="f-head">Description{{template "tip" "One sentence on what this deploys and when to use it. Shown on the catalog card."}}</span>
+        <input name="description" value="{{.T.Description}}" placeholder="A virtual machine with backups and monitoring"></label>
+    </div>
+  </section>
 
-    <label for="description">Description</label>
-    <input id="description" name="description" value="{{.T.Description}}" class="wide">
+  <section class="card bstep">
+    <h2><span class="num" aria-hidden="true">2</span>Terraform module</h2>
+    <div class="bgrid">
+      <label class="f span2"><span class="f-head">Module source <span class="req" aria-hidden="true">*</span>{{template "tip" "Where the module lives: a registry address or a git:: URL. Every workspace from this template runs this module."}}</span>
+        <input name="module_source" value="{{.T.Module.Source}}" required class="mono"
+          placeholder="git::https://dev.azure.com/org/project/_git/modules//storage-account"></label>
+      <label class="f"><span class="f-head">Version / git ref <span class="req" aria-hidden="true">*</span>{{template "tip" "The approved version: a registry version or a git tag. Changing it offers existing workspaces a module update."}}</span>
+        <input name="module_ref" value="{{.T.Module.Ref}}" required class="mono" placeholder="v1.0.0"></label>
+    </div>
+  </section>
 
-    <label for="module_source">Terraform module source <span class="req" aria-hidden="true">*</span></label>
-    <input id="module_source" name="module_source" value="{{.T.Module.Source}}" required class="wide"
-      placeholder="git::https://dev.azure.com/org/project/_git/modules//storage-account">
-    <p class="hint">A registry address or a <code>git::</code> URL.</p>
-
-    <label for="module_ref">Approved module version / git ref <span class="req" aria-hidden="true">*</span></label>
-    <input id="module_ref" name="module_ref" value="{{.T.Module.Ref}}" required>
-  </div>
-
-  <h2>Form fields</h2>
-  <p class="muted">Each row becomes a form field and a Terraform variable. Clear a row's variable name to remove it. Options are comma-separated (dropdowns only); write <code>Label=value</code> to show a friendly name. Conditions (<code>show_if</code>) are set in the template's JSON and kept when you save here.</p>
-  <div class="card flush">
-  <table id="fields">
-    <tr><th>Variable</th><th>Label</th><th>Type</th><th>Required</th><th>Sensitive</th><th>Pattern</th><th>Options</th><th>Default</th></tr>
-    {{range .Rows}}
-    <tr>
-      <td><input name="in_name" value="{{.Name}}" aria-label="variable name" style="min-width:7rem">
-        {{with .ShowIf}}<p class="hint">if {{.Input}} = {{join .Equals " or "}}</p>{{end}}</td>
-      <td><input name="in_label" value="{{.Label}}" aria-label="label" style="min-width:8rem"></td>
-      <td><select name="in_type" aria-label="type">
-        <option>string</option>
-        <option{{if eq .Type "number"}} selected{{end}}>number</option>
-        <option{{if eq .Type "bool"}} selected{{end}}>bool</option>
-        <option{{if eq .Type "select"}} selected{{end}}>select</option>
-      </select></td>
-      <td><select name="in_required" aria-label="required">
-        <option value="no">no</option><option value="yes"{{if .Required}} selected{{end}}>yes</option>
-      </select></td>
-      <td><select name="in_sensitive" aria-label="sensitive" title="Stored encrypted, typed in a password field, never shown">
-        <option value="no">no</option><option value="yes"{{if .Sensitive}} selected{{end}}>yes</option>
-      </select></td>
-      <td><input name="in_pattern" value="{{.Pattern}}" aria-label="regex pattern" style="min-width:6rem"></td>
-      <td><input name="in_options" value="{{range $i, $o := .Options}}{{if $i}}, {{end}}{{with $o.Label}}{{.}}={{end}}{{$o.Value}}{{end}}" aria-label="options" style="min-width:6rem"></td>
-      <td><input name="in_default" value="{{.Default}}" aria-label="default" style="min-width:5rem"></td>
-    </tr>
+  <section class="bstep">
+    <h2><span class="num" aria-hidden="true">3</span>Form fields</h2>
+    <p class="muted">Each field sets one Terraform variable, in this order. To ask only what matters, add a <strong>Dropdown</strong> (for example <code>os</code>), then set later fields to <strong>Show when os is windows</strong>. Hover a setting's name for help.</p>
+    <div id="fields">
+    {{range $i, $r := .Rows}}{{$cur := ""}}{{with .ShowIf}}{{$cur = .Input}}{{end}}
+      <div class="fcard" role="group" aria-label="Form field">
+        <div class="fcard-head">
+          <span class="fnum" aria-hidden="true"></span>
+          <label class="f"><span class="f-head">Variable{{template "tip" "The Terraform variable this field sets: lowercase letters, digits and underscores. Clear it to remove the field."}}</span>
+            <input name="in_name" value="{{.Name}}" class="mono" placeholder="admin_password" autocomplete="off" spellcheck="false"></label>
+          <label class="f grow"><span class="f-head">Label{{template "tip" "The question end users see. Leave empty to show the variable name."}}</span>
+            <input name="in_label" value="{{.Label}}" placeholder="Admin password"></label>
+          <label class="f"><span class="f-head">Type{{template "tip" "Text, Number, a Yes / no checkbox, or a Dropdown of fixed options. Only dropdowns can show or hide other fields."}}</span>
+            <select name="in_type" class="ftype">
+              <option value="string">Text</option>
+              <option value="number"{{if eq .Type "number"}} selected{{end}}>Number</option>
+              <option value="bool"{{if eq .Type "bool"}} selected{{end}}>Yes / no</option>
+              <option value="select"{{if eq .Type "select"}} selected{{end}}>Dropdown</option>
+            </select></label>
+          <div class="fcard-tools" hidden>
+            <button type="button" class="icon" data-act="up" aria-label="Move field up" title="Move up">↑</button>
+            <button type="button" class="icon" data-act="down" aria-label="Move field down" title="Move down">↓</button>
+            <button type="button" class="icon" data-act="remove" aria-label="Remove field" title="Remove">✕</button>
+          </div>
+        </div>
+        <div class="fcard-body">
+          <label class="f span2 only-select"><span class="f-head">Options{{template "tip" "The choices, comma-separated. Write Label=value to show a friendly name, for example: Windows=windows, Linux=linux."}}</span>
+            <input name="in_options" value="{{range $j, $o := .Options}}{{if $j}}, {{end}}{{with $o.Label}}{{.}}={{end}}{{$o.Value}}{{end}}" placeholder="Windows=windows, Linux=linux"></label>
+          <label class="f"><span class="f-head">Default{{template "tip" "Filled in when the form opens. A dropdown's default is one of its option values; a Yes / no default is true or false."}}</span>
+            <input name="in_default" value="{{.Default}}" placeholder="none"></label>
+          <label class="f only-string"><span class="f-head">Pattern{{template "tip" "A regular expression the whole value must match, for example [a-z0-9]{3,24}. Leave empty to accept any text."}}</span>
+            <input name="in_pattern" value="{{.Pattern}}" class="mono" placeholder="[a-z0-9]{3,24}" spellcheck="false"></label>
+          <div class="f checks">
+            <label class="check not-bool"><input type="checkbox" class="switch" name="in_required" value="{{$i}}"{{if .Required}} checked{{end}}>
+              <span class="f-head">Required{{template "tip" "End users must fill it in. A hidden field is never required."}}</span></label>
+            <label class="check only-secret"><input type="checkbox" class="switch" name="in_sensitive" value="{{$i}}"{{if .Sensitive}} checked{{end}}>
+              <span class="f-head">Sensitive{{template "tip" "For passwords and keys: typed in a password field, stored encrypted and never shown again. Can't have a default."}}</span></label>
+          </div>
+        </div>
+        <div class="fcard-cond">
+          <span class="f-head">Show{{template "tip" "Show this field only when a dropdown above it has one of the chosen values. A hidden field isn't sent to Terraform, so the module's default applies."}}</span>
+          <select name="in_show_input" class="show-input" aria-label="Show this field">
+            <option value="">always</option>
+            {{range $.ShowOptions $i}}<option value="{{.}}"{{if eq . $cur}} selected{{end}}>when {{.}} is</option>{{end}}
+          </select>
+          <input name="in_show_equals" class="show-equals mono" value="{{with .ShowIf}}{{join .Equals ", "}}{{end}}"
+            placeholder="windows, linux" aria-label="Values that show this field (comma-separated)">
+          <span class="show-chips" role="group" aria-label="Pick values"></span>
+        </div>
+      </div>
     {{end}}
-  </table>
-  </div>
-  <div class="actions">
-    <button type="button" id="add-row" class="secondary">+ Add field</button>
+    </div>
+  </section>
+  <div class="actions sticky">
+    <button type="button" id="add-field" class="secondary" hidden>+ Add field</button>
     <button type="submit">Save template</button>
+    <a class="btn secondary" href="{{if .Editing}}/templates/{{.T.ID}}{{else}}/{{end}}">Cancel</a>
   </div>
 </form>
 <script>
-  // Progressive enhancement: without JS you still get three blank rows per save.
-  document.getElementById("add-row").onclick = () => {
-    const t = document.getElementById("fields"), row = t.rows[t.rows.length - 1].cloneNode(true);
-    row.querySelectorAll("input").forEach(i => i.value = "");
-    row.querySelectorAll("select").forEach(s => s.selectedIndex = 0);
-    t.tBodies[0].appendChild(row);
-  };
+  // Progressive enhancement: without JS the last card is the blank one to fill in, and you clear a
+  // variable name to remove a field. The server checks everything again on save.
+  (() => {
+    const list = document.getElementById("fields"), add = document.getElementById("add-field");
+    const cards = () => [...list.querySelectorAll(".fcard")];
+    const split = s => s.split(",").map(v => v.trim()).filter(Boolean);
+    const optionValues = card => split(card.querySelector("[name=in_options]").value).map(o => o.slice(o.indexOf("=") + 1).trim());
+    // Renumber the checkboxes (they post their card's index), offer each card the dropdowns above it,
+    // and show the chosen dropdown's values as chips to click.
+    const refresh = () => {
+      const above = new Map();
+      cards().forEach((card, i) => {
+        for (const box of card.querySelectorAll("[type=checkbox]")) box.value = i;
+        const sel = card.querySelector(".show-input"), cur = sel.value, names = [...above.keys()];
+        if (cur && !names.includes(cur)) names.push(cur); // keep a stale choice: the save explains it
+        if (sel.options.length !== names.length + 1 || names.some((n, j) => sel.options[j + 1].value !== n))
+          sel.replaceChildren(new Option("always", ""), ...names.map(n => new Option("when " + n + " is", n, n === cur, n === cur)));
+        const eq = card.querySelector(".show-equals"), picked = split(eq.value);
+        card.querySelector(".show-chips").replaceChildren(...(above.has(cur) ? optionValues(above.get(cur)) : []).map(v => {
+          const b = document.createElement("button");
+          b.type = "button"; b.className = "chip"; b.textContent = b.dataset.v = v;
+          b.setAttribute("aria-pressed", picked.includes(v));
+          return b;
+        }));
+        const name = card.querySelector("[name=in_name]").value.trim();
+        if (name && card.querySelector(".ftype").value === "select") above.set(name, card);
+      });
+    };
+    list.addEventListener("click", e => {
+      const chip = e.target.closest(".chip"), act = e.target.closest("[data-act]");
+      if (chip) {
+        const eq = chip.parentElement.parentElement.querySelector(".show-equals"), vs = split(eq.value), v = chip.dataset.v;
+        eq.value = (vs.includes(v) ? vs.filter(x => x !== v) : [...vs, v]).join(", ");
+      } else if (act) {
+        const card = act.closest(".fcard");
+        if (act.dataset.act === "up") card.previousElementSibling?.before(card);
+        if (act.dataset.act === "down") card.nextElementSibling?.after(card);
+        if (act.dataset.act === "remove") {
+          if (cards().length > 1) card.remove(); else reset(card);
+        } else act.focus();
+      } else return;
+      refresh();
+    });
+    const reset = card => {
+      for (const el of card.querySelectorAll("input")) el.type === "checkbox" ? el.checked = false : el.value = "";
+      for (const el of card.querySelectorAll("select")) el.selectedIndex = 0;
+    };
+    add.onclick = () => {
+      const card = list.lastElementChild.cloneNode(true);
+      reset(card);
+      list.append(card);
+      refresh();
+      card.querySelector("[name=in_name]").focus();
+    };
+    list.addEventListener("input", refresh);
+    list.addEventListener("change", refresh);
+    for (const el of [add, ...document.querySelectorAll(".fcard-tools")]) el.hidden = false;
+    refresh();
+  })();
 </script>
 {{template "bottom"}}
+{{define "tip"}}<span class="tip" aria-hidden="true">?</span><span class="tip-text">{{.}}</span>{{end}}

@@ -40,13 +40,12 @@ type Input struct {
 	Default  string   `json:"default,omitempty"`
 	// Sensitive values are stored sealed with SECRET_KEY, typed in a password field and never shown.
 	Sensitive bool `json:"sensitive,omitempty"`
-	// ShowIf hides the input unless an earlier input has one of the listed values. A hidden input is
+	// ShowIf hides the input unless an earlier select has one of the listed values. A hidden input is
 	// not sent to Terraform: the module's default applies.
 	ShowIf *ShowIf `json:"show_if,omitempty"`
 }
 
-// ShowIf holds when the earlier select or bool input Input is shown and has one of the Equals values
-// ("true"/"false" for a bool).
+// ShowIf holds when the earlier select input Input is shown and has one of the Equals values.
 type ShowIf struct {
 	Input  string   `json:"input"`
 	Equals []string `json:"equals"`
@@ -56,12 +55,10 @@ func (c *ShowIf) holds(shown map[string]bool, cur map[string]string) bool {
 	return c == nil || shown[c.Input] && slices.Contains(c.Equals, cur[c.Input])
 }
 
-// Option is a select choice: Label is shown, Value goes to Terraform. In JSON a plain string is
-// both; an option with a show_if is offered only while it holds.
+// Option is a select choice: Label is shown, Value goes to Terraform. In JSON a plain string is both.
 type Option struct {
-	Label  string  `json:"label,omitempty"`
-	Value  string  `json:"value"`
-	ShowIf *ShowIf `json:"show_if,omitempty"`
+	Label string `json:"label,omitempty"`
+	Value string `json:"value"`
 }
 
 type plainOption Option // without the methods, so they don't recurse
@@ -74,7 +71,7 @@ func (o *Option) UnmarshalJSON(b []byte) error {
 }
 
 func (o Option) MarshalJSON() ([]byte, error) {
-	if o.Label == "" && o.ShowIf == nil {
+	if o.Label == "" {
 		return json.Marshal(o.Value)
 	}
 	return json.Marshal(plainOption(o))
@@ -336,9 +333,6 @@ func (t Template) check() error {
 			if o.Value == "" {
 				return fmt.Errorf("input %q: an option needs a value", in.Name)
 			}
-			if err := o.ShowIf.check(before); err != nil {
-				return fmt.Errorf("input %q option %q: %w", in.Name, o.Value, err)
-			}
 		}
 		if in.Type == "select" && in.Default != "" && !hasValue(in.Options, in.Default) {
 			return fmt.Errorf("input %q: default %q is not one of the options", in.Name, in.Default)
@@ -362,30 +356,27 @@ func (c *ShowIf) check(before map[string]Input) error {
 	if c == nil {
 		return nil
 	}
-	in, ok := before[c.Input]
-	switch {
-	case !ok:
-		return fmt.Errorf("show_if: %q is not an earlier input", c.Input)
-	case in.Type != "select" && in.Type != "bool":
-		return fmt.Errorf("show_if: %q is not a select or bool input", c.Input)
-	case len(c.Equals) == 0:
-		return fmt.Errorf("show_if: equals is empty")
+	if in, ok := before[c.Input]; !ok || in.Type != "select" {
+		return fmt.Errorf("show when: %q is not a dropdown above this field", c.Input)
+	}
+	if len(c.Equals) == 0 {
+		return fmt.Errorf("show when %s: pick at least one value", c.Input)
 	}
 	for _, v := range c.Equals {
-		if in.Type == "bool" && v != "true" && v != "false" || in.Type == "select" && !hasValue(in.Options, v) {
-			return fmt.Errorf("show_if: %q is not a value of %q", v, c.Input)
+		if !hasValue(before[c.Input].Options, v) {
+			return fmt.Errorf("show when: %q is not an option of %q", v, c.Input)
 		}
 	}
 	return nil
 }
 
-// eval returns which inputs the form values raw show, and their values (a bool's as "true"/"false").
+// eval returns which inputs the form values raw show, and their values.
 func (t Template) eval(raw map[string]string) (shown map[string]bool, cur map[string]string) {
 	shown, cur = map[string]bool{}, map[string]string{}
 	for _, in := range t.Inputs {
 		v := strings.TrimSpace(raw[in.Name])
-		if in.Type == "bool" {
-			v = strconv.FormatBool(v == "on" || v == "true")
+		if in.Type == "select" && v == "" && len(in.Options) > 0 {
+			v = in.Options[0].Value // what the browser shows selected
 		}
 		cur[in.Name] = v
 		shown[in.Name] = in.ShowIf.holds(shown, cur)
@@ -405,7 +396,7 @@ func anchored(pattern string) string { return "^(?:" + pattern + ")$" }
 // It returns per-field error messages; an empty map means valid. Hidden inputs are left out.
 func (t Template) Validate(raw map[string]string) (map[string]any, map[string]string) {
 	vals, errs := map[string]any{}, map[string]string{}
-	shown, cur := t.eval(raw)
+	shown, _ := t.eval(raw)
 	for _, in := range t.Inputs {
 		if !shown[in.Name] {
 			continue
@@ -430,7 +421,7 @@ func (t Template) Validate(raw map[string]string) (map[string]any, map[string]st
 			}
 			vals[in.Name] = n
 		case "select":
-			if !slices.ContainsFunc(in.Options, func(o Option) bool { return o.Value == v && o.ShowIf.holds(shown, cur) }) {
+			if !hasValue(in.Options, v) {
 				errs[in.Name] = "not an allowed option"
 				continue
 			}

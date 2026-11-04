@@ -97,8 +97,12 @@
   /* forms */
   label { display: block; margin: 1.1rem 0 .3rem; font-weight: 600; font-size: .875rem; }
   label:first-child { margin-top: 0; }
-  fieldset.show-if { border: 0; padding: 0; margin: 0; min-width: 0; }
-  fieldset.show-if > label:first-child { margin-top: 1.1rem; }
+  /* a field shown by an answer above: indented under a bar, faded in when it appears */
+  fieldset.show-if { border: 0; border-left: 3px solid color-mix(in srgb, var(--brand) 35%, transparent); padding: 0 0 0 .9rem; margin: .4rem 0 0; min-width: 0; }
+  fieldset.show-if:not([hidden]) { animation: reveal .18s ease-out; }
+  fieldset.show-if > label:first-child { margin-top: .7rem; }
+  @keyframes reveal { from { opacity: 0; transform: translateY(-.25rem); } }
+  @media (prefers-reduced-motion: reduce) { fieldset.show-if { animation: none !important; } }
   .req { color: var(--danger); }
   input, select, textarea { font: inherit; color: inherit; background: var(--surface); border: 1px solid #8c909c; border-radius: 5px;
     padding: .45rem .65rem; width: 100%; max-width: 34rem; }
@@ -119,6 +123,71 @@
   .chips a { font-size: .8rem; padding: .15rem .6rem; border-radius: 5px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
   .chips a:hover { border-color: var(--brand); text-decoration: none; }
   .chips a[aria-current="true"] { background: var(--brand-soft); border-color: var(--brand); color: var(--brand); }
+
+  /* template builder: numbered steps, one card per form field */
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .85rem; }
+  .bstep h2 { display: flex; align-items: center; gap: .6rem; font-size: 1.1rem; margin: 0 0 1rem; }
+  .bstep h2 .muted { font-weight: 400; font-size: .9rem; }
+  section.bstep:not(.card) h2 { margin: 2rem 0 .5rem; }
+  .bstep .num { display: grid; place-items: center; flex: none; width: 1.6rem; height: 1.6rem; border-radius: 50%;
+    background: var(--brand-soft); color: var(--brand); font-size: .8rem; font-weight: 700; }
+  .bgrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem 1.25rem; }
+  .span2 { grid-column: span 2; }
+  .f { display: flex; flex-direction: column; gap: .3rem; margin: 0; font-weight: normal; min-width: 0; }
+  .f input, .f select { max-width: none; }
+  .f-head { position: relative; display: inline-flex; align-items: center; gap: .3rem; font-size: .8rem; font-weight: 600; color: var(--muted); }
+  /* hover help: the text is part of the label, so screen readers get it too */
+  .tip { display: inline-grid; place-items: center; width: .95rem; height: .95rem; border-radius: 50%; border: 1px solid var(--border);
+    font-size: .62rem; font-weight: 700; color: var(--muted); cursor: help; }
+  .f-head:hover .tip { border-color: var(--brand); color: var(--brand); }
+  .tip-text { position: absolute; z-index: 3; bottom: calc(100% + .4rem); left: 0; width: max-content; max-width: 18rem;
+    padding: .5rem .7rem; border-radius: 6px; background: var(--nav); color: #fff; font-size: .78rem; font-weight: 400; line-height: 1.4;
+    box-shadow: 0 6px 18px rgb(12 12 14 / 30%); opacity: 0; pointer-events: none; transition: opacity .12s; }
+  .f-head:hover .tip-text { opacity: 1; }
+  #fields { counter-reset: field; display: grid; gap: .75rem; }
+  .fcard { counter-increment: field; background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--border);
+    border-radius: var(--radius); transition: box-shadow .15s; }
+  .fcard:hover { box-shadow: 0 1px 6px rgb(12 12 14 / 8%); }
+  .fcard:focus-within { border-left-color: var(--brand); }
+  .fcard-head { display: flex; align-items: flex-end; flex-wrap: wrap; gap: .75rem; padding: .9rem 1rem .75rem; }
+  .fcard-head .f { flex: 0 1 12rem; }
+  .fcard-head .grow { flex: 1 1 14rem; }
+  .fnum { display: grid; place-items: center; flex: none; width: 1.6rem; height: 1.6rem; margin-bottom: .3rem; border-radius: 5px;
+    background: var(--code); color: var(--muted); font-size: .75rem; font-weight: 700; }
+  .fnum::before { content: counter(field); }
+  .fcard-tools { display: flex; gap: .2rem; margin-left: auto; align-self: center; }
+  .fcard-tools[hidden], #add-field[hidden] { display: none; }
+  .icon { padding: .25rem .55rem; background: none; border-color: transparent; color: var(--muted); box-shadow: none; }
+  .icon:hover { background: var(--code); color: var(--text); }
+  .icon[data-act="remove"]:hover { background: var(--danger-soft); color: var(--danger); }
+  .fcard-body { display: grid; grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr)); gap: .75rem 1rem; padding: 0 1rem .9rem 3.35rem; }
+  .checks { flex-direction: row; flex-wrap: wrap; align-items: flex-end; gap: .4rem 1.25rem; padding-bottom: .45rem; }
+  .checks .check { margin: 0; align-items: center; }
+  .checks .check .f-head { color: var(--text); font-weight: 500; font-size: .85rem; }
+  .fcard-cond { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .6rem 1rem .6rem 3.35rem;
+    background: var(--code); border-top: 1px solid var(--border); border-radius: 0 0 var(--radius) var(--radius); }
+  .fcard-cond select { width: auto; max-width: 16rem; }
+  .fcard-cond .show-equals { flex: 0 1 14rem; }
+  .fcard-cond:has(.show-input [value=""]:checked) :is(.show-equals, .show-chips) { display: none; }
+  /* a conditional field stands out */
+  .fcard:has(.show-input :not([value=""]):checked) { border-left-color: var(--tf); }
+  .fcard:has(.show-input :not([value=""]):checked) .fcard-cond { background: var(--tf-soft); }
+  .show-chips { display: flex; flex-wrap: wrap; gap: .35rem; }
+  .chip { padding: .15rem .65rem; font-size: .8rem; border-radius: 1rem; background: var(--surface); color: var(--text); border-color: var(--border); box-shadow: none; }
+  .chip:hover { background: var(--surface); color: var(--text); border-color: var(--brand); }
+  .chip[aria-pressed="true"] { background: var(--brand-soft); color: var(--brand); border-color: var(--brand); }
+  .chip[aria-pressed="true"]::before { content: "✓"; }
+  /* settings a field's type doesn't use */
+  .fcard:not(:has(.ftype [value="select"]:checked)) .only-select,
+  .fcard:not(:has(.ftype [value="string"]:checked)) .only-string,
+  .fcard:has(.ftype :is([value="bool"], [value="select"]):checked) .only-secret,
+  .fcard:has(.ftype [value="bool"]:checked) .not-bool { display: none; }
+  .actions.sticky { position: sticky; bottom: 0; z-index: 2; background: var(--bg); padding: .9rem 0; border-top: 1px solid var(--border); }
+  @media (max-width: 52rem) {
+    .bgrid { grid-template-columns: 1fr; }
+    .span2 { grid-column: auto; }
+    .fcard-body, .fcard-cond { padding-left: 1rem; }
+  }
 
   /* settings pages: one narrow column of fields, one save button */
   .settings { max-width: 32rem; }
