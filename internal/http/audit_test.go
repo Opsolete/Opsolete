@@ -5,6 +5,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/opsolete/opsolete/internal/storage"
 )
 
 func TestAuditLogRecordsChanges(t *testing.T) {
@@ -52,5 +54,23 @@ func TestAuditLogRecordsChanges(t *testing.T) {
 	}
 	if body := get(h, "/audit?show=access").Body.String(); !strings.Contains(body, "GET /audit") || strings.Contains(body, "ARM_CLIENT_SECRET") {
 		t.Fatalf("access list: %s", body)
+	}
+}
+
+func TestAuditRowSummary(t *testing.T) {
+	for _, k := range []string{"admin_password", "secret.x", "client_secret", "API_TOKEN"} {
+		if !secretName(k) {
+			t.Errorf("secretName(%q) = false", k)
+		}
+	}
+	if secretName("key") || secretName("ssh_public_key") {
+		t.Error("secretName redacts a plain field")
+	}
+	row := newAuditRow(storage.AuditEntry{Detail: []byte(`{"form":{"description":[""],"in_label":["x"],"module_ref":["2.0.0"],
+		"module_source":["opsolete.lan/terraform-modules-examples/virtual-machine/azurerm"],"name":["vm"],"zz":["1"]},
+		"request":{"ip":"127.0.0.1","forwarded_for":"100.1.2.3","status":422,"error":"bad input"}}`)})
+	want := "name=vm module_ref=2.0.0 module_source=opsolete.lan/terraform-modules-examples… +1 more · bad input"
+	if row.Summary != want || row.From != "100.1.2.3" || row.StatusText != "rejected" || !strings.Contains(row.Pretty, "\n  ") {
+		t.Fatalf("row: %q %q %q", row.Summary, row.From, row.StatusText)
 	}
 }

@@ -20,9 +20,9 @@
 <tr>
   <td>{{.ID}}</td>
   <td>{{.At.UTC.Format "2006-01-02 15:04:05"}}</td>
-  <td>{{.Actor}}</td>
+  <td>{{.Actor}}{{with .From}}<br><span class="muted">{{.}}</span>{{end}}</td>
   <td><code>{{.Action}}</code></td>
-  <td><code>{{printf "%s" .Detail}}</code></td>
+  <td><details class="audit"><summary>{{if .StatusText}}<span class="status {{.StatusClass}}" title="HTTP {{.Status}}">{{.StatusText}} {{.Status}}</span> {{end}}<span class="muted">{{.Summary}}</span></summary><pre class="code">{{.Pretty}}</pre></details></td>
 </tr>
 {{else}}
 <tr><td colspan="5" class="empty">Nothing recorded yet.</td></tr>
