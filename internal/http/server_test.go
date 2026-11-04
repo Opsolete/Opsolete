@@ -690,6 +690,9 @@ func TestWorkspaceFlow(t *testing.T) {
 	if tp := get(h, "/workspaces/"+name+"?show=templates").Body.String(); !strings.Contains(tp, "Templates 1<") || !strings.Contains(tp, `href="/templates/storage-account"`) {
 		t.Error("templates tab lacks the template the workspace was created from")
 	}
+	if dp := get(h, "/workspaces/"+name+"/deploy").Body.String(); !strings.Contains(dp, `href="/workspaces/`+name+`/templates/new?template=storage-account"`) {
+		t.Errorf("deploy page lacks the catalog: %s", dp)
+	}
 	if strings.Contains(page, "s3cret") {
 		t.Fatal("sensitive output shown")
 	}

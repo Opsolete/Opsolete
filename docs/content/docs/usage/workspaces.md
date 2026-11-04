@@ -27,7 +27,7 @@ A workspace still has one active run at a time, so VCS runs wait their turn; if 
 
 ## Add templates to a workspace
 
-Add any number of templates (**Templates → Add a template** on a workspace page, operate access). Each becomes a module block, `module.<name>`, next to the workspace's own configuration (the template it was created from, its branch, or nothing), in the same state; add one template several times under different names.
+Add any number of templates (**Deploy…** in a workspace's menu, operate access). Each becomes a module block, `module.<name>`, next to the workspace's own configuration (the template it was created from, its branch, or nothing), in the same state; add one template several times under different names.
 
 - Adding, configuring or removing one starts a plan; removing one plans the destruction of its resources.
 - Removing the last one (the workspace's only configuration) starts a destroy run instead, and the template goes once that destroy is applied.

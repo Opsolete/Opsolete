@@ -19,6 +19,7 @@ weight: 6
 | `POST /workspaces/{name}/delete` | Delete a workspace |
 | `POST /workspaces/{name}/access` | Grants (admins) |
 | `GET\|POST /workspaces/{name}/configure` | Configure the workspace's template inputs |
+| `/workspaces/{name}/deploy` | Pick a template to add |
 | `GET\|POST /workspaces/{name}/templates/new?template={id}` | Add a template |
 | `/workspaces/{name}/templates/{module}` | Configure an added template |
 | `POST /workspaces/{name}/templates/{module}/remove` | Remove an added template |

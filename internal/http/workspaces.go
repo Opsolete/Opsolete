@@ -55,7 +55,7 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/vcs-archives/{file}", s.vcsArchive)
 	mux.HandleFunc("GET /workspaces/{name}", s.workspace)
 	// the workspace's side-menu pages: one handler, workspace.html shows the part of the current tab
-	for _, tab := range []string{"runs", "states", "variables", "settings"} {
+	for _, tab := range []string{"runs", "states", "variables", "settings", "deploy"} {
 		mux.HandleFunc("GET /workspaces/{name}/"+tab, s.workspace)
 	}
 	mux.HandleFunc("GET /workspaces/{name}/settings/{page}", s.workspace)
@@ -348,9 +348,12 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 			call, _, _ := strings.Cut(strings.TrimPrefix(g.Module, "module."), "[")
 			counts[call] += len(g.Rows)
 		}
-		maps.Copy(data, map[string]any{"Added": added, "TemplateCount": templateCount, "Updates": updates, "TemplateNames": names, "Catalog": s.Templates.List(),
+		maps.Copy(data, map[string]any{"Added": added, "TemplateCount": templateCount, "Updates": updates, "TemplateNames": names,
 			"ResourceGroups": groups, "TemplateResources": counts,
 			"LatestPlan": latestPlan, "LatestApply": latestApply, "Metrics": metrics, "Show": r.URL.Query().Get("show")})
+
+	case "deploy": // the catalog, each template one click from its add form
+		data["Catalog"] = s.Templates.List()
 
 	case "runs": // status filters, counted over the runs listed
 		filter := r.URL.Query().Get("filter")

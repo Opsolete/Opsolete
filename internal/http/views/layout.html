@@ -370,6 +370,7 @@
     <a href="/workspaces">‹ Workspaces</a>
     <span class="nav-head">{{.}}</span>
     <a href="/workspaces/{{.}}"{{if eq $t "overview"}} aria-current="page"{{end}}>Overview</a>
+    <a href="/workspaces/{{.}}/deploy"{{if eq $t "deploy"}} aria-current="page"{{end}}>Deploy…</a>
     <a href="/workspaces/{{.}}/runs"{{if eq $t "runs"}} aria-current="page"{{end}}>Runs</a>
     <a href="/workspaces/{{.}}/states"{{if eq $t "states"}} aria-current="page"{{end}}>States</a>
     <a href="/workspaces/{{.}}/variables"{{if eq $t "variables"}} aria-current="page"{{end}}>Variables</a>

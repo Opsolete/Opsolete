@@ -1,6 +1,6 @@
 {{template "top" .}}
 {{$w := .W}}{{$tab := tab}}{{$p := .Page}}
-<nav class="back" aria-label="breadcrumb"><a href="/workspaces">Workspaces</a> / <a href="/workspaces/{{$w.Name}}">{{$w.Name}}</a> / {{if eq $tab "runs"}}Runs{{else if eq $tab "states"}}{{if .State}}<a href="/workspaces/{{$w.Name}}/states">States</a> / v{{.State.Serial}}{{else}}States{{end}}{{else if eq $tab "variables"}}Variables{{else if eq $tab "settings"}}<a href="/workspaces/{{$w.Name}}/settings">Settings</a> / {{if eq $p "health"}}Health{{else if eq $p "lock"}}Locking{{else if eq $p "access"}}Team access{{else if eq $p "deletion"}}Destruction and deletion{{else}}General{{end}}{{else}}Overview{{end}}</nav>
+<nav class="back" aria-label="breadcrumb"><a href="/workspaces">Workspaces</a> / <a href="/workspaces/{{$w.Name}}">{{$w.Name}}</a> / {{if eq $tab "runs"}}Runs{{else if eq $tab "states"}}{{if .State}}<a href="/workspaces/{{$w.Name}}/states">States</a> / v{{.State.Serial}}{{else}}States{{end}}{{else if eq $tab "variables"}}Variables{{else if eq $tab "deploy"}}Deploy{{else if eq $tab "settings"}}<a href="/workspaces/{{$w.Name}}/settings">Settings</a> / {{if eq $p "health"}}Health{{else if eq $p "lock"}}Locking{{else if eq $p "access"}}Team access{{else if eq $p "deletion"}}Destruction and deletion{{else}}General{{end}}{{else}}Overview{{end}}</nav>
 {{if ne $tab "settings"}}
 <div class="page-head">
   <div>
@@ -147,13 +147,6 @@
 </table>
 </div>
 {{else}}<p class="muted">None.</p>{{end}}
-{{if and .CanOperate (not .Active) .Catalog}}
-<form method="get" action="/workspaces/{{$w.Name}}/templates/new" class="card inline">
-  <label for="add-template" style="margin:0">Add a template</label>
-  <select id="add-template" name="template" style="max-width:24rem">{{range .Catalog}}<option value="{{.ID}}">{{.Name}}</option>{{end}}</select>
-  <button type="submit" class="secondary">Add…</button>
-</form>
-{{end}}
 
 {{end}}
 </div>
@@ -181,6 +174,28 @@
 </aside>
 </div>
 
+{{end}}
+
+{{if eq $tab "deploy"}}
+<p class="muted">Pick a template to deploy its resources in this workspace. It's added as a module (<code>module.&lt;name&gt;</code>) next to the workspace's configuration, in the same state; you fill in its inputs and review the plan first.</p>
+{{if not .CanOperate}}<div class="alert" role="note">You need operate access to deploy templates in this workspace.</div>
+{{else if eq $w.ExecutionMode "local"}}<div class="alert" role="note">This workspace uses local execution: switch to remote in <a href="/workspaces/{{$w.Name}}/settings">Settings</a> to deploy templates.</div>
+{{else if .Active}}<div class="alert warn" role="status">A run is active: <a href="/workspaces/{{$w.Name}}/runs/{{.Active.ID}}">deploy once it has finished</a>.</div>{{end}}
+{{$deploy := and .CanOperate (not .Active) (ne $w.ExecutionMode "local")}}
+{{with .Catalog}}
+<div class="grid">
+  {{range .}}
+  <article class="card tile">
+    <h3>{{.Name}}</h3>
+    <p>{{or .Description "No description."}}</p>
+    <footer>
+      <span class="tag" title="module version">{{.Module.Ref}}</span>
+      {{if $deploy}}<a href="/workspaces/{{$w.Name}}/templates/new?template={{.ID}}">Deploy →</a>{{end}}
+    </footer>
+  </article>
+  {{end}}
+</div>
+{{else}}<p class="muted">No templates in the catalog yet.</p>{{end}}
 {{end}}
 
 {{if eq $tab "runs"}}
