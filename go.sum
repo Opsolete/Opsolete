@@ -48,8 +48,8 @@ github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapp
 github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.61.0/go.mod h1:sg6Wqbl0BKKZ5zKnQj2q0qic/3ziF894SCx1LpbX37Y=
 github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
-github.com/ProtonMail/go-crypto v1.4.1 h1:9RfcZHqEQUvP8RzecWEUafnZVtEvrBVL9BiF67IQOfM=
-github.com/ProtonMail/go-crypto v1.4.1/go.mod h1:e1OaTyu5SYVrO9gKOEhTc+5UcXtTUa+P3uLudwcgPqo=
+github.com/ProtonMail/go-crypto v1.5.2 h1:cucYnvqcY7UOXVD//mSyjeaPY0SSN3v5cDkYPxumINk=
+github.com/ProtonMail/go-crypto v1.5.2/go.mod h1:/RaSu30DaKO4RY+XdV/ACcCcZkGr7AhUIduq5sjzzCo=
 github.com/agext/levenshtein v1.2.2 h1:0S/Yg6LYmFJ5stwQeRp6EeOcCbj7xiqQSdNelsXvaqE=
 github.com/agext/levenshtein v1.2.2/go.mod h1:JEDfjyjHDjOF/1e4FlBE/PkbqA9OfWu2ki2W0IB5558=
 github.com/apparentlymart/go-textseg/v15 v15.0.0 h1:uYvfpb3DyLSCGWnctWKGj857c6ew1u1fNQOlOtuGxQY=
@@ -177,8 +177,8 @@ github.com/hashicorp/go-uuid v1.0.3 h1:2gKiV6YVmrJ1i2CKKa9obLvRieoRGviZFL26PcT/C
 github.com/hashicorp/go-uuid v1.0.3/go.mod h1:6SBZvOh/SIDV7/2o3Jml5SYk/TvGqwFJ/bN7x4byOro=
 github.com/hashicorp/go-version v1.9.0 h1:CeOIz6k+LoN3qX9Z0tyQrPtiB1DFYRPfCIBtaXPSCnA=
 github.com/hashicorp/go-version v1.9.0/go.mod h1:fltr4n8CU8Ke44wwGCBoEymUuxUHl09ZGVZPK5anwXA=
-github.com/hashicorp/hc-install v0.9.5 h1:XHCjcMn2563ysuaQ9v9ec2FNc7c2PJOIEEGobAFeIx4=
-github.com/hashicorp/hc-install v0.9.5/go.mod h1:ihEW4LshrNkxq2bU/MpVbKyn+yt1is2hYqUTHDGhG84=
+github.com/hashicorp/hc-install v0.10.0 h1:uIxUzTXNIm3O36cERJZikxUwbCacDUOhjZ9UKpm3oCQ=
+github.com/hashicorp/hc-install v0.10.0/go.mod h1:5kfh7dISJeGaGA1OuETooZsk6p9LVctKt3Hq5RM6oMU=
 github.com/hashicorp/hcl v0.0.0-20170504190234-a4b07c25de5f h1:UdxlrJz4JOnY8W+DbLISwf2B8WXEolNRA8BGCwI9jws=
 github.com/hashicorp/hcl v0.0.0-20170504190234-a4b07c25de5f/go.mod h1:oZtUIOe8dh44I2q6ScRibXws4Ajl+d+nod3AaR9vL5w=
 github.com/hashicorp/hcl/v2 v2.20.1 h1:M6hgdyz7HYt1UN9e61j+qKJBqR3orTWbI1HKBJEdxtc=
@@ -187,8 +187,8 @@ github.com/hashicorp/jsonapi v1.4.3-0.20250220162346-81a76b606f3e h1:xwy/1T0cxHW
 github.com/hashicorp/jsonapi v1.4.3-0.20250220162346-81a76b606f3e/go.mod h1:kWfdn49yCjQvbpnvY1dxxAuAFzISwrrMDQOcu6NsFoM=
 github.com/hashicorp/terraform-config-inspect v0.0.0-20260904064934-75d64de68c31 h1:EuBQLv86oPLfX2cnLOa0jR/5E4i/3MoNMcd6Fqdeg6E=
 github.com/hashicorp/terraform-config-inspect v0.0.0-20260904064934-75d64de68c31/go.mod h1:Gz/z9Hbn+4KSp8A2FBtNszfLSdT2Tn/uAKGuVqqWmDI=
-github.com/hashicorp/terraform-exec v0.25.3 h1:Xr9DBt2LX4deJnahlbhw7N25MFPDMxzj/VzE7cdFBoc=
-github.com/hashicorp/terraform-exec v0.25.3/go.mod h1:NeE9+ss4hLaLuVlOIr+M6FK7Bqyy+JLZUHo5kQph+ME=
+github.com/hashicorp/terraform-exec v0.26.0 h1:0h8YOfbKHWfCLUsvn24QVKCD9lEyjE/9VjV1fGDApRE=
+github.com/hashicorp/terraform-exec v0.26.0/go.mod h1:AzXiGH+CZQvpzfubB5reUaN4D0xOfCh3prGGFrhPUo8=
 github.com/hashicorp/terraform-json v0.29.0 h1:ZggVL0YzGj5zdbafX4+rDcROM7EvVU0eXlIMkHieptI=
 github.com/hashicorp/terraform-json v0.29.0/go.mod h1:PJIRf+Yzu5iLb52c/xYp1tUOL4jzMzfIAB5gvWWKIWE=
 github.com/hashicorp/terraform-registry-address v0.5.0 h1:FAlhWOLFgMvo/4f5DPhCTwRYfHYdF1DjiOtgxfGr4p0=
