@@ -22,7 +22,7 @@
       });
       opsolete = (pkgs.buildGoModule.override {inherit go;}) {
         pname = "opsolete";
-        version = "0.4.0"; # x-release-please-version
+        version = "0.5.0"; # x-release-please-version
         src = self;
         vendorHash = "sha256-9GH8dfw+J0fi2F9FlyPIMfd/l/KCxhr2BmALyWIx4hM="; # update after go.mod changes
         subPackages = ["cmd/opsolete"];
