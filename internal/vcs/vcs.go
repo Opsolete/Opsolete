@@ -184,7 +184,7 @@ func (c Conn) get(ctx context.Context, u string, limit int64, conditional bool) 
 	// Azure DevOps answers a bad token with 203 and a sign-in page, so anything but 200 is an error.
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
-		return nil, fmt.Errorf("%s %s: %s %s", c.Provider, req.URL.Path, resp.Status, strings.TrimSpace(string(msg)))
+		return nil, &StatusError{resp.StatusCode, fmt.Sprintf("%s %s: %s %s", c.Provider, req.URL.Path, resp.Status, strings.TrimSpace(string(msg)))}
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err == nil && int64(len(b)) > limit {
@@ -212,7 +212,7 @@ func (c Conn) authorize(req *http.Request) {
 	}
 }
 
-// StatusError is a provider's answer other than 2xx to a write.
+// StatusError is a provider's error answer (to a write: other than 2xx; to a read: other than 200).
 type StatusError struct {
 	Code int
 	Msg  string

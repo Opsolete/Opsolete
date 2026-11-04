@@ -50,7 +50,7 @@ func (rc *recorder) server(t *testing.T) *httptest.Server {
 		}
 		code := http.StatusOK
 		if res[0] != "" {
-			code = map[string]int{"201": 201, "409": 409, "422": 422}[res[0]]
+			code = map[string]int{"201": 201, "401": 401, "409": 409, "422": 422}[res[0]]
 		}
 		w.WriteHeader(code)
 		w.Write([]byte(res[1]))
@@ -95,6 +95,28 @@ func TestGitHubWrites(t *testing.T) {
 	err = c.commitFile(ctx, "acme/cat", "main", "base1", "catalog/new.json", []byte("{}"), true, "Add")
 	if se, ok := errors.AsType[*StatusError](err); !ok || se.Code != 422 || strings.Contains(rc.got[len(rc.got)-1], `"sha"`) {
 		t.Fatalf("new file: %v %s", err, rc.got[len(rc.got)-1])
+	}
+}
+
+// A refused token says how to fix it, whether a read (GET contents) or a write fails; other errors don't.
+func TestTokenHint(t *testing.T) {
+	rc := &recorder{routes: map[string][2]string{
+		"GET /repos/acme/cat/contents/catalog/a.json": {"401", `{"message":"Bad credentials"}`},
+		"POST /repos/acme/cat/git/refs":               {"401", `{"message":"Bad credentials"}`},
+	}}
+	ts := rc.server(t)
+	c := Conn{GitHub, ts.URL, "bad"}
+	ctx := context.Background()
+	for _, err := range []error{
+		c.commitFile(ctx, "acme/cat", "main", "base1", "catalog/a.json", nil, false, "Remove"),
+		c.createBranch(ctx, "acme/cat", "opsolete/x", "base1"),
+	} {
+		if msg := tokenHint(err).Error(); !strings.Contains(msg, "Change access token") || !strings.Contains(msg, "Bad credentials") {
+			t.Fatalf("hint: %s", msg)
+		}
+	}
+	if err := tokenHint(&StatusError{http.StatusConflict, "x"}); err.Error() != "x" || tokenHint(nil) != nil {
+		t.Fatalf("no hint for other errors: %v", err)
 	}
 }
 

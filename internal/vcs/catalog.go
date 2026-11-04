@@ -227,7 +227,7 @@ func writeTemplate(ctx context.Context, st *storage.Store, key []byte, cat *temp
 	if tc.Mode == "pr" { // shortcut: a branch whose commit then fails is left behind; delete it in the provider
 		branch = "opsolete/template-" + id[:min(len(id), 8)] + "-" + strings.ToLower(rand.Text()[:6])
 		if err := c.createBranch(ctx, tc.Repo, branch, base); err != nil {
-			return "", fmt.Errorf("create branch %s: %w", branch, err)
+			return "", tokenHint(fmt.Errorf("create branch %s: %w", branch, err))
 		}
 	}
 	if err := c.commitFile(ctx, tc.Repo, branch, base, file, body, isNew, msg); err != nil {
@@ -235,15 +235,26 @@ func writeTemplate(ctx context.Context, st *storage.Store, key []byte, cat *temp
 			SyncCatalog(ctx, st, key, cat)
 			return "", fmt.Errorf("the provider refused the commit; if %s changed in Git since it was loaded, the catalog is reloaded now: review and save again. %w", file, err)
 		}
-		return "", err
+		return "", tokenHint(err)
 	}
 	if tc.Mode == "pr" {
-		return c.openPR(ctx, tc.Repo, branch, tc.Branch, title, msg)
+		pr, err := c.openPR(ctx, tc.Repo, branch, tc.Branch, title, msg)
+		return pr, tokenHint(err)
 	}
 	if err := SyncCatalog(ctx, st, key, cat); err != nil {
 		return "", fmt.Errorf("committed %s to %s, but reloading the catalog failed (it retries every minute): %w", file, tc.Branch, err)
 	}
 	return "", nil
+}
+
+// tokenHint says what to do when the provider refused the connection's token: 401 (GitHub: bad
+// credentials), 403 (no write access) or Azure DevOps' 203 sign-in page.
+func tokenHint(err error) error {
+	se, ok := errors.AsType[*StatusError](err)
+	if !ok || se.Code != http.StatusUnauthorized && se.Code != http.StatusForbidden && se.Code != http.StatusNonAuthoritativeInfo {
+		return err
+	}
+	return fmt.Errorf("the provider refused the connection's token: it may be expired, revoked or lack write access. Replace it with Change access token in Settings → Templates, then try again. (%w)", err)
 }
 
 const zeroCommit = "0000000000000000000000000000000000000000"
