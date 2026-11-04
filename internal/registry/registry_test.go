@@ -20,6 +20,31 @@ const moduleTF = `
 variable "name" {
   type        = string
   description = "Account name"
+
+  validation {
+    condition     = length(var.name) < 64
+    error_message = "too long"
+  }
+  validation {
+    condition     = can(regex("^[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?$", var.name))
+    error_message = "1-64 letters, digits or -, not starting or ending with -."
+  }
+}
+variable "prefix" {
+  type    = string
+  default = "ab"
+  validation {
+    condition     = can(regex("^a|b$", var.prefix)) # a search, not a whole match
+    error_message = "starts with a or ends with b"
+  }
+}
+variable "other" {
+  type    = string
+  default = ""
+  validation {
+    condition     = can(regex("^${local.re}$", var.other)) # not a literal
+    error_message = "x"
+  }
 }
 variable "retention_days" {
   type    = number
@@ -56,13 +81,28 @@ func TestInspectAndInputs(t *testing.T) {
 		t.Fatalf("docs data: %+v", ins.Module)
 	}
 	inputs, skipped := Inputs(vars)
-	if len(inputs) != 3 || len(skipped) != 1 || skipped[0] != "tags (map(string))" {
+	if len(inputs) != 5 || len(skipped) != 1 || skipped[0] != "tags (map(string))" {
 		t.Fatalf("inputs %+v skipped %v", inputs, skipped)
 	}
-	if in := inputs[0]; in.Name != "name" || in.Label != "Account name" || !in.Required || in.Type != "string" {
+	if in := inputs[0]; in.Name != "name" || in.Label != "Account name" || !in.Required || in.Type != "string" ||
+		in.Pattern != "^[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?$" {
 		t.Fatalf("name input: %+v", in)
 	}
-	if in := inputs[1]; in.Type != "number" || in.Default != "7" || in.Required {
+	if p := inputs[1].Pattern; p != ".*(?:^a|b$).*" {
+		t.Fatalf("prefix pattern: %q", p)
+	}
+	if p := inputs[2].Pattern; p != "" {
+		t.Fatalf("other pattern: %q", p)
+	}
+	// The form accepts what Terraform's validation accepts.
+	tpl := templates.Template{Inputs: inputs[:2]}
+	if _, errs := tpl.Validate(map[string]string{"name": "web-01", "prefix": "zzb"}); len(errs) != 0 {
+		t.Fatalf("valid values rejected: %v", errs)
+	}
+	if _, errs := tpl.Validate(map[string]string{"name": "-web", "prefix": "zz"}); len(errs) != 2 {
+		t.Fatalf("invalid values accepted: %v", errs)
+	}
+	if in := inputs[3]; in.Type != "number" || in.Default != "7" || in.Required {
 		t.Fatalf("retention input: %+v", in)
 	}
 	if vars[0].Pos.Filename != "main.tf" {
@@ -133,11 +173,12 @@ func TestAddressAndSigning(t *testing.T) {
 }
 
 func TestResolve(t *testing.T) {
-	vars := []tfconfig.Variable{
-		{Name: "name", Type: "string", Required: true},
-		{Name: "location", Type: "string", Default: "westeurope"},
-		{Name: "count_x", Type: "number", Default: 1},
-		{Name: "secret", Type: "string", Sensitive: true},
+	vars := []Variable{
+		{Variable: tfconfig.Variable{Name: "name", Type: "string", Required: true}, Pattern: "^[a-z0-9]+$"},
+		{Variable: tfconfig.Variable{Name: "location", Type: "string", Default: "westeurope"}},
+		{Variable: tfconfig.Variable{Name: "count_x", Type: "number", Default: 1}},
+		{Variable: tfconfig.Variable{Name: "secret", Type: "string", Sensitive: true}},
+		{Variable: tfconfig.Variable{Name: "zone", Type: "string", Default: "a"}, Pattern: "^[a-c]$"},
 	}
 	overrides := []templates.Input{
 		{Name: "location", Label: "Region", Type: "select", Options: []templates.Option{{Value: "westeurope"}, {Value: "northeurope"}}},
@@ -149,6 +190,7 @@ func TestResolve(t *testing.T) {
 		{Name: "location", Label: "Region", Type: "select", Options: []templates.Option{{Value: "westeurope"}, {Value: "northeurope"}}, Default: "westeurope"},
 		{Name: "name", Label: "name", Type: "string", Required: true, Pattern: "^[a-z]+$"},
 		{Name: "count_x", Label: "count_x", Type: "number", Default: "1"},
+		{Name: "zone", Label: "zone", Type: "string", Default: "a", Pattern: "^[a-c]$"}, // the module's pattern
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got  %+v\nwant %+v", got, want)
@@ -157,7 +199,7 @@ func TestResolve(t *testing.T) {
 
 // A module variable declared sensitive is a sensitive input once the template lists it, without a default.
 func TestResolveSensitive(t *testing.T) {
-	vars := []tfconfig.Variable{{Name: "secret", Type: "string", Sensitive: true, Default: "x"}, {Name: "pw", Type: "string"}}
+	vars := []Variable{{Variable: tfconfig.Variable{Name: "secret", Type: "string", Sensitive: true, Default: "x"}}, {Variable: tfconfig.Variable{Name: "pw", Type: "string"}}}
 	got := Resolve([]templates.Input{{Name: "secret", Type: "string"}, {Name: "pw", Type: "string", Sensitive: true}}, vars)
 	want := []templates.Input{{Name: "secret", Label: "secret", Type: "string", Sensitive: true}, {Name: "pw", Label: "pw", Type: "string", Sensitive: true}}
 	if !reflect.DeepEqual(got, want) {

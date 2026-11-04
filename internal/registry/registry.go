@@ -16,14 +16,18 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp/syntax"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/hashicorp/go-version"
+	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
 	tfaddr "github.com/hashicorp/terraform-registry-address"
+	"github.com/zclconf/go-cty/cty"
 
 	"github.com/opsolete/opsolete/internal/templates"
 )
@@ -128,8 +132,15 @@ func (r *Registry) RunnerSource(m templates.Module, ttl time.Duration) string {
 // Inspection is what Inspect learns from a module archive.
 type Inspection struct {
 	Module    *tfconfig.Module    // everything terraform-config-inspect reads: inputs, outputs, providers, resources...
-	Variables []tfconfig.Variable // Module.Variables in source order, for form generation
-	Readme    string              // README.md at the archive root, if any
+	Variables []Variable       // Module.Variables in source order, for form generation
+	Readme    string           // README.md at the archive root, if any
+}
+
+// Variable is a module variable plus the form pattern read from its validation blocks,
+// which terraform-config-inspect doesn't read.
+type Variable struct {
+	tfconfig.Variable
+	Pattern string `json:"pattern,omitempty"`
 }
 
 const maxReadme = 256 << 10
@@ -171,12 +182,13 @@ func Inspect(archive []byte) (Inspection, error) {
 		rel(&c.Pos)
 	}
 
-	vars := make([]tfconfig.Variable, 0, len(mod.Variables))
+	patterns := regexPatterns(dir)
+	vars := make([]Variable, 0, len(mod.Variables))
 	for _, v := range mod.Variables {
-		vars = append(vars, *v)
+		vars = append(vars, Variable{Variable: *v, Pattern: patterns[v.Name]})
 	}
 	// File order, so the generated form follows the module author's ordering.
-	slices.SortFunc(vars, func(a, b tfconfig.Variable) int {
+	slices.SortFunc(vars, func(a, b Variable) int {
 		if c := strings.Compare(a.Pos.Filename, b.Pos.Filename); c != 0 {
 			return c
 		}
@@ -190,6 +202,77 @@ func Inspect(archive []byte) (Inspection, error) {
 		readme = string(b)
 	}
 	return Inspection{Module: mod, Variables: vars, Readme: readme}, nil
+}
+
+// regexPatterns returns, by variable name, form patterns from validation conditions written as
+// can(regex("<literal>", var.<the variable>)).
+// shortcut: other conditions (length, contains, &&, ...), .tf.json files and all but the first regex per
+// variable are skipped; Terraform still checks them at plan time. Read more forms when modules need it.
+func regexPatterns(dir string) map[string]string {
+	out := map[string]string{}
+	files, _ := filepath.Glob(filepath.Join(dir, "*.tf"))
+	for _, name := range files {
+		src, err := os.ReadFile(name)
+		if err != nil {
+			continue
+		}
+		f, diags := hclsyntax.ParseConfig(src, name, hcl.InitialPos)
+		if diags.HasErrors() {
+			continue
+		}
+		for _, b := range f.Body.(*hclsyntax.Body).Blocks {
+			if b.Type != "variable" || len(b.Labels) != 1 || out[b.Labels[0]] != "" {
+				continue
+			}
+			for _, v := range b.Body.Blocks {
+				if a, ok := v.Body.Attributes["condition"]; ok && v.Type == "validation" {
+					if p, ok := regexCondition(a.Expr, b.Labels[0]); ok {
+						out[b.Labels[0]] = p
+						break
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// regexCondition matches can(regex("<literal>", var.<name>)) and returns the regex as a form pattern.
+func regexCondition(e hclsyntax.Expression, name string) (string, bool) {
+	can, ok := e.(*hclsyntax.FunctionCallExpr)
+	if !ok || can.Name != "can" || len(can.Args) != 1 {
+		return "", false
+	}
+	re, ok := can.Args[0].(*hclsyntax.FunctionCallExpr)
+	if !ok || re.Name != "regex" || len(re.Args) != 2 {
+		return "", false
+	}
+	t, diags := hcl.AbsTraversalForExpr(re.Args[1])
+	if diags.HasErrors() || len(t) != 2 || t.RootName() != "var" {
+		return "", false
+	}
+	if a, ok := t[1].(hcl.TraverseAttr); !ok || a.Name != name {
+		return "", false
+	}
+	v, diags := re.Args[0].Value(nil) // nil context: interpolations and function calls fail, so only literals pass
+	if diags.HasErrors() || !v.IsKnown() || v.IsNull() || !v.Type().Equals(cty.String) {
+		return "", false
+	}
+	return formPattern(v.AsString())
+}
+
+// formPattern turns a Terraform regex, which matches anywhere in the value, into a form pattern,
+// which must match the whole value. Patterns anchored at both ends are kept as written.
+// shortcut: the .* wrapper doesn't cross newlines; fine for single-line form fields.
+func formPattern(re string) (string, bool) {
+	s, err := syntax.Parse(re, syntax.Perl) // the flags regexp.Compile, and so Terraform's regex(), use
+	if err != nil {
+		return "", false
+	}
+	if s.Op == syntax.OpConcat && len(s.Sub) >= 2 && s.Sub[0].Op == syntax.OpBeginText && s.Sub[len(s.Sub)-1].Op == syntax.OpEndText {
+		return re, true
+	}
+	return ".*(?:" + re + ").*", true
 }
 
 // extract unpacks regular files and directories only, rejecting paths that escape dir.
@@ -250,7 +333,7 @@ func extract(archive []byte, dir string) error {
 
 // Inputs maps module variables to form inputs. Complex types (list, map, object, ...) can't be a
 // simple form field yet; they are returned in skipped so the builder can warn about them.
-func Inputs(vars []tfconfig.Variable) (inputs []templates.Input, skipped []string) {
+func Inputs(vars []Variable) (inputs []templates.Input, skipped []string) {
 	for _, v := range vars {
 		in := templates.Input{Name: v.Name, Label: v.Description, Required: v.Required}
 		switch v.Type {
@@ -264,6 +347,9 @@ func Inputs(vars []tfconfig.Variable) (inputs []templates.Input, skipped []strin
 			skipped = append(skipped, fmt.Sprintf("%s (%s)", v.Name, v.Type))
 			continue
 		}
+		if in.Type == "string" {
+			in.Pattern = v.Pattern
+		}
 		if in.Label == "" {
 			in.Label = v.Name
 		}
@@ -276,10 +362,10 @@ func Inputs(vars []tfconfig.Variable) (inputs []templates.Input, skipped []strin
 }
 
 // Resolve makes a template's form match the module version it pins: one input per module variable,
-// with name, type and required-ness from variables.tf. The template's JSON inputs only add a label,
-// pattern, select options or default, and keep their order. JSON inputs the module doesn't declare are
+// with name, type, required-ness and regex validation pattern from variables.tf. The template's JSON
+// inputs only add a label, a pattern (replacing the module's), select options or default, and keep their order. JSON inputs the module doesn't declare are
 // dropped. Sensitive variables appear only if the JSON lists them; listed, they are sensitive inputs.
-func Resolve(overrides []templates.Input, vars []tfconfig.Variable) []templates.Input {
+func Resolve(overrides []templates.Input, vars []Variable) []templates.Input {
 	gen, _ := Inputs(vars)
 	sensitive := map[string]bool{}
 	for _, v := range vars {
@@ -305,7 +391,10 @@ func Resolve(overrides []templates.Input, vars []tfconfig.Variable) []templates.
 		if o.Default != "" {
 			in.Default = o.Default
 		}
-		in.Pattern, in.Required, in.ShowIf = o.Pattern, in.Required || o.Required, o.ShowIf
+		if o.Pattern != "" {
+			in.Pattern = o.Pattern
+		}
+		in.Required, in.ShowIf = in.Required || o.Required, o.ShowIf
 		in.Sensitive = o.Sensitive || sensitive[o.Name] && (in.Type == "string" || in.Type == "number")
 		if in.Sensitive {
 			in.Default = "" // never echoed into the form

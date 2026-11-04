@@ -11,13 +11,15 @@ import (
 
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/opsolete/opsolete/internal/registry"
 )
 
 var ErrExists = errors.New("already exists")
 
 type Module struct {
 	Namespace, Name, System, Version string
-	Variables                        []tfconfig.Variable
+	Variables                        []registry.Variable
 	UploadedAt                       time.Time
 }
 
