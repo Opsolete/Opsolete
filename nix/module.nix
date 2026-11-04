@@ -184,9 +184,10 @@ in {
     };
     stateStore = mkOption {
       type = types.str;
-      default = "file:///var/lib/opsolete/state?create_dir=1&metadata=skip";
+      # no_tmp_dir: PrivateTmp puts /tmp on another mount, so fileblob's rename from /tmp fails (EXDEV)
+      default = "file:///var/lib/opsolete/state?create_dir=1&metadata=skip&no_tmp_dir=1";
       example = "azblob://tfstate";
-      description = "STATE_STORE (Go CDK blob URL). Cloud credentials go in `secretFiles` (secrets) or `environment` (e.g. AZURE_STORAGE_ACCOUNT).";
+      description = "STATE_STORE (Go CDK blob URL). Cloud credentials go in `secretFiles` (secrets) or `environment` (e.g. AZURE_STORAGE_ACCOUNT). A file:// URL must be under /var/lib/opsolete (the only writable path) and needs `no_tmp_dir=1`.";
     };
     templatesDir = nullOr types.str null "TEMPLATES_DIR, a local template folder. null: none; keep the templates in a Git repository instead (Settings → Templates).";
     templateEditor = mkOption {
