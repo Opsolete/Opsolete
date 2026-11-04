@@ -65,7 +65,8 @@ func (r *Registry) ParseSource(source string) (ns, name, system string, ok bool)
 	if err != nil || m.Subdir != "" || !strings.EqualFold(m.Package.Host.String(), r.PublicURL.Host) {
 		return "", "", "", false
 	}
-	return m.Package.Namespace, m.Package.Name, m.Package.TargetSystem, true
+	p := m.Package // registry addresses are case-insensitive; Address stores them lower-cased
+	return strings.ToLower(p.Namespace), strings.ToLower(p.Name), strings.ToLower(p.TargetSystem), true
 }
 
 // CanonicalVersion parses a semver ("v1.2.0" or "1.2.0") into its canonical form.
@@ -296,9 +297,6 @@ func extract(archive []byte, dir string) error {
 		}
 		name := filepath.Clean(h.Name)
 		if !filepath.IsLocal(name) {
-			if name == "." {
-				continue
-			}
 			return fmt.Errorf("archive entry %q escapes the module directory", h.Name)
 		}
 		target := filepath.Join(dir, name)
