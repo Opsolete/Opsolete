@@ -252,6 +252,7 @@ func TestTemplateBuilder(t *testing.T) {
 		"in_default":     {"10.0.0.0/16", "westeurope", "", ""},
 		"in_show_input":  {"", "", "region", ""},
 		"in_show_equals": {"", "", "northeurope", ""},
+		"key":            {"zone"},
 	}
 	rec := post(h, "/templates/new", form)
 	loc := rec.Header().Get("Location")
@@ -265,12 +266,12 @@ func TestTemplateBuilder(t *testing.T) {
 	}
 	saved, _ := os.ReadFile(filepath.Join(dir, id+".json"))
 	if s := string(saved); !strings.Contains(s, `"show_if": {`) || strings.Contains(s, "stale") || !strings.Contains(s, `"required": true`) ||
-		!strings.Contains(s, `"label": "North, Europe"`) {
+		!strings.Contains(s, `"label": "North, Europe"`) || strings.Count(s, `"key": true`) != 1 {
 		t.Fatalf("saved template wrong:\n%s", s)
 	}
 	// the builder shows the condition and the option rows again
 	if body := get(h, loc+"/edit").Body.String(); !strings.Contains(body, `<option value="region" selected>when region is</option>`) ||
-		!strings.Contains(body, `name="in_opt_label_1" value="North, Europe"`) {
+		!strings.Contains(body, `name="in_opt_label_1" value="North, Europe"`) || !strings.Contains(body, `<option value="zone" selected>zone</option>`) {
 		t.Fatalf("builder lost the condition or options: %s", body)
 	}
 	// a condition on a dropdown below the field is refused with a readable error

@@ -39,6 +39,11 @@
         <input name="name" value="{{.T.Name}}" required placeholder="Windows or Linux VM"></label>
       <label class="f span2"><span class="f-head">Description{{template "tip" "One sentence on what this deploys and when to use it. Shown on the catalog card."}}</span>
         <input name="description" value="{{.T.Description}}" placeholder="A virtual machine with backups and monitoring"></label>
+      <label class="f"><span class="f-head">Workspace name from{{template "tip" "Added to a workspace, the template is named after this field's value plus a random suffix, e.g. web_prod_01_c8ad, fixed once added. Text, number and dropdown fields that aren't sensitive."}}</span>
+        <select name="key" id="key">
+          <option value="">the template's name</option>
+          {{range .Rows}}{{if or .Key (and .Name (ne .Type "bool") (not .Sensitive))}}<option value="{{.Name}}"{{if .Key}} selected{{end}}>{{.Name}}</option>{{end}}{{end}}
+        </select></label>
     </div>
   </section>
 
@@ -98,8 +103,6 @@
               <span class="f-head">Required{{template "tip" "End users must fill it in. A hidden field is never required."}}</span></label>
             <label class="check only-secret"><input type="checkbox" class="switch" name="in_sensitive" value="{{$i}}"{{if .Sensitive}} checked{{end}}>
               <span class="f-head">Sensitive{{template "tip" "For passwords and keys: typed in a password field, stored encrypted and never shown again. Can't have a default."}}</span></label>
-            <label class="check not-bool"><input type="checkbox" class="switch" name="in_key" value="{{$i}}"{{if .Key}} checked{{end}}>
-              <span class="f-head">Key{{template "tip" "At most one field: its value names the template in a workspace, e.g. vm_web_prod_01. The name is fixed once added. Not for sensitive fields."}}</span></label>
           </div>
         </div>
         <div class="fcard-cond">
@@ -132,7 +135,17 @@
     const optionValues = card => [...card.querySelectorAll(".opt-row [aria-label='Option value']")].map(el => el.value.trim()).filter(Boolean);
     // Renumber the checkboxes and option rows (they post their card's index), offer each card the
     // dropdowns above it, and show the chosen dropdown's values as chips to click.
+    // "Workspace name from" follows its card through renames; a card that can't be the key drops it.
+    const key = document.getElementById("key"), nameOf = card => card.querySelector("[name=in_name]").value.trim();
+    let keyCard = cards().find(c => key.value && nameOf(c) === key.value);
+    key.onchange = () => keyCard = cards().find(c => nameOf(c) === key.value);
     const refresh = () => {
+      const keys = cards().filter(c => {
+        const t = c.querySelector(".ftype").value;
+        return nameOf(c) && t !== "bool" && !(t !== "select" && c.querySelector("[name=in_sensitive]").checked);
+      });
+      if (!keys.includes(keyCard)) keyCard = undefined;
+      key.replaceChildren(new Option("the template's name", ""), ...keys.map(c => new Option(nameOf(c), nameOf(c), c === keyCard, c === keyCard)));
       const above = new Map();
       cards().forEach((card, i) => {
         for (const box of card.querySelectorAll("[type=checkbox]")) box.value = i;
