@@ -1,7 +1,7 @@
 # NixOS module: services.opsolete (server) and services.opsolete.runner.
 # Secrets are *File options holding a path (e.g. config.sops.secrets.<name>.path). They reach the
-# process via systemd LoadCredential, so they never enter the Nix store or the unit's Environment=,
-# and the files may stay root-owned (sops-nix's default).
+# server via systemd LoadCredential, the runner via a root launcher, so they never enter the Nix store
+# or the unit's Environment=, and the files may stay root-owned (sops-nix's default).
 self: {
   config,
   lib,
@@ -42,6 +42,13 @@ self: {
       exec ${opsolete} ${args}
     '';
   credentials = lib.mapAttrsToList (k: f: "${k}:${f}");
+  # The runner reads its secret files as root, then drops to its user. Not LoadCredential: job code runs
+  # as that user and could read /run/credentials/… (the env is hidden from jobs, the directory isn't).
+  runnerLauncher = pkgs.writeShellScript "opsolete-runner-start" ''
+    set -euo pipefail
+    ${exportSecrets (_: f: f) runnerSecrets}
+    exec ${pkgs.util-linux}/bin/setpriv --reuid=opsolete-runner --regid=opsolete-runner --clear-groups -- ${opsolete} runner
+  '';
   dropNulls = lib.filterAttrs (_: v: v != null);
   joinOrNull = l:
     if l == []
@@ -380,14 +387,15 @@ in {
         serviceConfig =
           hardening
           // {
-            ExecStart = launcher "opsolete-runner-start" runnerSecrets "runner";
+            # "!": started as root (User= still owns StateDirectory); runnerLauncher drops to it itself
+            ExecStart = "!${runnerLauncher}";
             User = "opsolete-runner"; # not DynamicUser: that fails to start together with PrivatePIDs
             Group = "opsolete-runner";
             StateDirectory = ["opsolete-runner" "opsolete-runner/plugin-cache"];
-            LoadCredential = credentials runnerSecrets;
             # PID 1 in its own namespace: the runner then kills what a job left running before the next one.
             PrivatePIDs = true;
-            CapabilityBoundingSet = "";
+            # for the launcher only (read secret files of any owner, drop to the user); gone after setpriv
+            CapabilityBoundingSet = "CAP_SETUID CAP_SETGID CAP_DAC_READ_SEARCH";
             # Stop = SIGTERM to the runner only: it stops claiming and finishes the current job.
             KillMode = "mixed";
             TimeoutStopSec = rcfg.jobTimeout;

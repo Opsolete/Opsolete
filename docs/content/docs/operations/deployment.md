@@ -48,4 +48,4 @@ services.opsolete = {
 };
 ```
 
-Create registry tokens with `sudo opsolete-admin token <name>`. A runner on another host sets `runner.tokenFile` to the same secret. The runner runs as PID 1 of its own PID namespace, so it cleans up after jobs like in a container. Test: `nix build .#checks.x86_64-linux.nixos` (NixOS VM, needs kvm).
+Create registry tokens with `sudo opsolete-admin token <name>`. A runner on another host sets `runner.tokenFile` to the same secret. The runner runs as PID 1 of its own PID namespace, so it cleans up after jobs like in a container. It reads its secret files as root and then drops to its user, so module code (which runs as that user) can't read them. Test: `nix build .#checks.x86_64-linux.nixos` (NixOS VM, needs kvm).

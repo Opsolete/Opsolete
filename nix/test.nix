@@ -33,5 +33,8 @@ self: {
     machine.fail("journalctl -u opsolete-runner | grep 'not running as a container'")
     machine.sleep(5)  # a rejected token would have stopped it by now
     machine.succeed("systemctl is-active opsolete-runner")
+    # it read the token as root and dropped to its user; jobs (same user) find no credentials directory
+    machine.succeed("test $(stat -c %U /proc/$(systemctl show -p MainPID --value opsolete-runner)) = opsolete-runner")
+    machine.fail("test -e /run/credentials/opsolete-runner.service")
   '';
 }
