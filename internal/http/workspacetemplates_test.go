@@ -134,7 +134,7 @@ func TestWorkspaceTemplates(t *testing.T) {
 	}
 }
 
-// TestDeleteWorkspace: a workspace can be deleted, with its state files, once it manages nothing.
+// TestDeleteWorkspace: a workspace managing resources is only deleted, with its state files, when forced.
 func TestDeleteWorkspace(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
@@ -162,8 +162,8 @@ func TestDeleteWorkspace(t *testing.T) {
 	if rec := post(h, url0+"/delete", nil); rec.Code != http.StatusConflict {
 		t.Fatalf("delete with resources: %d", rec.Code)
 	}
-	store.DB.Exec(`DELETE FROM state_version_resources WHERE state_version_id = $1`, vid)
-	if rec := post(h, url0+"/delete", nil); rec.Code != http.StatusSeeOther {
+	// force deletes it anyway, e.g. when the state files are lost
+	if rec := post(h, url0+"/delete", url.Values{"force": {"1"}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
 	}
 	if ok, _ := app.StateStore.Exists(ctx, key); ok {

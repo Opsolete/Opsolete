@@ -322,14 +322,15 @@ func (s *Store) RenameWorkspace(ctx context.Context, id, name string) error {
 // DeleteWorkspace deletes a workspace with its runs, variables, grants and state versions, and
 // returns the blob keys of its state files for the caller to delete. It refuses while a run is
 // active (ErrRunActive) or the current state manages resources or isn't indexed (ErrHasResources),
-// so deleting never orphans real infrastructure.
-func (s *Store) DeleteWorkspace(ctx context.Context, id string) ([]string, error) {
+// so deleting never orphans real infrastructure. force skips the resources check (the state may be
+// lost or the resources gone outside Terraform); an active run still refuses.
+func (s *Store) DeleteWorkspace(ctx context.Context, id string, force bool) ([]string, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
-	if err := requireIdle(ctx, tx, id); err != nil {
+	if err := requireIdle(ctx, tx, id); err != nil && !(force && errors.Is(err, ErrHasResources)) {
 		return nil, err
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT blob_key FROM state_versions WHERE workspace_id = ops_uuid($1)`, id)

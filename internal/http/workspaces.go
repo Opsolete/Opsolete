@@ -786,13 +786,15 @@ func (s *Server) lockWorkspace(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/settings/lock", http.StatusSeeOther)
 }
 
-// deleteWorkspace deletes a workspace that manages no resources, with its state files.
+// deleteWorkspace deletes a workspace that manages no resources, with its state files; force=1
+// deletes it anyway, leaving any real resources unmanaged.
 func (s *Server) deleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
 	if !ok {
 		return
 	}
-	keys, err := s.Store.DeleteWorkspace(r.Context(), ws.ID)
+	force := r.PostFormValue("force") != ""
+	keys, err := s.Store.DeleteWorkspace(r.Context(), ws.ID, force)
 	switch {
 	case errors.Is(err, sql.ErrNoRows): // deleted meanwhile
 		http.NotFound(w, r)
@@ -809,7 +811,7 @@ func (s *Server) deleteWorkspace(w http.ResponseWriter, r *http.Request) {
 			s.Log.Warn("delete state file", "workspace", ws.Name, "key", k, "err", err)
 		}
 	}
-	s.Log.Info("workspace deleted", "workspace", ws.Name, "id", ws.ID, "user", auth.FromContext(r.Context()).Email)
+	s.Log.Info("workspace deleted", "workspace", ws.Name, "id", ws.ID, "force", force, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/workspaces", http.StatusSeeOther)
 }
 
