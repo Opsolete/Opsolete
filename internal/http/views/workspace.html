@@ -185,14 +185,14 @@
 {{with .Catalog}}
 <div class="grid">
   {{range .}}
-  <article class="card tile">
+  {{if $deploy}}<a class="card tile workflow" href="/workspaces/{{$w.Name}}/templates/new?template={{.ID}}">{{else}}<article class="card tile">{{end}}
     <h3>{{.Name}}</h3>
     <p>{{or .Description "No description."}}</p>
     <footer>
       <span class="tag" title="module version">{{.Module.Ref}}</span>
-      {{if $deploy}}<a href="/workspaces/{{$w.Name}}/templates/new?template={{.ID}}">Deploy →</a>{{end}}
+      {{if $deploy}}<span style="color: var(--brand)">Deploy →</span>{{end}}
     </footer>
-  </article>
+  {{if $deploy}}</a>{{else}}</article>{{end}}
   {{end}}
 </div>
 {{else}}<p class="muted">No templates in the catalog yet.</p>{{end}}
