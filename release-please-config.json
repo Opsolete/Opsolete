@@ -5,7 +5,8 @@
       "release-type": "go",
       "initial-version": "0.1.0",
       "bump-minor-pre-major": true,
-      "prerelease": true
+      "prerelease": true,
+      "extra-files": ["flake.nix"]
     }
   }
 }
