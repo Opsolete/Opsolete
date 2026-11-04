@@ -32,7 +32,6 @@ import (
 const (
 	fieldWorkspace = "ops-workspace"
 	fieldAutoApply = "ops-auto-apply"
-	fieldModule    = "ops-module" // name of a template added to a workspace
 )
 
 var workspaceNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`)
@@ -98,21 +97,20 @@ func (s *Server) internalError(w http.ResponseWriter, what string, err error) {
 }
 
 type formPage struct {
-	T          templates.Template
-	Editor     bool
-	Values     map[string]string
-	Errors     map[string]string
-	Workspace  string
-	AutoApply  bool
-	Configure  *storage.Workspace // set: change this workspace's inputs and module version instead of creating one
-	Module     string             // with Configure: the added template to change (or add, with Adding)
-	Adding     bool
-	ModuleHint string           // with Adding: the name used if Module is left empty
-	Cur        templates.Module // with Configure: the module version it runs now
-	Error      string
-	Set        map[string]bool             // sensitive inputs with a stored value: left empty, it's kept
-	old        map[string]any              // the stored inputs, with Configure
-	added      []storage.WorkspaceTemplate // with Configure: the workspace's templates
+	T         templates.Template
+	Editor    bool
+	Values    map[string]string
+	Errors    map[string]string
+	Workspace string
+	AutoApply bool
+	Configure *storage.Workspace // set: change this workspace's inputs and module version instead of creating one
+	Module    string             // with Configure: the added template to change (or add, with Adding)
+	Adding    bool
+	Cur       templates.Module // with Configure: the module version it runs now
+	Error     string
+	Set       map[string]bool             // sensitive inputs with a stored value: left empty, it's kept
+	old       map[string]any              // the stored inputs, with Configure
+	added     []storage.WorkspaceTemplate // with Configure: the workspace's templates
 }
 
 func (s *Server) form(w http.ResponseWriter, r *http.Request) {
