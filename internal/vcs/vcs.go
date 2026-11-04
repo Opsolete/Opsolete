@@ -946,7 +946,7 @@ func TriggerRuns(ctx context.Context, st *storage.Store, key []byte, group []sto
 
 func short(commit string) string { return commit[:min(len(commit), 8)] }
 
-var tagVersionRe = regexp.MustCompile(`\d+(\.\d+)+`)
+var tagVersionRe = regexp.MustCompile(`\d+(\.\d+)+(-[0-9A-Za-z.-]+)?`) // keeps -rc: a prerelease ranks below its release
 
 // LatestTag returns the matching tag with the highest version in its name; tag-based workspaces
 // run it. A bad pattern matches nothing.

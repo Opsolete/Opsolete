@@ -169,12 +169,12 @@ func TestProviders(t *testing.T) {
 
 // TestLatestTag: tag-based workspaces run the matching tag with the highest version, not the newest-listed.
 func TestLatestTag(t *testing.T) {
-	tags := []Tag{{"1.2.0", "a"}, {"1.10.0", "b"}, {"v-2.0.0", "c"}, {"1.9.0-rc", "d"}, {"release", "e"}}
+	tags := []Tag{{"1.2.0", "a"}, {"1.10.0-rc", "f"}, {"1.10.0", "b"}, {"v-2.0.0", "c"}, {"1.9.0-rc", "d"}, {"release", "e"}}
 	for _, c := range []struct{ pattern, want string }{
 		{`^\d+\.\d+\.\d+$`, "1.10.0"}, // semantic versioning: 1.10.0 beats 1.2.0 (not a string compare)
 		{`\d+\.\d+\.\d+$`, "v-2.0.0"}, // with a prefix
-		{`^\d+\.\d+\.\d+`, "1.10.0"},  // with a suffix: 1.9.0-rc is lower
-		{`-rc$`, "1.9.0-rc"},
+		{`^\d+\.\d+\.\d+`, "1.10.0"},  // with a suffix: 1.10.0-rc, listed first, is lower
+		{`-rc$`, "1.10.0-rc"},
 		{`^release$`, ""}, // no version number: never picked
 		{`(`, ""},         // bad pattern
 	} {

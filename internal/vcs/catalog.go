@@ -117,11 +117,10 @@ func SyncCatalog(ctx context.Context, st *storage.Store, key []byte, cat *templa
 	if rerr != nil {
 		return rerr
 	}
-	lerr := loadSnapshot(cat, tc) // the last good commit, in the current mode
-	if !ok {
-		lerr = LoadCatalog(ctx, st, cat)
+	if !ok { // another instance stored a newer result: serve that, not this one's stale snapshot
+		return errors.Join(err, LoadCatalog(ctx, st, cat))
 	}
-	return errors.Join(err, lerr)
+	return errors.Join(err, loadSnapshot(cat, tc)) // the last good commit, in the current mode
 }
 
 // fetchCatalog returns the branch head and, unless it's the commit already loaded, its template files.
