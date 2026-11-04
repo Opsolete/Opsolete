@@ -117,7 +117,8 @@ func (s *Server) audit(next http.Handler) http.Handler {
 		}
 		// shortcut: written after the response, so a failed write loses the entry (logged below); make it
 		// part of each handler's transaction if the log must never miss an action.
-		if err := s.Store.Audit(ctx, actor, r.Method+" "+r.URL.Path, detail); err != nil {
+		// escaped: a decoded %00 or %ff would fail the insert, and a probe would leave no entry
+		if err := s.Store.Audit(ctx, actor, r.Method+" "+r.URL.EscapedPath(), detail); err != nil {
 			s.Log.Error("audit log write failed", "err", err, "actor", actor, "method", r.Method, "path", r.URL.Path)
 		}
 	})
@@ -171,9 +172,9 @@ func newAuditRow(e storage.AuditEntry) auditRow {
 	} else {
 		row.Pretty = string(e.Detail)
 	}
-	row.From = d.Request.ForwardedFor
-	if row.From == "" {
-		row.From = d.Request.IP
+	row.From = d.Request.IP
+	if f := d.Request.ForwardedFor; f != "" { // client-supplied unless a proxy sets it: keep the peer address next to it
+		row.From = f + " (via " + d.Request.IP + ")"
 	}
 	row.Status = d.Request.Status
 	switch st := d.Request.Status; {
