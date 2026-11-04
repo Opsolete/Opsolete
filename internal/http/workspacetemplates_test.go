@@ -90,7 +90,12 @@ func TestWorkspaceTemplates(t *testing.T) {
 		SELECT id, 1, 'l', 'wt/' || id || '.tfstate', 'm', 2, true FROM workspaces WHERE name = $1 RETURNING id`, ws).Scan(&vid); err != nil {
 		t.Fatal(err)
 	}
-	store.DB.Exec(`INSERT INTO state_version_resources (state_version_id, address, type, name, provider) VALUES ($1, 'module.one.a.b', 'a', 'b', 'p')`, vid)
+	store.DB.Exec(`INSERT INTO state_version_resources (state_version_id, address, type, name, provider, module) VALUES ($1, 'module.one.a.b', 'a', 'b', 'p', 'module.one')`, vid)
+	// each template shows whether it has resources in the state, e.g. after a failed apply
+	if page := get(h, "/workspaces/"+ws+"?show=templates").Body.String(); !strings.Contains(page, "<code>one</code><br><small class=\"muted\" title=\"resources of this template in the current state\">1 resource</small>") ||
+		!strings.Contains(page, "<code>two</code><br><small class=\"muted\" title=\"resources of this template in the current state\">⚠ no resources in state</small>") {
+		t.Fatalf("resources per template: %s", page)
+	}
 	destroy := func(name string, left int) {
 		t.Helper()
 		if rec := post(h, base+name+"/remove", nil); rec.Code != http.StatusSeeOther || !strings.Contains(rec.Header().Get("Location"), "/runs/") {

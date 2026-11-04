@@ -342,9 +342,15 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 			s.internalError(w, "run metrics", err)
 			return
 		}
+		groups := groupResources(res, ws, added, names)
+		counts := map[string]int{} // module call ("" = root) -> resources in the current state
+		for _, g := range groups {
+			call, _, _ := strings.Cut(strings.TrimPrefix(g.Module, "module."), "[")
+			counts[call] += len(g.Rows)
+		}
 		maps.Copy(data, map[string]any{"Added": added, "TemplateCount": templateCount, "Updates": updates, "TemplateNames": names, "Catalog": s.Templates.List(),
-			"ResourceGroups": groupResources(res, ws, added, names),
-			"LatestPlan":     latestPlan, "LatestApply": latestApply, "Metrics": metrics, "Show": r.URL.Query().Get("show")})
+			"ResourceGroups": groups, "TemplateResources": counts,
+			"LatestPlan": latestPlan, "LatestApply": latestApply, "Metrics": metrics, "Show": r.URL.Query().Get("show")})
 
 	case "runs": // status filters, counted over the runs listed
 		filter := r.URL.Query().Get("filter")

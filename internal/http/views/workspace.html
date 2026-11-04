@@ -132,11 +132,12 @@
 <div class="card flush">
 <table>
 <tr><th>Name</th><th>Template</th><th>Module</th><th>Inputs</th>{{if $.CanOperate}}<th></th>{{end}}</tr>
-{{with $w.TemplateID}}<tr><td class="muted">root</td><td><a href="/templates/{{.}}">{{or (index $.TemplateNames .) .}}</a></td>
+{{$indexed := and .Versions (index .Versions 0).Indexed}}
+{{with $w.TemplateID}}<tr><td class="muted">root{{if $indexed}}{{template "deployed" index $.TemplateResources ""}}{{end}}</td><td><a href="/templates/{{.}}">{{or (index $.TemplateNames .) .}}</a></td>
   <td><code>{{$w.ModuleSource}}</code> <span class="tag">{{$w.ModuleRef}}</span>{{with $.Update}} <span class="tag">update: {{.Ref}}</span>{{end}}</td>
   <td>{{template "inputs" $w.Inputs}}</td>
   {{if $.CanOperate}}<td class="nowrap">{{if and $.HasTemplate (not $.Active)}}<a class="btn secondary small" href="/workspaces/{{$w.Name}}/configure">Configure…</a>{{end}}</td>{{end}}</tr>{{end}}
-{{range .Added}}<tr><td><code>{{.Name}}</code></td><td><a href="/templates/{{.TemplateID}}">{{or (index $.TemplateNames .TemplateID) .TemplateID}}</a></td>
+{{range .Added}}<tr><td><code>{{.Name}}</code>{{if $indexed}}{{template "deployed" index $.TemplateResources .Name}}{{end}}</td><td><a href="/templates/{{.TemplateID}}">{{or (index $.TemplateNames .TemplateID) .TemplateID}}</a></td>
   <td><code>{{.ModuleSource}}</code> <span class="tag">{{.ModuleRef}}</span>{{with index $.Updates .Name}} <span class="tag">update: {{.}}</span>{{end}}</td>
   <td>{{template "inputs" .Inputs}}</td>
   {{if $.CanOperate}}<td class="nowrap">{{if not $.Active}}<a class="btn secondary small" href="/workspaces/{{$w.Name}}/templates/{{.Name}}">Configure…</a>
@@ -463,5 +464,6 @@
   </span>
   <span class="end"><span class="status {{.Status}}">{{status .Status}}</span><small title="{{.CreatedAt.Format "2006-01-02 15:04"}}">{{ago .CreatedAt}}</small></span>
 </a>{{end}}
+{{define "deployed"}}<br><small class="muted" title="resources of this template in the current state">{{if .}}{{.}} resource{{if ne . 1}}s{{end}}{{else}}⚠ no resources in state{{end}}</small>{{end}}
 {{define "inputs"}}{{if .}}<details class="inputs"><summary>{{len .}} input{{if ne (len .) 1}}s{{end}}</summary>
 <dl>{{range $k, $v := .}}<dt><code>{{$k}}</code></dt><dd>{{if sealed $v}}<span class="muted">(sensitive)</span>{{else}}<code>{{$v}}</code>{{end}}</dd>{{end}}</dl></details>{{else}}<span class="muted">none</span>{{end}}{{end}}
