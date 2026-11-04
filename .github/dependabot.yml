@@ -6,6 +6,9 @@ updates:
     directory: /
     schedule: { interval: weekly }
     commit-message: { prefix: "fix(deps)" }
+    ignore:
+      # test only, pinned on purpose: the oldest go-tfe a supported Terraform ships (see cloud_gotfe_test.go)
+      - dependency-name: github.com/hashicorp/go-tfe
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
