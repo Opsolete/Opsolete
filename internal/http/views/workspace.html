@@ -140,10 +140,10 @@
 {{range .Added}}<tr><td><code>{{.Name}}</code>{{if $indexed}}{{template "deployed" index $.TemplateResources .Name}}{{end}}</td><td><a href="/templates/{{.TemplateID}}">{{or (index $.TemplateNames .TemplateID) .TemplateID}}</a></td>
   <td><code>{{.ModuleSource}}</code> <span class="tag">{{.ModuleRef}}</span>{{with index $.Updates .Name}} <span class="tag">update: {{.}}</span>{{end}}</td>
   <td>{{template "inputs" .Inputs}}</td>
-  {{if $.CanOperate}}<td class="nowrap">{{if not $.Active}}<a class="btn secondary small" href="/workspaces/{{$w.Name}}/templates/{{.Name}}">Configure…</a>
+  {{if $.CanOperate}}<td class="nowrap">{{if not $.Active}}<div class="inline"><a class="btn secondary small" href="/workspaces/{{$w.Name}}/templates/{{.Name}}">Configure…</a>
     <form method="post" action="/workspaces/{{$w.Name}}/templates/{{.Name}}/remove" class="inline"
       onsubmit="return confirm('Remove {{.Name}}? This starts a plan that destroys its resources.')">
-      <button type="submit" class="danger small">Remove…</button></form>{{end}}</td>{{end}}</tr>{{end}}
+      <button type="submit" class="danger small">Remove…</button></form></div>{{end}}</td>{{end}}</tr>{{end}}
 </table>
 </div>
 {{else}}<p class="muted">None.</p>{{end}}
