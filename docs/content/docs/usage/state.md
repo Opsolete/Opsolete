@@ -36,7 +36,7 @@ data "terraform_remote_state" "x" {
 }
 ```
 
-The runner sets `TF_HTTP_USERNAME`/`TF_HTTP_PASSWORD` to the run's own state credentials, so the config needs no secrets. Such a run can only read the state: it can't write or lock it. It gets the whole state file, sensitive values included, just like in HCP.
+The runner sets `TF_HTTP_USERNAME`/`TF_HTTP_PASSWORD` to the run's own state credentials, so the config needs no secrets. Such a run can only read the state: it can't write or lock it. It gets the whole state file, sensitive values included, just like in HCP. Speculative plans of pull requests run unreviewed code, so they can't read shared states.
 
 ## Security
 

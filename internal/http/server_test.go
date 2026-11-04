@@ -1167,6 +1167,11 @@ func TestRemoteStateSharing(t *testing.T) {
 	if c := state("GET", token); c != http.StatusNoContent {
 		t.Fatalf("Health save changed sharing: %d", c)
 	}
+	// a pull request's speculative plan runs unreviewed code: no shared state, even when shared with all
+	store.DB.Exec(`UPDATE runs SET vcs_pull_request = 7 WHERE id::text = $1`, run.ID)
+	if c := state("GET", token); c != http.StatusForbidden {
+		t.Fatalf("pull request plan read shared state: %d", c)
+	}
 }
 
 // Locking, like HCP Terraform's: a lock (with its reason) keeps runs queued, except plans that are

@@ -61,7 +61,7 @@ func (s *Server) stateAuth(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "only this workspace's runs may change its state", http.StatusForbidden)
 			return
 		}
-		run, status, err := s.Store.WorkingRun(r.Context(), user)
+		run, status, pullRequest, err := s.Store.WorkingRun(r.Context(), user)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "no run is working on this workspace", http.StatusForbidden)
 			return
@@ -81,6 +81,11 @@ func (s *Server) stateAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		if user != id {
+			// unreviewed code: SetWorkspaceVCS keeps variable sets from these plans for the same reason
+			if pullRequest {
+				http.Error(w, "a pull request's speculative plan can't read other workspaces' state", http.StatusForbidden)
+				return
+			}
 			shared, err := s.Store.SharesState(r.Context(), id, user)
 			if err != nil {
 				s.internalError(w, "remote state sharing", err)

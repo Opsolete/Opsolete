@@ -28,11 +28,11 @@ type StateVersion struct {
 }
 
 // WorkingRun returns the id and status (planning or applying) of the run a runner is working on
-// in a workspace, or sql.ErrNoRows if none is.
-func (s *Store) WorkingRun(ctx context.Context, workspaceID string) (run, status string, err error) {
-	err = s.DB.QueryRowContext(ctx, `SELECT id, status FROM runs
-		WHERE workspace_id = ops_uuid($1) AND `+working+` AND lease_id IS NOT NULL`, workspaceID).Scan(&run, &status)
-	return run, status, err
+// in a workspace, and whether it's a pull request's speculative plan; sql.ErrNoRows if none is.
+func (s *Store) WorkingRun(ctx context.Context, workspaceID string) (run, status string, pullRequest bool, err error) {
+	err = s.DB.QueryRowContext(ctx, `SELECT id, status, vcs_pull_request IS NOT NULL FROM runs
+		WHERE workspace_id = ops_uuid($1) AND `+working+` AND lease_id IS NOT NULL`, workspaceID).Scan(&run, &status, &pullRequest)
+	return run, status, pullRequest, err
 }
 
 // StateVersions lists a workspace's state versions, newest first.

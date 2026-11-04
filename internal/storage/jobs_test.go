@@ -97,7 +97,7 @@ func TestRunLifecycle(t *testing.T) {
 		t.Fatalf("claims: %+v", won)
 	}
 	plan := won[0]
-	if working, _, err := s.WorkingRun(ctx, w.ID); err != nil || working != run.ID {
+	if working, _, _, err := s.WorkingRun(ctx, w.ID); err != nil || working != run.ID {
 		t.Fatalf("the planning run must hold the workspace's state: %q %v", working, err)
 	}
 
