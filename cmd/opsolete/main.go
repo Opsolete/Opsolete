@@ -176,7 +176,7 @@ func serve(log *slog.Logger) error {
 		}
 	}
 
-	vcsOn := cfg.Registry
+	vcsOn := cfg.Registry || cfg.Deployments // modules for the registry, workspaces and the catalog for deployments
 	app := httpserver.New(store, tpls, reg, authn, state, httpserver.Features{
 		Deployments: cfg.Deployments, Registry: cfg.Registry, Editor: cfg.TemplateEditor, VCS: vcsOn}, log)
 	app.Organization = cfg.Organization
@@ -189,7 +189,9 @@ func serve(log *slog.Logger) error {
 		log.Info("re-sealed variables and VCS tokens", "count", n)
 	}
 	if vcsOn {
-		go vcs.Poll(ctx, store, app.SecretKey, 5*time.Minute, log)
+		if cfg.Registry {
+			go vcs.Poll(ctx, store, app.SecretKey, 5*time.Minute, log)
+		}
 		if cfg.Deployments {
 			go vcs.PollRuns(ctx, store, app.SecretKey, time.Minute, log)
 			// A catalog in Git (Settings → Templates) replaces TEMPLATES_DIR: its last loaded commit now, then the branch head.

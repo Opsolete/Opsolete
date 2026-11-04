@@ -56,7 +56,7 @@ type Features struct {
 	// Editor (TEMPLATE_EDITOR, for development): the template builder writes into TEMPLATES_DIR,
 	// and module uploads are on. A catalog in Git has its own editor mode, uploads their own setting.
 	Editor bool
-	VCS    bool // publish registry modules from GitHub / Azure DevOps (needs Registry and SECRET_KEY)
+	VCS    bool // GitHub / Azure DevOps connections: publish registry modules (with Registry), link workspaces and the template catalog (with Deployments)
 }
 
 func New(store *storage.Store, tpls *templates.Catalog, reg *registry.Registry, a *auth.Auth, state *blob.Bucket, f Features, log *slog.Logger) *Server {

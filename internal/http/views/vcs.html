@@ -2,7 +2,7 @@
 <div class="page-head">
   <div>
     <h1>VCS providers</h1>
-    <p class="muted">A connection is an access token for GitHub or Azure DevOps. Workspaces (as its workspace scope allows), <a href="/registry/publish?type=vcs">registry modules</a> and the template catalog use it. Use separate connections where they need different permissions, such as a write token for the template catalog.</p>
+    <p class="muted">A connection is an access token for GitHub or Azure DevOps. {{if (features).Deployments}}Workspaces (as its workspace scope allows){{if (features).Registry}}, <a href="/registry/publish?type=vcs">registry modules</a>{{end}} and the template catalog use it.{{else}}<a href="/registry/publish?type=vcs">Registry modules</a> use it.{{end}} Use separate connections where they need different permissions, such as a write token for the template catalog.</p>
   </div>
   <a class="btn" href="/vcs/new">Add a VCS provider</a>
 </div>
@@ -25,7 +25,7 @@
   <td class="nowrap">{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
   <td class="nowrap">
     <a class="btn secondary small" href="/vcs/{{.ID}}/settings">Settings</a>
-    <a class="btn secondary small" href="/registry/publish?connection={{.ID}}">Publish module</a>
+    {{if (features).Registry}}<a class="btn secondary small" href="/registry/publish?connection={{.ID}}">Publish module</a>{{end}}
     <form method="post" action="/vcs/{{.ID}}/delete" style="display:inline"
       onsubmit="return confirm('Delete this connection? Its workspaces are unlinked and its modules stop syncing; published versions stay.')">
       <button type="submit" class="danger small">Delete</button></form>

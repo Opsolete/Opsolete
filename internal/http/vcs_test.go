@@ -223,3 +223,12 @@ func TestVCSAdminOnly(t *testing.T) {
 		}
 	}
 }
+
+// Without the registry, VCS connections still serve workspaces and the catalog, but publish nothing.
+func TestVCSWithoutRegistry(t *testing.T) {
+	app := newApp(t, t.TempDir(), nil, devAuth(t, nil, "admin@example.com", true), Features{Deployments: true, VCS: true})
+	h := app.Handler()
+	if rec := post(h, "/registry/publish", url.Values{"connection": {"x"}}); rec.Code != http.StatusNotFound {
+		t.Errorf("publish without the registry: %d", rec.Code)
+	}
+}

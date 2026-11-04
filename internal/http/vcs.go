@@ -29,6 +29,9 @@ func (s *Server) vcsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /vcs/{id}/settings", s.admin(s.connectionSettings))
 	mux.HandleFunc("POST /vcs/{id}/settings", s.admin(s.saveConnectionSettings))
 	mux.HandleFunc("POST /vcs/{id}/token", s.admin(s.replaceToken))
+	if !s.Features.Registry {
+		return
+	}
 	mux.HandleFunc("POST /registry/publish", s.admin(s.publishModule))
 	mux.HandleFunc("POST /registry/{ns}/{name}/{system}/sync", s.admin(s.syncModule))
 	mux.HandleFunc("POST /registry/{ns}/{name}/{system}/unlink", s.admin(s.unlinkModule))
