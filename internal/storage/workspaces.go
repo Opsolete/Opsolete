@@ -707,7 +707,7 @@ func (s *Store) CurrentOutputs(ctx context.Context, workspaceID string) (outputs
 	var raw []byte
 	err = s.DB.QueryRowContext(ctx, `SELECT
 		(SELECT outputs FROM state_versions WHERE workspace_id = ops_uuid($1) ORDER BY id DESC LIMIT 1),
-		COALESCE((SELECT action = 'destroy' FROM runs WHERE workspace_id = ops_uuid($1) AND status = $2
+		COALESCE((SELECT action = 'destroy' AND remove_template IS NULL AND target IS NULL FROM runs WHERE workspace_id = ops_uuid($1) AND status = $2
 			ORDER BY created_at DESC LIMIT 1), false)`, workspaceID, Applied).Scan(&raw, &destroyed)
 	if err != nil || raw == nil {
 		return nil, destroyed, err
