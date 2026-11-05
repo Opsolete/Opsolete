@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.5.0](https://github.com/Opsolete/Opsolete/compare/v0.4.0...v0.5.0) (2026-11-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* **templates:** show_if may only refer to an earlier select input; conditions on bool inputs and on individual select options are removed.
+
+### Features
+
+* **audit:** one-line summaries with full detail on click, redact secret-named fields ([004bb34](https://github.com/Opsolete/Opsolete/commit/004bb34b88fb7b9d2aed23474addbf60f58c5a77))
+* **builder:** pick the key field in one "Workspace name from" dropdown ([8544753](https://github.com/Opsolete/Opsolete/commit/854475341472517f3eac943387a3c0995fadda47))
+* **templates:** edit dropdown options as value / shown-as rows in the builder ([cae526f](https://github.com/Opsolete/Opsolete/commit/cae526f4a7837a0a72ce626997c31c0a17326756))
+* **templates:** edit show-when conditions in a reworked template builder ([1edaf84](https://github.com/Opsolete/Opsolete/commit/1edaf840b7cff6748ded2f24f6311c91b4470ec3))
+* **templates:** key input names a template added to a workspace ([00c8a8e](https://github.com/Opsolete/Opsolete/commit/00c8a8ea4a18732b664ecf9ad631101ff8e0d18c))
+* **workspaces:** Deploy… page to add templates from the catalog ([0909977](https://github.com/Opsolete/Opsolete/commit/090997796a2c2fa97efe9560c29b2a60bbc89004))
+* **workspaces:** force delete a workspace whose state still lists resources ([8cbd288](https://github.com/Opsolete/Opsolete/commit/8cbd288e95835e95c406555b75bb2192123879ad))
+* **workspaces:** show per template whether it has resources in state ([04a2601](https://github.com/Opsolete/Opsolete/commit/04a2601c94506c30d0054525ba85245884d08fc5))
+
+
+### Bug Fixes
+
+* **audit:** record the escaped path so odd paths are still audited, show the peer address next to X-Forwarded-For ([76c81fd](https://github.com/Opsolete/Opsolete/commit/76c81fda7ca5502f74483575580a2e077eeaba27))
+* **auth:** take the admin role from ADMIN_EMAILS on every request, not from the session or the database ([748a620](https://github.com/Opsolete/Opsolete/commit/748a6200afe762d64c98ecf4f7b0bc5404db566f))
+* **cloud:** JSON:API error objects for older go-tfe, refuse state uploads to remote workspaces, cap decoded state size ([b789d7c](https://github.com/Opsolete/Opsolete/commit/b789d7c5a8aa2bf20791654e96b2c8484c0a7da3))
+* **flake:** update vendorHash ([9aa0dc6](https://github.com/Opsolete/Opsolete/commit/9aa0dc6aa5f3d0ee92bc29862f4de429da50c803))
+* **nix:** give a stopping runner's job 5 minutes past its timeout to save state ([3e4030d](https://github.com/Opsolete/Opsolete/commit/3e4030dbee0864f7c9d8b334d3130da6fdc0ad87))
+* **nix:** the runner reads its secrets as root and drops to its user, so job code can't read the runner token ([6d37990](https://github.com/Opsolete/Opsolete/commit/6d379905a88ad5869a4742b06fd88a17344b7b63))
+* **nix:** write file state store temp files next to the target ([4a903dd](https://github.com/Opsolete/Opsolete/commit/4a903ddeac2692f2a17c9c77c69ce82c7c1e2478))
+* **registry:** match this registry's module sources case-insensitively, drop an unreachable extract check ([5a28275](https://github.com/Opsolete/Opsolete/commit/5a28275634f233fe92811d5db0b92e6f1075794f))
+* **runner:** keep the state token off the command line and saved plan, redact messages before truncating ([d4429a2](https://github.com/Opsolete/Opsolete/commit/d4429a2974d65f2a31502dc200fae586f0a8c2f8))
+* **server:** wait for in-flight requests before closing the store on shutdown ([fe66467](https://github.com/Opsolete/Opsolete/commit/fe66467b1da126be1dd3970b65c034de2e75f7a3))
+* **state:** pull request plans can't read other workspaces' shared state ([7b00908](https://github.com/Opsolete/Opsolete/commit/7b00908c3d5bed2ca1238ecac49feee24bcf7992))
+* **storage:** concurrent first logins, empty lock holder after a lost lock race, read a created workspace by id ([6a01b7f](https://github.com/Opsolete/Opsolete/commit/6a01b7fbf205e8c249993e566199ce1fe766e7cd))
+* **templates:** say how to fix a refused VCS token when saving or deleting a template ([01e7114](https://github.com/Opsolete/Opsolete/commit/01e7114eb148c16e260eba5317f77b9d0cf60858))
+* **vcs:** enable VCS connections with deployments too, publish modules only with the registry ([9b07b63](https://github.com/Opsolete/Opsolete/commit/9b07b63f833421afce974178f70073c3b69e4e96))
+* **vcs:** rank a prerelease tag below its release, don't load a stale catalog snapshot first ([924fc21](https://github.com/Opsolete/Opsolete/commit/924fc2141ea3d4bc718bb4922e3be062ea1a8746))
+* **workspaces:** delete unindexed workspaces from the UI, validate settings before saving, keep VCS scope on create, finish cleanups after disconnects ([fa96863](https://github.com/Opsolete/Opsolete/commit/fa9686385e06fa596ad1cca3664b13eb610235be))
+* **workspaces:** name an added template from its key plus a random hex suffix, drop the name field ([09ab4f8](https://github.com/Opsolete/Opsolete/commit/09ab4f8f7097ceaa2e23fb552127b3737b2598e9))
+
+
+### Performance Improvements
+
+* **storage:** index status history, rollback links and workspace cascades, drop an unused index ([35c6f35](https://github.com/Opsolete/Opsolete/commit/35c6f352c6c23bd9d002cf5f5919e8ae5b6cd12b))
+
 ## [0.4.0](https://github.com/Opsolete/Opsolete/compare/v0.3.0...v0.4.0) (2026-11-03)
 
 
