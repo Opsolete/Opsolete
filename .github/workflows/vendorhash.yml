@@ -9,13 +9,19 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: vendorhash-${{ github.head_ref }}
+  cancel-in-progress: true
+
 jobs:
   update:
-    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    # Branch, not PR author: also runs after "Update branch"/rebase by a human, when go.sum changes again.
+    if: startsWith(github.head_ref, 'dependabot/') && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       # A PAT, not GITHUB_TOKEN: pushes made with GITHUB_TOKEN don't trigger ci.yml on the new commit.
-      # DEPENDABOT_PUSH_TOKEN must be a *Dependabot* secret (fine-grained PAT, contents: write, this repo).
+      # DEPENDABOT_PUSH_TOKEN (fine-grained PAT, contents: write, this repo) must exist as BOTH a Dependabot
+      # secret (runs triggered by Dependabot) and an Actions secret (runs triggered by a human updating the branch).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.head_ref }}

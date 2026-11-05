@@ -6,6 +6,11 @@ updates:
     directory: /
     schedule: { interval: weekly }
     commit-message: { prefix: "fix(deps)" }
+    # One PR for all Go modules: separate PRs each carry a vendorHash for their own go.sum, and merging
+    # several of them leaves master with a combined go.sum that matches none of those hashes.
+    groups:
+      go:
+        patterns: ["*"]
     ignore:
       # test only, pinned on purpose: the oldest go-tfe a supported Terraform ships (see cloud_gotfe_test.go)
       - dependency-name: github.com/hashicorp/go-tfe
