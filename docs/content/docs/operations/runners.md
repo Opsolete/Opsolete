@@ -24,6 +24,7 @@ weight: 3
 | `OPS_SERVER_URL` | required | How the runner reaches Opsolete (in k8s: the Service URL). Registry modules are fetched from here too |
 | `OPS_RUNNER_TOKEN` | required | The server's `RUNNER_TOKEN` |
 | `OPS_JOB_TIMEOUT` | `1h` | Hard limit per run phase |
+| `OPS_TERRAFORM` | `terraform` on `PATH` | Terraform binary |
 | `OPS_RUNNER_NAME` | hostname | Shown on runs; the pod name in k8s |
 | `OPS_INFRACOST_API_KEY` | off | Turns on cost estimation (get a key with `infracost auth login`) |
 | `OPS_INFRACOST` | `infracost` on `PATH` | Infracost binary (the runner image ships 0.10.47) |
