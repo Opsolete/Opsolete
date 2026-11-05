@@ -65,15 +65,22 @@ func (s *Server) audit(next http.Handler) http.Handler {
 			return
 		}
 		mutating := r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions
+		h := next
 		if mutating {
-			r.ParseForm() // urlencoded bodies only (same 10 MB cap as the handlers' own ParseForm); a bad body is the handler's to reject
+			// urlencoded bodies only (10 MB cap). Rejected here: the handlers' own ParseForm then returns
+			// nil and they'd act on an empty form.
+			if err := r.ParseForm(); err != nil {
+				h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					http.Error(w, "invalid form: "+err.Error(), http.StatusBadRequest)
+				})
+			}
 		}
 		p := &auth.Principal{Type: "anonymous"}
 		if u, ok := s.Auth.User(r); ok {
 			*p = auth.Principal{User: u, Type: "user"}
 		}
 		sw := &statusWriter{ResponseWriter: w}
-		next.ServeHTTP(sw, r.WithContext(auth.WithPrincipal(r.Context(), p)))
+		h.ServeHTTP(sw, r.WithContext(auth.WithPrincipal(r.Context(), p)))
 		if sw.status == 0 {
 			sw.status = http.StatusOK
 		}
