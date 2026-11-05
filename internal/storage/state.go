@@ -234,7 +234,8 @@ const CloudLockPrefix = "cloud-"
 // is "" (force unlock). Locks of runs and rollbacks are never released here.
 func (s *Store) UnlockCloudState(ctx context.Context, id, userID string) error {
 	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET state_lock = NULL WHERE id = ops_uuid($1)
-		AND starts_with(state_lock->>'ID', $3) AND ($2 = '' OR state_lock->>'UserID' = $2)`, id, userID, CloudLockPrefix)
+		AND starts_with(state_lock->>'ID', $3) AND ($2 = '' OR state_lock->>'UserID' = $2)
+		AND state_lock->>'OpsoleteRun' IS NULL`, id, userID, CloudLockPrefix) // a run's Terraform picks its own lock ID: it can't make it a cloud one
 	return err
 }
 
