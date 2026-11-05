@@ -15,7 +15,7 @@ weight: 3
 - **Plans between phases.** The plan phase uploads the plan file and `.terraform.lock.hcl` to the server, which keeps them in `STATE_STORE` (a plan holds variable values, so it's as sensitive as state). The apply phase downloads both and restores the lock file before `init`, so it uses exactly the providers the plan used. Both files are deleted when the run ends.
 - **Logs.** Output is shipped about once a second, cut at line ends, and capped at 10 MB per run. The run page follows it live via Server-Sent Events, resuming with `Last-Event-ID` after reconnects. `…/runs/<id>/logs` serves the raw log.
 - **Secrets.** Sensitive outputs are shown as `(sensitive)` and never leave the runner. The `output -json` call isn't streamed, and signed module URLs are redacted from logs. The runner reads its `OPS_*` settings and then removes them from its environment, so Terraform, providers and module code never see the runner token.
-- **Shutdown.** The first SIGTERM stops claiming and lets the current job finish. A second one interrupts Terraform with SIGINT, so it releases its state lock, and the job ends as `canceled`. Set the pod's `terminationGracePeriodSeconds` to cover a job.
+- **Shutdown.** The first SIGTERM stops claiming and lets the current job finish. A second one interrupts Terraform with SIGINT, so it releases its state lock, and the job ends as `canceled`. Set the pod's `terminationGracePeriodSeconds` to cover a job: a phase that hits `OPS_JOB_TIMEOUT` gets up to as long again to save its state.
 
 ## Settings
 

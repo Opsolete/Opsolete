@@ -397,9 +397,10 @@ in {
             # for the launcher only (read secret files of any owner, drop to the user); gone after setpriv
             CapabilityBoundingSet = "CAP_SETUID CAP_SETGID CAP_DAC_READ_SEARCH";
             # Stop = SIGTERM to the runner only: it stops claiming and finishes the current job. A job that
-            # hits its own timeout is interrupted then, and gets the 5 minutes to save its state and report.
+            # hits its own timeout is interrupted then, and Terraform gets up to another jobTimeout (the
+            # runner's wait delay) to save its state, plus 5 minutes to report.
             KillMode = "mixed";
-            TimeoutStopSec = "${rcfg.jobTimeout} 5min";
+            TimeoutStopSec = "${rcfg.jobTimeout} ${rcfg.jobTimeout} 5min";
           };
       };
     })
