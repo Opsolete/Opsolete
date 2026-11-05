@@ -20,7 +20,7 @@ just docs          # preview this documentation on http://localhost:1313/Opsolet
 just psql | db-reset | down
 ```
 
-`nix build` only sees files tracked by git, so `git add` new files first. After changing dependencies in `go.mod`, update `vendorHash` in `flake.nix` (set it to `nixpkgs.lib.fakeHash`, run `nix build`, and copy the hash it prints).
+`nix build` only sees files tracked by git, so `git add` new files first. After changing dependencies in `go.mod`, `just build` (also run by `just smoke` and `just check`) updates `vendorHash` in `flake.nix`; commit that change along with `go.mod`.
 
 ## Run locally without Nix
 

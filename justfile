@@ -117,8 +117,18 @@ test: db-start
     go vet ./...
     go test -count=1 -p 1 ./...  # -p 1: DB tests share one database and its job queue
 
+# fix flake.nix's vendorHash after go.mod/go.sum changes (no-op when it is current)
+vendorhash:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Builds only the go-modules derivation; on a stale hash nix prints "got: sha256-...". Other errors surface in the next build.
+    got=$(nix build .#default.goModules --no-link 2>&1 | awk '/got:/ {print $2}') || true
+    [ -n "$got" ] || exit 0
+    sed -i.bak "s|vendorHash = \"[^\"]*\"|vendorHash = \"$got\"|" flake.nix && rm flake.nix.bak # .bak: BSD and GNU sed both accept it
+    echo "vendorHash updated to $got: commit flake.nix"
+
 # build the nix package into ./result
-build:
+build: vendorhash
     nix build
 
 # build the package, boot it against postgres and submit a deployment end-to-end

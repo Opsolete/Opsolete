@@ -22,7 +22,7 @@ This site lives in `docs/` (Hugo with the [Hextra](https://imfing.github.io/hext
 `.github/workflows/ci.yml` runs on every PR and every push to `master`:
 
 - **`test`:** gofmt, vet, and all tests against a Postgres service, with Terraform 1.17.0 for the runner tests.
-- **`nix`:** `nix build`, which also catches a stale `vendorHash`.
+- **`nix`:** `nix build`, which also catches a stale `vendorHash`. On Dependabot PRs, `vendorhash.yml` fixes it and pushes to the PR branch.
 - **`images`:** builds the `app` and `runner` images. They're pushed **only when a release is created**.
 
 `.github/workflows/docs.yml` builds this site on PRs that touch `docs/` and publishes it to GitHub Pages (https://opsolete.github.io/Opsolete/) on every push to `master` that touches `docs/`.
@@ -60,3 +60,4 @@ Repo settings, one-time:
    ```sh
    gh api -X POST repos/Opsolete/Opsolete/pages -f build_type=workflow
    ```
+6. **Dependabot vendorHash fix:** a fine-grained PAT with *contents* write access on this repo, saved as `DEPENDABOT_PUSH_TOKEN` under **both** *Secrets → Dependabot* and *Secrets → Actions*. Pushes made with `GITHUB_TOKEN` wouldn't trigger CI on the fixed commit.
