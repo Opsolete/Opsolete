@@ -66,6 +66,9 @@ func Load() (Config, error) {
 		RunnerToken:      os.Getenv("RUNNER_TOKEN"),
 		Organization:     getenv("ORGANIZATION", "opsolete"),
 	}
+	for i, g := range c.AuthDevGroups { // "a, b": group names must match the IdP's exactly
+		c.AuthDevGroups[i] = strings.TrimSpace(g)
+	}
 	if c.DatabaseURL == "" {
 		return c, errors.New("DATABASE_URL is required")
 	}
