@@ -1065,7 +1065,7 @@ func (s *Server) logStream(w http.ResponseWriter, r *http.Request) {
 
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
-	idle := 0
+	idle, ended := 0, false
 	for {
 		chunks, err := s.Store.Logs(ctx, run.ID, cursor, 200)
 		if err != nil {
@@ -1086,6 +1086,10 @@ func (s *Server) logStream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if !cur.Working() {
+				if !ended { // its last lines may have landed after the Logs query: read once more
+					ended = true
+					continue
+				}
 				fmt.Fprintf(w, "event: done\ndata: %s\n\n", cur.Status)
 				rc.Flush()
 				return
