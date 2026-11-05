@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -349,5 +350,107 @@ func TestSensitiveInputs(t *testing.T) {
 	}
 	if w, _ := store.GetWorkspace(ctx, root); !isSealed(w.Inputs["name"]) {
 		t.Fatalf("root inputs: %+v", w.Inputs)
+	}
+}
+
+// TestRemoveRootTemplate: the template a workspace was created from can be removed too. Next to
+// added templates, the destroy targets only the root's resources; alone, it destroys everything.
+func TestRemoveRootTemplate(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	claimWait = 100 * time.Millisecond
+	store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
+	id := strings.ToLower(newID()[:8])
+	ws, solo, empty := "root-"+id, "rootsolo-"+id, "rootnone-"+id
+	t.Cleanup(func() { store.DB.Exec(`DELETE FROM workspaces WHERE name IN ($1, $2, $3)`, ws, solo, empty) })
+	h := newServer(t, "../../catalog", false, store)
+	free := func() {
+		store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE status IN ('plan_queued', 'needs_confirmation')`)
+	}
+	create := func(name string) storage.Workspace {
+		t.Helper()
+		if rec := post(h, "/templates/greeting", url.Values{"ops-workspace": {name}, "greeting": {"hi"}, "name": {"root"}}); rec.Code != http.StatusSeeOther {
+			t.Fatalf("create %s: %d %s", name, rec.Code, rec.Body.String())
+		}
+		free()
+		w, err := store.GetWorkspace(ctx, name)
+		if err != nil || w.TemplateID != "greeting" {
+			t.Fatalf("created %s: %+v %v", name, w, err)
+		}
+		return w
+	}
+	state := func(w storage.Workspace, indexed bool, addrs ...string) {
+		t.Helper()
+		var vid int64
+		if err := store.DB.QueryRow(`INSERT INTO state_versions (workspace_id, serial, lineage, blob_key, md5, size, indexed)
+			VALUES ($1, 1, 'l', $3, 'm', 2, $2) RETURNING id`, w.ID, indexed, "rt/"+w.ID+newID()[:4]+".tfstate").Scan(&vid); err != nil {
+			t.Fatal(err)
+		}
+		for _, a := range addrs {
+			mod := ""
+			if strings.HasPrefix(a, "module.") {
+				mod = strings.Join(strings.SplitN(a, ".", 3)[:2], ".")
+			}
+			store.DB.Exec(`INSERT INTO state_version_resources (state_version_id, address, type, name, provider, module) VALUES ($1, $2, 'a', 'b', 'p', $3)`, vid, a, mod)
+		}
+	}
+	remove := func(name string) *httptest.ResponseRecorder { return post(h, "/workspaces/"+name+"/root/remove", nil) }
+	finish := func(want []string) storage.Job {
+		t.Helper()
+		j, ok, err := store.ClaimJob(ctx, "r1", time.Minute)
+		if err != nil || !ok || j.Action != "destroy" || !slices.Equal(j.Target, want) || j.ModuleSource == "" { // the root stays until it's destroyed
+			t.Fatalf("destroy job: %+v %v %v, want target %q", j, ok, err, want)
+		}
+		if _, err := store.FinishJob(ctx, j.RunID, j.LeaseID, "succeeded", "", nil, nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		return j
+	}
+
+	// Next to an added template: the destroy targets the root's resources only, and the added one stays.
+	w := create(ws)
+	if rec := post(h, "/workspaces/"+ws+"/templates/new?template=greeting", url.Values{"greeting": {"hi"}, "name": {"one"}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("add: %d %s", rec.Code, rec.Body.String())
+	}
+	free()
+	added, _ := store.WorkspaceTemplates(ctx, w.ID)
+	if page := get(h, "/workspaces/"+ws+"?show=templates").Body.String(); !strings.Contains(page, `action="/workspaces/`+ws+`/root/remove"`) {
+		t.Fatalf("no Remove on the root row: %s", page)
+	}
+	state(w, false, "terraform_data.greeting", "module."+added[0].Name+".terraform_data.greeting")
+	if rec := remove(ws); rec.Code != http.StatusConflict { // unindexed: the root's resources aren't known
+		t.Fatalf("remove with an unindexed state: %d", rec.Code)
+	}
+	state(w, true, "terraform_data.greeting", "module."+added[0].Name+".terraform_data.greeting")
+	if rec := remove(ws); rec.Code != http.StatusSeeOther || !strings.Contains(rec.Header().Get("Location"), "/runs/") {
+		t.Fatalf("remove: %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	if j := finish([]string{"terraform_data.greeting"}); len(j.Modules) != 1 {
+		t.Fatalf("the added template is missing from the destroy: %+v", j.Modules)
+	}
+	if w, _ := store.GetWorkspace(ctx, ws); w.TemplateID != "" || w.ModuleSource != "" || len(w.Inputs) != 0 || w.Templates != 1 {
+		t.Fatalf("after removing the root: %+v", w)
+	}
+	if rec := remove(ws); rec.Code != http.StatusNotFound {
+		t.Fatalf("removing twice: %d", rec.Code)
+	}
+
+	// Alone: a destroy of everything.
+	state(create(solo), true, "terraform_data.greeting")
+	if rec := remove(solo); rec.Code != http.StatusSeeOther {
+		t.Fatalf("remove solo: %d", rec.Code)
+	}
+	finish(nil)
+	if w, _ := store.GetWorkspace(ctx, solo); w.TemplateID != "" {
+		t.Fatalf("solo after the destroy: %+v", w)
+	}
+
+	// Nothing deployed: removed right away, without a run.
+	create(empty)
+	if rec := remove(empty); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/workspaces/"+empty {
+		t.Fatalf("remove undeployed: %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	if w, _ := store.GetWorkspace(ctx, empty); w.TemplateID != "" {
+		t.Fatalf("undeployed after removing: %+v", w)
 	}
 }

@@ -136,7 +136,10 @@
 {{with $w.TemplateID}}<tr><td class="muted">root{{if $indexed}}{{template "deployed" index $.TemplateResources ""}}{{end}}</td><td><a href="/templates/{{.}}">{{or (index $.TemplateNames .) .}}</a></td>
   <td><code>{{$w.ModuleSource}}</code> <span class="tag">{{$w.ModuleRef}}</span>{{with $.Update}} <span class="tag">update: {{.Ref}}</span>{{end}}</td>
   <td>{{template "inputs" $w.Inputs}}</td>
-  {{if $.CanOperate}}<td class="nowrap">{{if and $.HasTemplate (not $.Active)}}<a class="btn secondary small" href="/workspaces/{{$w.Name}}/configure">Configure…</a>{{end}}</td>{{end}}</tr>{{end}}
+  {{if $.CanOperate}}<td class="nowrap">{{if not $.Active}}<div class="inline">{{if $.HasTemplate}}<a class="btn secondary small" href="/workspaces/{{$w.Name}}/configure">Configure…</a>{{end}}
+    <form method="post" action="/workspaces/{{$w.Name}}/root/remove" class="inline"
+      onsubmit="return confirm('Remove the root template? This starts a plan that destroys its resources{{if $.Added}}; the added templates stay{{end}}.')">
+      <button type="submit" class="danger small">Remove…</button></form></div>{{end}}</td>{{end}}</tr>{{end}}
 {{range .Added}}<tr><td><code>{{.Name}}</code>{{if $indexed}}{{template "deployed" index $.TemplateResources .Name}}{{end}}</td><td><a href="/templates/{{.TemplateID}}">{{or (index $.TemplateNames .TemplateID) .TemplateID}}</a></td>
   <td><code>{{.ModuleSource}}</code> <span class="tag">{{.ModuleRef}}</span>{{with index $.Updates .Name}} <span class="tag">update: {{.}}</span>{{end}}</td>
   <td>{{template "inputs" .Inputs}}</td>

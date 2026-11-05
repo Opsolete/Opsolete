@@ -21,7 +21,7 @@ type Job struct {
 	Phase        string // plan | apply
 	Action       string // apply | destroy | refresh | assess | plan
 	Replace      []string
-	Target       []string // -target: module.<name> of a destroy run that removes that template
+	Target       []string // -target: module.<name> of a destroy run that removes that template, or the root template's resources
 	LeaseID      string
 	ModuleSource string
 	ModuleRef    string
@@ -46,14 +46,15 @@ func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration
 	var status string
 	var replace []byte
 	var removeTemplate string
+	var target []byte
 	err = tx.QueryRowContext(ctx, `
 		UPDATE runs SET status = CASE status WHEN 'plan_queued' THEN 'planning' ELSE 'applying' END,
 			runner = $1, lease_id = $2, lease_until = now() + make_interval(secs => $3), updated_at = now()
 		WHERE id = (SELECT id FROM runs r WHERE status IN ('plan_queued', 'apply_queued')
 			AND (r.action IN ('plan', 'assess') OR NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.id = r.workspace_id AND w.state_lock IS NOT NULL))
 			ORDER BY updated_at FOR UPDATE OF r SKIP LOCKED LIMIT 1)
-		RETURNING id, workspace_id, action, status, replace, COALESCE(vcs_commit, ''), COALESCE(remove_template, '')`,
-		runner, j.LeaseID, lease.Seconds()).Scan(&j.RunID, &j.WorkspaceID, &j.Action, &status, &replace, &j.VCSCommit, &removeTemplate)
+		RETURNING id, workspace_id, action, status, replace, COALESCE(vcs_commit, ''), COALESCE(remove_template, ''), target`,
+		runner, j.LeaseID, lease.Seconds()).Scan(&j.RunID, &j.WorkspaceID, &j.Action, &status, &replace, &j.VCSCommit, &removeTemplate, &target)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, false, nil
 	}
@@ -67,6 +68,11 @@ func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration
 	}
 	if removeTemplate != "" {
 		j.Target = []string{"module." + removeTemplate}
+	}
+	if target != nil { // a destroy run that removes the root template next to added ones
+		if err := json.Unmarshal(target, &j.Target); err != nil {
+			return Job{}, false, err
+		}
 	}
 	j.Phase = "plan"
 	if status == Applying {
@@ -263,6 +269,10 @@ func (s *Store) FinishJob(ctx context.Context, runID, lease, result, message str
 		// A destroy run that removes the workspace's last template: its resources are gone now.
 		if _, err := tx.ExecContext(ctx, `DELETE FROM workspace_templates t USING runs r
 			WHERE r.id = ops_uuid($1) AND t.workspace_id = r.workspace_id AND t.name = r.remove_template`, runID); err != nil {
+			return "", err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE workspaces w SET `+clearRoot+` FROM runs r
+			WHERE r.id = ops_uuid($1) AND r.remove_root AND w.id = r.workspace_id`, runID); err != nil {
 			return "", err
 		}
 	}

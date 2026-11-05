@@ -70,6 +70,7 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /workspaces/{name}/templates/{module}", s.workspaceTemplateForm)
 	mux.HandleFunc("POST /workspaces/{name}/templates/{module}", s.saveWorkspaceTemplate)
 	mux.HandleFunc("POST /workspaces/{name}/templates/{module}/remove", s.removeWorkspaceTemplate)
+	mux.HandleFunc("POST /workspaces/{name}/root/remove", s.removeWorkspaceTemplate) // the root template
 	mux.HandleFunc("POST /workspaces/{name}/access", s.admin(s.workspaceAccess))
 	mux.HandleFunc("GET /workspaces/{name}/runs/{run}", s.run)
 	mux.HandleFunc("POST /workspaces/{name}/runs/{run}/confirm", s.confirmRun)
