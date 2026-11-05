@@ -9,7 +9,7 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.7
 	github.com/hashicorp/go-tfe v1.94.0 // test only, pinned: Terraform 1.14's, the strictest error decoder (cloud_gotfe_test.go)
 	github.com/hashicorp/go-version v1.9.0
-	github.com/hashicorp/hcl/v2 v2.20.1
+	github.com/hashicorp/hcl/v2 v2.25.0
 	github.com/hashicorp/terraform-config-inspect v0.0.0-20260904064934-75d64de68c31
 	github.com/hashicorp/terraform-exec v0.26.0
 	github.com/hashicorp/terraform-json v0.29.0
@@ -86,7 +86,7 @@ require (
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.3 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
-	github.com/mitchellh/go-wordwrap v1.0.0 // indirect
+	github.com/mitchellh/go-wordwrap v1.0.1 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
