@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/Opsolete/Opsolete/compare/v0.5.0...v0.5.1) (2026-11-05)
+
+
+### Bug Fixes
+
+* **flake:** update vendorHash and group Dependabot Go updates ([543e396](https://github.com/Opsolete/Opsolete/commit/543e3964fa5b9cdb7c8a382adf7694cc22182bae))
+
 ## [0.5.0](https://github.com/Opsolete/Opsolete/compare/v0.4.0...v0.5.0) (2026-11-04)
 
 
