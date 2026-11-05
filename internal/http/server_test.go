@@ -261,7 +261,7 @@ func TestTemplateBuilder(t *testing.T) {
 		t.Fatalf("create: %d %q %s", rec.Code, loc, rec.Body.String())
 	}
 	if rec := get(h, loc); !strings.Contains(rec.Body.String(), `<option value="westeurope" selected>westeurope</option>`) ||
-		!strings.Contains(rec.Body.String(), `value="10.0.0.0/16"`) || !strings.Contains(rec.Body.String(), `class="show-if"`) {
+		!strings.Contains(rec.Body.String(), `value="10.0.0.0/16"`) || !strings.Contains(rec.Body.String(), `data-show-if=`) {
 		t.Fatalf("generated form wrong: %s", rec.Body.String())
 	}
 	saved, _ := os.ReadFile(filepath.Join(dir, id+".json"))

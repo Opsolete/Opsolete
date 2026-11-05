@@ -97,12 +97,36 @@
   /* forms */
   label { display: block; margin: 1.1rem 0 .3rem; font-weight: 600; font-size: .875rem; }
   label:first-child { margin-top: 0; }
-  /* a field shown by an answer above: indented under a bar, faded in when it appears */
-  fieldset.show-if { border: 0; border-left: 3px solid color-mix(in srgb, var(--brand) 35%, transparent); padding: 0 0 0 .9rem; margin: .4rem 0 0; min-width: 0; }
-  fieldset.show-if:not([hidden]) { animation: reveal .18s ease-out; }
-  fieldset.show-if > label:first-child { margin-top: .7rem; }
+  /* deploy form: one row per field, label left and control right, striped; stacks on narrow screens */
+  .form-rows { padding: 0; }
+  .rows-head { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; padding: 1.1rem 1.25rem .6rem; }
+  .rows-head h2 { margin: 0; font-size: 1rem; }
+  .rows-head .hint { margin: 0; }
+  .rows { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  .row { display: grid; grid-template-columns: minmax(10rem, 16rem) minmax(0, 1fr); column-gap: 1.5rem; align-items: start;
+    margin: 0; padding: .8rem 1.25rem; border: 0; border-left: 3px solid transparent; min-width: 0; transition: background-color .12s; }
+  /* "of :not([hidden])": a hidden show_if row doesn't break the stripes */
+  .row:nth-child(even of :not([hidden])) { background: color-mix(in srgb, var(--code) 60%, var(--surface)); }
+  .row:hover, .row:focus-within { background: var(--brand-soft); }
+  .row:focus-within { border-left-color: var(--brand); }
+  .row.invalid { background: var(--danger-soft); border-left-color: var(--danger); }
+  .row > label { grid-column: 1; grid-row: 1 / span 3; margin: 0; padding-top: .5rem; }
+  .row > :not(label) { grid-column: 2; }
+  .row > input[type="checkbox"] { width: 1.15rem; height: 1.15rem; margin: .6rem 0 0; }
+  .row .hint, .row .err { margin-top: .35rem; }
+  [aria-invalid="true"] { border-color: var(--danger); }
+  .form-foot { padding: 1rem 1.25rem 1.25rem; }
+  .form-foot .actions { margin-top: .75rem; }
+  @media (max-width: 40rem) {
+    .row { grid-template-columns: minmax(0, 1fr); }
+    .row > label, .row > :not(label) { grid-column: 1; grid-row: auto; }
+    .row > label { padding-top: 0; margin-bottom: .3rem; }
+  }
+  /* a field shown by an answer above: marked with a bar, faded in when it appears */
+  .row.show-if { border-left-color: color-mix(in srgb, var(--brand) 35%, transparent); }
+  .row.show-if:not([hidden]) { animation: reveal .18s ease-out; }
   @keyframes reveal { from { opacity: 0; transform: translateY(-.25rem); } }
-  @media (prefers-reduced-motion: reduce) { fieldset.show-if { animation: none !important; } }
+  @media (prefers-reduced-motion: reduce) { .row { animation: none !important; transition: none; } }
   .req { color: var(--danger); }
   input, select, textarea { font: inherit; color: inherit; background: var(--surface); border: 1px solid #8c909c; border-radius: 5px;
     padding: .45rem .65rem; width: 100%; max-width: 34rem; }
@@ -144,6 +168,11 @@
     padding: .5rem .7rem; border-radius: 6px; background: var(--nav); color: #fff; font-size: .78rem; font-weight: 400; line-height: 1.4;
     box-shadow: 0 6px 18px rgb(12 12 14 / 30%); opacity: 0; pointer-events: none; transition: opacity .12s; }
   .f-head:hover .tip-text { opacity: 1; }
+  /* deploy form: also shown while the field has focus, so keyboard and touch users see it */
+  label:has(> .tip) { position: relative; }
+  label > .tip { margin-left: .35rem; vertical-align: .1em; }
+  label:is(:hover, :focus-within, :has(+ :focus)) > .tip { border-color: var(--brand); color: var(--brand); }
+  label:is(:hover, :focus-within, :has(+ :focus)) > .tip-text { opacity: 1; }
   #fields { counter-reset: field; display: grid; gap: .75rem; }
   .fcard { counter-increment: field; background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--border);
     border-radius: var(--radius); transition: box-shadow .15s; }
@@ -312,6 +341,7 @@
     padding: .45rem .9rem; border-radius: 5px; border: 1px solid var(--btn-hover); background: var(--btn); color: #fff; white-space: nowrap;
     box-shadow: 0 1px 1px rgb(12 12 14 / 5%); }
   button:hover, .btn:hover { background: var(--btn-hover); color: #fff; text-decoration: none; }
+  .form-rows button:disabled { opacity: .65; cursor: progress; } /* submitting */
   .secondary { background: var(--code); color: var(--text); border-color: #8c909c; }
   .secondary:hover { background: var(--border); color: var(--text); }
   /* HCP/Helios "critical" button: soft red until hovered */

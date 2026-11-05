@@ -5,7 +5,7 @@
   <div>
     {{if $.Adding}}
     <h1>Add {{$.T.Name}} to {{.Name}}</h1>
-    <p class="muted">The template becomes the module <code>module.&lt;name&gt;</code> in this workspace's configuration and state, named after {{with $.T.KeyInput}}<strong>{{or .Label .Name}}</strong>{{else}}the template's name{{end}} plus a random suffix like <code>_c8ad</code>, and fixed once added; adding it starts a plan.</p>
+    <p class="muted">The template becomes the module <code>module.&lt;name&gt;</code> in this workspace's configuration and state, named after {{with $.T.KeyInput}}<strong>{{.Title}}</strong>{{else}}the template's name{{end}} plus a random suffix like <code>_c8ad</code>, and fixed once added; adding it starts a plan.</p>
     {{else}}
     <h1>Configure {{with $.Module}}{{.}} in {{end}}{{.Name}}</h1>
     <p class="muted">Change the inputs{{if or (ne $.Cur.Ref $.T.Module.Ref) (ne $.Cur.Source $.T.Module.Source)}} and move to the template's module version{{end}}, then plan the change.</p>
@@ -26,52 +26,64 @@
   {{if .Editor}}<a class="btn secondary" href="/templates/{{.T.ID}}/edit">Edit template</a>{{end}}
 </div>
 {{end}}
-<form method="post" class="card" id="template-form">
+<form method="post" class="card form-rows" id="template-form">
 {{$v := .Values}}{{$e := .Errors}}
 {{if not .Configure}}
-  <label for="ops-workspace">Workspace name <span class="req" aria-hidden="true">*</span></label>
-  <input id="ops-workspace" name="ops-workspace" value="{{.Workspace}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}"
-    placeholder="{{.T.ID}}-prod" aria-describedby="ops-workspace-hint">
-  <p class="hint" id="ops-workspace-hint">Lowercase letters, digits and dashes. It holds this deployment's state and runs.</p>
-  {{with index $e "ops-workspace"}}<p class="err" role="alert">{{.}}</p>{{end}}
-  <label for="ops-auto-apply"><input type="checkbox" id="ops-auto-apply" name="ops-auto-apply"{{if .AutoApply}} checked{{end}}>
-    Auto-apply: apply plans without asking for confirmation</label>
-  <hr style="border:0;border-top:1px solid var(--border);margin:1.4rem 0 .4rem">
+  <div class="rows-head"><h2>Workspace</h2><p class="hint"><span class="req" aria-hidden="true">*</span> Required</p></div>
+  <div class="rows">
+    <div class="row{{if index $e "ops-workspace"}} invalid{{end}}">
+      <label for="ops-workspace">Workspace name <span class="req" aria-hidden="true">*</span></label>
+      <input id="ops-workspace" name="ops-workspace" value="{{.Workspace}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}"
+        placeholder="{{.T.ID}}-prod" autocomplete="off" spellcheck="false" aria-describedby="ops-workspace-hint"{{if index $e "ops-workspace"}} aria-invalid="true"{{end}}>
+      <p class="hint" id="ops-workspace-hint">Lowercase letters, digits and dashes. It holds this deployment's state and runs.</p>
+      {{with index $e "ops-workspace"}}<p class="err" role="alert">{{.}}</p>{{end}}
+    </div>
+    <div class="row">
+      <label for="ops-auto-apply">Auto-apply</label>
+      <input type="checkbox" id="ops-auto-apply" name="ops-auto-apply"{{if .AutoApply}} checked{{end}} aria-describedby="ops-auto-apply-hint">
+      <p class="hint" id="ops-auto-apply-hint">Apply plans without asking for confirmation.</p>
+    </div>
+  </div>
 {{end}}
-{{range .T.Inputs}}
-  {{with .ShowIf}}<fieldset class="show-if" data-show-if="{{json .}}"{{if not ($.T.Match . $v)}} hidden disabled{{end}}>{{end}}
+{{if .T.Inputs}}
+  <div class="rows-head"><h2>Settings</h2>{{if .Configure}}<p class="hint"><span class="req" aria-hidden="true">*</span> Required</p>{{end}}</div>
+  <div class="rows">
+{{range .T.Inputs}}{{$err := index $e .Name}}
+  <!-- a fieldset per row: disabling it keeps a hidden show_if field from being posted -->
+  <fieldset class="row{{if .ShowIf}} show-if{{end}}{{if $err}} invalid{{end}}"{{with .ShowIf}} data-show-if="{{json .}}"{{if not ($.T.Match . $v)}} hidden disabled{{end}}{{end}}>
+    <label for="{{.Name}}">{{.Title}}{{if .Required}} <span class="req" aria-hidden="true">*</span>{{end}}{{with .Help}}{{template "tip" .}}{{end}}</label>
   {{if eq .Type "bool"}}
-    <label for="{{.Name}}"><input type="checkbox" id="{{.Name}}" name="{{.Name}}"{{if eq (index $v .Name) "on" "true"}} checked{{end}}>
-      {{or .Label .Name}}</label>
-  {{else}}
-    <label for="{{.Name}}">{{or .Label .Name}}{{if .Required}} <span class="req" aria-hidden="true">*</span>{{end}}</label>
-    {{if eq .Type "select"}}
-    <select id="{{.Name}}" name="{{.Name}}">
+    <input type="checkbox" id="{{.Name}}" name="{{.Name}}"{{if eq (index $v .Name) "on" "true"}} checked{{end}}>
+  {{else if eq .Type "select"}}
+    <select id="{{.Name}}" name="{{.Name}}"{{if $err}} aria-invalid="true"{{end}}>
       {{$cur := index $v .Name}}
       {{range .Options}}<option value="{{.Value}}"{{if eq .Value $cur}} selected{{end}}>{{.Text}}</option>{{end}}
     </select>
-    {{else if .Sensitive}}{{$set := index $.Set .Name}}
+  {{else if .Sensitive}}{{$set := index $.Set .Name}}
     <!-- never filled in: the stored value is sealed; left empty, it's kept -->
     <input id="{{.Name}}" name="secret.{{.Name}}" type="password" autocomplete="new-password"
-      {{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if and .Required (not $set)}} required{{end}} aria-describedby="{{.Name}}-hint">
+      {{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if and .Required (not $set)}} required{{end}} aria-describedby="{{.Name}}-hint"{{if $err}} aria-invalid="true"{{end}}>
     <p class="hint" id="{{.Name}}-hint">Sensitive: stored encrypted and never shown.{{if $set}} A value is set; leave empty to keep it.{{end}}</p>
-    {{else}}
-    <input id="{{.Name}}" name="{{.Name}}" value="{{index $v .Name}}"
-      {{if eq .Type "number"}}type="number" step="any"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}>
-    {{end}}
+  {{else}}
+    <input id="{{.Name}}" name="{{.Name}}" value="{{index $v .Name}}" autocomplete="off" spellcheck="false"
+      {{if eq .Type "number"}}type="number" step="any" inputmode="decimal"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}{{if $err}} aria-invalid="true"{{end}}>
   {{end}}
-  {{with index $e .Name}}<p class="err" role="alert">{{.}}</p>{{end}}
-  {{if .ShowIf}}</fieldset>{{end}}
+    {{with $err}}<p class="err" role="alert">{{.}}</p>{{end}}
+  </fieldset>
 {{end}}
-  <p class="hint">Deploys <code>{{.T.Module.Source}}</code> at <code>{{.T.Module.Ref}}</code>.</p>
-  <div class="actions">
-    {{with .Configure}}
-    <button type="submit">{{if $.Adding}}Add template{{else}}Save configuration{{end}} &amp; start plan</button>
-    <a class="btn secondary" href="/workspaces/{{.Name}}">Cancel</a>
-    {{else}}
-    <button type="submit">Create workspace &amp; plan</button>
-    <a class="btn secondary" href="/">Cancel</a>
-    {{end}}
+  </div>
+{{end}}
+  <div class="form-foot">
+    <p class="hint">Deploys <code>{{.T.Module.Source}}</code> at <code>{{.T.Module.Ref}}</code>.</p>
+    <div class="actions">
+      {{with .Configure}}
+      <button type="submit">{{if $.Adding}}Add template{{else}}Save configuration{{end}} &amp; start plan</button>
+      <a class="btn secondary" href="/workspaces/{{.Name}}">Cancel</a>
+      {{else}}
+      <button type="submit">Create workspace &amp; plan</button>
+      <a class="btn secondary" href="/">Cancel</a>
+      {{end}}
+    </div>
   </div>
 </form>
 <script>
@@ -87,6 +99,10 @@
     };
     form.addEventListener("change", update);
     update(); // the browser may have restored other values
+    // one click, one plan: lock the button while the request runs; unlock when Back restores the page
+    const btn = form.querySelector("button[type=submit]"), text = btn.textContent;
+    form.addEventListener("submit", () => { btn.disabled = true; btn.textContent = "Starting plan…"; });
+    addEventListener("pageshow", () => { btn.disabled = false; btn.textContent = text; });
   })();
 </script>
 {{template "bottom"}}

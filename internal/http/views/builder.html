@@ -68,7 +68,7 @@
           <span class="fnum" aria-hidden="true"></span>
           <label class="f"><span class="f-head">Variable{{template "tip" "The Terraform variable this field sets: lowercase letters, digits and underscores. Clear it to remove the field."}}</span>
             <input name="in_name" value="{{.Name}}" class="mono" placeholder="admin_password" autocomplete="off" spellcheck="false"></label>
-          <label class="f grow"><span class="f-head">Label{{template "tip" "The question end users see. Leave empty to show the variable name."}}</span>
+          <label class="f grow"><span class="f-head">Label{{template "tip" "The question end users see. Leave empty to show the variable name. Text after the first ': ' goes behind a ? on the form, e.g. VM name: 1-64 letters or digits."}}</span>
             <input name="in_label" value="{{.Label}}" placeholder="Admin password"></label>
           <label class="f"><span class="f-head">Type{{template "tip" "Text, Number, a Yes / no checkbox, or a Dropdown of fixed options. Only dropdowns can show or hide other fields."}}</span>
             <select name="in_type" class="ftype">

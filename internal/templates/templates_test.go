@@ -157,3 +157,17 @@ func TestParseLimits(t *testing.T) {
 		}
 	}
 }
+
+func TestInputTitleHelp(t *testing.T) {
+	for _, c := range []struct{ label, title, help string }{
+		{"VM name: 1-64 letters, digits or -.", "VM name", "1-64 letters, digits or -."},
+		{"Region", "Region", ""},
+		{"", "vm_name", ""},
+		{"a: b: c", "a", "b: c"},
+	} {
+		in := Input{Name: "vm_name", Label: c.label}
+		if in.Title() != c.title || in.Help() != c.help {
+			t.Errorf("%q: got %q / %q, want %q / %q", c.label, in.Title(), in.Help(), c.title, c.help)
+		}
+	}
+}

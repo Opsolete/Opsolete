@@ -48,6 +48,11 @@ type Input struct {
 	Key bool `json:"key,omitempty"`
 }
 
+// Title and Help split the label at its first ": ", as module variable descriptions often read
+// ("VM name: 1-64 letters…"): the form shows Title and puts Help behind a ?.
+func (in Input) Title() string { t, _, _ := strings.Cut(in.Label, ": "); return cmp.Or(t, in.Name) }
+func (in Input) Help() string  { _, h, _ := strings.Cut(in.Label, ": "); return h }
+
 // KeyInput returns the template's key input, nil without one.
 func (t Template) KeyInput() *Input {
 	for i := range t.Inputs {
