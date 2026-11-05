@@ -156,6 +156,29 @@ func (s *Store) ModuleArchive(ctx context.Context, namespace, name, system, vers
 	return b, err
 }
 
+// DeleteModule removes every version of a module and its VCS link (else the next sync republishes
+// it). Returns sql.ErrNoRows if the module has no versions.
+func (s *Store) DeleteModule(ctx context.Context, namespace, name, system string) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `DELETE FROM modules WHERE namespace=$1 AND name=$2 AND system=$3`, namespace, name, system)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return sql.ErrNoRows
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM vcs_modules WHERE namespace=$1 AND name=$2 AND system=$3`, namespace, name, system); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // Token scopes: registry tokens are for Terraform clients, user tokens (terraform login) act as a
 // user and also work for the registry. Runners use RUNNER_TOKEN instead.
 const (

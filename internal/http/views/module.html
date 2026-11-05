@@ -12,6 +12,9 @@
       <button type="submit" class="danger">Unlink</button></form>{{end}}{{end}}
     {{if .Editor}}<a class="btn secondary" href="/templates/new?module={{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}">Create template</a>{{end}}
     {{range .Templates}}<a class="btn" href="/templates/{{.ID}}">Provision workspace{{if gt (len $.Templates) 1}}: {{.Name}}{{end}}</a>{{end}}
+    {{if .Admin}}<form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/delete"
+      onsubmit="return confirm('Delete {{.Namespace}}/{{.Name}}/{{.System}} and all its versions? Workspaces using it can no longer download it.')">
+      <button type="submit" class="danger">Delete module</button></form>{{end}}
   </div>
 </div>
 {{with .Templates}}<p class="muted">Provisioning uses the template's pinned version{{range .}} (<strong>{{.Name}}</strong>: <code>{{.Module.Ref}}</code>){{end}}. Workspaces on an older version get an update notice.</p>{{end}}

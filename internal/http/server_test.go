@@ -437,11 +437,32 @@ data "terraform_remote_state" "net" {
 		t.Fatalf("unknown registry version accepted: %d", rec.Code)
 	}
 	form.Set("module_ref", "1.2.0")
-	if rec := post(h, "/templates/new", form); rec.Code != http.StatusSeeOther {
+	rec = post(h, "/templates/new", form)
+	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("save registry template: %d %s", rec.Code, rec.Body.String())
 	}
-	if rec := get(h, "/registry"); !strings.Contains(rec.Body.String(), "ops.example.com/"+ns+"/storage/azurerm") {
+	tplURL := rec.Header().Get("Location")
+	if rec := get(h, "/registry"); !strings.Contains(rec.Body.String(), "ops.example.com/"+ns+"/storage/azurerm") ||
+		!strings.Contains(rec.Body.String(), `action="/registry/`+ns+`/storage/azurerm/delete"`) {
 		t.Fatalf("registry page: %s", rec.Body.String())
+	}
+
+	// Delete: refused while a template deploys the module, then removes every version.
+	del := "/registry/" + ns + "/storage/azurerm/delete"
+	if rec := post(h, del, nil); rec.Code != http.StatusConflict {
+		t.Fatalf("delete module used by a template: %d", rec.Code)
+	}
+	if rec := post(h, tplURL+"/delete", nil); rec.Code != http.StatusSeeOther {
+		t.Fatalf("delete template: %d", rec.Code)
+	}
+	if rec := post(h, del, nil); rec.Code != http.StatusSeeOther {
+		t.Fatalf("delete module: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := authed(base + "versions"); rec.Code != http.StatusNotFound {
+		t.Fatalf("deleted module still served: %d", rec.Code)
+	}
+	if rec := post(h, del, nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("delete twice: %d", rec.Code)
 	}
 }
 

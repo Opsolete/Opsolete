@@ -28,6 +28,32 @@ func (s *Server) registryRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /registry/{ns}/{name}/{system}/{version}/docs.md", s.moduleDocs)
 	mux.HandleFunc("GET /registry/publish", s.admin(s.publishPage))
 	mux.HandleFunc("POST /registry", s.admin(s.uploadModule))
+	mux.HandleFunc("POST /registry/{ns}/{name}/{system}/delete", s.admin(s.deleteModule))
+}
+
+// deleteModule removes all versions of a module, unless a template still deploys it.
+// Workspaces already using it keep their state but can't download it again.
+func (s *Server) deleteModule(w http.ResponseWriter, r *http.Request) {
+	ns, name, sys, _, err := s.Registry.Address(r.PathValue("ns"), r.PathValue("name"), r.PathValue("system"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	for _, t := range s.Templates.List() {
+		if tns, tname, tsys, ok := s.Registry.ParseSource(t.Module.Source); ok && tns == ns && tname == name && tsys == sys {
+			http.Error(w, fmt.Sprintf("template %q (%s) still uses this module; delete or repoint it first", t.Name, t.ID), http.StatusConflict)
+			return
+		}
+	}
+	if err := s.Store.DeleteModule(r.Context(), ns, name, sys); errors.Is(err, sql.ErrNoRows) {
+		http.NotFound(w, r)
+		return
+	} else if err != nil {
+		s.internalError(w, "delete module", err)
+		return
+	}
+	s.Log.Info("module deleted", "module", ns+"/"+name+"/"+sys, "user", auth.FromContext(r.Context()).Email)
+	http.Redirect(w, r, "/registry", http.StatusSeeOther)
 }
 
 // requireToken checks a bearer token of the given scope (Terraform sends TF_TOKEN_<host> as one).
@@ -113,6 +139,7 @@ type registryPage struct {
 	Templates bool // the template builder is on: offer "Create template"
 	Upload    bool
 	VCS       bool // VCS publishing is on and the user is an admin
+	Admin     bool // may delete modules
 	Linked    []storage.VCSModule
 	Host      string
 }
@@ -150,7 +177,7 @@ func (s *Server) registryPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := registryPage{Modules: latestVersions(mods), Templates: s.canEditTemplates(r), Upload: s.canUpload(r), Host: s.Registry.PublicURL.Host,
-		VCS: s.Features.VCS && auth.FromContext(r.Context()).Admin()}
+		VCS: s.Features.VCS && auth.FromContext(r.Context()).Admin(), Admin: auth.FromContext(r.Context()).Admin()}
 	if p.VCS {
 		if p.Linked, err = s.Store.VCSModules(r.Context()); err != nil {
 			s.internalError(w, "vcs modules", err)

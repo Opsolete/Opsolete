@@ -17,8 +17,8 @@
 
 <div class="card flush">
 <table>
-<tr><th>Module</th><th>Latest version</th><th>Variables</th><th>Uploaded</th>{{if .Templates}}<th></th>{{end}}</tr>
-{{$editor := .Templates}}{{$host := .Host}}
+<tr><th>Module</th><th>Latest version</th><th>Variables</th><th>Uploaded</th>{{if .Templates}}<th></th>{{end}}{{if .Admin}}<th></th>{{end}}</tr>
+{{$editor := .Templates}}{{$host := .Host}}{{$admin := .Admin}}
 {{range .Modules}}
 <tr>
   <td><a href="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}"><code>{{$host}}/{{.Namespace}}/{{.Name}}/{{.System}}</code></a></td>
@@ -26,6 +26,9 @@
   <td>{{len .Variables}}</td>
   <td class="nowrap">{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
   {{if $editor}}<td class="nowrap"><a href="/templates/new?module={{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}">Create template</a></td>{{end}}
+  {{if $admin}}<td class="nowrap"><form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/delete" style="display:inline"
+      onsubmit="return confirm('Delete {{.Namespace}}/{{.Name}}/{{.System}} and all its versions? Workspaces using it can no longer download it.')">
+      <button type="submit" class="danger small">Delete</button></form></td>{{end}}
 </tr>
 {{else}}
 <tr><td colspan="5" class="empty">No modules published yet.{{if or .VCS .Upload}} <a href="/registry/publish">Publish a module →</a>{{end}}</td></tr>
