@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"strings"
 
 	"github.com/opsolete/opsolete/internal/templates"
 	"github.com/opsolete/opsolete/internal/vcs"
@@ -47,6 +48,9 @@ func (s *Server) sealInputs(t templates.Template, raw map[string]string, vals, o
 		}
 		v, ok := vals[in.Name]
 		if !ok {
+			if strings.TrimSpace(raw[in.Name]) != "" {
+				continue // a new value Validate rejected: keep its error, not the stored value
+			}
 			if v, ok = old[in.Name]; !ok {
 				continue
 			}
