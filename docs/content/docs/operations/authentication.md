@@ -24,7 +24,7 @@ Teams are your IdP's groups. At every login Opsolete records the ID token's `gro
 
 ## Audit log
 
-Admins, **Settings → Audit log**, modeled on HCP's: every state-changing request, every sign-in (`GET /auth/callback`, successful or not), and every request refused as unauthenticated or forbidden (401/403), reads included. The page shows the changes; sign-ins and refused requests are on their own tab (`/audit?show=access`).
+Admins, **Settings → Audit log**: every state-changing request, every sign-in (`GET /auth/callback`, successful or not), and every request refused as unauthenticated or forbidden (401/403), reads included. The page shows the changes; sign-ins and refused requests are on their own tab (`/audit?show=access`).
 
 - Each entry records the principal (`user` for a browser session, `token` for the Terraform CLI, `system` for VCS polling (actor `vcs`) and `opsolete token` (actor `cli`), or `anonymous`) with its id, role and groups; the client address, `X-Forwarded-For` as sent and user agent; method, path and form; and the status and error message.
 - Variable values, tokens and OAuth codes are recorded as `(redacted)`.

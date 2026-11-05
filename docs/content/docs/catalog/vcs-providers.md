@@ -22,7 +22,7 @@ The no-code flow:
 
 ## Which workspaces may link a connection
 
-Admins publish modules and load the template catalog through any connection; users link workspaces to its repositories. Users' code runs on the runners, and a run can read its whole repository, so the latter needs limits. Like HCP Terraform, Opsolete trusts what's on a linked branch: it can't tell a malicious commit from a good one.
+Admins publish modules and load the template catalog through any connection; users link workspaces to its repositories. Users' code runs on the runners, and a run can read its whole repository, so the latter needs limits. Opsolete trusts what's on a linked branch: it can't tell a malicious commit from a good one.
 
 - **Workspace scope** per connection, in its *Settings* on the **VCS providers** page: off (the default for new connections: only admins use it, for modules and templates, and users don't see it), **All workspaces**, or **Selected workspaces**, picked there in a searchable multi-select, like a variable set's workspaces. A new workspace can only link a connection open to all workspaces; for selected ones, create the workspace first, select it, then link it under its *Version control* settings. Connections that limited repositories by pattern before this setting existed keep the workspaces already linked through them.
 - It's checked when a workspace is linked and again when each run starts, so detaching a workspace stops its runs: they fail with "may not link repositories through VCS connection".

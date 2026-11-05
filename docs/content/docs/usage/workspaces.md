@@ -16,14 +16,14 @@ Runs need configuration: a template, a linked branch, or added templates.
 
 A workspace can be linked to a **VCS repository branch** (GitHub or Azure DevOps, through a [VCS connection]({{< relref "/docs/catalog/vcs-providers" >}}), if the connection allows the workspace). Runs then plan the repository root at the branch's latest commit. That commit is pinned for the run, so the apply uses the configuration that was planned.
 
-Like HCP Terraform's VCS-driven workflow, the server checks the branch every minute (no webhooks, so Opsolete can stay internal; see [API usage of VCS polling]({{< relref "/docs/catalog/vcs-providers#api-usage-of-vcs-polling" >}})):
+The server checks the branch every minute (no webhooks, so Opsolete can stay internal; see [API usage of VCS polling]({{< relref "/docs/catalog/vcs-providers#api-usage-of-vcs-polling" >}})):
 
 - **Start a run on every new commit** (on by default for new links) queues an apply run of each new commit that has no run yet, applied with auto-apply or after confirmation.
 - **Speculative plans for pull requests** (opt-in) queue a plan-only run, never applied, for each new commit of an open pull request into the branch; pull requests from forks are skipped.
 
 A workspace still has one active run at a time, so VCS runs wait their turn; if several commits land meanwhile, only the newest gets a run. Both settings are on the workspace's **Version control** page, which also shows whether the link works (**Connected to VCS**: the connection allows the workspace and the branch or tags can be read).
 
-**Tag-based** triggers replace both, as in HCP Terraform: a new tag in a chosen format (semantic version `1.2.3`, with a prefix `v1.2.3`, with a suffix `1.2.3-rc`, or a custom regular expression) queues an apply run of its commit, manual runs plan the newest matching tag (by the version number in its name; tags without one are never picked), and pull requests get no plans.
+**Tag-based** triggers replace both: a new tag in a chosen format (semantic version `1.2.3`, with a prefix `v1.2.3`, with a suffix `1.2.3-rc`, or a custom regular expression) queues an apply run of its commit, manual runs plan the newest matching tag (by the version number in its name; tags without one are never picked), and pull requests get no plans.
 
 ## Add templates to a workspace
 
@@ -31,8 +31,10 @@ Add any number of templates (**Deploy…** in a workspace's menu, operate access
 
 - Adding, configuring or removing one starts a plan; removing one plans the destruction of its resources.
 - Removing the last one (the workspace's only configuration) starts a destroy run instead, and the template goes once that destroy is applied.
+- The template the workspace was created from (the *root* row) can be removed the same way. Alone, that's a destroy of everything. Next to added templates, the destroy targets only the root's own resources, so the added templates and their resources stay. That needs an indexed state (run a plan first), and the added templates must configure their own providers. The root goes once the destroy is applied; with none of its resources in the state, it goes right away.
 - Their outputs show as `<name>__<output>`.
 - Workspace variables and variable sets reach the root module only: env variables (credentials) apply to all of them.
+- Each template's module should configure its own providers (see [Writing modules for templates]({{< relref "/docs/catalog/templates#writing-modules-for-templates" >}})). Otherwise it depends on provider blocks in the workspace's own configuration.
 
 ## Update to a new module version
 

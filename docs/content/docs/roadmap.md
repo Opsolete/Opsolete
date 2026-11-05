@@ -29,7 +29,7 @@ weight: 6
 
 **Blocker: Entra ID only does exact matching**
 
-Entra federated identity credentials match `iss`, `sub` and `aud` exactly, with a limit of 20 per identity. [Flexible FIC](https://learn.microsoft.com/en-us/entra/workload-id/workload-identities-flexible-federated-identity-credentials) (wildcards) is in preview and only supports GitHub, GitLab and HCP Terraform as issuers, so a rule like `workspace:prod-*` isn't possible. AWS (`StringLike`) and GCP (CEL conditions) do support wildcards.
+Entra federated identity credentials match `iss`, `sub` and `aud` exactly, with a limit of 20 per identity. [Flexible FIC](https://learn.microsoft.com/en-us/entra/workload-id/workload-identities-flexible-federated-identity-credentials) (wildcards) is in preview and only supports a fixed list of issuers such as GitHub and GitLab, so a rule like `workspace:prod-*` isn't possible. AWS (`StringLike`) and GCP (CEL conditions) do support wildcards.
 
 **Options for Azure if this goes ahead**
 

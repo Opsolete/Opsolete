@@ -25,7 +25,7 @@ A run's state password is an HMAC of the workspace and the run. It works only fo
 
 ## Remote state sharing
 
-As in HCP Terraform: under *Settings › General*, a workspace shares its state with all workspaces or with specific ones (default: none). A run of a workspace it is shared with reads it with:
+Under *Settings › General*, a workspace shares its state with all workspaces or with specific ones (default: none). A run of a workspace it is shared with reads it with:
 
 ```hcl
 data "terraform_remote_state" "x" {
@@ -36,7 +36,7 @@ data "terraform_remote_state" "x" {
 }
 ```
 
-The runner sets `TF_HTTP_USERNAME`/`TF_HTTP_PASSWORD` to the run's own state credentials, so the config needs no secrets. Such a run can only read the state: it can't write or lock it. It gets the whole state file, sensitive values included, just like in HCP. Speculative plans of pull requests run unreviewed code, so they can't read shared states.
+The runner sets `TF_HTTP_USERNAME`/`TF_HTTP_PASSWORD` to the run's own state credentials, so the config needs no secrets. Such a run can only read the state: it can't write or lock it. It gets the whole state file, sensitive values included. Speculative plans of pull requests run unreviewed code, so they can't read shared states.
 
 ## Security
 

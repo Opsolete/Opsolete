@@ -3,7 +3,7 @@ title: Terraform CLI
 weight: 5
 ---
 
-Run Terraform on your own machine with Opsolete as the state backend, using Terraform's [`cloud` block](https://developer.hashicorp.com/terraform/cli/cloud/settings) as for HCP Terraform:
+Run Terraform on your own machine with Opsolete as the state backend, using Terraform's [`cloud` block](https://developer.hashicorp.com/terraform/cli/cloud/settings):
 
 ```sh
 terraform login opsolete.example.com     # browser: confirm "Authorize Terraform CLI"; the token is saved in ~/.terraform.d

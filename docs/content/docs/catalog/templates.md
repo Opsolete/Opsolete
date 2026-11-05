@@ -9,6 +9,21 @@ Mark a `string` or `number` input `"sensitive": true` for passwords and keys. It
 
 Mark one input `"key": true` (not `bool` or sensitive) to name the template after its value when it's added to a workspace: a key `vm_name` of `Web-Prod 01` adds it as `module.web_prod_01_c8ad`: a random hex suffix, so the same key can be added twice. Without a key, the template's name is used. The name can't be typed in, and is fixed once added: changing the key's value later doesn't rename it, since that would destroy and recreate its resources.
 
+An input's `label` is the question the form asks. Text after its first `: ` moves behind a **?** next to it: `VM name: 1-64 letters, digits or -.` shows *VM name*, with the rest as help. Labels generated from a registry module's variable descriptions follow the same rule, so write descriptions in that form.
+
+## Writing modules for templates
+
+A template's module is deployed by people who never write Terraform, so it has to stand on its own. Follow these principles:
+
+- **Configure the providers in the module.** Declare `required_providers` and write the `provider` blocks in the module itself, e.g. `provider "azurerm" { features {} }`. The workspace writes no provider configuration, and a template runs either as the workspace's root configuration or as `module.<name>` next to other templates. With its own providers, each template works on its own, whatever else the workspace holds.
+
+  Reusable modules called from your own Terraform normally *leave out* provider blocks. A module that has them can't be called with `count`, `for_each` or `depends_on`. Opsolete never writes those arguments, so that limit doesn't apply. Terraform also needs a module's provider configuration to destroy its resources, so removing an added template first runs a destroy targeted at `module.<name>` while its block is still there, and only then drops the block.
+- **No credentials in the module.** Pass them as environment variables (`ARM_CLIENT_ID`, `AWS_ACCESS_KEY_ID`, …) through a [variable set]({{< relref "/docs/usage/variables" >}}). Environment variables reach every template in the workspace.
+- **Resources in the module's root directory**, in the standard module structure (`main.tf`, `variables.tf`, `outputs.tf`), so the [registry]({{< relref "module-registry" >}}) can generate the docs and the form from it.
+- **One specific use case, few decisions.** Hard-code what your standards fix (SKU, region list, logging, network rules) and expose only what users must choose.
+- **Defaults wherever possible**, and a `select` input for variables that have no default, so users pick from approved values instead of typing them.
+- **Pin an approved version** in the template's `ref`. Moving the template to a newer one offers existing workspaces a module update.
+
 ## Conditional inputs
 
 Add `"show_if": {"input": "<name>", "equals": ["<value>", ...]}` to an input to show it only while an earlier `select` input has one of the values. In the [template builder]({{< relref "template-builder" >}}) this is a field's **Show when … is …** row. Conditions can be chained (a hidden dropdown hides the inputs that depend on it). A hidden input isn't validated or sent to Terraform, so the module's own default applies. Switching a workspace away from a condition drops that input's stored value, sensitive ones included.
