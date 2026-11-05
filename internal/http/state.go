@@ -121,7 +121,8 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
-	ctx, id := r.Context(), r.PathValue("id")
+	// not canceled on SIGTERM: a lost state write orphans the resources the apply just created
+	ctx, id := context.WithoutCancel(r.Context()), r.PathValue("id")
 	// the lock this run took, not just its ID: a 423 shows other locks' IDs to any run
 	if locked, err := s.Store.StateLockedBy(ctx, id, r.URL.Query().Get("ID"), r.PathValue("run")); err != nil {
 		s.internalError(w, "state lock", err)

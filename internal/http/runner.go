@@ -185,7 +185,8 @@ func (s *Server) jobFinish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	status, err := s.Store.FinishJob(r.Context(), id, r.Header.Get(runnerapi.LeaseHeader), req.Status, req.Message,
+	// not canceled on SIGTERM: a job's result must survive a server restart
+	status, err := s.Store.FinishJob(context.WithoutCancel(r.Context()), id, r.Header.Get(runnerapi.LeaseHeader), req.Status, req.Message,
 		req.Outputs, req.Plan, req.Resources)
 	if err == nil {
 		s.Log.Info("job finished", "run", id, "result", req.Status, "status", status)
@@ -211,7 +212,7 @@ func (s *Server) putArtifact(w http.ResponseWriter, r *http.Request) {
 		writeErrors(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("artifacts are limited to %d MB", maxArtifactSize>>20))
 		return
 	}
-	if err := s.writeBlob(r.Context(), artifactKey(id, name), body); err != nil {
+	if err := s.writeBlob(context.WithoutCancel(r.Context()), artifactKey(id, name), body); err != nil {
 		s.Log.Error("write artifact", "err", err)
 		writeErrors(w, http.StatusInternalServerError, "internal error")
 		return
