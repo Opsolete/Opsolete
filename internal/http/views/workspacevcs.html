@@ -49,7 +49,7 @@
 <nav class="back" aria-label="breadcrumb"><a href="/workspaces">Workspaces</a> / <a href="/workspaces/{{$w.Name}}">{{$w.Name}}</a> / <a href="/workspaces/{{$w.Name}}/settings">Settings</a> / {{if and .Edit $w.VCSConnectionID}}<a href="{{$base}}">Version control</a> / Edit{{else}}Version control{{end}}</nav>
 <div class="page-head">
   <div>
-    <h1>{{if .Edit}}Version control{{else}}Edit version control{{end}}</h1>
+    <h1>{{if .Edit}}Edit version control{{else}}Version control{{end}}</h1>
     <p class="muted">Where {{$w.Name}}'s runs get their Terraform configuration.</p>
   </div>
 </div>
