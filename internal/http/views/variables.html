@@ -9,7 +9,7 @@
   <td>{{if .Sensitive}}<span class="muted">Sensitive - write only</span>{{else}}<code>{{.Value}}</code>{{end}}</td>
   <td>{{.Category}}</td>
   <td>{{if $.CanEdit}}<form method="post" action="{{$.Base}}/variables/{{.ID}}/delete">
-    <button type="submit" class="secondary small" aria-label="Delete {{.Key}}">Delete</button></form>{{else}}<span class="muted">None</span>{{end}}</td>
+    <button type="submit" class="danger small" aria-label="Delete {{.Key}}">Delete</button></form>{{else}}<span class="muted">None</span>{{end}}</td>
 </tr>
 {{end}}
 </table>

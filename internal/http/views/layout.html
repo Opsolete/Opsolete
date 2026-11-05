@@ -314,8 +314,12 @@
   button:hover, .btn:hover { background: var(--btn-hover); color: #fff; text-decoration: none; }
   .secondary { background: var(--code); color: var(--text); border-color: #8c909c; }
   .secondary:hover { background: var(--border); color: var(--text); }
-  .danger { background: var(--btn-danger); border-color: #940004; }
-  .danger:hover { background: #940004; }
+  /* HCP/Helios "critical" button: soft red until hovered */
+  .danger { background: var(--danger-soft); color: var(--danger); border-color: var(--danger); }
+  .danger:hover { background: var(--btn-danger); color: #fff; border-color: #940004; }
+  .danger:active { background: #940004; color: #fff; border-color: #940004; box-shadow: none; }
+  .danger:focus-visible { outline: none; box-shadow: inset 0 0 0 1px #c00005, 0 0 0 3px #dd7578; }
+  .danger:disabled { opacity: .5; cursor: not-allowed; background: var(--danger-soft); color: var(--danger); }
   .small { padding: .2rem .6rem; font-size: .8rem; }
   .topbar .secondary { background: transparent; color: var(--nav-text); border-color: var(--nav-hover); }
   .topbar .secondary:hover { background: var(--nav-hover); color: #fff; }

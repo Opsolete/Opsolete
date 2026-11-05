@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -47,40 +46,47 @@ func TestWorkspaceTemplates(t *testing.T) {
 	if rec := post(h, "/workspaces/new", url.Values{"name": {ws}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
 	}
-	if page := get(h, base+"new?template=greeting").Body.String(); !strings.Contains(page, `name="ops-module" value="" placeholder="world"`) { // from the key input's default
+	if page := get(h, base+"new?template=greeting").Body.String(); strings.Contains(page, `name="ops-module"`) { // the name comes from the key input only
 		t.Fatalf("add form: %s", page)
 	}
 	if rec := get(h, base+"new?template=nope"); rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown template: %d", rec.Code)
 	}
-	add := url.Values{"ops-module": {"new"}, "greeting": {"hi"}, "name": {"a"}}
-	if rec := post(h, base+"new?template=greeting", add); rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf(`"new" is reserved: %d`, rec.Code)
+	// named returns the name of the added template whose key is key: key_<hex>.
+	named := func(key string) string {
+		t.Helper()
+		w, _ := store.GetWorkspace(ctx, ws)
+		added, _ := store.WorkspaceTemplates(ctx, w.ID)
+		for _, a := range added {
+			if regexp.MustCompile(`^` + key + `_[0-9a-f]{4}$`).MatchString(a.Name) {
+				return a.Name
+			}
+		}
+		t.Fatalf("no template named %s_<hex>: %+v", key, added)
+		return ""
 	}
+	add := url.Values{"ops-module": {"ignored"}, "greeting": {"hi"}}
 	for _, name := range []string{"one", "two"} {
-		add.Set("ops-module", name)
-		add.Set("name", name)
+		add.Set("name", name) // the key input
 		if rec := post(h, base+"new?template=greeting", add); rec.Code != http.StatusSeeOther {
 			t.Fatalf("add %s: %d %s", name, rec.Code, rec.Body.String())
 		}
 		claim()
 	}
-	if rec := post(h, base+"new?template=greeting", add); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "already has a template named two") {
-		t.Fatalf("duplicate name: %d", rec.Code)
-	}
+	one, two := named("one"), named("two")
 
 	// Both reach the runner as modules, with their inputs; there is no root module.
 	if rec := post(h, "/workspaces/"+ws+"/runs", url.Values{"action": {"apply"}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("new run: %d %s", rec.Code, rec.Body.String())
 	}
 	j := claim()
-	if j.ModuleSource != "" || len(j.Modules) != 2 || j.Modules[0].Name != "one" || j.Modules[1].Inputs["name"] != "two" ||
+	if j.ModuleSource != "" || len(j.Modules) != 2 || j.Modules[0].Name != one || j.Modules[1].Inputs["name"] != "two" ||
 		!strings.HasSuffix(j.Modules[0].Source, "/examples/greeting/terraform?ref=1.1.0") {
 		t.Fatalf("job: %+v", j)
 	}
 
 	// Configure one.
-	if rec := post(h, base+"one", url.Values{"greeting": {"hey"}, "name": {"x"}}); rec.Code != http.StatusSeeOther {
+	if rec := post(h, base+one, url.Values{"greeting": {"hey"}, "name": {"x"}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("configure: %d %s", rec.Code, rec.Body.String())
 	}
 	if j := claim(); len(j.Modules) != 2 || j.Modules[0].Inputs["greeting"] != "hey" {
@@ -93,10 +99,10 @@ func TestWorkspaceTemplates(t *testing.T) {
 		SELECT id, 1, 'l', 'wt/' || id || '.tfstate', 'm', 2, true FROM workspaces WHERE name = $1 RETURNING id`, ws).Scan(&vid); err != nil {
 		t.Fatal(err)
 	}
-	store.DB.Exec(`INSERT INTO state_version_resources (state_version_id, address, type, name, provider, module) VALUES ($1, 'module.one.a.b', 'a', 'b', 'p', 'module.one')`, vid)
+	store.DB.Exec(`INSERT INTO state_version_resources (state_version_id, address, type, name, provider, module) VALUES ($1, $2, 'a', 'b', 'p', $3)`, vid, "module."+one+".a.b", "module."+one)
 	// each template shows whether it has resources in the state, e.g. after a failed apply
-	if page := get(h, "/workspaces/"+ws+"?show=templates").Body.String(); !strings.Contains(page, "<code>one</code><br><small class=\"muted\" title=\"resources of this template in the current state\">1 resource</small>") ||
-		!strings.Contains(page, "<code>two</code><br><small class=\"muted\" title=\"resources of this template in the current state\">⚠ no resources in state</small>") {
+	if page := get(h, "/workspaces/"+ws+"?show=templates").Body.String(); !strings.Contains(page, "<code>"+one+"</code><br><small class=\"muted\" title=\"resources of this template in the current state\">1 resource</small>") ||
+		!strings.Contains(page, "<code>"+two+"</code><br><small class=\"muted\" title=\"resources of this template in the current state\">⚠ no resources in state</small>") {
 		t.Fatalf("resources per template: %s", page)
 	}
 	destroy := func(name string, left int) {
@@ -115,29 +121,28 @@ func TestWorkspaceTemplates(t *testing.T) {
 			t.Fatalf("templates after removing %s: %+v", name, added)
 		}
 	}
-	destroy("two", 1)
-	if rec := post(h, base+"two/remove", nil); rec.Code != http.StatusNotFound {
+	destroy(two, 1)
+	if rec := post(h, base+two+"/remove", nil); rec.Code != http.StatusNotFound {
 		t.Fatalf("removing twice: %d", rec.Code)
 	}
-	if page := get(h, "/workspaces/"+ws+"?show=templates").Body.String(); !strings.Contains(page, base+"one") || strings.Contains(page, base+"two") ||
+	if page := get(h, "/workspaces/"+ws+"?show=templates").Body.String(); !strings.Contains(page, base+one) || strings.Contains(page, base+two) ||
 		!strings.Contains(page, ">Greeting (example)</a>") || !strings.Contains(page, "<summary>2 inputs</summary>") {
 		t.Fatalf("workspace page: %s", page)
 	}
-	destroy("one", 0) // the last one too
+	destroy(one, 0) // the last one too
 
 	// Nothing deployed: it goes right away, without a run.
 	store.DB.Exec(`DELETE FROM state_version_resources WHERE state_version_id = $1`, vid)
-	add.Set("ops-module", "three")
+	add.Set("name", "three")
 	if rec := post(h, base+"new?template=greeting", add); rec.Code != http.StatusSeeOther {
 		t.Fatalf("add three: %d %s", rec.Code, rec.Body.String())
 	}
 	claim()
-	if rec := post(h, base+"three/remove", nil); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/workspaces/"+ws {
+	if rec := post(h, base+named("three")+"/remove", nil); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/workspaces/"+ws {
 		t.Fatalf("removing the last template of an empty workspace: %d %q", rec.Code, rec.Header().Get("Location"))
 	}
 
-	// Without a name: from the key input "Who to greet", then with a random hex suffix while taken.
-	add.Set("ops-module", "")
+	// The same key twice: each its own random hex suffix.
 	add.Set("name", "Big Room")
 	for range 2 {
 		if rec := post(h, base+"new?template=greeting", add); rec.Code != http.StatusSeeOther {
@@ -151,8 +156,8 @@ func TestWorkspaceTemplates(t *testing.T) {
 	for _, a := range added {
 		names = append(names, a.Name)
 	}
-	slices.Sort(names) // "big_room" sorts before "big_room_…"
-	if len(names) != 2 || names[0] != "big_room" || !regexp.MustCompile(`^big_room_[0-9a-f]{4}$`).MatchString(names[1]) {
+	re := regexp.MustCompile(`^big_room_[0-9a-f]{4}$`)
+	if len(names) != 2 || names[0] == names[1] || !re.MatchString(names[0]) || !re.MatchString(names[1]) {
 		t.Fatalf("added: %v", names)
 	}
 }
@@ -197,10 +202,13 @@ func TestDeleteWorkspace(t *testing.T) {
 	}
 }
 
+// moduleNameRe is a Terraform module call name; "new" is the add route.
+var moduleNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
+
 func TestModuleName(t *testing.T) {
 	for name, want := range map[string]string{"Greeting (example)": "greeting_example", "Virtual machine – Windows": "virtual_machine_windows",
 		"2 VMs": "t_2_vms", "": "t", "New": "template", strings.Repeat("a ", 40): strings.Repeat("a_", 31) + "a"} {
-		if got := moduleName(name); got != want || !moduleNameRe.MatchString(got) && got != "template" {
+		if got := moduleName(name); got != want || !moduleNameRe.MatchString(got) {
 			t.Errorf("moduleName(%q) = %q, want %q", name, got, want)
 		}
 	}
@@ -216,7 +224,7 @@ func TestDefaultModule(t *testing.T) {
 		want string // a regexp
 	}{
 		{keyed, map[string]string{"vm": "Web-Prod 01"}, `web_prod_01_[0-9a-f]{4}`},
-		{keyed, map[string]string{"vm": "db"}, `db`},
+		{keyed, map[string]string{"vm": "db"}, `db_[0-9a-f]{4}`},             // always a suffix
 		{keyed, map[string]string{"vm": " "}, `virtual_machine_[0-9a-f]{4}`}, // empty key: the template's name
 		{templates.Template{Name: "Virtual machine"}, nil, `virtual_machine_[0-9a-f]{4}`},
 		{keyed, map[string]string{"vm": long}, `a{58}_[0-9a-f]{4}`},
@@ -283,7 +291,7 @@ func TestSensitiveInputs(t *testing.T) {
 	if page := get(h, base+"new?template=greeting").Body.String(); !strings.Contains(page, `name="secret.name" type="password"`) {
 		t.Fatalf("add form: %s", page)
 	}
-	if rec := post(h, base+"new?template=greeting", url.Values{"ops-module": {"one"}, "greeting": {"hi"}, "secret.name": {"hunter2"}}); rec.Code != http.StatusSeeOther {
+	if rec := post(h, base+"new?template=greeting", url.Values{"greeting": {"hi"}, "secret.name": {"hunter2"}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("add: %d %s", rec.Code, rec.Body.String())
 	}
 	if j := claim(); len(j.Modules) != 1 || j.Modules[0].Inputs["name"] != "hunter2" {
@@ -303,18 +311,23 @@ func TestSensitiveInputs(t *testing.T) {
 		t.Fatalf("workspace page: %s", page)
 	}
 	// Reconfigure: the form is empty, and leaving it empty keeps the value even though it's required.
-	page = get(h, base+"one").Body.String()
+	var mod string // no key input: the template's name, with a hex suffix
+	store.DB.QueryRow(`SELECT t.name FROM workspace_templates t JOIN workspaces w ON w.id = t.workspace_id WHERE w.name = $1`, ws).Scan(&mod)
+	if !regexp.MustCompile(`^greeting_example_[0-9a-f]{4}$`).MatchString(mod) {
+		t.Fatalf("module name: %q", mod)
+	}
+	page = get(h, base+mod).Body.String()
 	if leaks("configure form", page); !strings.Contains(page, "A value is set") {
 		t.Fatalf("configure form: %s", page)
 	}
-	if rec := post(h, base+"one", url.Values{"greeting": {"hey"}, "secret.name": {""}}); rec.Code != http.StatusSeeOther {
+	if rec := post(h, base+mod, url.Values{"greeting": {"hey"}, "secret.name": {""}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("configure, kept: %d %s", rec.Code, rec.Body.String())
 	}
 	if j := claim(); j.Modules[0].Inputs["name"] != "hunter2" || j.Modules[0].Inputs["greeting"] != "hey" {
 		t.Fatalf("after keeping: %+v", j.Modules)
 	}
 	// A sealed value moved to another module doesn't open: it's bound to its workspace and module.
-	store.DB.Exec(`UPDATE workspace_templates SET name = 'two' WHERE name = 'one' AND workspace_id = (SELECT id FROM workspaces WHERE name = $1)`, ws)
+	store.DB.Exec(`UPDATE workspace_templates SET name = 'two' WHERE name = $2 AND workspace_id = (SELECT id FROM workspaces WHERE name = $1)`, ws, mod)
 	store.DB.Exec(`UPDATE runs SET status = 'plan_queued' WHERE id = (SELECT r.id FROM runs r JOIN workspaces w ON w.id = r.workspace_id WHERE w.name = $1 ORDER BY r.created_at DESC LIMIT 1)`, ws)
 	req := httptest.NewRequest("POST", runnerapi.Prefix+"/jobs/claim", strings.NewReader(`{"runner":"r1"}`))
 	req.Header.Set("Authorization", "Bearer "+testRunnerToken)

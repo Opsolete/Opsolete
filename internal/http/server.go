@@ -456,7 +456,8 @@ func newID() string {
 }
 
 // templateFromForm reads the builder form. Field cards are parallel in_* lists, rows without a name are
-// dropped; the in_required/in_sensitive/in_key checkboxes post their card's index, since unchecked ones post nothing.
+// dropped; the in_required/in_sensitive checkboxes post their card's index, since unchecked ones post nothing.
+// The key select posts the key input's name.
 func templateFromForm(r *http.Request) templates.Template {
 	f := r.PostForm
 	get := func(key string) string { return strings.TrimSpace(f.Get(key)) }
@@ -476,7 +477,7 @@ func templateFromForm(r *http.Request) templates.Template {
 		}
 		idx, typ := strconv.Itoa(i), at("in_type", i)
 		in := templates.Input{Name: name, Label: at("in_label", i), Type: typ, Default: at("in_default", i),
-			Required: typ != "bool" && slices.Contains(f["in_required"], idx), Key: typ != "bool" && slices.Contains(f["in_key"], idx)}
+			Required: typ != "bool" && slices.Contains(f["in_required"], idx), Key: name == get("key")}
 		// the card hides the settings its type doesn't use; drop what they still post
 		if typ == "string" {
 			in.Pattern = at("in_pattern", i)

@@ -5,7 +5,7 @@
   <div>
     {{if $.Adding}}
     <h1>Add {{$.T.Name}} to {{.Name}}</h1>
-    <p class="muted">The template becomes the module <code>module.&lt;name&gt;</code> in this workspace's configuration and state; adding it starts a plan.</p>
+    <p class="muted">The template becomes the module <code>module.&lt;name&gt;</code> in this workspace's configuration and state, named after {{with $.T.KeyInput}}<strong>{{or .Label .Name}}</strong>{{else}}the template's name{{end}} plus a random suffix like <code>_c8ad</code>, and fixed once added; adding it starts a plan.</p>
     {{else}}
     <h1>Configure {{with $.Module}}{{.}} in {{end}}{{.Name}}</h1>
     <p class="muted">Change the inputs{{if or (ne $.Cur.Ref $.T.Module.Ref) (ne $.Cur.Source $.T.Module.Source)}} and move to the template's module version{{end}}, then plan the change.</p>
@@ -28,13 +28,6 @@
 {{end}}
 <form method="post" class="card" id="template-form">
 {{$v := .Values}}{{$e := .Errors}}
-{{if .Adding}}
-  <label for="ops-module">Name in the workspace <span class="req" aria-hidden="true">*</span></label>
-  <input id="ops-module" name="ops-module" value="{{.Module}}" placeholder="{{.ModuleHint}}" data-fallback="{{.T.Name}}" pattern="[a-z][a-z0-9_\-]{0,62}" aria-describedby="ops-module-hint">
-  <p class="hint" id="ops-module-hint">Leave empty to use {{with .T.KeyInput}}<strong>{{or .Label .Name}}</strong> below{{else}}the template's name{{end}} (with a random suffix like <code>_c8ad</code> if taken). Lowercase letters, digits, dashes and underscores, starting with a letter. Fixed once added.</p>
-  {{with index $e "ops-module"}}<p class="err" role="alert">{{.}}</p>{{end}}
-  <hr style="border:0;border-top:1px solid var(--border);margin:1.4rem 0 .4rem">
-{{end}}
 {{if not .Configure}}
   <label for="ops-workspace">Workspace name <span class="req" aria-hidden="true">*</span></label>
   <input id="ops-workspace" name="ops-workspace" value="{{.Workspace}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}"
@@ -53,7 +46,7 @@
   {{else}}
     <label for="{{.Name}}">{{or .Label .Name}}{{if .Required}} <span class="req" aria-hidden="true">*</span>{{end}}</label>
     {{if eq .Type "select"}}
-    <select id="{{.Name}}" name="{{.Name}}"{{if .Key}} data-key{{end}}>
+    <select id="{{.Name}}" name="{{.Name}}">
       {{$cur := index $v .Name}}
       {{range .Options}}<option value="{{.Value}}"{{if eq .Value $cur}} selected{{end}}>{{.Text}}</option>{{end}}
     </select>
@@ -63,7 +56,7 @@
       {{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if and .Required (not $set)}} required{{end}} aria-describedby="{{.Name}}-hint">
     <p class="hint" id="{{.Name}}-hint">Sensitive: stored encrypted and never shown.{{if $set}} A value is set; leave empty to keep it.{{end}}</p>
     {{else}}
-    <input id="{{.Name}}" name="{{.Name}}" value="{{index $v .Name}}"{{if .Key}} data-key{{end}}
+    <input id="{{.Name}}" name="{{.Name}}" value="{{index $v .Name}}"
       {{if eq .Type "number"}}type="number" step="any"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}>
     {{end}}
   {{end}}
@@ -94,16 +87,6 @@
     };
     form.addEventListener("change", update);
     update(); // the browser may have restored other values
-    // Preview the name an empty "Name in the workspace" gets: like moduleName on the server, which
-    // decides (and adds a random suffix if taken).
-    const mod = form.elements["ops-module"], key = form.querySelector("[data-key]");
-    const slug = s => {
-      let v = s.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-      if (!/^[a-z]/.test(v)) v = "t_" + v;
-      v = v.slice(0, 63).replace(/_+$/, "");
-      return v === "new" ? "template" : v;
-    };
-    if (mod && key) key.addEventListener("input", () => mod.placeholder = slug(key.value.trim() || mod.dataset.fallback));
   })();
 </script>
 {{template "bottom"}}

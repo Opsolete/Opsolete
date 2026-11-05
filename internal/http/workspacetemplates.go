@@ -1,7 +1,6 @@
 package httpserver
 
 import (
-	"cmp"
 	"database/sql"
 	"errors"
 	"net/http"
@@ -17,17 +16,15 @@ import (
 // Templates added to a workspace, any number: each is the module block module.<name> next to the
 // workspace's own configuration, planned and applied together in its one state.
 
-// moduleNameRe is a Terraform module call name; "new" is the add route.
-var moduleNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
-
-// moduleName suggests a module name from a template's display name: "Virtual machine (Windows)" → "virtual_machine_windows".
+// moduleName makes a Terraform module call name (^[a-z][a-z0-9_-]{0,62}$, not "new": the add route)
+// from a template's key value or display name: "Virtual machine (Windows)" → "virtual_machine_windows".
 func moduleName(name string) string {
 	s := strings.Trim(nonModuleChars.ReplaceAllString(strings.ToLower(name), "_"), "_")
 	if s == "" || s[0] < 'a' || s[0] > 'z' {
 		s = "t_" + s
 	}
 	s = strings.TrimRight(s[:min(len(s), 63)], "_")
-	if s == "new" { // otherwise s already matches moduleNameRe
+	if s == "new" {
 		return "template"
 	}
 	return s
@@ -35,21 +32,21 @@ func moduleName(name string) string {
 
 var nonModuleChars = regexp.MustCompile(`[^a-z0-9]+`)
 
-const moduleNameRule = "1–63 lowercase letters, digits, dashes and underscores, starting with a letter (not \"new\")"
-
-// defaultModule is the name a template is added under when none is given: from its key input's
-// form value (raw), else its display name. While taken it gets a random hex suffix (_c8ad): a
-// counter (_2) would read like part of the resource's own name.
+// defaultModule is the name a template is added under, fixed from then on: from its key input's
+// form value (raw), else its display name, plus a random hex suffix (_c8ad), drawn again while
+// taken: a counter (_2) would read like part of the resource's own name.
 func defaultModule(t templates.Template, raw map[string]string, taken []storage.WorkspaceTemplate) string {
 	base := moduleName(t.Name)
 	if k := t.KeyInput(); k != nil && strings.TrimSpace(raw[k.Name]) != "" {
 		base = moduleName(raw[k.Name])
 	}
-	name := base
-	for slices.ContainsFunc(taken, func(a storage.WorkspaceTemplate) bool { return a.Name == name }) {
-		name = base[:min(len(base), 58)] + "_" + newID()[:4]
+	base = base[:min(len(base), 58)]
+	for {
+		name := base + "_" + newID()[:4]
+		if !slices.ContainsFunc(taken, func(a storage.WorkspaceTemplate) bool { return a.Name == name }) {
+			return name
+		}
 	}
-	return name
 }
 
 // loadTemplateForm loads the form to add a template (?template=<id>) to the {name} workspace, or
@@ -92,9 +89,6 @@ func (s *Server) loadTemplateForm(w http.ResponseWriter, r *http.Request) (formP
 	}
 	page.T, page.old = t, inputs
 	page.Values, page.Set = formDefaults(t, inputs)
-	if page.Adding {
-		page.ModuleHint = defaultModule(t, page.Values, added)
-	}
 	return page, ws, true
 }
 
@@ -119,21 +113,13 @@ func (s *Server) saveWorkspaceTemplate(w http.ResponseWriter, r *http.Request) {
 	page.Values = formValues(r, t)
 	var vals map[string]any
 	vals, page.Errors = t.Validate(page.Values)
-	typed := strings.TrimSpace(r.PostForm.Get(fieldModule))
 	if page.Adding {
-		page.ModuleHint = defaultModule(t, page.Values, page.added)
-		page.Module = cmp.Or(typed, page.ModuleHint)
-		if !moduleNameRe.MatchString(page.Module) || page.Module == "new" {
-			page.Errors[fieldModule] = moduleNameRule
-		}
+		page.Module = defaultModule(t, page.Values, page.added)
 	}
 	if err := s.sealInputs(t, page.Values, vals, page.old, page.Errors, ws.ID, page.Module); err != nil {
 		page.Error = err.Error()
 	}
 	if len(page.Errors) > 0 || page.Error != "" {
-		if page.Adding && typed == "" {
-			page.Module = "" // keep following the key
-		}
 		s.render(w, r, http.StatusUnprocessableEntity, "form.html", page)
 		return
 	}
@@ -142,7 +128,7 @@ func (s *Server) saveWorkspaceTemplate(w http.ResponseWriter, r *http.Request) {
 		ModuleSource: t.Module.Source, ModuleRef: t.Module.Ref, Inputs: vals}, page.Adding, u.ID)
 	switch {
 	case errors.Is(err, storage.ErrExists):
-		page.Errors[fieldModule] = "this workspace already has a template named " + page.Module
+		page.Error = "this workspace already has a template named " + page.Module + " (added meanwhile), try again"
 		s.render(w, r, http.StatusUnprocessableEntity, "form.html", page)
 		return
 	case errors.Is(err, storage.ErrRunActive), errors.Is(err, storage.ErrLocalExecution):
