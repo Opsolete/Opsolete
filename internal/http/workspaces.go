@@ -804,7 +804,7 @@ func (s *Server) deleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, sql.ErrNoRows): // deleted meanwhile
 		http.NotFound(w, r)
 		return
-	case errors.Is(err, storage.ErrRunActive), errors.Is(err, storage.ErrHasResources):
+	case errors.Is(err, storage.ErrRunActive), errors.Is(err, storage.ErrHasResources), errors.Is(err, storage.ErrStateLocked):
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	case err != nil:

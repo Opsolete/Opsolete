@@ -18,6 +18,7 @@ var (
 	ErrNotConfirmable = errors.New("the run isn't waiting for confirmation")
 	ErrNotCancelable  = errors.New("the run can't be canceled: it isn't queued or running")
 	ErrHasResources   = errors.New("the workspace's state still manages resources: destroy them first")
+	ErrStateLocked    = errors.New("the workspace's state is locked: wait for whoever holds the lock, or unlock it")
 	ErrLocalExecution = errors.New("the workspace uses local execution: Terraform runs on your machine, so runs can't start here (change it in the workspace's settings)")
 )
 
@@ -332,6 +333,14 @@ func (s *Store) DeleteWorkspace(ctx context.Context, id string, force bool) ([]s
 	defer tx.Rollback()
 	if err := requireIdle(ctx, tx, id); err != nil && !(force && errors.Is(err, ErrHasResources)) {
 		return nil, err
+	}
+	// even with force: a CLI's first apply holds the lock but has no state version yet
+	var locked bool
+	if err := tx.QueryRowContext(ctx, `SELECT state_lock IS NOT NULL FROM workspaces WHERE id = ops_uuid($1)`, id).Scan(&locked); err != nil {
+		return nil, err
+	}
+	if locked {
+		return nil, ErrStateLocked
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT blob_key FROM state_versions WHERE workspace_id = ops_uuid($1)`, id)
 	if err != nil {
