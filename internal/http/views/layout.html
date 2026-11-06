@@ -81,6 +81,7 @@
   .back a:hover { color: var(--text); }
   .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.25rem; margin-bottom: 1rem; }
   .card.flush { padding: 0; overflow-x: auto; }
+  .card.flush:has(.menu[open]) { overflow: visible; } /* else a row's actions menu is clipped */
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); gap: 1rem; }
   .tile { display: flex; flex-direction: column; margin: 0; transition: box-shadow .15s, border-color .15s; }
   .tile:hover { border-color: #c2c5cb; box-shadow: 0 2px 6px rgb(12 12 14 / 10%); }
@@ -310,6 +311,16 @@
   .menu summary::-webkit-details-marker { display: none; }
   .menu summary::after { content: "⌄"; margin-left: auto; color: var(--muted); }
   .menu[open] summary::after { content: "⌃"; }
+  /* row actions ("…"): a menu of links, right-aligned under its button */
+  .menu.kebab { display: inline-block; }
+  .menu.kebab summary { padding: .15rem .6rem; }
+  .menu.kebab summary::after { content: none; }
+  .menu [role="menu"] { position: absolute; z-index: 1; top: calc(100% + .3rem); right: 0; min-width: 11rem;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: .35rem 0; box-shadow: 0 8px 24px rgb(12 12 14 / 30%); }
+  .menu [role="menu"] a { display: block; padding: .5rem 1rem; }
+  .menu [role="menu"] a:hover, .menu [role="menu"] a:focus-visible { background: var(--code); }
+  /* for screen readers only */
+  .sr-hint { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .menu [role="radiogroup"] { position: absolute; z-index: 1; top: calc(100% + .3rem); left: 0; width: min(28rem, 100%);
     background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: .35rem 0;
     box-shadow: 0 8px 24px rgb(12 12 14 / 30%); }
@@ -491,6 +502,25 @@
     <a href="/workspaces/{{.}}/settings"{{if eq $t "settings"}} aria-current="page"{{end}}>Settings ›</a>
   </nav>
   {{end}}
+  {{else}}{{with project}}{{$t := tab}}
+  {{if and (eq $t "settings") $}}{{$p := $.Page}}
+  <!-- the side nav becomes the project's settings menu, like a workspace's -->
+  <nav aria-label="Project settings">
+    <a href="/projects/{{.}}">‹ {{.}}</a>
+    <span class="nav-label">Project settings</span>
+    <a href="/projects/{{.}}/settings"{{if eq $p ""}} aria-current="page"{{end}}>General</a>
+    <a href="/projects/{{.}}/settings/access"{{if eq $p "access"}} aria-current="page"{{end}}>Team access</a>
+    <a href="/projects/{{.}}/settings/variable-sets"{{if eq $p "variable-sets"}} aria-current="page"{{end}}>Variable sets</a>
+  </nav>
+  {{else}}
+  <nav aria-label="Project">
+    <a href="/projects">‹ Projects</a>
+    <span class="nav-head">{{.}}</span>
+    <a href="/projects/{{.}}"{{if eq $t "overview"}} aria-current="page"{{end}}>Overview</a>
+    <a href="/projects/{{.}}/workspaces"{{if eq $t "workspaces"}} aria-current="page"{{end}}>Workspaces{{with $}}{{with .P}} <span class="tag">{{.Workspaces}}</span>{{end}}{{end}}</a>
+    <a href="/projects/{{.}}/settings"{{if eq $t "settings"}} aria-current="page"{{end}}>Settings ›</a>
+  </nav>
+  {{end}}
   {{else}}
   {{$s := section}}{{with features}}
   {{if and (or (eq $s "organization") (eq $s "vcs") (eq $s "catalog") (eq $s "audit")) (user).Admin}}
@@ -505,10 +535,11 @@
   </nav>
   {{else}}
   <nav aria-label="Main">
+    <span class="nav-label">Manage</span>
     {{if .Deployments}}
-    <a href="/"{{if or (eq $s "") (eq $s "templates")}} aria-current="page"{{end}}>Templates</a>
     <a href="/projects"{{if eq $s "projects"}} aria-current="page"{{end}}>Projects</a>
     <a href="/workspaces"{{if eq $s "workspaces"}} aria-current="page"{{end}}>Workspaces</a>
+    <a href="/"{{if or (eq $s "") (eq $s "templates")}} aria-current="page"{{end}}>Templates</a>
     {{end}}
     {{if and .Deployments (user).Admin}}<a href="/variable-sets"{{if eq $s "variable-sets"}} aria-current="page"{{end}}>Variable sets</a>{{end}}
     {{if .Registry}}<a href="/registry"{{if eq $s "registry"}} aria-current="page"{{end}}>Registry</a>{{end}}
@@ -516,7 +547,7 @@
   </nav>
   {{end}}
   {{end}}
-  {{end}}
+  {{end}}{{end}}
 </aside>
 <main class="wrap">
 {{end}}
@@ -558,7 +589,7 @@
     d.querySelector('summary span').textContent = n ? n + ' selected' : 'Select workspaces';
   }
   document.addEventListener('click', e => { // a click outside closes it, like a select
-    for (const d of document.querySelectorAll('details.picker[open]')) if (!d.contains(e.target)) d.open = false;
+    for (const d of document.querySelectorAll('details.picker[open], details.kebab[open]')) if (!d.contains(e.target)) d.open = false;
   });
 </script>
 </body>

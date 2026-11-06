@@ -17,7 +17,11 @@ import (
 func (s *Server) projectRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /projects", s.projects)
 	mux.HandleFunc("POST /projects", s.admin(s.createProject))
+	// the project's menu pages: one handler, project.html shows the part of the current tab
 	mux.HandleFunc("GET /projects/{project}", s.project)
+	mux.HandleFunc("GET /projects/{project}/workspaces", s.project)
+	mux.HandleFunc("GET /projects/{project}/settings", s.project)
+	mux.HandleFunc("GET /projects/{project}/settings/{page}", s.project)
 	mux.HandleFunc("POST /projects/{project}/settings", s.admin(s.projectSettings))
 	mux.HandleFunc("POST /projects/{project}/delete", s.admin(s.deleteProject))
 	mux.HandleFunc("POST /projects/{project}/access", s.admin(s.projectAccess))
@@ -30,7 +34,7 @@ func (s *Server) projects(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "list projects", err)
 		return
 	}
-	s.render(w, r, http.StatusOK, "projects.html", list)
+	s.render(w, r, http.StatusOK, "projects.html", map[string]any{"Projects": list, "Org": s.Organization})
 }
 
 // projectFromForm reads and checks a project's name and description.
@@ -80,41 +84,57 @@ func (s *Server) loadProject(w http.ResponseWriter, r *http.Request) (storage.Pr
 	return list[i], true
 }
 
+// project serves a project's menu, like HCP Terraform's: Overview, Workspaces and Settings (General,
+// Team access, Variable sets). Everyone who sees the project sees them; only admins change them.
 func (s *Server) project(w http.ResponseWriter, r *http.Request) {
+	page := r.PathValue("page") // settings sub-pages; "" is General
+	if !slices.Contains([]string{"", "access", "variable-sets"}, page) {
+		http.NotFound(w, r)
+		return
+	}
 	p, ok := s.loadProject(w, r)
 	if !ok {
 		return
 	}
 	ctx := r.Context()
-	list, err := s.Store.ListWorkspaces(ctx, viewer(r), p.Name)
-	if err != nil {
-		s.internalError(w, "list workspaces", err)
-		return
-	}
-	grants, err := s.Store.ProjectGrants(ctx, p.ID)
-	if err != nil {
-		s.internalError(w, "project grants", err)
-		return
-	}
-	sets, err := s.Store.ProjectVariableSets(ctx, p.ID)
-	if err != nil {
-		s.internalError(w, "project variable sets", err)
-		return
-	}
-	creatable, err := s.creatableProjects(r)
-	if err != nil {
-		s.internalError(w, "list projects", err)
-		return
-	}
-	canCreate := slices.ContainsFunc(creatable, func(c storage.Project) bool { return c.ID == p.ID })
-	var groups []string
-	if auth.FromContext(ctx).Admin() {
-		if groups, err = s.Store.KnownGroups(ctx); err != nil {
-			s.internalError(w, "known groups", err)
+	data := map[string]any{"P": p, "Page": page}
+	tab, _, _ := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/projects/"+p.Name), "/"), "/")
+	var err error
+	switch {
+	case tab == "" || tab == "workspaces":
+		var list []storage.Workspace
+		if list, err = s.Store.ListWorkspaces(ctx, viewer(r), p.Name); err != nil {
+			s.internalError(w, "list workspaces", err)
+			return
+		}
+		creatable, err := s.creatableProjects(r)
+		if err != nil {
+			s.internalError(w, "list projects", err)
+			return
+		}
+		data["CanCreate"] = slices.ContainsFunc(creatable, func(c storage.Project) bool { return c.ID == p.ID })
+		if tab == "" { // the overview shows the most recently active ones
+			list = list[:min(len(list), 5)]
+		}
+		data["Workspaces"] = list
+	case page == "access":
+		if data["Grants"], err = s.Store.ProjectGrants(ctx, p.ID); err != nil {
+			s.internalError(w, "project grants", err)
+			return
+		}
+		if auth.FromContext(ctx).Admin() {
+			if data["Groups"], err = s.Store.KnownGroups(ctx); err != nil {
+				s.internalError(w, "known groups", err)
+				return
+			}
+		}
+	case page == "variable-sets":
+		if data["Sets"], err = s.Store.ProjectVariableSets(ctx, p.ID); err != nil {
+			s.internalError(w, "project variable sets", err)
 			return
 		}
 	}
-	s.render(w, r, http.StatusOK, "project.html", map[string]any{"P": p, "Workspaces": list, "Grants": grants, "Groups": groups, "CanCreate": canCreate, "Sets": sets})
+	s.render(w, r, http.StatusOK, "project.html", data)
 }
 
 // projectAccess grants an IdP group read or operate access to all of a project's workspaces
@@ -133,7 +153,7 @@ func (s *Server) projectAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Log.Info("project access", "project", p.Name, "group", group, "level", level, "user", auth.FromContext(r.Context()).Email)
-	http.Redirect(w, r, "/projects/"+p.Name+"#access", http.StatusSeeOther)
+	http.Redirect(w, r, "/projects/"+p.Name+"/settings/access", http.StatusSeeOther)
 }
 
 // projectSettings renames a project, sets its description and, with default=on, makes it the default.
@@ -160,7 +180,7 @@ func (s *Server) projectSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.Log.Info("project updated", "project", p.Name, "name", name, "user", auth.FromContext(r.Context()).Email)
-	http.Redirect(w, r, "/projects/"+name, http.StatusSeeOther)
+	http.Redirect(w, r, "/projects/"+name+"/settings", http.StatusSeeOther)
 }
 
 func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {

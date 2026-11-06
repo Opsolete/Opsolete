@@ -64,7 +64,7 @@ type Features struct {
 func New(store *storage.Store, tpls *templates.Catalog, reg *registry.Registry, a *auth.Auth, state *blob.Bucket, f Features, log *slog.Logger) *Server {
 	pages := template.Must(template.New("").Funcs(template.FuncMap{"join": strings.Join, "json": toJSON,
 		"user": func() auth.User { return auth.User{} }, "section": func() string { return "" },
-		"workspace": func() string { return "" }, "tab": func() string { return "" },
+		"workspace": func() string { return "" }, "project": func() string { return "" }, "tab": func() string { return "" },
 		"features": func() Features { return f }, "duration": humanDuration, "ago": ago,
 		"provider": func(p string) string { return strings.TrimPrefix(p, "registry.terraform.io/") },
 		"status":   func(s string) string { return strings.ReplaceAll(s, "_", " ") }}).ParseFS(views, "views/*.html"))
@@ -545,10 +545,13 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, name
 	defer s.clones.Put(pages)
 	// section is the first path segment, for highlighting the current nav entry.
 	section, rest, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, "/"), "/")
-	// inside a workspace the side nav is its menu; tab is the page within it
-	workspace := r.PathValue("name")
+	// inside a workspace or project the side nav is its menu; tab is the page within it
+	workspace, project := r.PathValue("name"), r.PathValue("project")
 	if section != "workspaces" {
 		workspace = ""
+	}
+	if section != "projects" {
+		project = ""
 	}
 	_, tab, _ := strings.Cut(rest, "/")
 	tab, _, _ = strings.Cut(tab, "/")
@@ -556,7 +559,7 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, status int, name
 		tab = "overview"
 	}
 	pages.Funcs(template.FuncMap{"user": func() auth.User { return u }, "section": func() string { return section },
-		"workspace": func() string { return workspace }, "tab": func() string { return tab }})
+		"workspace": func() string { return workspace }, "project": func() string { return project }, "tab": func() string { return tab }})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	if err := pages.ExecuteTemplate(w, name, data); err != nil {

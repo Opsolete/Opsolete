@@ -378,7 +378,7 @@
   </table>
   {{else}}<p class="muted" style="margin:0">No groups have access to this workspace itself.</p>
   {{end}}
-  {{with .ProjectGrants}}<p class="hint">Through the project <a href="/projects/{{$w.ProjectName}}#access">{{$w.ProjectName}}</a>:
+  {{with .ProjectGrants}}<p class="hint">Through the project <a href="/projects/{{$w.ProjectName}}/settings/access">{{$w.ProjectName}}</a>:
     {{range $i, $g := .}}{{if $i}}, {{end}}<code>{{$g.Group}}</code> {{$g.Level}}{{end}}</p>{{end}}
   {{if .Admin}}
   <form method="post" action="/workspaces/{{$w.Name}}/access" class="inline" style="margin-top:1rem">

@@ -33,6 +33,13 @@ func TestProjectPages(t *testing.T) {
 	if body := get(user, "/projects").Body.String(); strings.Contains(body, proj) || !strings.Contains(body, "default") {
 		t.Fatal("a user lists only the default project")
 	}
+	if body := get(h, "/projects").Body.String(); !strings.Contains(body, `<tr data-name="`+proj+`">`) || !strings.Contains(body, `id="new-project"`) ||
+		!strings.Contains(body, `href="/projects/`+proj+`/settings">Edit project`) {
+		t.Fatal("an admin's projects list: searchable rows, the New project dialog and Edit project actions")
+	}
+	if body := get(user, "/projects").Body.String(); strings.Contains(body, `id="new-project"`) || strings.Contains(body, "Edit project") {
+		t.Fatal("a user gets neither New project nor Edit project")
+	}
 
 	// a user can't put a workspace into a project they can't see; an admin can
 	want(post(user, "/workspaces/new", url.Values{"name": {ws}, "ops-project": {proj}}), http.StatusBadRequest, "user picks a hidden project")
@@ -43,9 +50,21 @@ func TestProjectPages(t *testing.T) {
 	if body := get(h, "/workspaces?project=default").Body.String(); strings.Contains(body, ws) {
 		t.Fatal("the default project's list shows another project's workspace")
 	}
-	if body := get(h, "/projects/"+proj).Body.String(); !strings.Contains(body, ws) {
-		t.Fatal("the project page lists its workspace")
+	// the project's menu: Overview, Workspaces, and Settings with General, Team access and Variable sets
+	for _, path := range []string{"", "/workspaces"} {
+		if body := get(h, "/projects/"+proj+path).Body.String(); !strings.Contains(body, `href="/workspaces/`+ws+`"`) ||
+			!strings.Contains(body, `<nav aria-label="Project">`) {
+			t.Fatalf("%s lists the project's workspace in the project's menu", path)
+		}
 	}
+	for _, path := range []string{"/settings", "/settings/access", "/settings/variable-sets"} {
+		if body := get(h, "/projects/"+proj+path).Body.String(); !strings.Contains(body, `<nav aria-label="Project settings">`) ||
+			!strings.Contains(body, `href="/projects/`+proj+path+`" aria-current="page"`) {
+			t.Fatalf("%s shows the settings menu with itself current", path)
+		}
+	}
+	want(get(h, "/projects/"+proj+"/settings/nope"), http.StatusNotFound, "unknown settings page")
+	want(get(user, "/projects/"+proj+"/settings"), http.StatusNotFound, "settings of a project the user can't see")
 	// a project grant reaches its workspaces; without one they don't exist
 	group := "grp-prj-" + sfx
 	member := newServerAs(t, "../../catalog", false, store, devAuth(t, store, "proj-member@example.com", false, group))
@@ -86,8 +105,8 @@ func TestProjectPages(t *testing.T) {
 	if body := get(h, "/workspaces/"+ws+"/variables").Body.String(); !strings.Contains(body, set) {
 		t.Fatal("the project's workspace lists the set")
 	}
-	if body := get(h, "/projects/"+proj).Body.String(); !strings.Contains(body, `href="/variable-sets/`+set+`"`) {
-		t.Fatal("the project page lists the set")
+	if body := get(h, "/projects/"+proj+"/settings/variable-sets").Body.String(); !strings.Contains(body, `href="/variable-sets/`+set+`"`) {
+		t.Fatal("the project's Variable sets page lists the set")
 	}
 	want(post(h, "/variable-sets/"+set+"/projects", nil), http.StatusSeeOther, "detach")
 	if body := get(h, "/workspaces/"+ws+"/variables").Body.String(); strings.Contains(body, set) {
