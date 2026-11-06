@@ -30,10 +30,15 @@ func TestOrganizationCurrency(t *testing.T) {
 func TestSettingsNav(t *testing.T) {
 	store := testStore(t)
 	h := newServer(t, "../../catalog", false, store)
-	if body := get(h, "/workspaces").Body.String(); !strings.Contains(body, `href="/organization">Settings ›</a>`) || strings.Contains(body, ">Audit log<") {
+	if body := get(h, "/workspaces").Body.String(); !strings.Contains(body, `href="/organization">Settings ›</a>`) || strings.Contains(body, ">Audit log<") ||
+		strings.Contains(body, ">Variable sets<") {
 		t.Fatalf("main nav: %s", body)
 	}
-	if body := get(h, "/audit").Body.String(); !strings.Contains(body, `aria-label="Settings"`) || !strings.Contains(body, `href="/audit" aria-current="page">Audit log`) {
-		t.Fatalf("settings nav: %s", body)
+	// grouped like HCP Terraform's organization settings; variable sets live there, not in the main nav
+	for path, current := range map[string]string{"/audit": "Audit log", "/organization": "General", "/variable-sets": "Variable sets"} {
+		if body := get(h, path).Body.String(); !strings.Contains(body, `aria-label="Organization settings"`) ||
+			!strings.Contains(body, `href="`+path+`" aria-current="page">`+current) {
+			t.Fatalf("settings nav on %s: %s", path, body)
+		}
 	}
 }

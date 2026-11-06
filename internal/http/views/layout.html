@@ -523,15 +523,18 @@
   {{end}}
   {{else}}
   {{$s := section}}{{with features}}
-  {{if and (or (eq $s "organization") (eq $s "vcs") (eq $s "catalog") (eq $s "audit")) (user).Admin}}
-  <!-- the side nav becomes the settings menu, like a workspace's -->
-  <nav aria-label="Settings">
-    <a href="/">‹ Home</a>
-    <span class="nav-label">Settings</span>
-    <a href="/organization"{{if eq $s "organization"}} aria-current="page"{{end}}>Organization</a>
-    {{if .VCS}}<a href="/vcs"{{if eq $s "vcs"}} aria-current="page"{{end}}>VCS providers</a>{{end}}
-    {{if and .Deployments .VCS}}<a href="/catalog"{{if eq $s "catalog"}} aria-current="page"{{end}}>Templates</a>{{end}}
+  {{if and (or (eq $s "organization") (eq $s "variable-sets") (eq $s "vcs") (eq $s "catalog") (eq $s "audit")) (user).Admin}}
+  <!-- the side nav becomes the organization settings menu, grouped like HCP Terraform's -->
+  <nav aria-label="Organization settings">
+    {{if .Deployments}}<a href="/projects">‹ Projects</a>{{else}}<a href="/registry">‹ Registry</a>{{end}}
+    <span class="nav-label">Organization settings</span>
+    <a href="/organization"{{if eq $s "organization"}} aria-current="page"{{end}}>General</a>
+    {{if .Deployments}}<a href="/variable-sets"{{if eq $s "variable-sets"}} aria-current="page"{{end}}>Variable sets</a>{{end}}
+    <span class="nav-label">Security</span>
     <a href="/audit"{{if eq $s "audit"}} aria-current="page"{{end}}>Audit log</a>
+    {{if .VCS}}<span class="nav-label">Version control</span>
+    <a href="/vcs"{{if eq $s "vcs"}} aria-current="page"{{end}}>Providers</a>
+    {{if .Deployments}}<a href="/catalog"{{if eq $s "catalog"}} aria-current="page"{{end}}>Template catalog</a>{{end}}{{end}}
   </nav>
   {{else}}
   <nav aria-label="Main">
@@ -541,7 +544,6 @@
     <a href="/workspaces"{{if eq $s "workspaces"}} aria-current="page"{{end}}>Workspaces</a>
     <a href="/"{{if or (eq $s "") (eq $s "templates")}} aria-current="page"{{end}}>Templates</a>
     {{end}}
-    {{if and .Deployments (user).Admin}}<a href="/variable-sets"{{if eq $s "variable-sets"}} aria-current="page"{{end}}>Variable sets</a>{{end}}
     {{if .Registry}}<a href="/registry"{{if eq $s "registry"}} aria-current="page"{{end}}>Registry</a>{{end}}
     {{if (user).Admin}}<a href="/organization">Settings ›</a>{{end}}
   </nav>
