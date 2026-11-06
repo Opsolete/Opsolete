@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.6.0](https://github.com/Opsolete/Opsolete/compare/v0.5.1...v0.6.0) (2026-11-06)
+
+
+### Features
+
+* **catalog:** add a commit to a template's open pull request instead of opening another ([181e76a](https://github.com/Opsolete/Opsolete/commit/181e76ae32971815b8d54f5a60e51bcc30b254fe))
+* **form:** one striped row per field, label help behind a ?, error states and a busy submit button ([09158b7](https://github.com/Opsolete/Opsolete/commit/09158b77ad5b62d15cd8a272ee6e82a5bc4b5335))
+* **registry:** delete modules from the UI ([a546722](https://github.com/Opsolete/Opsolete/commit/a5467224be7ce2ecd83d1e4e46bd41f84ee49b36))
+* **templates:** preview forms, yes / no conditions and clearer messages for end users ([de47cc9](https://github.com/Opsolete/Opsolete/commit/de47cc965540417c0ec2af4e2437b99e40a88a45))
+* **workspaces:** pass workspace and variable-set Terraform variables to added templates ([ec76565](https://github.com/Opsolete/Opsolete/commit/ec765658c028c9b3eda1a271da0078663bdba0ca))
+* **workspaces:** remove the root template too ([8571a4c](https://github.com/Opsolete/Opsolete/commit/8571a4c84ccd34c494fd64e78331eb5a80bd22cf))
+
+
+### Bug Fixes
+
+* **config:** trim spaces around AUTH_DEV_GROUPS entries ([a7e5b6b](https://github.com/Opsolete/Opsolete/commit/a7e5b6b02e74b66698e7620b956cd5c30973c8d3))
+* **http:** reject an unparsable form before the handler acts on an empty one ([0741312](https://github.com/Opsolete/Opsolete/commit/0741312f9fad281f7c0c56789410dceef70196c8))
+* **nix:** let the runner's stop timeout cover Terraform's wait delay after a job timeout ([35b6c72](https://github.com/Opsolete/Opsolete/commit/35b6c72a674874844e3fb3fe7e657fed7ed9870c))
+* **runs:** send a finished run's last log lines before ending the stream ([989997e](https://github.com/Opsolete/Opsolete/commit/989997ee14b9a70f07699acf4e967e189ef1e4ad))
+* **state:** finish state, artifact and job result writes when the server shuts down ([08746d8](https://github.com/Opsolete/Opsolete/commit/08746d88bb5c62dd7b045b72cfcbdc59ab78bc0b))
+* **state:** never release a run's state lock as a cloud lock ([4b067e2](https://github.com/Opsolete/Opsolete/commit/4b067e27724774238c3b6b0a228718c9773ba531))
+* **templates:** hide show_if fields whose condition fails instead of showing them disabled ([4a5a0a6](https://github.com/Opsolete/Opsolete/commit/4a5a0a6159f606489f481b339255dea7aab4c31c))
+* **templates:** keep a new template's id on resave, check browser-incompatible patterns, show numbers in full ([d896bad](https://github.com/Opsolete/Opsolete/commit/d896bad3b8c3c2457ad53d81d9cdde891be3fee1))
+* **vcs:** swap the workspace version control page headings ([f50eebf](https://github.com/Opsolete/Opsolete/commit/f50eebfbde3df29bb64964620377ff33fca0477b))
+* **workspaces:** a template or root removal no longer marks the workspace destroyed ([be347a2](https://github.com/Opsolete/Opsolete/commit/be347a242161e29f0932ac4043211b47edbb9d74))
+* **workspaces:** keep the error of a rejected sensitive input instead of saving the old value ([b971fe8](https://github.com/Opsolete/Opsolete/commit/b971fe86e6a105dd65efeffbc7fbc20d0314a539))
+* **workspaces:** refuse to delete a workspace while its state is locked ([ac41eed](https://github.com/Opsolete/Opsolete/commit/ac41eed9fd9c583751fee21842554e8f0c485a6e))
+
 ## [0.5.1](https://github.com/Opsolete/Opsolete/compare/v0.5.0...v0.5.1) (2026-11-05)
 
 
