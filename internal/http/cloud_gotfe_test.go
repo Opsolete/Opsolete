@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -92,6 +93,39 @@ func TestCloudGoTFE(t *testing.T) {
 	}
 	if _, err := alice.Workspaces.Unlock(ctx, ws.ID); err != nil {
 		t.Fatalf("unlock: %v", err)
+	}
+
+	// cloud { workspaces { project = "x" } }: Terraform's calls in internal/cloud/backend.go (StateMgr).
+	if ws.Project == nil || ws.Project.ID == "" {
+		t.Fatalf("a workspace created without a project is in the default one: %+v", ws.Project)
+	}
+	if def, err := alice.Projects.List(ctx, "acme", &tfe.ProjectListOptions{Name: "default"}); err != nil || len(def.Items) != 1 || def.Items[0].ID != ws.Project.ID {
+		t.Fatalf("default project by name: %+v %v", def, err)
+	}
+	pname := "tfe-prj-" + suffix
+	if none, err := alice.Projects.List(ctx, "acme", &tfe.ProjectListOptions{Name: pname}); err != nil || len(none.Items) != 0 {
+		t.Fatalf("missing project: %+v %v", none, err)
+	}
+	if _, err := alice.Projects.Create(ctx, "acme", tfe.ProjectCreateOptions{Name: pname}); err == nil || !strings.Contains(err.Error(), "admin") {
+		t.Fatalf("a user creates a project: %v", err)
+	}
+	prj, err := other.Projects.Create(ctx, "acme", tfe.ProjectCreateOptions{Name: pname})
+	if err != nil || prj.Name != pname {
+		t.Fatalf("an admin creates the project: %+v %v", prj, err)
+	}
+	t.Cleanup(func() {
+		store.DB.Exec(`DELETE FROM workspaces WHERE project_id::text = $1`, prj.ID)
+		store.DB.Exec(`DELETE FROM projects WHERE id::text = $1`, prj.ID)
+	})
+	if _, err := alice.Workspaces.Create(ctx, "acme", tfe.WorkspaceCreateOptions{Name: tfe.String(name + "-p"), Project: prj}); err == nil || !strings.Contains(err.Error(), "operate") {
+		t.Fatalf("a user without operate on the project creates a workspace in it: %v", err)
+	}
+	inPrj, err := other.Workspaces.Create(ctx, "acme", tfe.WorkspaceCreateOptions{Name: tfe.String(name + "-p"), Project: prj})
+	if err != nil || inPrj.Project == nil || inPrj.Project.ID != prj.ID {
+		t.Fatalf("create in the project: %+v %v", inPrj, err)
+	}
+	if got, err := other.Workspaces.Read(ctx, "acme", name+"-p"); err != nil || got.Project == nil || got.Project.ID != prj.ID {
+		t.Fatalf("read returns the project: %+v %v", got, err)
 	}
 
 	// A run's lock (here a rollback's) is reported as a run's.
