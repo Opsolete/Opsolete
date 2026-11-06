@@ -34,7 +34,7 @@
     <div class="row{{if index $e "ops-workspace"}} invalid{{end}}">
       <label for="ops-workspace">Workspace name <span class="req" aria-hidden="true">*</span></label>
       <input id="ops-workspace" name="ops-workspace" value="{{.Workspace}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}"
-        placeholder="{{.T.ID}}-prod" autocomplete="off" spellcheck="false" aria-describedby="ops-workspace-hint"{{if index $e "ops-workspace"}} aria-invalid="true"{{end}}>
+        placeholder="{{.NamePlaceholder}}" autocomplete="off" spellcheck="false" aria-describedby="ops-workspace-hint"{{if index $e "ops-workspace"}} aria-invalid="true"{{end}}>
       <p class="hint" id="ops-workspace-hint">Lowercase letters, digits and dashes. It holds this deployment's state and runs.</p>
       {{with index $e "ops-workspace"}}<p class="err" role="alert">{{.}}</p>{{end}}
     </div>
@@ -99,6 +99,17 @@
     };
     form.addEventListener("change", update);
     update(); // the browser may have restored other values
+    // Browsers compile pattern with the v flag, which rejects e.g. [a-z0-9-] and then skip the check:
+    // check those with the u flag instead. Go-only syntax fails both; the server still checks it.
+    for (const el of form.querySelectorAll("input[pattern]")) {
+      const p = el.getAttribute("pattern");
+      try { new RegExp(p, "v"); continue; } catch {}
+      let re;
+      try { re = new RegExp("^(?:" + p + ")$", "u"); } catch { continue; }
+      const check = () => el.setCustomValidity(el.value && !re.test(el.value) ? "must match " + p : "");
+      el.addEventListener("input", check);
+      check();
+    }
     // one click, one plan: lock the button while the request runs; unlock when Back restores the page
     const btn = form.querySelector("button[type=submit]"), text = btn.textContent;
     form.addEventListener("submit", () => { btn.disabled = true; btn.textContent = "Starting plan…"; });

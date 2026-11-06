@@ -352,7 +352,7 @@ func Inputs(vars []Variable) (inputs []templates.Input, skipped []string) {
 			in.Label = v.Name
 		}
 		if v.Default != nil {
-			in.Default = fmt.Sprint(v.Default)
+			in.Default = templates.FormatValue(v.Default)
 		}
 		inputs = append(inputs, in)
 	}

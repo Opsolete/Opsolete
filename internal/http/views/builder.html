@@ -12,7 +12,7 @@
 {{with .PullRequest}}<p class="alert" role="status">Pull request opened: <a href="{{.}}" target="_blank" rel="noopener">{{.}}</a>. The catalog changes once it's merged; saving again opens another one.</p>{{end}}
 
 {{if .Registry}}
-<form method="get" class="card bstep">
+<form method="get" class="card bstep" id="from-module">
   <h2><span class="num" aria-hidden="true">↯</span>Start from a registry module <span class="muted">(optional)</span></h2>
   {{$sel := .Selected}}
   <div class="inline">
@@ -32,6 +32,8 @@
 {{with .Warning}}<div class="alert warn" role="status">{{.}}</div>{{end}}
 <form method="post" id="builder">
   <input type="hidden" name="selected" value="{{.Selected}}">
+  {{if and (not .Editing) .T.ID}}<!-- saving again (e.g. after its pull request opened) keeps the id instead of adding a second template -->
+  <input type="hidden" name="id" value="{{.T.ID}}">{{end}}
   <section class="card bstep">
     <h2><span class="num" aria-hidden="true">1</span>About this template</h2>
     <div class="bgrid">
@@ -201,6 +203,14 @@
       refresh();
       card.querySelector("[name=in_name]").focus();
     };
+    // picking a registry module reloads the page: carry the typed name and description along, and
+    // confirm before its variables replace the fields
+    const pick = document.getElementById("from-module"), builder = document.getElementById("builder");
+    pick?.addEventListener("submit", e => {
+      if (cards().some(nameOf) && !confirm("Replace the form fields below with the module's variables? Unsaved field changes are lost.")) return e.preventDefault();
+      for (const n of ["name", "description"])
+        (pick.elements[n] ?? pick.appendChild(Object.assign(document.createElement("input"), {type: "hidden", name: n}))).value = builder.elements[n].value;
+    });
     list.addEventListener("input", refresh);
     list.addEventListener("change", refresh);
     for (const el of [add, ...document.querySelectorAll(".fcard-tools, [data-act^=opt]")]) el.hidden = false;

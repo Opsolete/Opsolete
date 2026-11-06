@@ -225,7 +225,8 @@ func TestFeatureSwitches(t *testing.T) {
 
 func TestInvalidSubmitRerendersForm(t *testing.T) {
 	rec := post(newTestServer(t), "/templates/storage-account", url.Values{"name": {"NO"}, "location": {"westeurope"}})
-	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "must match") {
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "must match") ||
+		!strings.Contains(rec.Body.String(), `placeholder="azure-storage-account-prod"`) {
 		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
 	}
 }
@@ -283,6 +284,13 @@ func TestTemplateBuilder(t *testing.T) {
 	}
 	if rec := post(h, "/templates/new", form); rec.Header().Get("Location") == loc {
 		t.Fatal("each new template must get its own id")
+	}
+	// saving the new-template page again (its pull request opened) keeps the id it was given
+	again := url.Values{}
+	maps.Copy(again, form)
+	again.Set("id", id)
+	if rec := post(h, "/templates/new", again); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "already exists") {
+		t.Fatalf("resave with the page's id: %d %s", rec.Code, rec.Body.String())
 	}
 
 	form.Set("name", "VNet")

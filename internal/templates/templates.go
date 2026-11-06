@@ -416,6 +416,14 @@ func (t Template) Match(c *ShowIf, raw map[string]string) bool {
 
 func anchored(pattern string) string { return "^(?:" + pattern + ")$" }
 
+// FormatValue shows a stored input value or module default as typed: fmt prints the float64 1000000 as 1e+06.
+func FormatValue(v any) string {
+	if f, ok := v.(float64); ok {
+		return strconv.FormatFloat(f, 'f', -1, 64)
+	}
+	return fmt.Sprint(v)
+}
+
 // Validate turns raw form values into typed Terraform variables.
 // It returns per-field error messages; an empty map means valid. Hidden inputs are left out.
 func (t Template) Validate(raw map[string]string) (map[string]any, map[string]string) {
@@ -425,7 +433,10 @@ func (t Template) Validate(raw map[string]string) (map[string]any, map[string]st
 		if !shown[in.Name] {
 			continue
 		}
-		v := strings.TrimSpace(raw[in.Name])
+		v := raw[in.Name]
+		if !in.Sensitive || in.Type != "string" { // a password may start or end with a space
+			v = strings.TrimSpace(v)
+		}
 		if in.Type == "bool" {
 			vals[in.Name] = v == "on" || v == "true"
 			continue

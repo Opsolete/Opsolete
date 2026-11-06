@@ -108,7 +108,7 @@ func formDefaults(t templates.Template, stored map[string]any) (vals map[string]
 		case in.Sensitive:
 			set[in.Name] = ok
 		case ok && !isSealed(v): // a sealed value of a no longer sensitive input must be typed again
-			vals[in.Name] = fmt.Sprint(v)
+			vals[in.Name] = templates.FormatValue(v)
 		case !ok:
 			vals[in.Name] = in.Default
 		}

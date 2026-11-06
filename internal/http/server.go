@@ -2,6 +2,7 @@
 package httpserver
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -13,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -316,6 +318,10 @@ func (s *Server) builder(w http.ResponseWriter, r *http.Request) {
 		}
 		p.T, p.Editing = t, true
 	}
+	// ?name=&description=: typed before "Use module" reloaded the page
+	if q := r.URL.Query(); q.Has("description") {
+		p.T.Name, p.T.Description = cmp.Or(strings.TrimSpace(q.Get("name")), p.T.Name), strings.TrimSpace(q.Get("description"))
+	}
 	// ?module=ns/name/system/version: point the template at a registry module and generate its fields.
 	if sel := r.URL.Query().Get("module"); sel != "" && s.Features.Registry {
 		parts := strings.Split(sel, "/")
@@ -365,6 +371,8 @@ func (s *Server) saveTemplate(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		t.ID = r.PathValue("id") // the id is the file name; it can't change on edit
+	} else if id := r.PostForm.Get("id"); uuidRe.MatchString(id) { // posted by this page's earlier save
+		t.ID = id
 	} else {
 		t.ID = newID()
 	}
@@ -445,6 +453,8 @@ func toJSON(v any) string {
 	}
 	return string(b)
 }
+
+var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`) // newID's format
 
 // newID returns a random UUIDv4, the same format as deployment ids.
 func newID() string {

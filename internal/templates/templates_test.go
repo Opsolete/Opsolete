@@ -102,6 +102,19 @@ func TestValidateEdgeCases(t *testing.T) {
 	}
 }
 
+func TestSensitiveKeepsSpacesAndFormatValue(t *testing.T) {
+	tpl := Template{Inputs: []Input{{Name: "pw", Type: "string", Sensitive: true}, {Name: "pin", Type: "number", Sensitive: true}, {Name: "s", Type: "string"}}}
+	vals, errs := tpl.Validate(map[string]string{"pw": " hunter2 ", "pin": " 42 ", "s": " x "})
+	if len(errs) != 0 || vals["pw"] != " hunter2 " || vals["pin"] != 42.0 || vals["s"] != "x" {
+		t.Errorf("got %v %v", vals, errs)
+	}
+	for v, want := range map[any]string{1e6: "1000000", 1.5: "1.5", true: "true", "a": "a"} {
+		if got := FormatValue(v); got != want {
+			t.Errorf("FormatValue(%v) = %q, want %q", v, got, want)
+		}
+	}
+}
+
 func TestShowIf(t *testing.T) {
 	files := map[string][]byte{"vm.json": []byte(`{"id": "vm", "name": "VM", "module": {"source": "s", "ref": "r"}, "inputs": [
 		{"name": "os", "type": "select", "options": [{"label": "Windows", "value": "windows"}, "linux"], "default": "linux"},

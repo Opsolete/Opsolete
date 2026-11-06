@@ -114,6 +114,13 @@ type formPage struct {
 	added     []storage.WorkspaceTemplate // with Configure: the workspace's templates
 }
 
+// NamePlaceholder suggests a workspace name from the template's name ("Windows VM" → windows-vm-prod):
+// builder-made templates have UUID ids, which read badly.
+func (p formPage) NamePlaceholder() string {
+	base := cmp.Or(strings.Trim(nonModuleChars.ReplaceAllString(strings.ToLower(p.T.Name), "-"), "-"), "workspace")
+	return strings.TrimRight(base[:min(len(base), 58)], "-") + "-prod"
+}
+
 func (s *Server) form(w http.ResponseWriter, r *http.Request) {
 	t, ok, err := s.template(r.Context(), r.PathValue("id"))
 	if err != nil {
