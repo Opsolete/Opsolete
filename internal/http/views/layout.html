@@ -125,6 +125,7 @@
   /* a field shown by an answer above: marked with a bar, faded in when it appears */
   .row.show-if { border-left-color: color-mix(in srgb, var(--brand) 35%, transparent); }
   .row.show-if:not([hidden]) { animation: reveal .18s ease-out; }
+  .row[hidden] { display: none; } /* .row's display: grid would otherwise beat [hidden] */
   @keyframes reveal { from { opacity: 0; transform: translateY(-.25rem); } }
   @media (prefers-reduced-motion: reduce) { .row { animation: none !important; transition: none; } }
   .req { color: var(--danger); }
