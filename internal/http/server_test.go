@@ -1150,11 +1150,11 @@ func TestRemoteStateSharing(t *testing.T) {
 	app := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true})
 	h := app.Handler()
 	suffix := strings.ToLower(newID()[:8])
-	src, err := store.CreateEmptyWorkspace(ctx, "rs-src-"+suffix, false, "")
+	src, err := store.CreateEmptyWorkspace(ctx, "rs-src-"+suffix, "", false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	cons, err := store.CreateEmptyWorkspace(ctx, "rs-cons-"+suffix, false, "")
+	cons, err := store.CreateEmptyWorkspace(ctx, "rs-cons-"+suffix, "", false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1225,7 +1225,7 @@ func TestWorkspaceLock(t *testing.T) {
 	store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
 	alice := newServerAs(t, "../../catalog", false, store, devAuth(t, store, "alice@example.com", true))
 	bob := newServerAs(t, "../../catalog", false, store, devAuth(t, store, "bob@example.com", true))
-	ws, err := store.CreateEmptyWorkspace(ctx, "lk-"+strings.ToLower(newID()[:8]), false, "")
+	ws, err := store.CreateEmptyWorkspace(ctx, "lk-"+strings.ToLower(newID()[:8]), "", false, "")
 	if err != nil {
 		t.Fatal(err)
 	}

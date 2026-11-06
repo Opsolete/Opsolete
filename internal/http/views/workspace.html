@@ -256,6 +256,16 @@
 <div class="field">ID</div>
 <p class="id"><code>{{$w.ID}}</code>
   <button type="button" class="copy" aria-label="Copy ID" title="Copy ID" onclick="navigator.clipboard.writeText('{{$w.ID}}')">⧉</button></p>
+{{if .Projects}}
+<form method="post" action="/workspaces/{{$w.Name}}/project" class="inline">
+  <label for="project">Project</label>
+  <select id="project" name="project">{{range .Projects}}<option value="{{.Name}}"{{if eq .ID $w.ProjectID}} selected{{end}}>{{.Name}}</option>{{end}}</select>
+  <button type="submit" class="secondary">Move to project</button>
+</form>
+<p class="hint">The workspace gets the new project's team access and variable sets; a run under way gets them from its next phase.</p>
+{{else}}
+<div class="field">Project</div><p><a href="/projects/{{$w.ProjectName}}">{{$w.ProjectName}}</a></p>
+{{end}}
 {{if .CanOperate}}
 <form method="post" action="/workspaces/{{$w.Name}}/settings">
   <!-- one settings endpoint: keep the Health page's value -->

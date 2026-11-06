@@ -177,18 +177,19 @@ func scanRun(row interface{ Scan(...any) error }) (Run, error) {
 
 // CreateWorkspace creates a workspace from a template and queues its first plan. createdBy is a user id, or empty.
 // id is the new workspace's id ("" = a random one): set when inputs are sealed to it beforehand.
-func (s *Store) CreateWorkspace(ctx context.Context, id, name, templateID, moduleSource, moduleRef string,
+// project is the name of the project it goes into; "" is the default project.
+func (s *Store) CreateWorkspace(ctx context.Context, id, name, project, templateID, moduleSource, moduleRef string,
 	inputs map[string]any, autoApply bool, createdBy string) (Workspace, Run, error) {
-	return s.createWorkspace(ctx, id, name, templateID, moduleSource, moduleRef, inputs, autoApply, createdBy, true)
+	return s.createWorkspace(ctx, id, name, project, templateID, moduleSource, moduleRef, inputs, autoApply, createdBy, true)
 }
 
 // CreateEmptyWorkspace creates a workspace without configuration and without a run.
-func (s *Store) CreateEmptyWorkspace(ctx context.Context, name string, autoApply bool, createdBy string) (Workspace, error) {
-	w, _, err := s.createWorkspace(ctx, "", name, "", "", "", map[string]any{}, autoApply, createdBy, false)
+func (s *Store) CreateEmptyWorkspace(ctx context.Context, name, project string, autoApply bool, createdBy string) (Workspace, error) {
+	w, _, err := s.createWorkspace(ctx, "", name, project, "", "", "", map[string]any{}, autoApply, createdBy, false)
 	return w, err
 }
 
-func (s *Store) createWorkspace(ctx context.Context, id, name, templateID, moduleSource, moduleRef string,
+func (s *Store) createWorkspace(ctx context.Context, id, name, project, templateID, moduleSource, moduleRef string,
 	inputs map[string]any, autoApply bool, createdBy string, plan bool) (Workspace, Run, error) {
 	raw, err := json.Marshal(inputs)
 	if err != nil {
@@ -204,8 +205,10 @@ func (s *Store) createWorkspace(ctx context.Context, id, name, templateID, modul
 		INSERT INTO workspaces (id, name, template_id, module_source, module_ref, inputs, state_key, auto_apply, created_by, project_id)
 		SELECT v, $1, NULLIF($2, ''), NULLIF($3, ''), NULLIF($4, ''), $5,
 			'opsolete/' || COALESCE(NULLIF($2, ''), 'workspaces') || '/' || v || '.tfstate', $6, NULLIF($7, '')::uuid,
-			o.default_project_id FROM id, organization o -- step 2 of the projects roadmap adds a project picker
-		RETURNING id`, name, templateID, moduleSource, moduleRef, raw, autoApply, createdBy, id).Scan(&id)
+			-- an unknown project name is NULL: the insert fails instead of silently using the default
+			CASE WHEN $9 = '' THEN o.default_project_id ELSE (SELECT p.id FROM projects p WHERE p.name = $9) END
+		FROM id, organization o
+		RETURNING id`, name, templateID, moduleSource, moduleRef, raw, autoApply, createdBy, id, project).Scan(&id)
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
 		return Workspace{}, Run{}, ErrNameTaken
 	}
@@ -280,13 +283,14 @@ func (s *Store) GetWorkspaceByID(ctx context.Context, id string) (Workspace, err
 	return scanWorkspace(s.DB.QueryRowContext(ctx, `SELECT `+workspaceCols+` FROM workspaces w WHERE w.id = ops_uuid($1)`, id))
 }
 
-// ListWorkspaces returns the 200 most recently active workspaces v may see, with their latest run.
-func (s *Store) ListWorkspaces(ctx context.Context, v Viewer) ([]Workspace, error) {
+// ListWorkspaces returns the 200 most recently active workspaces v may see, with their latest run;
+// project (a name) limits them to one project, "" lists all.
+func (s *Store) ListWorkspaces(ctx context.Context, v Viewer, project string) ([]Workspace, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT `+workspaceCols+`, l.status, l.action, l.updated_at
 		FROM workspaces w LEFT JOIN LATERAL (SELECT status, action, updated_at FROM runs
 			WHERE workspace_id = w.id AND action NOT IN ('assess', 'plan') ORDER BY created_at DESC LIMIT 1) l ON true
-		WHERE `+visible+`
-		ORDER BY COALESCE(l.updated_at, w.created_at) DESC LIMIT 200`, v.UserID, v.Admin)
+		WHERE `+visible+` AND ($3 = '' OR w.project_id = (SELECT p.id FROM projects p WHERE p.name = $3))
+		ORDER BY COALESCE(l.updated_at, w.created_at) DESC LIMIT 200`, v.UserID, v.Admin, project)
 	if err != nil {
 		return nil, err
 	}

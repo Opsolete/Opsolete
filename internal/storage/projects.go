@@ -36,10 +36,11 @@ func scanProject(row interface{ Scan(...any) error }) (Project, error) {
 	return p, err
 }
 
-// Projects lists, by name, the projects v may see: those with a workspace v sees, or a grant to one of v's groups.
+// Projects lists, by name, the projects v may see: the default project (anyone may create workspaces
+// there), those with a workspace v sees, and those granted to one of v's groups.
 func (s *Store) Projects(ctx context.Context, v Viewer) ([]Project, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT `+projectCols+` FROM projects p
-		WHERE $2 OR EXISTS (SELECT 1 FROM workspaces w WHERE w.project_id = p.id AND `+visible+`)
+		WHERE $2 OR p.id = (SELECT default_project_id FROM organization) OR EXISTS (SELECT 1 FROM workspaces w WHERE w.project_id = p.id AND `+visible+`)
 			OR EXISTS (SELECT 1 FROM project_access a JOIN users u ON u.id = NULLIF($1, '')::uuid
 				WHERE a.project_id = p.id AND a.group_name = ANY(u.groups))
 		ORDER BY p.name`, v.UserID, v.Admin)
@@ -81,6 +82,12 @@ func (s *Store) UpdateProject(ctx context.Context, id, name, description string)
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
 		return ErrProjectNameTaken
 	}
+	return affected(res, err)
+}
+
+// SetDefaultProject makes a project the one new workspaces land in; sql.ErrNoRows for an unknown id.
+func (s *Store) SetDefaultProject(ctx context.Context, id string) error {
+	res, err := s.DB.ExecContext(ctx, `UPDATE organization SET default_project_id = p.id FROM projects p WHERE p.id = ops_uuid($1)`, id)
 	return affected(res, err)
 }
 

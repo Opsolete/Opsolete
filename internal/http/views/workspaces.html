@@ -6,12 +6,21 @@
   </div>
   <a class="btn" href="/workspaces/new">+ New workspace</a>
 </div>
+<form method="get" class="inline" style="margin-bottom:1rem">
+  <label for="project-filter">Project</label>
+  <select id="project-filter" name="project">
+    <option value="">All projects</option>
+    {{range .Projects}}<option value="{{.Name}}"{{if eq .Name $.Project}} selected{{end}}>{{.Name}}</option>{{end}}
+  </select>
+  <button type="submit" class="secondary">Filter</button>
+</form>
 <div class="card flush">
 <table>
-<tr><th>Workspace</th><th>Configuration</th><th>Version</th><th>Latest run</th><th>Owner</th><th>Updated</th></tr>
-{{range .}}
+<tr><th>Workspace</th><th>Project</th><th>Configuration</th><th>Version</th><th>Latest run</th><th>Owner</th><th>Updated</th></tr>
+{{range .Workspaces}}
 <tr>
   <td><a href="/workspaces/{{.Name}}"><strong>{{.Name}}</strong></a>{{if .AutoApply}} <span class="tag" title="plans of apply runs are applied without confirmation">auto-apply</span>{{end}}{{if .Drifted}} <span class="status drifted">drifted</span>{{end}}</td>
+  <td><a href="/projects/{{.ProjectName}}">{{.ProjectName}}</a></td>
   <td>{{if .TemplateID}}{{.TemplateID}}{{else if .VCSConnectionID}}<code>{{.VCSRepo}}</code>{{else}}<span class="muted">none</span>{{end}}</td>
   <td>{{if .TemplateID}}<span class="tag">{{.ModuleRef}}</span>{{else if .VCSConnectionID}}<span class="tag">{{.VCSBranch}}</span>{{end}}</td>
   <td>{{with .Latest}}<span class="status {{.Status}}">{{status .Status}}</span>{{if eq .Action "destroy"}} <small>destroy</small>{{end}}{{else}}<span class="muted">none</span>{{end}}</td>
@@ -19,7 +28,7 @@
   <td class="nowrap">{{with .Latest}}<span title="{{.UpdatedAt.Format "2006-01-02 15:04"}}">{{ago .UpdatedAt}}</span>{{else}}<span title="{{.CreatedAt.Format "2006-01-02 15:04"}}">{{ago .CreatedAt}}</span>{{end}}</td>
 </tr>
 {{else}}
-<tr><td colspan="6" class="empty">No workspaces yet. <a href="/workspaces/new">Create one</a>.</td></tr>
+<tr><td colspan="7" class="empty">No workspaces{{if .Project}} in this project{{end}} yet. <a href="/workspaces/new">Create one</a>.</td></tr>
 {{end}}
 </table>
 </div>

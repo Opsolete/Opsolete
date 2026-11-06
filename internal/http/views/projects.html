@@ -1,0 +1,36 @@
+{{template "top"}}
+<div class="page-head">
+  <div>
+    <h1>Projects</h1>
+    <p class="muted">A project groups workspaces. Its team access and variable sets apply to all of them.</p>
+  </div>
+</div>
+
+<div class="card flush">
+<table>
+<tr><th>Project</th><th>Description</th><th>Workspaces</th><th>Teams</th></tr>
+{{range .}}
+<tr>
+  <td><a href="/projects/{{.Name}}"><strong>{{.Name}}</strong></a>{{if .Default}} <span class="tag" title="new workspaces go here unless another project is picked">default</span>{{end}}</td>
+  <td>{{.Description}}</td>
+  <td>{{.Workspaces}}</td>
+  <td>{{.Grants}}</td>
+</tr>
+{{else}}
+<tr><td colspan="4" class="empty">No projects you can see.</td></tr>
+{{end}}
+</table>
+</div>
+
+{{if (user).Admin}}
+<h2>Create a project</h2>
+<form method="post" class="card">
+  <label for="name">Name <span class="req" aria-hidden="true">*</span></label>
+  <input id="name" name="name" required pattern="[a-z0-9][a-z0-9\-]{1,62}" placeholder="networking" aria-describedby="name-hint">
+  <p class="hint" id="name-hint">Lowercase letters, digits and dashes.</p>
+  <label for="description">Description</label>
+  <input id="description" name="description" class="wide" maxlength="1000">
+  <div class="actions"><button type="submit">Create project</button></div>
+</form>
+{{end}}
+{{template "bottom"}}

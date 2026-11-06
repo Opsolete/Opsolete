@@ -199,7 +199,7 @@ func (s *Server) cloudCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := auth.FromContext(r.Context())
-	ws, err := s.Store.CreateEmptyWorkspace(r.Context(), name, false, u.ID)
+	ws, err := s.Store.CreateEmptyWorkspace(r.Context(), name, "", false, u.ID) // the default project until the cloud API takes one (projects roadmap step 5)
 	if errors.Is(err, storage.ErrNameTaken) {
 		writeAPIError(w, http.StatusUnprocessableEntity, err.Error())
 		return

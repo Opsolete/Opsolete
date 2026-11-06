@@ -32,6 +32,7 @@ import (
 const (
 	fieldWorkspace = "ops-workspace"
 	fieldAutoApply = "ops-auto-apply"
+	fieldProject   = "ops-project"
 )
 
 var workspaceNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`)
@@ -105,6 +106,8 @@ type formPage struct {
 	Errors    map[string]string
 	Workspace string
 	AutoApply bool
+	Project   string             // the project picked for the new workspace; "" is the default
+	Projects  []storage.Project  // to pick from, when creating a workspace
 	Configure *storage.Workspace // set: change this workspace's inputs and module version instead of creating one
 	Module    string             // with Configure: the added template to change (or add, with Adding)
 	Adding    bool
@@ -133,7 +136,13 @@ func (s *Server) form(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	vals, _ := formDefaults(t, nil)
-	s.render(w, r, http.StatusOK, "form.html", formPage{T: t, Editor: s.canEditTemplates(r), Values: vals})
+	projects, err := s.visibleProjects(r)
+	if err != nil {
+		s.internalError(w, "list projects", err)
+		return
+	}
+	s.render(w, r, http.StatusOK, "form.html", formPage{T: t, Editor: s.canEditTemplates(r), Values: vals,
+		Project: r.URL.Query().Get("project"), Projects: projects})
 }
 
 // createWorkspace creates a workspace from a template and queues its first plan.
@@ -158,7 +167,14 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 		errs[fieldWorkspace] = workspaceNameRule
 	}
 	page := formPage{T: t, Editor: s.canEditTemplates(r), Values: raw, Errors: errs, Workspace: name,
-		AutoApply: r.PostForm.Get(fieldAutoApply) != ""}
+		AutoApply: r.PostForm.Get(fieldAutoApply) != "", Project: r.PostForm.Get(fieldProject)}
+	if !s.pickableProject(w, r, page.Project) {
+		return
+	}
+	if page.Projects, err = s.visibleProjects(r); err != nil {
+		s.internalError(w, "list projects", err)
+		return
+	}
 	id := newID() // sensitive inputs are sealed to the workspace's id
 	if err := s.sealInputs(t, raw, vals, nil, errs, id, ""); err != nil {
 		page.Error = err.Error()
@@ -168,7 +184,7 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := auth.FromContext(r.Context())
-	ws, run, err := s.Store.CreateWorkspace(r.Context(), id, name, t.ID, t.Module.Source, t.Module.Ref, vals, page.AutoApply, u.ID)
+	ws, run, err := s.Store.CreateWorkspace(r.Context(), id, name, page.Project, t.ID, t.Module.Source, t.Module.Ref, vals, page.AutoApply, u.ID)
 	if errors.Is(err, storage.ErrNameTaken) {
 		errs[fieldWorkspace] = err.Error()
 		s.render(w, r, http.StatusUnprocessableEntity, "form.html", page)
@@ -182,13 +198,20 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID, http.StatusSeeOther)
 }
 
+// workspaces lists the workspaces the user may see; ?project= (a name) filters by project.
 func (s *Server) workspaces(w http.ResponseWriter, r *http.Request) {
-	list, err := s.Store.ListWorkspaces(r.Context(), viewer(r))
+	project := r.URL.Query().Get("project")
+	list, err := s.Store.ListWorkspaces(r.Context(), viewer(r), project)
 	if err != nil {
 		s.internalError(w, "list workspaces", err)
 		return
 	}
-	s.render(w, r, http.StatusOK, "workspaces.html", list)
+	projects, err := s.Store.Projects(r.Context(), viewer(r))
+	if err != nil {
+		s.internalError(w, "list projects", err)
+		return
+	}
+	s.render(w, r, http.StatusOK, "workspaces.html", map[string]any{"Workspaces": list, "Projects": projects, "Project": project})
 }
 
 // loadWorkspace loads the {name} workspace if the user has at least the given access level; it
@@ -463,7 +486,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 				s.internalError(w, "remote state consumers", err)
 				return
 			}
-			all, err := s.Store.ListWorkspaces(ctx, viewer(r))
+			all, err := s.Store.ListWorkspaces(ctx, viewer(r), "")
 			if err != nil {
 				s.internalError(w, "list workspaces", err)
 				return
@@ -480,7 +503,15 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		maps.Copy(data, map[string]any{"Grants": grants, "Groups": groups, "StateConsumers": stateConsumers,
+		var projects []storage.Project // General: where an admin can move it
+		if page == "" && auth.FromContext(ctx).Admin() {
+			var err error
+			if projects, err = s.Store.Projects(ctx, viewer(r)); err != nil {
+				s.internalError(w, "list projects", err)
+				return
+			}
+		}
+		maps.Copy(data, map[string]any{"Grants": grants, "Groups": groups, "StateConsumers": stateConsumers, "Projects": projects,
 			"StateAddress": s.Registry.PublicURL.JoinPath(runnerapi.StatePrefix, ws.ID).String()})
 	}
 	s.render(w, r, http.StatusOK, "workspace.html", data)

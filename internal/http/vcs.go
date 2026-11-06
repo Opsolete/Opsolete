@@ -100,7 +100,7 @@ func (s *Server) renderNewConnection(w http.ResponseWriter, r *http.Request, sta
 	p.Providers = vcs.Providers
 	if p.Step == 3 {
 		// shortcut: offers the 200 most recently active workspaces, as variable sets do; add search if there are more.
-		all, err := s.Store.ListWorkspaces(r.Context(), storage.Viewer{Admin: true}) // admin-only page
+		all, err := s.Store.ListWorkspaces(r.Context(), storage.Viewer{Admin: true}, "") // admin-only page
 		if err != nil {
 			s.internalError(w, "list workspaces", err)
 			return

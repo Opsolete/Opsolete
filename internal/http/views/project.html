@@ -1,0 +1,51 @@
+{{template "top"}}
+{{$p := .P}}
+<nav class="back" aria-label="breadcrumb"><a href="/projects">Projects</a> / {{$p.Name}}</nav>
+<div class="page-head">
+  <div>
+    <h1>{{$p.Name}}{{if $p.Default}} <span class="tag">default</span>{{end}}</h1>
+    {{with $p.Description}}<p class="muted">{{.}}</p>{{end}}
+  </div>
+  <a class="btn" href="/workspaces/new?project={{$p.Name}}">+ New workspace</a>
+</div>
+
+<h2>Workspaces</h2>
+<div class="card flush">
+<table>
+<tr><th>Workspace</th><th>Latest run</th><th>Owner</th><th>Updated</th></tr>
+{{range .Workspaces}}
+<tr>
+  <td><a href="/workspaces/{{.Name}}"><strong>{{.Name}}</strong></a></td>
+  <td>{{with .Latest}}<span class="status {{.Status}}">{{status .Status}}</span>{{else}}<span class="muted">none</span>{{end}}</td>
+  <td>{{.CreatedBy}}</td>
+  <td class="nowrap">{{with .Latest}}{{ago .UpdatedAt}}{{else}}{{ago .CreatedAt}}{{end}}</td>
+</tr>
+{{else}}
+<tr><td colspan="4" class="empty">No workspaces you can see in this project.</td></tr>
+{{end}}
+</table>
+</div>
+
+{{if (user).Admin}}
+<h2>Settings</h2>
+<form method="post" action="/projects/{{$p.Name}}/settings" class="card">
+  <label for="name">Name <span class="req" aria-hidden="true">*</span></label>
+  <input id="name" name="name" value="{{$p.Name}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}" aria-describedby="name-hint">
+  <p class="hint" id="name-hint">Renaming changes the project's URL; its workspaces keep theirs.</p>
+  <label for="description">Description</label>
+  <input id="description" name="description" value="{{$p.Description}}" class="wide" maxlength="1000">
+  <label class="check"><input type="checkbox" name="default"{{if $p.Default}} checked disabled{{end}}>
+    <span>Default project<small>New workspaces go here unless another project is picked. To change it, make another project the default.</small></span></label>
+  <div class="actions"><button type="submit" class="secondary">Save</button></div>
+</form>
+
+<h2>Delete project</h2>
+{{if $p.Default}}<p class="muted">The default project can't be deleted.</p>
+{{else if $p.Workspaces}}<p class="muted">Move or delete its {{$p.Workspaces}} workspace(s) first.</p>
+{{else}}
+<form method="post" action="/projects/{{$p.Name}}/delete" onsubmit="return confirm('Delete the project {{$p.Name}} with its team access and variable set attachments?')">
+  <button type="submit" class="danger">Delete project</button>
+</form>
+{{end}}
+{{end}}
+{{template "bottom"}}

@@ -151,11 +151,15 @@ func (s *Server) newWorkspacePage(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	// "From a template" goes to that template's form.
 	if id := q.Get("template"); id != "" {
-		http.Redirect(w, r, "/templates/"+url.PathEscape(id), http.StatusSeeOther)
+		to := "/templates/" + url.PathEscape(id)
+		if p := q.Get("project"); p != "" {
+			to += "?project=" + url.QueryEscape(p)
+		}
+		http.Redirect(w, r, to, http.StatusSeeOther)
 		return
 	}
 	form := map[string]string{"type": q.Get("type"), "vcs_connection": q.Get("conn"), "vcs_repo": q.Get("repo"), "other": q.Get("other"),
-		"vcs_branch": "main", "vcs_trigger": "1"}
+		"vcs_branch": "main", "vcs_trigger": "1", "project": q.Get("project")}
 	fillTagForm(form, "")
 	if repo := form["vcs_repo"]; repo != "" {
 		form["name"] = strings.ToLower(path.Base(repo)) // a suggestion; the form checks it
@@ -173,7 +177,12 @@ func (s *Server) renderNewWorkspace(w http.ResponseWriter, r *http.Request, stat
 		s.internalError(w, "vcs connections", err)
 		return
 	}
-	data := map[string]any{"Templates": s.Templates.List(), "VCS": f, "Providers": vcs.Providers}
+	projects, err := s.Store.Projects(r.Context(), viewer(r))
+	if err != nil {
+		s.internalError(w, "list projects", err)
+		return
+	}
+	data := map[string]any{"Templates": s.Templates.List(), "VCS": f, "Providers": vcs.Providers, "Projects": projects, "Project": form["project"]}
 	for _, c := range f.Conns {
 		if c.ID == form["vcs_connection"] {
 			data["Conn"] = c
@@ -189,10 +198,14 @@ func (s *Server) createEmptyWorkspace(w http.ResponseWriter, r *http.Request) {
 	if form["type"] == "" { // re-render a failed form at the right step
 		form["type"] = map[bool]string{true: "vcs", false: "cli"}[form["vcs_connection"] != ""]
 	}
+	form["project"] = r.PostFormValue(fieldProject)
 	fail := func(msg string) { s.renderNewWorkspace(w, r, http.StatusUnprocessableEntity, form, msg) }
 	name := form["name"]
 	if !validWorkspaceName(name) {
 		fail("Workspace name: " + workspaceNameRule)
+		return
+	}
+	if !s.pickableProject(w, r, form["project"]) {
 		return
 	}
 	// "": selected-scope connections list existing workspaces, so a new one only gets "all" connections
@@ -207,7 +220,7 @@ func (s *Server) createEmptyWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := auth.FromContext(r.Context())
-	ws, err := s.Store.CreateEmptyWorkspace(r.Context(), name, form["auto_apply"] != "", u.ID)
+	ws, err := s.Store.CreateEmptyWorkspace(r.Context(), name, form["project"], form["auto_apply"] != "", u.ID)
 	if errors.Is(err, storage.ErrNameTaken) {
 		fail(err.Error())
 		return

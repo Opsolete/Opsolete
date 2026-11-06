@@ -218,7 +218,7 @@ func (s *Server) variableSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// shortcut: offers the 200 most recently active workspaces; add search if there are more.
-	all, err := s.Store.ListWorkspaces(r.Context(), storage.Viewer{Admin: true}) // admin-only page
+	all, err := s.Store.ListWorkspaces(r.Context(), storage.Viewer{Admin: true}, "") // admin-only page
 	if err != nil {
 		s.internalError(w, "list workspaces", err)
 		return

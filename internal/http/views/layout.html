@@ -507,6 +507,7 @@
   <nav aria-label="Main">
     {{if .Deployments}}
     <a href="/"{{if or (eq $s "") (eq $s "templates")}} aria-current="page"{{end}}>Templates</a>
+    <a href="/projects"{{if eq $s "projects"}} aria-current="page"{{end}}>Projects</a>
     <a href="/workspaces"{{if eq $s "workspaces"}} aria-current="page"{{end}}>Workspaces</a>
     {{end}}
     {{if and .Deployments (user).Admin}}<a href="/variable-sets"{{if eq $s "variable-sets"}} aria-current="page"{{end}}>Variable sets</a>{{end}}
@@ -518,6 +519,13 @@
   {{end}}
 </aside>
 <main class="wrap">
+{{end}}
+{{define "projectpick"}}<!-- the project of a new workspace: .Projects to pick from, .Project the picked name ("" = the default) -->
+<label for="ops-project">Project</label>
+<select id="ops-project" name="ops-project" aria-describedby="ops-project-hint">
+  {{$sel := .Project}}{{range .Projects}}<option value="{{.Name}}"{{if or (eq .Name $sel) (and (not $sel) .Default)}} selected{{end}}>{{.Name}}{{if .Default}} (default){{end}}</option>{{end}}
+</select>
+<p class="hint" id="ops-project-hint">The project's grants and variable sets apply to the workspace.</p>
 {{end}}
 {{define "picker"}}<!-- searchable multi-select (a picker value from Go): checkboxes in a dropdown; closed <details> still submit their boxes -->
 <details class="menu picker">

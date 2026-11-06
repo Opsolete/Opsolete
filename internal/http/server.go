@@ -158,6 +158,7 @@ func (s *Server) Handler() http.Handler {
 	s.stateRoutes(mux)
 	s.cloudRoutes(mux)
 	s.workspaceRoutes(mux)
+	s.projectRoutes(mux)
 	s.variableRoutes(mux)
 	// CrossOriginProtection rejects cross-site browser POSTs (CSRF); token clients send no Origin and pass.
 	return instrument(mux, s.logRequests(s.audit(http.NewCrossOriginProtection().Handler(s.requireLogin(mux)))))
