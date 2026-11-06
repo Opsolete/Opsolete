@@ -59,6 +59,8 @@ type Workspace struct {
 	Drifted           bool   // the latest assessment found drift and nothing was applied since
 	CreatedBy         string // email; empty for workspaces from before login
 	CreatedAt         time.Time
+	ProjectID         string
+	ProjectName       string
 	Latest            *Run // most recent run
 }
 
@@ -129,14 +131,15 @@ const workspaceCols = `w.id, w.name, COALESCE(w.template_id, ''), COALESCE(w.mod
 	COALESCE((SELECT a.status = 'drifted' AND NOT EXISTS (SELECT 1 FROM runs x WHERE x.workspace_id = w.id
 		AND x.status = 'applied' AND x.updated_at > a.updated_at) FROM runs a
 		WHERE a.workspace_id = w.id AND a.action = 'assess' AND a.status IN ('no_changes', 'drifted')
-		ORDER BY a.created_at DESC LIMIT 1), false), COALESCE((SELECT email FROM users u WHERE u.id = w.created_by), ''), w.created_at`
+		ORDER BY a.created_at DESC LIMIT 1), false), COALESCE((SELECT email FROM users u WHERE u.id = w.created_by), ''), w.created_at,
+	w.project_id, (SELECT p.name FROM projects p WHERE p.id = w.project_id)`
 
 func scanWorkspace(row interface{ Scan(...any) error }, extra ...any) (Workspace, error) {
 	var w Workspace
 	var raw []byte
 	dest := append([]any{&w.ID, &w.Name, &w.TemplateID, &w.ModuleSource, &w.ModuleRef, &raw,
 		&w.VCSConnectionID, &w.VCSRepo, &w.VCSBranch, &w.VCSTrigger, &w.VCSPullRequests, &w.VCSTagsRegex, &w.VCSTagBaseline, &w.StateKey, &w.Templates,
-		&w.AutoApply, &w.DriftDetection, &w.GlobalRemoteState, &w.ExecutionMode, &w.Drifted, &w.CreatedBy, &w.CreatedAt}, extra...)
+		&w.AutoApply, &w.DriftDetection, &w.GlobalRemoteState, &w.ExecutionMode, &w.Drifted, &w.CreatedBy, &w.CreatedAt, &w.ProjectID, &w.ProjectName}, extra...)
 	if err := row.Scan(dest...); err != nil {
 		return w, err
 	}
@@ -198,9 +201,10 @@ func (s *Store) createWorkspace(ctx context.Context, id, name, templateID, modul
 	defer tx.Rollback()
 	err = tx.QueryRowContext(ctx, `
 		WITH id AS (SELECT COALESCE(NULLIF($8, '')::uuid, gen_random_uuid()) AS v)
-		INSERT INTO workspaces (id, name, template_id, module_source, module_ref, inputs, state_key, auto_apply, created_by)
+		INSERT INTO workspaces (id, name, template_id, module_source, module_ref, inputs, state_key, auto_apply, created_by, project_id)
 		SELECT v, $1, NULLIF($2, ''), NULLIF($3, ''), NULLIF($4, ''), $5,
-			'opsolete/' || COALESCE(NULLIF($2, ''), 'workspaces') || '/' || v || '.tfstate', $6, NULLIF($7, '')::uuid FROM id
+			'opsolete/' || COALESCE(NULLIF($2, ''), 'workspaces') || '/' || v || '.tfstate', $6, NULLIF($7, '')::uuid,
+			o.default_project_id FROM id, organization o -- step 2 of the projects roadmap adds a project picker
 		RETURNING id`, name, templateID, moduleSource, moduleRef, raw, autoApply, createdBy, id).Scan(&id)
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
 		return Workspace{}, Run{}, ErrNameTaken

@@ -125,3 +125,34 @@ The division of responsibility:
 - **Terraform + existing modules:** plan · apply · outputs, with state in the Opsolete `http` backend, one state per workspace.
 
 Runners never touch the database or the state store directly. The server holds read/write access to the state store, and cloud credentials only as sealed variables it never uses itself.
+
+## Roadmap: projects (in progress)
+
+Goal: one level above workspaces, modeled on HCP Terraform projects (https://developer.hashicorp.com/terraform/cloud-docs/projects). A project is a folder of workspaces that carries access grants and variable sets for all of them. Tick items off here as they land; record changed decisions as "Decision (month year): …" like the rest of this file.
+
+### Design
+
+- **HCP as it is configured now** (the rudesome org, read through its API in November 2026): there is one project, "Default Project" (`prj-…`), with 2 workspaces, no teams, tags or variable sets. The default project is an organization setting (`organization.relationships.default-project`), not a fixed name. A project carries `workspace-count`, `team-count`, `auto-destroy-activity-duration`, and a `default-execution-mode` and default agent pool. Those two are inherited from the organization unless `setting-overwrites` is set. Each workspace has `relationships.project`.
+- **Every workspace is in exactly one project.** The migration creates a project named `default` and stores it as `organization.default_project_id` (the singleton table from `032_organization.sql`). It then moves every existing workspace into it. A new workspace goes into the project the user picks, or the default project if they don't pick one. Admins can make a different project the default. The current default project cannot be deleted.
+- **Workspace names stay unique across the whole instance**, as in HCP (unique per organization). So `/workspaces/{name}`, the state backend path, the `cloud` API and VCS polling do not change. Projects add grouping, not a new namespace.
+- **Project names** follow the workspace name rule (`validWorkspaceName`, which also reserves `new`) and are the URL key: `/projects/{name}`. Renaming a project changes its URL; workspace URLs stay the same.
+- **Schema** (one migration, `040_projects.sql`):
+  - `projects (id uuid PK, name text UNIQUE NOT NULL, description text NOT NULL DEFAULT '', created_at)`
+  - `workspaces.project_id uuid NOT NULL REFERENCES projects ON DELETE RESTRICT`, with an index. RESTRICT means only empty projects can be deleted, as in HCP.
+  - `organization.default_project_id uuid NOT NULL REFERENCES projects`, which also blocks deleting the default project.
+  - `project_access (project_id, group_name, level read|operate, PK(project_id, group_name))`, the same shape as `workspace_access`.
+  - `variable_set_projects (set_id, project_id, PK(set_id, project_id))`, the same shape as `variable_set_workspaces`.
+- **Access:** a user's level on a workspace is the highest of: creator (operate), a workspace grant, or a grant on the workspace's project. Change only the `visible` SQL condition and `Store.Access` in `internal/storage/workspaces.go`; every caller then inherits project grants. A user sees a project if they can see at least one workspace in it or hold a grant on it. Admins create, rename and delete projects, move workspaces, and grant access. There are no per-project admins yet.
+- **Variable precedence** (strongest first, as in HCP): workspace variables, then sets attached to the workspace, then sets attached to its project, then global sets. The existing rule that global sets skip VCS-linked workspaces stays. Project-attached sets still apply to those workspaces, because someone attached them deliberately.
+- **Moving a workspace** to another project is admin-only. It is allowed while a run is active, because nothing at runtime depends on the project except the variables, and those are resolved when a job is claimed. Record each move in the audit log.
+- **Cloud API:** support `cloud { workspaces { project = "x" } }`. Serve `GET /organizations/{org}/projects` with a name filter, and accept `relationships.project` when a workspace is created. If the CLI omits the project, use `default`. Return `relationships.project` in `writeWorkspace`. Check what the CLI sends against go-tfe before building this (`cloud_gotfe_test.go`).
+- **Code layout:** `internal/storage/projects.go`, `internal/http/projects.go`, and `views/projects.html` and `views/project.html`. No new package.
+
+### Steps
+
+1. [x] **Data model:** write the migration, then `Store` CRUD (`Projects`, `Project`, `CreateProject`, `UpdateProject`, `DeleteProject`, which refuses non-empty projects, and `MoveWorkspace`), and add `Workspace.ProjectID/ProjectName`. Storage tests cover: existing workspaces land in `default`, deleting a non-empty project fails, and the default project cannot be deleted.
+2. [ ] **UI, basic:** `/projects` lists projects with workspace and group-grant counts (HCP's `workspace-count` and `team-count`). `/projects/{name}` shows a project's workspaces, settings (rename, description, delete) and a "new workspace" button. The workspace create form gets a project picker. Workspace settings get a "move to project" control. The `/workspaces` list shows and filters by project. Project actions go to the audit log.
+3. [ ] **Access:** add project grants (`POST /projects/{name}/access`, admin only) and change `visible` and `Access`. Tests check that a project grant reveals all of the project's workspaces, that the highest of the workspace and project levels wins, and that a user with no access gets a 404.
+4. [ ] **Variable sets:** let sets attach to projects (on the variable set page), and apply the precedence above in the variables query. Test the precedence order.
+5. [ ] **Cloud API:** add the projects endpoint, workspace creation in a project, and the project relationship on workspaces, with go-tfe tests.
+6. [ ] **Later, only on request:** project tags inherited by workspaces, project-level defaults (execution mode and auto-apply, which workspaces inherit unless they override them, following HCP's `default-execution-mode` and `setting-overwrites`), auto-destroy of inactive workspaces, scoping VCS connections or remote state sharing to projects, and project-admin roles beyond read/operate.
