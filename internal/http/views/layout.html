@@ -168,7 +168,7 @@
   .tip-text { position: absolute; z-index: 3; bottom: calc(100% + .4rem); left: 0; width: max-content; max-width: 18rem;
     padding: .5rem .7rem; border-radius: 6px; background: var(--nav); color: #fff; font-size: .78rem; font-weight: 400; line-height: 1.4;
     box-shadow: 0 6px 18px rgb(12 12 14 / 30%); opacity: 0; pointer-events: none; transition: opacity .12s; }
-  .f-head:hover .tip-text { opacity: 1; }
+  .f-head:hover .tip-text, :is(label, .opts, .fcard-cond):focus-within > .f-head > .tip-text { opacity: 1; } /* focus: keyboard and touch */
   /* deploy form: also shown while the field has focus, so keyboard and touch users see it */
   label:has(> .tip) { position: relative; }
   label > .tip { margin-left: .35rem; vertical-align: .1em; }
@@ -216,7 +216,7 @@
   .fcard:not(:has(.ftype [value="select"]:checked)) .only-select,
   .fcard:not(:has(.ftype [value="string"]:checked)) .only-string,
   .fcard:has(.ftype :is([value="bool"], [value="select"]):checked) .only-secret,
-  .fcard:has(.ftype [value="bool"]:checked) .not-bool { display: none; }
+  .fcard:has(.ftype :is([value="bool"], [value="select"]):checked) .only-typed { display: none; }
   .actions.sticky { position: sticky; bottom: 0; z-index: 2; background: var(--bg); padding: .9rem 0; border-top: 1px solid var(--border); }
   @media (max-width: 52rem) {
     .bgrid { grid-template-columns: 1fr; }

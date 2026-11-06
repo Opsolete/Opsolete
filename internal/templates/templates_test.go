@@ -66,7 +66,7 @@ func TestCatalogSave(t *testing.T) {
 		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "r", Type: "select", Options: []Option{{Value: "a"}}, Default: "b"}}},
 		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "s", Type: "string", ShowIf: &ShowIf{Input: "later", Equals: []string{"a"}}}, {Name: "later", Type: "select", Options: []Option{{Value: "a"}}}}},
 		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "t", Type: "string"}, {Name: "s", Type: "string", ShowIf: &ShowIf{Input: "t", Equals: []string{"x"}}}}},
-		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "b", Type: "bool"}, {Name: "s", Type: "string", ShowIf: &ShowIf{Input: "b", Equals: []string{"true"}}}}},
+		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "b", Type: "bool"}, {Name: "s", Type: "string", ShowIf: &ShowIf{Input: "b", Equals: []string{"yes"}}}}},
 		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "r", Type: "select", Options: []Option{{Value: "a"}}}, {Name: "s", Type: "string", ShowIf: &ShowIf{Input: "r", Equals: []string{"b"}}}}},
 		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "r", Type: "select", Options: []Option{{Value: "a"}}}, {Name: "s", Type: "string", ShowIf: &ShowIf{Input: "r"}}}},
 		{ID: "ok", Name: "x", Module: tpl.Module, Inputs: []Input{{Name: "n", Type: "number", Default: "seven"}}},
@@ -102,6 +102,30 @@ func TestValidateEdgeCases(t *testing.T) {
 	}
 }
 
+// A yes / no field can show others; unchecked (nothing posted) is "false".
+func TestShowIfBool(t *testing.T) {
+	tpl := Template{ID: "b", Name: "b", Module: Module{Source: "s", Ref: "r"}, Inputs: []Input{{Name: "backup", Type: "bool"},
+		{Name: "days", Type: "number", Required: true, ShowIf: &ShowIf{Input: "backup", Equals: []string{"true"}}},
+		{Name: "why", Type: "string", Required: true, ShowIf: &ShowIf{Input: "backup", Equals: []string{"false"}}}}}
+	if err := tpl.check(); err != nil {
+		t.Fatal(err)
+	}
+	for raw, want := range map[string]string{"on": "days", "true": "days", "": "why"} {
+		if _, errs := tpl.Validate(map[string]string{"backup": raw}); len(errs) != 1 || errs[want] == "" {
+			t.Errorf("backup=%q: %v, want only %s required", raw, errs, want)
+		}
+	}
+}
+
+func TestDescribe(t *testing.T) {
+	tpl := Template{Inputs: []Input{{Name: "size", Label: "Size: the VM size", Type: "select", Options: []Option{{Label: "Small", Value: "s"}}},
+		{Name: "pw", Sensitive: true}, {Name: "backup", Type: "bool"}, {Name: "disk", Type: "number"}}}
+	got := fmt.Sprint(tpl.Describe(map[string]any{"disk": 1e6, "old": "x", "backup": true, "pw": map[string]any{"sealed": "c2"}, "size": "s"}))
+	if want := "[{size Size Small false} {pw pw  true} {backup backup Yes false} {disk disk 1000000 false} {old old x false}]"; got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+}
+
 func TestSensitiveKeepsSpacesAndFormatValue(t *testing.T) {
 	tpl := Template{Inputs: []Input{{Name: "pw", Type: "string", Sensitive: true}, {Name: "pin", Type: "number", Sensitive: true}, {Name: "s", Type: "string"}}}
 	vals, errs := tpl.Validate(map[string]string{"pw": " hunter2 ", "pin": " 42 ", "s": " x "})
@@ -134,15 +158,15 @@ func TestShowIf(t *testing.T) {
 	}
 	// windows: the password; ssh_key and monitoring (and so workspace_id) are hidden
 	vals, errs = vm.Validate(map[string]string{"os": "windows", "ssh_key": "k", "monitoring": "on"})
-	if errs["admin_password"] != "required" || len(errs) != 1 || vals["ssh_key"] != nil || vals["monitoring"] != nil {
+	if errs["admin_password"] != "This field is required." || len(errs) != 1 || vals["ssh_key"] != nil || vals["monitoring"] != nil {
 		t.Errorf("windows: %v %v", vals, errs)
 	}
 	// a chain: workspace_id shows only with monitoring on, which shows only on linux
-	if _, errs = vm.Validate(map[string]string{"os": "linux", "ssh_key": "k", "monitoring": "on"}); errs["workspace_id"] != "required" {
+	if _, errs = vm.Validate(map[string]string{"os": "linux", "ssh_key": "k", "monitoring": "on"}); errs["workspace_id"] != "This field is required." {
 		t.Errorf("chain: %v", errs)
 	}
 	// an empty dropdown counts as its first option, as the browser shows it
-	if _, errs = vm.Validate(map[string]string{}); errs["admin_password"] != "required" || errs["ssh_key"] != "" {
+	if _, errs = vm.Validate(map[string]string{}); errs["admin_password"] != "This field is required." || errs["ssh_key"] != "" {
 		t.Errorf("empty dropdown: %v", errs)
 	}
 

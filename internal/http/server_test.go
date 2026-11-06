@@ -225,7 +225,8 @@ func TestFeatureSwitches(t *testing.T) {
 
 func TestInvalidSubmitRerendersForm(t *testing.T) {
 	rec := post(newTestServer(t), "/templates/storage-account", url.Values{"name": {"NO"}, "location": {"westeurope"}})
-	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "must match") ||
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), `<p class="err">3-24 lowercase letters or digits, unique in Azure.</p>`) || // the label's help says what fits
+		!strings.Contains(rec.Body.String(), `<a href="#name">Account name</a>`) || // the error summary links the field
 		!strings.Contains(rec.Body.String(), `placeholder="azure-storage-account-prod"`) {
 		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -255,6 +256,17 @@ func TestTemplateBuilder(t *testing.T) {
 		"in_show_equals": {"", "", "northeurope", ""},
 		"key":            {"zone"},
 	}
+	// a preview renders the deploy form from the unsaved template, and saves nothing
+	preview := url.Values{}
+	maps.Copy(preview, form)
+	preview.Set("preview", "1")
+	if rec := post(h, "/templates/new", preview); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Preview:") ||
+		!strings.Contains(rec.Body.String(), `<button type="submit" disabled>Create workspace`) || !strings.Contains(rec.Body.String(), `data-show-if=`) {
+		t.Fatalf("preview: %d %s", rec.Code, rec.Body.String())
+	}
+	if files, _ := filepath.Glob(filepath.Join(dir, "*.json")); len(files) != 0 {
+		t.Fatalf("a preview must not save: %v", files)
+	}
 	rec := post(h, "/templates/new", form)
 	loc := rec.Header().Get("Location")
 	id := strings.TrimPrefix(loc, "/templates/")
@@ -279,7 +291,7 @@ func TestTemplateBuilder(t *testing.T) {
 	bad := url.Values{}
 	maps.Copy(bad, form)
 	bad["in_show_input"] = []string{"region", "", "", ""}
-	if rec := post(h, "/templates/new", bad); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "not a dropdown above this field") {
+	if rec := post(h, "/templates/new", bad); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "not a dropdown or yes / no field above this field") {
 		t.Fatalf("bad condition: %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := post(h, "/templates/new", form); rec.Header().Get("Location") == loc {

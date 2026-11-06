@@ -9,7 +9,7 @@ Mark a `string` or `number` input `"sensitive": true` for passwords and keys. It
 
 Mark one input `"key": true` (not `bool` or sensitive) to name the template after its value when it's added to a workspace: a key `vm_name` of `Web-Prod 01` adds it as `module.web_prod_01_c8ad`: a random hex suffix, so the same key can be added twice. Without a key, the template's name is used. The name can't be typed in, and is fixed once added: changing the key's value later doesn't rename it, since that would destroy and recreate its resources.
 
-An input's `label` is the question the form asks. Text after its first `: ` moves behind a **?** next to it: `VM name: 1-64 letters, digits or -.` shows *VM name*, with the rest as help. Labels generated from a registry module's variable descriptions follow the same rule, so write descriptions in that form.
+An input's `label` is the question the form asks. Text after its first `: ` is help, shown under the field: `VM name: 1-64 letters, digits or -.` asks *VM name*, with the rest as help. Labels generated from a registry module's variable descriptions follow the same rule, so write descriptions in that form. The help shows under the field, and is the error message when a value doesn't match the input's `pattern`, so say there what fits (without help, the error shows the pattern).
 
 ## Writing modules for templates
 
@@ -26,7 +26,7 @@ A template's module is deployed by people who never write Terraform, so it has t
 
 ## Conditional inputs
 
-Add `"show_if": {"input": "<name>", "equals": ["<value>", ...]}` to an input to show it only while an earlier `select` input has one of the values. In the [template builder]({{< relref "template-builder" >}}) this is a field's **Show when … is …** row. Conditions can be chained (a hidden dropdown hides the inputs that depend on it). A hidden input isn't validated or sent to Terraform, so the module's own default applies. Switching a workspace away from a condition drops that input's stored value, sensitive ones included.
+Add `"show_if": {"input": "<name>", "equals": ["<value>", ...]}` to an input to show it only while an earlier `select` input has one of the values, or an earlier `bool` input is `"true"` or `"false"` (e.g. `{"input": "backups", "equals": ["true"]}`). In the [template builder]({{< relref "template-builder" >}}) this is a field's **Show when … is …** row. Conditions can be chained (a hidden dropdown hides the inputs that depend on it). A hidden input isn't validated or sent to Terraform, so the module's own default applies. Switching a workspace away from a condition drops that input's stored value, sensitive ones included.
 
 A `select` option is either a string or an object `{"label": "...", "value": "..."}`: the form shows the label and Terraform gets the value.
 
@@ -39,7 +39,7 @@ A `select` option is either a string or an object `{"label": "...", "value": "..
 Things to know:
 
 - **Module variables need a default.** Every variable behind a conditional input needs one (e.g. `default = null`). Without it, Terraform fails with a missing variable whenever that input is hidden.
-- **Registry modules drop unknown inputs.** For a template on a [registry]({{< relref "module-registry" >}}) module, the form follows the module's variables, and JSON inputs the module doesn't declare are dropped. If the dropdown a `show_if` refers to (such as `os`) isn't a module variable, every input that depends on it stays hidden. Add it to the module as a variable.
+- **Registry modules drop unknown inputs.** For a template on a [registry]({{< relref "module-registry" >}}) module, the form follows the module's variables, and JSON inputs the module doesn't declare are dropped. If the dropdown or yes / no input a `show_if` refers to (such as `os`) isn't a module variable, every input that depends on it stays hidden. Add it to the module as a variable.
 - **A dropdown without a value counts as its first option**, the one the browser shows selected.
 - **Without JavaScript, the form doesn't update while you type.** It shows the fields that fit the values it was loaded with. After you change a value and submit, the page reloads with the fields and errors for the new value.
 

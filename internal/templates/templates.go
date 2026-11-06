@@ -40,7 +40,7 @@ type Input struct {
 	Default  string   `json:"default,omitempty"`
 	// Sensitive values are stored sealed with SECRET_KEY, typed in a password field and never shown.
 	Sensitive bool `json:"sensitive,omitempty"`
-	// ShowIf hides the input unless an earlier select has one of the listed values. A hidden input is
+	// ShowIf hides the input unless an earlier select (or bool: "true" / "false") has one of the listed values. A hidden input is
 	// not sent to Terraform: the module's default applies.
 	ShowIf *ShowIf `json:"show_if,omitempty"`
 	// Key: at most one input per template; its value names the template when it's added to a workspace
@@ -63,7 +63,7 @@ func (t Template) KeyInput() *Input {
 	return nil
 }
 
-// ShowIf holds when the earlier select input Input is shown and has one of the Equals values.
+// ShowIf holds when the earlier select or bool input Input is shown and has one of the Equals values.
 type ShowIf struct {
 	Input  string   `json:"input"`
 	Equals []string `json:"equals"`
@@ -368,7 +368,7 @@ func (t Template) check() error {
 			d := in
 			d.ShowIf = nil // alone, its condition's input is missing
 			if _, errs := (Template{Inputs: []Input{d}}).Validate(map[string]string{in.Name: in.Default}); errs[in.Name] != "" {
-				return fmt.Errorf("input %q: default %q %s", in.Name, in.Default, errs[in.Name])
+				return fmt.Errorf("input %q: default %q: %s", in.Name, in.Default, errs[in.Name])
 			}
 		}
 		before[in.Name] = in
@@ -380,14 +380,19 @@ func (c *ShowIf) check(before map[string]Input) error {
 	if c == nil {
 		return nil
 	}
-	if in, ok := before[c.Input]; !ok || in.Type != "select" {
-		return fmt.Errorf("show when: %q is not a dropdown above this field", c.Input)
+	in, ok := before[c.Input]
+	if !ok || in.Type != "select" && in.Type != "bool" {
+		return fmt.Errorf("show when: %q is not a dropdown or yes / no field above this field", c.Input)
 	}
 	if len(c.Equals) == 0 {
 		return fmt.Errorf("show when %s: pick at least one value", c.Input)
 	}
+	opts := in.Options
+	if in.Type == "bool" {
+		opts = []Option{{Value: "true"}, {Value: "false"}}
+	}
 	for _, v := range c.Equals {
-		if !hasValue(before[c.Input].Options, v) {
+		if !hasValue(opts, v) {
 			return fmt.Errorf("show when: %q is not an option of %q", v, c.Input)
 		}
 	}
@@ -402,6 +407,9 @@ func (t Template) eval(raw map[string]string) (shown map[string]bool, cur map[st
 		if in.Type == "select" && v == "" && len(in.Options) > 0 {
 			v = in.Options[0].Value // what the browser shows selected
 		}
+		if in.Type == "bool" { // a checkbox posts "on", a stored value or default reads "true"
+			v = strconv.FormatBool(v == "on" || v == "true")
+		}
 		cur[in.Name] = v
 		shown[in.Name] = in.ShowIf.holds(shown, cur)
 	}
@@ -415,6 +423,47 @@ func (t Template) Match(c *ShowIf, raw map[string]string) bool {
 }
 
 func anchored(pattern string) string { return "^(?:" + pattern + ")$" }
+
+// StoredValue is a stored input as the form asked it: the question and the answer in its words.
+type StoredValue struct {
+	Name, Title, Text string
+	Sensitive         bool // sealed: the text is never shown
+}
+
+// Describe lists the stored inputs in the form's order, then any the template no longer asks (by name).
+func (t Template) Describe(stored map[string]any) []StoredValue {
+	var out []StoredValue
+	add := func(in Input, v any) {
+		sv := StoredValue{Name: in.Name, Title: in.Title()}
+		switch x := v.(type) {
+		case map[string]any: // {"sealed": ...}
+			sv.Sensitive = true
+		case bool:
+			sv.Text = map[bool]string{true: "Yes", false: "No"}[x]
+		default:
+			sv.Text = FormatValue(v)
+			for _, o := range in.Options {
+				if o.Value == sv.Text {
+					sv.Text = o.Text()
+				}
+			}
+		}
+		out = append(out, sv)
+	}
+	asked := map[string]bool{}
+	for _, in := range t.Inputs {
+		if v, ok := stored[in.Name]; ok {
+			add(in, v)
+			asked[in.Name] = true
+		}
+	}
+	for _, k := range slices.Sorted(maps.Keys(stored)) {
+		if !asked[k] {
+			add(Input{Name: k}, stored[k])
+		}
+	}
+	return out
+}
 
 // FormatValue shows a stored input value or module default as typed: fmt prints the float64 1000000 as 1e+06.
 func FormatValue(v any) string {
@@ -443,7 +492,7 @@ func (t Template) Validate(raw map[string]string) (map[string]any, map[string]st
 		}
 		if v == "" {
 			if in.Required {
-				errs[in.Name] = "required"
+				errs[in.Name] = "This field is required."
 			}
 			continue
 		}
@@ -451,20 +500,20 @@ func (t Template) Validate(raw map[string]string) (map[string]any, map[string]st
 		case "number":
 			n, err := strconv.ParseFloat(v, 64)
 			if err != nil || math.IsNaN(n) || math.IsInf(n, 0) { // NaN and Inf parse, but aren't JSON
-				errs[in.Name] = "must be a number"
+				errs[in.Name] = "Enter a number, e.g. 42."
 				continue
 			}
 			vals[in.Name] = n
 		case "select":
 			if !hasValue(in.Options, v) {
-				errs[in.Name] = "not an allowed option"
+				errs[in.Name] = "Choose one of the options."
 				continue
 			}
 			vals[in.Name] = v
 		default:
 			// anchored like the browser's pattern attribute: the whole value must match
 			if in.Pattern != "" && !regexp.MustCompile(anchored(in.Pattern)).MatchString(v) {
-				errs[in.Name] = "must match " + in.Pattern
+				errs[in.Name] = cmp.Or(in.Help(), "Doesn't have the expected format: "+in.Pattern) // the help says it in words
 				continue
 			}
 			vals[in.Name] = v

@@ -15,7 +15,6 @@
 {{if and (not $.Adding) (or (ne $.Cur.Ref $.T.Module.Ref) (ne $.Cur.Source $.T.Module.Source))}}
 <div class="alert warn" role="status">Module update: <code>{{$.Cur.Ref}}</code> → <code>{{$.T.Module.Ref}}</code>{{if ne $.Cur.Source $.T.Module.Source}} (source <code>{{$.T.Module.Source}}</code>){{end}}. Fill in any new inputs below.</div>
 {{end}}
-{{with $.Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
 {{else}}
 <a class="back" href="/">← Templates</a>
 <div class="page-head">
@@ -25,7 +24,12 @@
   </div>
   {{if .Editor}}<a class="btn secondary" href="/templates/{{.T.ID}}/edit">Edit template</a>{{end}}
 </div>
+{{if .Preview}}<div class="alert" role="status">Preview: the form end users get with this template, as it is in the builder. It can't be submitted; close this tab to go back to the builder.</div>{{end}}
 {{end}}
+{{with $.Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
+{{if .Errors}}<div class="alert error" role="alert"><strong>Fix {{len .Errors}} field{{if ne (len .Errors) 1}}s{{end}}:</strong>
+  <ul>{{with index .Errors "ops-workspace"}}<li><a href="#ops-workspace">Workspace name</a>: {{.}}</li>{{end}}
+  {{range .T.Inputs}}{{$in := .}}{{with index $.Errors .Name}}<li><a href="#{{$in.Name}}">{{$in.Title}}</a>: {{.}}</li>{{end}}{{end}}</ul></div>{{end}}
 <form method="post" class="card form-rows" id="template-form">
 {{$v := .Values}}{{$e := .Errors}}
 {{if not .Configure}}
@@ -36,7 +40,7 @@
       <input id="ops-workspace" name="ops-workspace" value="{{.Workspace}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}"
         placeholder="{{.NamePlaceholder}}" autocomplete="off" spellcheck="false" aria-describedby="ops-workspace-hint"{{if index $e "ops-workspace"}} aria-invalid="true"{{end}}>
       <p class="hint" id="ops-workspace-hint">Lowercase letters, digits and dashes. It holds this deployment's state and runs.</p>
-      {{with index $e "ops-workspace"}}<p class="err" role="alert">{{.}}</p>{{end}}
+      {{with index $e "ops-workspace"}}<p class="err">{{.}}</p>{{end}}
     </div>
     <div class="row">
       <label for="ops-auto-apply">Auto-apply</label>
@@ -51,24 +55,25 @@
 {{range .T.Inputs}}{{$err := index $e .Name}}
   <!-- a fieldset per row: disabling it keeps a hidden show_if field from being posted -->
   <fieldset class="row{{if .ShowIf}} show-if{{end}}{{if $err}} invalid{{end}}"{{with .ShowIf}} data-show-if="{{json .}}"{{if not ($.T.Match . $v)}} hidden disabled{{end}}{{end}}>
-    <label for="{{.Name}}">{{.Title}}{{if .Required}} <span class="req" aria-hidden="true">*</span>{{end}}{{with .Help}}{{template "tip" .}}{{end}}</label>
+    <label for="{{.Name}}">{{.Title}}{{if .Required}} <span class="req" aria-hidden="true">*</span>{{end}}</label>
   {{if eq .Type "bool"}}
-    <input type="checkbox" id="{{.Name}}" name="{{.Name}}"{{if eq (index $v .Name) "on" "true"}} checked{{end}}>
+    <input type="checkbox" id="{{.Name}}" name="{{.Name}}"{{if eq (index $v .Name) "on" "true"}} checked{{end}}{{if .Help}} aria-describedby="{{.Name}}-help"{{end}}>
   {{else if eq .Type "select"}}
-    <select id="{{.Name}}" name="{{.Name}}"{{if $err}} aria-invalid="true"{{end}}>
+    <select id="{{.Name}}" name="{{.Name}}"{{if .Help}} aria-describedby="{{.Name}}-help"{{end}}{{if $err}} aria-invalid="true"{{end}}>
       {{$cur := index $v .Name}}
       {{range .Options}}<option value="{{.Value}}"{{if eq .Value $cur}} selected{{end}}>{{.Text}}</option>{{end}}
     </select>
   {{else if .Sensitive}}{{$set := index $.Set .Name}}
     <!-- never filled in: the stored value is sealed; left empty, it's kept -->
     <input id="{{.Name}}" name="secret.{{.Name}}" type="password" autocomplete="new-password"
-      {{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if and .Required (not $set)}} required{{end}} aria-describedby="{{.Name}}-hint"{{if $err}} aria-invalid="true"{{end}}>
+      {{if .Pattern}} pattern="{{.Pattern}}"{{with .Help}} title="{{.}}"{{end}}{{end}}{{if and .Required (not $set)}} required{{end}} aria-describedby="{{.Name}}-hint{{if .Help}} {{.Name}}-help{{end}}"{{if $err}} aria-invalid="true"{{end}}>
     <p class="hint" id="{{.Name}}-hint">Sensitive: stored encrypted and never shown.{{if $set}} A value is set; leave empty to keep it.{{end}}</p>
   {{else}}
     <input id="{{.Name}}" name="{{.Name}}" value="{{index $v .Name}}" autocomplete="off" spellcheck="false"
-      {{if eq .Type "number"}}type="number" step="any" inputmode="decimal"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}{{if $err}} aria-invalid="true"{{end}}>
+      {{if eq .Type "number"}}type="number" step="any" inputmode="decimal"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{with .Help}} title="{{.}}"{{end}}{{end}}{{if .Required}} required{{end}}{{if .Help}} aria-describedby="{{.Name}}-help"{{end}}{{if $err}} aria-invalid="true"{{end}}>
   {{end}}
-    {{with $err}}<p class="err" role="alert">{{.}}</p>{{end}}
+    {{if .Help}}<p class="hint" id="{{.Name}}-help">{{.Help}}</p>{{end}}
+    {{with $err}}<p class="err">{{.}}</p>{{end}}
   </fieldset>
 {{end}}
   </div>
@@ -80,7 +85,7 @@
       <button type="submit">{{if $.Adding}}Add template{{else}}Save configuration{{end}} &amp; start plan</button>
       <a class="btn secondary" href="/workspaces/{{.Name}}">Cancel</a>
       {{else}}
-      <button type="submit">Create workspace &amp; plan</button>
+      <button type="submit"{{if .Preview}} disabled{{end}}>Create workspace &amp; plan</button>
       <a class="btn secondary" href="/">Cancel</a>
       {{end}}
     </div>
@@ -94,7 +99,8 @@
     const update = () => {
       for (const el of form.querySelectorAll("[data-show-if]")) {
         const c = JSON.parse(el.dataset.showIf), src = form.elements[c.input];
-        el.hidden = el.disabled = !src || src.matches(":disabled") || !c.equals.includes(src.value);
+        const v = src?.type === "checkbox" ? String(src.checked) : src?.value;
+        el.hidden = el.disabled = !src || src.matches(":disabled") || !c.equals.includes(v);
       }
     };
     form.addEventListener("change", update);
@@ -106,7 +112,7 @@
       try { new RegExp(p, "v"); continue; } catch {}
       let re;
       try { re = new RegExp("^(?:" + p + ")$", "u"); } catch { continue; }
-      const check = () => el.setCustomValidity(el.value && !re.test(el.value) ? "must match " + p : "");
+      const check = () => el.setCustomValidity(el.value && !re.test(el.value) ? el.title || "Doesn't have the expected format: " + p : "");
       el.addEventListener("input", check);
       check();
     }

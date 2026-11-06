@@ -100,6 +100,7 @@ func (s *Server) internalError(w http.ResponseWriter, what string, err error) {
 type formPage struct {
 	T         templates.Template
 	Editor    bool
+	Preview   bool // the builder's unsaved template: shown, never submitted
 	Values    map[string]string
 	Errors    map[string]string
 	Workspace string
@@ -305,7 +306,8 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 	t, hasTemplate := s.Templates.Get(ws.TemplateID)
 	data := map[string]any{"W": ws, "Lock": lock, "Me": auth.FromContext(ctx).ID, "Runs": runs, "Active": active, "Current": current, "Page": page,
 		"HasTemplate": hasTemplate, "Resources": res, "Versions": versions, "Outputs": outputs, "Destroyed": destroyed,
-		"Assessment": assessment, "CanOperate": level == levelOperate, "Admin": auth.FromContext(ctx).Admin()}
+		"Assessment": assessment, "CanOperate": level == levelOperate, "Admin": auth.FromContext(ctx).Admin(),
+		"RootInputs": t.Describe(ws.Inputs)} // a deleted template: its inputs by name
 
 	switch tab {
 	case "overview":
@@ -322,8 +324,9 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		if ws.TemplateID != "" { // the template the workspace was created from counts too
 			templateCount++
 		}
-		updates := map[string]string{} // added template name -> module version its template pins now
-		names := map[string]string{}   // template id -> display name; a deleted template shows its id
+		updates := map[string]string{}                 // added template name -> module version its template pins now
+		names := map[string]string{}                   // template id -> display name; a deleted template shows its id
+		inputs := map[string][]templates.StoredValue{} // added template name -> its inputs as its form asks them
 		if hasTemplate {
 			names[t.ID] = t.Name
 		}
@@ -332,6 +335,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 			if ok {
 				names[t.ID] = t.Name
 			}
+			inputs[a.Name] = t.Describe(a.Inputs)
 			if ok && (t.Module.Source != a.ModuleSource || t.Module.Ref != a.ModuleRef) {
 				updates[a.Name] = t.Module.Ref
 			}
@@ -356,7 +360,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 			call, _, _ := strings.Cut(strings.TrimPrefix(g.Module, "module."), "[")
 			counts[call] += len(g.Rows)
 		}
-		maps.Copy(data, map[string]any{"Added": added, "TemplateCount": templateCount, "Updates": updates, "TemplateNames": names,
+		maps.Copy(data, map[string]any{"Added": added, "TemplateCount": templateCount, "Updates": updates, "TemplateNames": names, "AddedInputs": inputs,
 			"ResourceGroups": groups, "TemplateResources": counts,
 			"LatestPlan": latestPlan, "LatestApply": latestApply, "Metrics": metrics, "Show": r.URL.Query().Get("show")})
 

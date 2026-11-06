@@ -135,14 +135,14 @@
 {{$indexed := and .Versions (index .Versions 0).Indexed}}
 {{with $w.TemplateID}}<tr><td class="muted">root{{if $indexed}}{{template "deployed" index $.TemplateResources ""}}{{end}}</td><td><a href="/templates/{{.}}">{{or (index $.TemplateNames .) .}}</a></td>
   <td><code>{{$w.ModuleSource}}</code> <span class="tag">{{$w.ModuleRef}}</span>{{with $.Update}} <span class="tag">update: {{.Ref}}</span>{{end}}</td>
-  <td>{{template "inputs" $w.Inputs}}</td>
+  <td>{{template "inputs" $.RootInputs}}</td>
   {{if $.CanOperate}}<td class="nowrap">{{if not $.Active}}<div class="inline">{{if $.HasTemplate}}<a class="btn secondary small" href="/workspaces/{{$w.Name}}/configure">Configure…</a>{{end}}
     <form method="post" action="/workspaces/{{$w.Name}}/root/remove" class="inline"
       onsubmit="return confirm('Remove the root template? This starts a plan that destroys its resources{{if $.Added}}; the added templates stay{{end}}.')">
       <button type="submit" class="danger small">Remove…</button></form></div>{{end}}</td>{{end}}</tr>{{end}}
 {{range .Added}}<tr><td><code>{{.Name}}</code>{{if $indexed}}{{template "deployed" index $.TemplateResources .Name}}{{end}}</td><td><a href="/templates/{{.TemplateID}}">{{or (index $.TemplateNames .TemplateID) .TemplateID}}</a></td>
   <td><code>{{.ModuleSource}}</code> <span class="tag">{{.ModuleRef}}</span>{{with index $.Updates .Name}} <span class="tag">update: {{.}}</span>{{end}}</td>
-  <td>{{template "inputs" .Inputs}}</td>
+  <td>{{template "inputs" index $.AddedInputs .Name}}</td>
   {{if $.CanOperate}}<td class="nowrap">{{if not $.Active}}<div class="inline"><a class="btn secondary small" href="/workspaces/{{$w.Name}}/templates/{{.Name}}">Configure…</a>
     <form method="post" action="/workspaces/{{$w.Name}}/templates/{{.Name}}/remove" class="inline"
       onsubmit="return confirm('Remove {{.Name}}? This starts a plan that destroys its resources.')">
@@ -166,7 +166,7 @@
   </ul>
   {{if $w.TemplateID}}
   <h3>Inputs</h3>
-  <ul class="facts">{{range $k, $v := $w.Inputs}}<li><code>{{$k}} = {{if sealed $v}}(sensitive){{else}}{{$v}}{{end}}</code></li>{{else}}<li class="muted">none</li>{{end}}</ul>
+  <ul class="facts">{{range .RootInputs}}<li title="{{.Name}}">{{.Title}}: {{if .Sensitive}}<span class="muted">(sensitive)</span>{{else}}<code>{{.Text}}</code>{{end}}</li>{{else}}<li class="muted">none</li>{{end}}</ul>
   {{end}}
   <h3>Metrics <small>(last {{.Metrics.Runs}} runs)</small></h3>
   <dl class="metrics">
@@ -488,4 +488,4 @@
 </a>{{end}}
 {{define "deployed"}}<br><small class="muted" title="resources of this template in the current state">{{if .}}{{.}} resource{{if ne . 1}}s{{end}}{{else}}⚠ no resources in state{{end}}</small>{{end}}
 {{define "inputs"}}{{if .}}<details class="inputs"><summary>{{len .}} input{{if ne (len .) 1}}s{{end}}</summary>
-<dl>{{range $k, $v := .}}<dt><code>{{$k}}</code></dt><dd>{{if sealed $v}}<span class="muted">(sensitive)</span>{{else}}<code>{{$v}}</code>{{end}}</dd>{{end}}</dl></details>{{else}}<span class="muted">none</span>{{end}}{{end}}
+<dl>{{range .}}<dt title="{{.Name}}">{{.Title}}</dt><dd>{{if .Sensitive}}<span class="muted">(sensitive)</span>{{else}}<code>{{.Text}}</code>{{end}}</dd>{{end}}</dl></details>{{else}}<span class="muted">none</span>{{end}}{{end}}

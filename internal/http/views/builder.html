@@ -41,7 +41,7 @@
         <input name="name" value="{{.T.Name}}" required placeholder="Windows or Linux VM"></label>
       <label class="f span2"><span class="f-head">Description{{template "tip" "One sentence on what this deploys and when to use it. Shown on the catalog card."}}</span>
         <input name="description" value="{{.T.Description}}" placeholder="A virtual machine with backups and monitoring"></label>
-      <label class="f"><span class="f-head">Workspace name from{{template "tip" "Added to a workspace, the template is named after this field's value plus a random suffix, e.g. web_prod_01_c8ad, fixed once added. Text, number and dropdown fields that aren't sensitive."}}</span>
+      <label class="f"><span class="f-head">Module name from{{template "tip" "Added to a workspace, the template becomes module.<name>, named after this field's value plus a random suffix, e.g. web_prod_01_c8ad, fixed once added. Text, number and dropdown fields that aren't sensitive."}}</span>
         <select name="key" id="key">
           <option value="">the template's name</option>
           {{range .Rows}}{{if or .Key (and .Name (ne .Type "bool") (not .Sensitive))}}<option value="{{.Name}}"{{if .Key}} selected{{end}}>{{.Name}}</option>{{end}}{{end}}
@@ -62,7 +62,7 @@
 
   <section class="bstep">
     <h2><span class="num" aria-hidden="true">3</span>Form fields</h2>
-    <p class="muted">Each field sets one Terraform variable, in this order. To ask only what matters, add a <strong>Dropdown</strong> (for example <code>os</code>), then set later fields to <strong>Show when os is windows</strong>. Hover a setting's name for help.</p>
+    <p class="muted">Each field sets one Terraform variable, in this order. To ask only what matters, add a <strong>Dropdown</strong> (for example <code>os</code>) or a <strong>Yes / no</strong> field (for example <code>backups</code>), then set later fields to <strong>Show when os is windows</strong> or <strong>when backups is true</strong>. Hover a setting's name for help.</p>
     <div id="fields">
     {{range $i, $r := .Rows}}{{$cur := ""}}{{with .ShowIf}}{{$cur = .Input}}{{end}}
       <div class="fcard" role="group" aria-label="Form field">
@@ -70,9 +70,9 @@
           <span class="fnum" aria-hidden="true"></span>
           <label class="f"><span class="f-head">Variable{{template "tip" "The Terraform variable this field sets: lowercase letters, digits and underscores. Clear it to remove the field."}}</span>
             <input name="in_name" value="{{.Name}}" class="mono" placeholder="admin_password" autocomplete="off" spellcheck="false"></label>
-          <label class="f grow"><span class="f-head">Label{{template "tip" "The question end users see. Leave empty to show the variable name. Text after the first ': ' goes behind a ? on the form, e.g. VM name: 1-64 letters or digits."}}</span>
+          <label class="f grow"><span class="f-head">Label{{template "tip" "The question end users see. Leave empty to show the variable name. Text after the first ': ' is help shown under the field, and the error when the pattern doesn't match, e.g. VM name: 1-64 letters or digits."}}</span>
             <input name="in_label" value="{{.Label}}" placeholder="Admin password"></label>
-          <label class="f"><span class="f-head">Type{{template "tip" "Text, Number, a Yes / no checkbox, or a Dropdown of fixed options. Only dropdowns can show or hide other fields."}}</span>
+          <label class="f"><span class="f-head">Type{{template "tip" "Text, Number, a Yes / no checkbox, or a Dropdown of fixed options. Only dropdowns and Yes / no fields can show or hide other fields."}}</span>
             <select name="in_type" class="ftype">
               <option value="string">Text</option>
               <option value="number"{{if eq .Type "number"}} selected{{end}}>Number</option>
@@ -97,18 +97,18 @@
             <button type="button" class="icon opt-add" data-act="opt-add" hidden>+ Add option</button>
           </div>
           <label class="f"><span class="f-head">Default{{template "tip" "Filled in when the form opens. A dropdown's default is one of its option values; a Yes / no default is true or false."}}</span>
-            <input name="in_default" value="{{.Default}}" placeholder="none"></label>
+            <input name="in_default" value="{{.Default}}" placeholder="none" autocomplete="off"><datalist></datalist></label>
           <label class="f only-string"><span class="f-head">Pattern{{template "tip" "A regular expression the whole value must match, for example [a-z0-9]{3,24}. Leave empty to accept any text."}}</span>
             <input name="in_pattern" value="{{.Pattern}}" class="mono" placeholder="[a-z0-9]{3,24}" spellcheck="false"></label>
           <div class="f checks">
-            <label class="check not-bool"><input type="checkbox" class="switch" name="in_required" value="{{$i}}"{{if .Required}} checked{{end}}>
-              <span class="f-head">Required{{template "tip" "End users must fill it in. A hidden field is never required."}}</span></label>
+            <label class="check only-typed"><input type="checkbox" class="switch" name="in_required" value="{{$i}}"{{if .Required}} checked{{end}}>
+              <span class="f-head">Required{{template "tip" "End users must fill it in. A hidden field is never required. Dropdowns and Yes / no fields always have a value."}}</span></label>
             <label class="check only-secret"><input type="checkbox" class="switch" name="in_sensitive" value="{{$i}}"{{if .Sensitive}} checked{{end}}>
               <span class="f-head">Sensitive{{template "tip" "For passwords and keys: typed in a password field, stored encrypted and never shown again. Can't have a default."}}</span></label>
           </div>
         </div>
         <div class="fcard-cond">
-          <span class="f-head">Show{{template "tip" "Show this field only when a dropdown above it has one of the chosen values. A hidden field isn't sent to Terraform, so the module's default applies."}}</span>
+          <span class="f-head">Show{{template "tip" "Show this field only when a dropdown or Yes / no field above it has one of the chosen values (Yes / no: true or false). A hidden field isn't sent to Terraform, so the module's default applies."}}</span>
           <select name="in_show_input" class="show-input" aria-label="Show this field">
             <option value="">always</option>
             {{range $.ShowOptions $i}}<option value="{{.}}"{{if eq . $cur}} selected{{end}}>when {{.}} is</option>{{end}}
@@ -124,6 +124,7 @@
   <div class="actions sticky">
     <button type="button" id="add-field" class="secondary" hidden>+ Add field</button>
     <button type="submit">Save template</button>
+    <button type="submit" name="preview" value="1" formtarget="_blank" formnovalidate class="secondary">Preview form</button>
     <a class="btn secondary" href="{{if .Editing}}/templates/{{.T.ID}}{{else}}/{{end}}">Cancel</a>
   </div>
 </form>
@@ -134,10 +135,11 @@
     const list = document.getElementById("fields"), add = document.getElementById("add-field");
     const cards = () => [...list.querySelectorAll(".fcard")];
     const split = s => s.split(",").map(v => v.trim()).filter(Boolean);
-    const optionValues = card => [...card.querySelectorAll(".opt-row [aria-label='Option value']")].map(el => el.value.trim()).filter(Boolean);
+    const optionValues = card => card.querySelector(".ftype").value === "bool" ? ["true", "false"] :
+      [...card.querySelectorAll(".opt-row [aria-label='Option value']")].map(el => el.value.trim()).filter(Boolean);
     // Renumber the checkboxes and option rows (they post their card's index), offer each card the
     // dropdowns above it, and show the chosen dropdown's values as chips to click.
-    // "Workspace name from" follows its card through renames; a card that can't be the key drops it.
+    // "Module name from" follows its card through renames; a card that can't be the key drops it.
     const key = document.getElementById("key"), nameOf = card => card.querySelector("[name=in_name]").value.trim();
     let keyCard = cards().find(c => key.value && nameOf(c) === key.value);
     key.onchange = () => keyCard = cards().find(c => nameOf(c) === key.value);
@@ -163,8 +165,15 @@
           b.setAttribute("aria-pressed", picked.includes(v));
           return b;
         }));
+        // the default suggests the values a dropdown or Yes / no field accepts
+        const type = card.querySelector(".ftype").value, def = card.querySelector("[name=in_default]"), dl = def.nextElementSibling;
+        dl.id = "defaults-" + i;
+        def.setAttribute("list", dl.id);
+        def.placeholder = {bool: "false (true or false)", select: "the first option"}[type] ?? "none";
+        const vals = type === "select" || type === "bool" ? optionValues(card) : [];
+        if (dl.options.length !== vals.length || vals.some((v, j) => dl.options[j].value !== v)) dl.replaceChildren(...vals.map(v => new Option(v, v)));
         const name = card.querySelector("[name=in_name]").value.trim();
-        if (name && card.querySelector(".ftype").value === "select") above.set(name, card);
+        if (name && (type === "select" || type === "bool")) above.set(name, card);
       });
     };
     list.addEventListener("click", e => {
@@ -214,6 +223,8 @@
     list.addEventListener("input", refresh);
     list.addEventListener("change", refresh);
     for (const el of [add, ...document.querySelectorAll(".fcard-tools, [data-act^=opt]")]) el.hidden = false;
+    // "+ Add field" replaces the blank card the page ends with for use without JS
+    if (cards().length > 1 && !nameOf(list.lastElementChild)) list.lastElementChild.remove();
     refresh();
   })();
 </script>

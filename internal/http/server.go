@@ -66,7 +66,6 @@ func New(store *storage.Store, tpls *templates.Catalog, reg *registry.Registry, 
 		"user": func() auth.User { return auth.User{} }, "section": func() string { return "" },
 		"workspace": func() string { return "" }, "tab": func() string { return "" },
 		"features": func() Features { return f }, "duration": humanDuration, "ago": ago,
-		"sealed":   isSealed,
 		"provider": func(p string) string { return strings.TrimPrefix(p, "registry.terraform.io/") },
 		"status":   func(s string) string { return strings.ReplaceAll(s, "_", " ") }}).ParseFS(views, "views/*.html"))
 	s := &Server{Store: store, Templates: tpls, Registry: reg, Auth: a, StateStore: state, Features: f, Log: log, pages: pages}
@@ -96,23 +95,32 @@ func (s *Server) checkSource(t templates.Template) error {
 // version it pins (registry.Resolve), so the form can't drift from the module's variables.tf.
 func (s *Server) template(ctx context.Context, id string) (templates.Template, bool, error) {
 	t, ok := s.Templates.Get(id)
-	if !ok || !s.Features.Registry {
-		return t, ok, nil
+	if !ok {
+		return t, false, nil
+	}
+	t, err := s.resolve(ctx, t)
+	return t, err == nil, err
+}
+
+// resolve returns t with its inputs resolved from the registry module version it pins, if any.
+func (s *Server) resolve(ctx context.Context, t templates.Template) (templates.Template, error) {
+	if !s.Features.Registry {
+		return t, nil
 	}
 	// shortcut: git:: and other external sources keep their JSON inputs, since the server doesn't fetch modules. Publish them to the registry (e.g. via VCS) to get generated inputs.
 	ns, name, sys, isReg := s.Registry.ParseSource(t.Module.Source)
 	if !isReg {
-		return t, true, nil
+		return t, nil
 	}
 	m, err := s.Store.GetModule(ctx, ns, name, sys, t.Module.Ref)
 	if errors.Is(err, sql.ErrNoRows) { // saveTemplate refuses this; a hand-written JSON fails at terraform init
-		return t, true, nil
+		return t, nil
 	}
 	if err != nil {
-		return t, false, err
+		return t, err
 	}
 	t.Inputs = registry.Resolve(t.Inputs, m.Variables)
-	return t, true, nil
+	return t, nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -271,12 +279,12 @@ type builderPage struct {
 	PullRequest string           // the pull request the save opened (Git catalog in pr mode)
 }
 
-// ShowOptions lists the dropdowns row i's "show when" can pick: the select rows above it, plus its
+// ShowOptions lists the fields row i's "show when" can pick: the select and bool rows above it, plus its
 // current choice (so an invalid one is shown with the save error, not silently dropped).
 func (p builderPage) ShowOptions(i int) []string {
 	var names []string
 	for _, in := range p.Rows[:i] {
-		if in.Type == "select" && in.Name != "" {
+		if (in.Type == "select" || in.Type == "bool") && in.Name != "" {
 			names = append(names, in.Name)
 		}
 	}
@@ -305,7 +313,7 @@ func (s *Server) renderBuilder(w http.ResponseWriter, r *http.Request, status in
 }
 
 func (s *Server) builder(w http.ResponseWriter, r *http.Request) {
-	p := builderPage{T: templates.Template{Module: templates.Module{Ref: "v1.0.0"}}}
+	var p builderPage
 	if id := r.PathValue("id"); id != "" {
 		t, ok, err := s.template(r.Context(), id)
 		if err != nil {
@@ -393,6 +401,20 @@ func (s *Server) saveTemplate(w http.ResponseWriter, r *http.Request) {
 			fail("could not check registry module")
 			return
 		}
+	}
+	if r.PostForm.Has("preview") { // the deploy form as end users get it, without saving
+		if _, err := templates.Encode(t); err != nil {
+			fail(err.Error())
+			return
+		}
+		rt, err := s.resolve(r.Context(), t)
+		if err != nil {
+			s.internalError(w, "resolve template", err)
+			return
+		}
+		vals, _ := formDefaults(rt, nil)
+		s.render(w, r, http.StatusOK, "form.html", formPage{T: rt, Values: vals, Preview: true})
+		return
 	}
 	if mode, _ := s.Templates.Source(); mode != "" {
 		pr, err := vcs.SaveTemplate(r.Context(), s.Store, s.SecretKey, s.Templates, t, auth.FromContext(r.Context()).Email)
@@ -487,7 +509,7 @@ func templateFromForm(r *http.Request) templates.Template {
 		}
 		idx, typ := strconv.Itoa(i), at("in_type", i)
 		in := templates.Input{Name: name, Label: at("in_label", i), Type: typ, Default: at("in_default", i),
-			Required: typ != "bool" && slices.Contains(f["in_required"], idx), Key: name == get("key")}
+			Required: typ != "bool" && typ != "select" && slices.Contains(f["in_required"], idx), Key: name == get("key")} // a dropdown always has a value
 		// the card hides the settings its type doesn't use; drop what they still post
 		if typ == "string" {
 			in.Pattern = at("in_pattern", i)
