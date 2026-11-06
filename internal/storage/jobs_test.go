@@ -479,6 +479,59 @@ func TestRunVariables(t *testing.T) {
 	if m := got(w.ID); m["env:"+k+"_X"] != "c" {
 		t.Fatalf("after detaching b, c must win: %v", m)
 	}
+
+	// Project sets rank between the workspace's attached sets and global ones, whatever their names:
+	// "a-project" sorts before every set but "a-global".
+	p, err := s.CreateProject(ctx, name, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { // before the workspaces' own cleanups: RESTRICT keeps a project with workspaces
+		s.DB.Exec(`DELETE FROM workspaces WHERE project_id = $1`, p.ID)
+		s.DB.Exec(`DELETE FROM projects WHERE id = $1`, p.ID)
+	})
+	if err := s.MoveWorkspace(ctx, w.ID, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateVariableSet(ctx, name+"a-project", "", false); err != nil {
+		t.Fatal(err)
+	}
+	ps, _ := s.GetVariableSet(ctx, name+"a-project")
+	if err := s.AttachVariableSetProject(ctx, ps.ID, p.Name, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AttachVariableSetProject(ctx, ps.ID, "no-such-project", true); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("attach to an unknown project: %v", err)
+	}
+	if ps, _ = s.GetVariableSet(ctx, ps.Name); !slices.Equal(ps.Projects, []string{p.Name}) {
+		t.Fatalf("set's projects: %v", ps.Projects)
+	}
+	for _, key := range []string{"_G", "_X", "_P", "_W"} {
+		set(VarOwner{SetID: ps.ID}, "env", k+key, "project")
+	}
+	want = map[string]string{"env:" + k + "_G": "project", "env:" + k + "_X": "c", "env:" + k + "_P": "project",
+		"env:" + k + "_W": "workspace", "terraform:" + k + "_W": "tf"}
+	if m := got(w.ID); !maps.Equal(m, want) {
+		t.Fatalf("with a project set: got %v, want %v", m, want)
+	}
+	if m := got(other.ID); m["env:"+k+"_P"] != "" {
+		t.Fatalf("a workspace of another project gets the set: %v", m)
+	}
+
+	// A VCS-linked workspace gets neither project nor global sets, only those attached to it.
+	if _, err := s.CreateVCSConnection(ctx, VCSConnection{Name: name, Provider: "github", Token: []byte("x")}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.DB.Exec(`DELETE FROM vcs_connections WHERE name = $1`, name) })
+	if _, err := s.DB.Exec(`UPDATE workspaces SET vcs_connection_id = (SELECT id FROM vcs_connections WHERE name = $2) WHERE id = $1`, w.ID, name); err != nil {
+		t.Fatal(err)
+	}
+	if m := got(w.ID); m["env:"+k+"_P"] != "" || m["env:"+k+"_G"] != "" || m["env:"+k+"_X"] != "c" {
+		t.Fatalf("VCS-linked: %v", m)
+	}
+	if shown, _ := s.WorkspaceVariableSets(ctx, w.ID); slices.ContainsFunc(shown, func(vs VariableSet) bool { return vs.ID == ps.ID }) {
+		t.Fatal("a VCS-linked workspace lists the project set")
+	}
 }
 
 func TestAccess(t *testing.T) {
@@ -538,7 +591,10 @@ func TestAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.DB.Exec(`DELETE FROM projects WHERE id=$1`, p.ID) })
+	t.Cleanup(func() { // before the workspaces' own cleanups: RESTRICT keeps a project with workspaces
+		s.DB.Exec(`DELETE FROM workspaces WHERE project_id = $1`, p.ID)
+		s.DB.Exec(`DELETE FROM projects WHERE id = $1`, p.ID)
+	})
 	sibling, _ := newWorkspace(t, s, false)
 	for _, id := range []string{w.ID, sibling.ID} {
 		if err := s.MoveWorkspace(ctx, id, p.ID); err != nil {

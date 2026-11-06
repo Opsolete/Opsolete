@@ -26,6 +26,23 @@
 </table>
 </div>
 
+<h2 id="variable-sets">Variable sets</h2>
+<p class="muted">These sets apply to every workspace in the project except those linked to a repository. A workspace's own variables and the sets attached to it override them.
+  {{if (user).Admin}}Attach a set to the project on <a href="/variable-sets">its page</a>.{{end}}</p>
+<div class="card flush">
+<table>
+<tr><th>Set</th><th>Description</th></tr>
+{{range .Sets}}
+<tr>
+  <td>{{if (user).Admin}}<a href="/variable-sets/{{.Name}}"><strong>{{.Name}}</strong></a>{{else}}<strong>{{.Name}}</strong>{{end}}{{if .Global}} <span class="tag">global</span>{{end}}</td>
+  <td>{{.Description}}</td>
+</tr>
+{{else}}
+<tr><td colspan="2" class="empty">No variable sets are attached to this project.</td></tr>
+{{end}}
+</table>
+</div>
+
 <h2 id="access">Team access</h2>
 <p class="muted">These IdP groups get access to every workspace in the project. <strong>operate</strong>: runs, confirm, destroy, settings, rename; <strong>read</strong>: view only.
   A group gets the higher of its project and workspace access.</p>

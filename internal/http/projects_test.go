@@ -73,6 +73,27 @@ func TestProjectPages(t *testing.T) {
 	want(post(h, "/projects/"+proj+"/access", url.Values{"group": {group}}), http.StatusSeeOther, "revoke")
 	want(get(member, "/workspaces/"+ws), http.StatusNotFound, "revoked")
 
+	// a variable set attached to the project applies to its workspaces
+	set := "prj-set-" + sfx
+	t.Cleanup(func() { store.DB.Exec(`DELETE FROM variable_sets WHERE name = $1`, set) })
+	want(post(h, "/variable-sets", url.Values{"name": {set}}), http.StatusSeeOther, "create set")
+	want(post(user, "/variable-sets/"+set+"/projects", url.Values{"project": {proj}}), http.StatusForbidden, "a user attaches a set")
+	want(post(h, "/variable-sets/"+set+"/projects", url.Values{"project": {proj, "nope-" + sfx}}), http.StatusBadRequest, "unknown project")
+	want(post(h, "/variable-sets/"+set+"/projects", url.Values{"project": {proj}}), http.StatusSeeOther, "attach to project")
+	if body := get(h, "/variable-sets/"+set).Body.String(); !strings.Contains(body, `value="`+proj+`" checked>`) {
+		t.Fatal("the set's page shows the project attached")
+	}
+	if body := get(h, "/workspaces/"+ws+"/variables").Body.String(); !strings.Contains(body, set) {
+		t.Fatal("the project's workspace lists the set")
+	}
+	if body := get(h, "/projects/"+proj).Body.String(); !strings.Contains(body, `href="/variable-sets/`+set+`"`) {
+		t.Fatal("the project page lists the set")
+	}
+	want(post(h, "/variable-sets/"+set+"/projects", nil), http.StatusSeeOther, "detach")
+	if body := get(h, "/workspaces/"+ws+"/variables").Body.String(); strings.Contains(body, set) {
+		t.Fatal("a detached set still applies")
+	}
+
 	want(post(h, "/projects/"+proj+"/delete", nil), http.StatusConflict, "delete a non-empty project")
 	want(post(h, "/projects/default/delete", nil), http.StatusConflict, "delete the default project")
 

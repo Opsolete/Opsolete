@@ -233,13 +233,13 @@
 {{template "variables" .Variables}}
 
 <h3>Variable sets <span class="tag">{{len .Sets}}</span></h3>
-<p class="muted">Variable sets let admins reuse variables across workspaces. Between sets, attached sets win over global ones, then the first by name.</p>
+<p class="muted">Variable sets let admins reuse variables across workspaces. Between sets, those attached to this workspace win over those of its project, those over global ones, then the first by name.</p>
 {{range .Sets}}
 <div class="card">
   <div class="section-head"><h3 style="margin:0">{{if $.Admin}}<a href="/variable-sets/{{.Name}}">{{.Name}}</a>{{else}}{{.Name}}{{end}}</h3>
     {{if $.Admin}}<a class="btn secondary small" href="/variable-sets/{{.Name}}">Edit…</a>{{end}}</div>
   {{with .Description}}<p class="muted">{{.}}</p>{{end}}
-  <p class="meta">{{if .Global}}<span>Global: applies to all workspaces</span>{{else}}<span>{{len .Workspaces}} workspace{{if ne (len .Workspaces) 1}}s{{end}}</span>{{end}}
+  <p class="meta">{{if .Global}}<span>Global: applies to all workspaces</span>{{else}}{{with .Projects}}<span>Projects: {{join . ", "}}</span>{{end}}<span>{{len .Workspaces}} workspace{{if ne (len .Workspaces) 1}}s{{end}}</span>{{end}}
     <span>{{len .Vars.Vars}} variable{{if ne (len .Vars.Vars) 1}}s{{end}}</span><span>Created {{.CreatedAt.Format "2006-01-02 15:04"}}</span></p>
 </div>
 {{template "variables" .Vars}}

@@ -96,6 +96,11 @@ func (s *Server) project(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "project grants", err)
 		return
 	}
+	sets, err := s.Store.ProjectVariableSets(ctx, p.ID)
+	if err != nil {
+		s.internalError(w, "project variable sets", err)
+		return
+	}
 	creatable, err := s.creatableProjects(r)
 	if err != nil {
 		s.internalError(w, "list projects", err)
@@ -109,7 +114,7 @@ func (s *Server) project(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	s.render(w, r, http.StatusOK, "project.html", map[string]any{"P": p, "Workspaces": list, "Grants": grants, "Groups": groups, "CanCreate": canCreate})
+	s.render(w, r, http.StatusOK, "project.html", map[string]any{"P": p, "Workspaces": list, "Grants": grants, "Groups": groups, "CanCreate": canCreate, "Sets": sets})
 }
 
 // projectAccess grants an IdP group read or operate access to all of a project's workspaces
