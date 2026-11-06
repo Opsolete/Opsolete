@@ -64,6 +64,9 @@ func TestProjectPages(t *testing.T) {
 		}
 	}
 	want(get(h, "/projects/"+proj+"/settings/nope"), http.StatusNotFound, "unknown settings page")
+	if body := get(h, "/workspaces/"+ws).Body.String(); !strings.Contains(body, `<a href="/projects/`+proj+`">`+proj+`</a> / <a href="/projects/`+proj+`/workspaces">Workspaces</a>`) {
+		t.Fatal("a workspace's breadcrumb starts with its project")
+	}
 	want(get(user, "/projects/"+proj+"/settings"), http.StatusNotFound, "settings of a project the user can't see")
 	// a project grant reaches its workspaces; without one they don't exist
 	group := "grp-prj-" + sfx

@@ -562,6 +562,8 @@
 </aside>
 <main class="wrap">
 {{end}}
+{{define "wscrumb"}}<!-- a workspace's breadcrumb, as in HCP Terraform: its project first -->
+<a href="/projects">Projects</a> / <a href="/projects/{{.ProjectName}}">{{.ProjectName}}</a> / <a href="/projects/{{.ProjectName}}/workspaces">Workspaces</a> / <a href="/workspaces/{{.Name}}">{{.Name}}</a>{{end}}
 {{define "projectpick"}}<!-- the project of a new workspace: .Projects to pick from, .Project the picked name ("" = the default) -->
 <label for="ops-project">Project</label>
 <select id="ops-project" name="ops-project" aria-describedby="ops-project-hint">

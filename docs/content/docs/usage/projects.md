@@ -1,0 +1,46 @@
+---
+title: Projects
+weight: 2
+---
+
+A **project** groups [workspaces]({{< relref "workspaces" >}}), like a project in HCP Terraform. Team access and [variable sets]({{< relref "variables" >}}) given to a project reach all of its workspaces.
+
+- **Every workspace is in exactly one project.** New workspaces go into the project picked when creating them, or the **default project**. Existing workspaces were put into a project named `default` when projects arrived.
+- **Workspace names stay unique across all projects**, so a workspace's URL, its state address and Terraform's `cloud` block don't change when it moves. Projects group workspaces; they don't add a namespace.
+
+## The project menu
+
+**Projects** in the menu lists the projects you can see, with their team and workspace counts; search by name. A project has its own menu:
+
+- **Overview:** its ID and description, and the most recently active workspaces. **+ New workspace** creates one in this project.
+- **Workspaces:** all of the project's workspaces you can see.
+- **Settings:** *General* (name, description, default project, delete), *Team access* and *Variable sets*.
+
+Everyone who can see a project sees these pages; only admins change them.
+
+## Manage projects
+
+Admins:
+
+- **Create** a project with **+ New project** on the projects page. Its name follows the workspace name rule and is its URL: renaming a project changes its URL, not its workspaces'.
+- **Make another project the default** under *Settings › General*. The default project can't be deleted.
+- **Delete** an empty project under *Settings › General*: its team access and variable set attachments go with it. Move or delete its workspaces first.
+- **Move a workspace** to another project in the workspace's *Settings › General*. That's allowed during a run: its variables are resolved when each phase starts, so the next phase gets the new project's sets.
+
+Every project change and move is in the [audit log]({{< relref "/docs/operations/authentication#audit-log" >}}).
+
+## Access
+
+An admin grants an IdP group `read` or `operate` on a project under *Settings › Team access*. The grant reaches every workspace in the project. A user's level on a workspace is the highest of: being its creator (operate), a grant on the workspace, and a grant on its project. A workspace's *Team access* page lists the grants it gets from its project.
+
+You see a project if you can see one of its workspaces or hold a grant on it; everyone sees the default project.
+
+**Creating a workspace in a project needs `operate` on the project** (admins: any project; everyone: the default project). A new workspace gets the project's variable sets, so `read` must not be enough to receive them.
+
+## Variable sets
+
+An admin attaches a variable set to projects on the set's page (*Settings › Variable sets*); a project's *Settings › Variable sets* lists them. They apply to every workspace in the project **except repository-linked ones**: whoever operates a workspace can link it to any code, and a project set, unlike one attached to the workspace, isn't detached when the link changes. Attach a set to a repository-linked workspace itself instead. For the order between a workspace's variables and sets, see [Precedence]({{< relref "variables" >}}).
+
+## Terraform CLI
+
+Terraform's `cloud` block names a project with `workspaces { project = "…" }`: `terraform init` creates a missing workspace there. See [Terraform CLI]({{< relref "terraform-cli" >}}).

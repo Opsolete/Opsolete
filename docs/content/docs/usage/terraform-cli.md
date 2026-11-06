@@ -1,6 +1,6 @@
 ---
 title: Terraform CLI
-weight: 5
+weight: 6
 ---
 
 Run Terraform on your own machine with Opsolete as the state backend, using Terraform's [`cloud` block](https://developer.hashicorp.com/terraform/cli/cloud/settings):

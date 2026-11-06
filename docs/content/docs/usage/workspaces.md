@@ -7,6 +7,8 @@ A workspace holds exactly one Terraform [state]({{< relref "state" >}}). Every c
 
 ## Create a workspace
 
+Every workspace is in a [project]({{< relref "projects" >}}): pick it when creating the workspace (the default project unless you pick another; other projects need `operate` on them).
+
 - **From a template:** pick a template, name the workspace and fill in the form.
 - **Workspaces don't need a template** (**Workspaces → New workspace**). A blank workspace can stay empty or hold only [variables]({{< relref "variables" >}}).
 
@@ -47,4 +49,4 @@ When a template is moved to a newer module version, workspaces on an older one s
 
 ## Access
 
-The creator and admins operate a workspace; IdP groups get `read` or `operate` per workspace. Without access, a workspace returns 404, as if it didn't exist. See [Teams: access per workspace]({{< relref "/docs/operations/authentication#teams-access-per-workspace" >}}).
+The creator and admins operate a workspace; IdP groups get `read` or `operate` per workspace or per [project]({{< relref "projects#access" >}}), and the higher of the two wins. Without access, a workspace returns 404, as if it didn't exist. See [Teams: access per workspace]({{< relref "/docs/operations/authentication#teams-access-per-workspace" >}}).

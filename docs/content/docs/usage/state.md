@@ -1,6 +1,6 @@
 ---
 title: State
-weight: 4
+weight: 5
 ---
 
 Each workspace has exactly one Terraform state. Opsolete is the state backend: runners use Terraform's built-in [`http` backend](https://developer.hashicorp.com/terraform/language/backend/http) against `/api/state/v1/<workspace>`, so they need no storage credentials and the same protocol works on every cloud.
