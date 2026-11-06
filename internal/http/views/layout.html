@@ -51,6 +51,7 @@
   .logo { display: grid; place-items: center; width: 1.75rem; height: 1.75rem; border-radius: 4px; font-size: .62rem; font-weight: 700;
     background: #7b42bc; color: #fff; letter-spacing: -.03em; }
   .who { margin-left: auto; display: flex; align-items: center; gap: .6rem; font-size: .85rem; color: var(--nav-text); }
+  .who a { color: inherit; }
   .who .tag { background: var(--nav-hover); color: #fff; border-color: var(--nav-hover); }
   .sidenav { position: sticky; top: 3.75rem; height: calc(100vh - 3.75rem); overflow-y: auto; padding: 1.25rem 1rem;
     border-right: 1px solid var(--border); }
@@ -64,7 +65,7 @@
   @media (max-width: 52rem) {
     body { display: block; }
     .topbar { position: static; }
-    .who > span:first-child { display: none; }
+    .who > a:first-child { display: none; }
     .sidenav { position: static; height: auto; padding: .5rem 1rem; border-right: 0; border-bottom: 1px solid var(--border); }
     .sidenav nav { flex-direction: row; flex-wrap: wrap; align-items: center; }
     .sidenav a[aria-current="page"]::before { display: none; }
@@ -471,7 +472,7 @@
   <a class="brand" href="/"><span class="logo" aria-hidden="true">OPS</span>Opsolete</a>
   {{with user}}{{if .Email}}
   <form class="who" method="post" action="/auth/logout">
-    <span>{{.Email}}</span>{{if .Admin}}<span class="tag">admin</span>{{end}}
+    <a href="/account/profile" title="Account settings">{{.Email}}</a>{{if .Admin}}<span class="tag">admin</span>{{end}}
     <button type="submit" class="secondary small">Log out</button>
   </form>
   {{end}}{{end}}
@@ -523,7 +524,15 @@
   {{end}}
   {{else}}
   {{$s := section}}{{with features}}
-  {{if and (or (eq $s "organization") (eq $s "variable-sets") (eq $s "vcs") (eq $s "catalog") (eq $s "audit")) (user).Admin}}
+  {{if eq $s "account"}}{{$p := ""}}{{with $}}{{$p = .Page}}{{end}}
+  <!-- the side nav becomes the account settings menu -->
+  <nav aria-label="Account settings">
+    {{if .Deployments}}<a href="/projects">‹ Projects</a>{{else}}<a href="/registry">‹ Registry</a>{{end}}
+    <span class="nav-label">Account settings</span>
+    <a href="/account/profile"{{if eq $p "profile"}} aria-current="page"{{end}}>Profile</a>
+    <a href="/account/tokens"{{if eq $p "tokens"}} aria-current="page"{{end}}>Tokens</a>
+  </nav>
+  {{else if and (or (eq $s "organization") (eq $s "variable-sets") (eq $s "vcs") (eq $s "catalog") (eq $s "audit")) (user).Admin}}
   <!-- the side nav becomes the organization settings menu, grouped like HCP Terraform's -->
   <nav aria-label="Organization settings">
     {{if .Deployments}}<a href="/projects">‹ Projects</a>{{else}}<a href="/registry">‹ Registry</a>{{end}}

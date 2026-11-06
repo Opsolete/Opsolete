@@ -136,6 +136,7 @@ func (s *Server) Handler() http.Handler {
 	if s.Features.VCS {
 		s.vcsRoutes(mux)
 	}
+	s.accountRoutes(mux)
 	mux.HandleFunc("GET /organization", s.admin(s.organizationPage))
 	mux.HandleFunc("POST /organization", s.admin(s.saveOrganization))
 	if !s.Features.Deployments {

@@ -36,7 +36,7 @@ const cloudPrefix = "/api/v2"
 const (
 	oauthClient = "terraform-cli"
 	codeTTL     = 5 * time.Minute
-	// shortcut: no token list or revoke page; tokens just expire. Add one if users must revoke them early.
+	// users list and revoke their own tokens under Account settings › Tokens
 	userTokenTTL = 30 * 24 * time.Hour
 )
 
