@@ -23,15 +23,16 @@ var (
 )
 
 // Viewer is who asks: admins see everything, others their own workspaces and those granted to
-// one of their groups.
+// one of their groups, directly or through the workspace's project.
 type Viewer struct {
 	UserID string
 	Admin  bool
 }
 
 // visible is the SQL condition for "viewer ($1 = user id, $2 = admin) may see workspace w".
-const visible = `($2 OR w.created_by = NULLIF($1, '')::uuid OR EXISTS (SELECT 1 FROM workspace_access a
-	JOIN users u ON u.id = NULLIF($1, '')::uuid WHERE a.workspace_id = w.id AND a.group_name = ANY(u.groups)))`
+const visible = `($2 OR w.created_by = NULLIF($1, '')::uuid OR EXISTS (SELECT 1 FROM users u WHERE u.id = NULLIF($1, '')::uuid AND (
+	EXISTS (SELECT 1 FROM workspace_access a WHERE a.workspace_id = w.id AND a.group_name = ANY(u.groups))
+	OR EXISTS (SELECT 1 FROM project_access a WHERE a.project_id = w.project_id AND a.group_name = ANY(u.groups)))))`
 
 // Workspace is a long-lived home for one Terraform state. Its configuration comes from a template
 // (TemplateID, ModuleSource, ModuleRef, Inputs), from a VCS branch (VCS*), or from nowhere yet: an
@@ -395,7 +396,8 @@ func requireIdle(ctx context.Context, tx *sql.Tx, id string) error {
 }
 
 // Access returns what userID may do in a workspace through being its creator or through a group
-// grant: "operate", "read" or "". Admins are handled by the caller.
+// grant on the workspace or its project, the highest of them: "operate", "read" or "". Admins are
+// handled by the caller.
 func (s *Store) Access(ctx context.Context, workspaceID, userID string) (string, error) {
 	var level string
 	err := s.DB.QueryRowContext(ctx, `SELECT CASE
@@ -404,12 +406,13 @@ func (s *Store) Access(ctx context.Context, workspaceID, userID string) (string,
 			WHEN count(a.level) > 0 THEN 'read' ELSE '' END
 		FROM workspaces w
 		LEFT JOIN users u ON u.id = NULLIF($2, '')::uuid
-		LEFT JOIN workspace_access a ON a.workspace_id = w.id AND a.group_name = ANY(u.groups)
+		LEFT JOIN LATERAL (SELECT level FROM workspace_access WHERE workspace_id = w.id AND group_name = ANY(u.groups)
+			UNION ALL SELECT level FROM project_access WHERE project_id = w.project_id AND group_name = ANY(u.groups)) a ON true
 		WHERE w.id = ops_uuid($1) GROUP BY w.id, w.created_by`, workspaceID, userID).Scan(&level)
 	return level, err
 }
 
-// Grant is one group's access to a workspace.
+// Grant is one group's access to a workspace or project.
 type Grant struct {
 	Group string
 	Level string // read | operate
@@ -417,8 +420,18 @@ type Grant struct {
 
 // Grants lists a workspace's group grants.
 func (s *Store) Grants(ctx context.Context, workspaceID string) ([]Grant, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT group_name, level FROM workspace_access
-		WHERE workspace_id = ops_uuid($1) ORDER BY group_name`, workspaceID)
+	return s.grants(ctx, "workspace_access", "workspace_id", workspaceID)
+}
+
+// ProjectGrants lists a project's group grants; they reach all of its workspaces.
+func (s *Store) ProjectGrants(ctx context.Context, projectID string) ([]Grant, error) {
+	return s.grants(ctx, "project_access", "project_id", projectID)
+}
+
+// grants lists the grants of table (workspace_access or project_access) whose col is id.
+func (s *Store) grants(ctx context.Context, table, col, id string) ([]Grant, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT group_name, level FROM `+table+`
+		WHERE `+col+` = ops_uuid($1) ORDER BY group_name`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -454,12 +467,22 @@ func (s *Store) KnownGroups(ctx context.Context) ([]string, error) {
 
 // SetGrant gives a group read or operate access to a workspace; level "" removes the grant.
 func (s *Store) SetGrant(ctx context.Context, workspaceID, group, level string) error {
+	return s.setGrant(ctx, "workspace_access", "workspace_id", workspaceID, group, level)
+}
+
+// SetProjectGrant gives a group read or operate access to all of a project's workspaces; level "" removes it.
+func (s *Store) SetProjectGrant(ctx context.Context, projectID, group, level string) error {
+	return s.setGrant(ctx, "project_access", "project_id", projectID, group, level)
+}
+
+// setGrant: table and col are workspace_access/workspace_id or project_access/project_id, never input.
+func (s *Store) setGrant(ctx context.Context, table, col, id, group, level string) error {
 	if level == "" {
-		_, err := s.DB.ExecContext(ctx, `DELETE FROM workspace_access WHERE workspace_id = ops_uuid($1) AND group_name = $2`, workspaceID, group)
+		_, err := s.DB.ExecContext(ctx, `DELETE FROM `+table+` WHERE `+col+` = ops_uuid($1) AND group_name = $2`, id, group)
 		return err
 	}
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO workspace_access (workspace_id, group_name, level) VALUES ($1::uuid, $2, $3)
-		ON CONFLICT (workspace_id, group_name) DO UPDATE SET level = EXCLUDED.level`, workspaceID, group, level)
+	_, err := s.DB.ExecContext(ctx, `INSERT INTO `+table+` (`+col+`, group_name, level) VALUES ($1::uuid, $2, $3)
+		ON CONFLICT (`+col+`, group_name) DO UPDATE SET level = EXCLUDED.level`, id, group, level)
 	return err
 }
 

@@ -6,7 +6,7 @@
     <h1>{{$p.Name}}{{if $p.Default}} <span class="tag">default</span>{{end}}</h1>
     {{with $p.Description}}<p class="muted">{{.}}</p>{{end}}
   </div>
-  <a class="btn" href="/workspaces/new?project={{$p.Name}}">+ New workspace</a>
+  {{if .CanCreate}}<a class="btn" href="/workspaces/new?project={{$p.Name}}">+ New workspace</a>{{end}}
 </div>
 
 <h2>Workspaces</h2>
@@ -24,6 +24,30 @@
 <tr><td colspan="4" class="empty">No workspaces you can see in this project.</td></tr>
 {{end}}
 </table>
+</div>
+
+<h2 id="access">Team access</h2>
+<p class="muted">These IdP groups get access to every workspace in the project. <strong>operate</strong>: runs, confirm, destroy, settings, rename; <strong>read</strong>: view only.
+  A group gets the higher of its project and workspace access.</p>
+<div class="card">
+  {{with .Grants}}
+  <table>
+  <tr><th>Group</th><th>Access</th>{{if (user).Admin}}<th></th>{{end}}</tr>
+  {{range .}}<tr><td><code>{{.Group}}</code></td><td>{{.Level}}</td>
+    {{if (user).Admin}}<td><form method="post" action="/projects/{{$p.Name}}/access"><input type="hidden" name="group" value="{{.Group}}">
+      <button type="submit" class="secondary small">Revoke</button></form></td>{{end}}</tr>{{end}}
+  </table>
+  {{else}}<p class="muted" style="margin:0">No groups have access through the project.</p>
+  {{end}}
+  {{if (user).Admin}}
+  <form method="post" action="/projects/{{$p.Name}}/access" class="inline" style="margin-top:1rem">
+    <!-- datalist, not select: a group may be granted before any of its members has logged in -->
+    <input name="group" list="known-groups" aria-label="group" placeholder="IdP group (e.g. Entra group object id)" required>
+    <datalist id="known-groups">{{range .Groups}}<option value="{{.}}">{{end}}</datalist>
+    <select name="level" aria-label="access level" style="flex:0 0 9rem"><option>read</option><option>operate</option></select>
+    <button type="submit" class="secondary">Grant</button>
+  </form>
+  {{end}}
 </div>
 
 {{if (user).Admin}}

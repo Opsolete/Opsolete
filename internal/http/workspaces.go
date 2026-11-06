@@ -136,7 +136,7 @@ func (s *Server) form(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	vals, _ := formDefaults(t, nil)
-	projects, err := s.visibleProjects(r)
+	projects, err := s.creatableProjects(r)
 	if err != nil {
 		s.internalError(w, "list projects", err)
 		return
@@ -171,7 +171,7 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !s.pickableProject(w, r, page.Project) {
 		return
 	}
-	if page.Projects, err = s.visibleProjects(r); err != nil {
+	if page.Projects, err = s.creatableProjects(r); err != nil {
 		s.internalError(w, "list projects", err)
 		return
 	}
@@ -468,6 +468,10 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 			var err error
 			if grants, err = s.Store.Grants(ctx, ws.ID); err != nil {
 				s.internalError(w, "workspace grants", err)
+				return
+			}
+			if data["ProjectGrants"], err = s.Store.ProjectGrants(ctx, ws.ProjectID); err != nil {
+				s.internalError(w, "project grants", err)
 				return
 			}
 			if auth.FromContext(ctx).Admin() {
@@ -869,9 +873,8 @@ func (s *Server) workspaceAccess(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	group, level := strings.TrimSpace(r.PostFormValue("group")), r.PostFormValue("level")
-	if group == "" || len(group) > 256 || (level != "" && level != levelRead && level != levelOperate) {
-		http.Error(w, "group is required, and level must be read, operate or empty (revoke)", http.StatusBadRequest)
+	group, level, ok := grantFromForm(w, r)
+	if !ok {
 		return
 	}
 	if err := s.Store.SetGrant(r.Context(), ws.ID, group, level); err != nil {
@@ -880,6 +883,16 @@ func (s *Server) workspaceAccess(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Log.Info("workspace access", "workspace", ws.Name, "group", group, "level", level, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/settings/access", http.StatusSeeOther)
+}
+
+// grantFromForm reads a grant's group and level ("" revokes); it writes a 400 and returns false if invalid.
+func grantFromForm(w http.ResponseWriter, r *http.Request) (group, level string, ok bool) {
+	group, level = strings.TrimSpace(r.PostFormValue("group")), r.PostFormValue("level")
+	if group == "" || len(group) > 256 || (level != "" && level != levelRead && level != levelOperate) {
+		http.Error(w, "group is required, and level must be read, operate or empty (revoke)", http.StatusBadRequest)
+		return "", "", false
+	}
+	return group, level, true
 }
 
 func (s *Server) run(w http.ResponseWriter, r *http.Request) {

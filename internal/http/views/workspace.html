@@ -366,7 +366,8 @@
 
 {{else if eq $p "access"}}
 <h1>Team access</h1>
-<p class="muted">Visible to its creator, admins and these IdP groups. <strong>operate</strong>: runs, confirm, destroy, settings, rename; <strong>read</strong>: view only.</p>
+<p class="muted">Visible to its creator, admins, these IdP groups and those of its project. <strong>operate</strong>: runs, confirm, destroy, settings, rename; <strong>read</strong>: view only.
+  A group gets the higher of its workspace and project access.</p>
 <div class="card">
   {{with .Grants}}
   <table>
@@ -375,8 +376,10 @@
     {{if $.Admin}}<td><form method="post" action="/workspaces/{{$w.Name}}/access"><input type="hidden" name="group" value="{{.Group}}">
       <button type="submit" class="secondary small">Revoke</button></form></td>{{end}}</tr>{{end}}
   </table>
-  {{else}}<p class="muted" style="margin:0">No groups have access.</p>
+  {{else}}<p class="muted" style="margin:0">No groups have access to this workspace itself.</p>
   {{end}}
+  {{with .ProjectGrants}}<p class="hint">Through the project <a href="/projects/{{$w.ProjectName}}#access">{{$w.ProjectName}}</a>:
+    {{range $i, $g := .}}{{if $i}}, {{end}}<code>{{$g.Group}}</code> {{$g.Level}}{{end}}</p>{{end}}
   {{if .Admin}}
   <form method="post" action="/workspaces/{{$w.Name}}/access" class="inline" style="margin-top:1rem">
     <!-- datalist, not select: a group may be granted before any of its members has logged in -->

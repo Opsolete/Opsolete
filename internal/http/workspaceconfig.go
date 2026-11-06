@@ -177,7 +177,7 @@ func (s *Server) renderNewWorkspace(w http.ResponseWriter, r *http.Request, stat
 		s.internalError(w, "vcs connections", err)
 		return
 	}
-	projects, err := s.Store.Projects(r.Context(), viewer(r))
+	projects, err := s.creatableProjects(r)
 	if err != nil {
 		s.internalError(w, "list projects", err)
 		return

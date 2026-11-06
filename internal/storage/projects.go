@@ -39,10 +39,24 @@ func scanProject(row interface{ Scan(...any) error }) (Project, error) {
 // Projects lists, by name, the projects v may see: the default project (anyone may create workspaces
 // there), those with a workspace v sees, and those granted to one of v's groups.
 func (s *Store) Projects(ctx context.Context, v Viewer) ([]Project, error) {
+	return s.projects(ctx, `EXISTS (SELECT 1 FROM workspaces w WHERE w.project_id = p.id AND `+visible+`)
+		OR EXISTS (SELECT 1 FROM project_access a JOIN users u ON u.id = NULLIF($1, '')::uuid
+			WHERE a.project_id = p.id AND a.group_name = ANY(u.groups))`, v)
+}
+
+// CreatableProjects lists, by name, the projects v may create workspaces in: the default project,
+// and those granted operate to one of v's groups. A workspace gets its project's variable sets, so
+// a read grant mustn't be enough.
+func (s *Store) CreatableProjects(ctx context.Context, v Viewer) ([]Project, error) {
+	return s.projects(ctx, `EXISTS (SELECT 1 FROM project_access a JOIN users u ON u.id = NULLIF($1, '')::uuid
+		WHERE a.project_id = p.id AND a.level = 'operate' AND a.group_name = ANY(u.groups))`, v)
+}
+
+// projects lists all projects for admins, else the default one and those matching cond
+// ($1 = user id, $2 = admin, p = the project).
+func (s *Store) projects(ctx context.Context, cond string, v Viewer) ([]Project, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT `+projectCols+` FROM projects p
-		WHERE $2 OR p.id = (SELECT default_project_id FROM organization) OR EXISTS (SELECT 1 FROM workspaces w WHERE w.project_id = p.id AND `+visible+`)
-			OR EXISTS (SELECT 1 FROM project_access a JOIN users u ON u.id = NULLIF($1, '')::uuid
-				WHERE a.project_id = p.id AND a.group_name = ANY(u.groups))
+		WHERE $2 OR p.id = (SELECT default_project_id FROM organization) OR `+cond+`
 		ORDER BY p.name`, v.UserID, v.Admin)
 	if err != nil {
 		return nil, err

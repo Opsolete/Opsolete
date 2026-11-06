@@ -46,6 +46,33 @@ func TestProjectPages(t *testing.T) {
 	if body := get(h, "/projects/"+proj).Body.String(); !strings.Contains(body, ws) {
 		t.Fatal("the project page lists its workspace")
 	}
+	// a project grant reaches its workspaces; without one they don't exist
+	group := "grp-prj-" + sfx
+	member := newServerAs(t, "../../catalog", false, store, devAuth(t, store, "proj-member@example.com", false, group))
+	want(get(member, "/workspaces/"+ws), http.StatusNotFound, "no access")
+	want(post(user, "/projects/"+proj+"/access", url.Values{"group": {group}, "level": {"read"}}), http.StatusForbidden, "a user grants")
+	want(post(h, "/projects/"+proj+"/access", url.Values{"group": {group}, "level": {"admin"}}), http.StatusBadRequest, "bad level")
+	want(post(h, "/projects/"+proj+"/access", url.Values{"group": {group}, "level": {"read"}}), http.StatusSeeOther, "grant read")
+	want(get(member, "/workspaces/"+ws), http.StatusOK, "read through the project")
+	want(get(member, "/projects/"+proj), http.StatusOK, "the granted project")
+	want(post(member, "/workspaces/"+ws+"/settings", url.Values{"auto_apply": {"on"}}), http.StatusForbidden, "read can't operate")
+	// creating a workspace in a project hands it the project's variable sets: read isn't enough
+	ws2 := "prj-ws2-" + sfx
+	t.Cleanup(func() { store.DB.Exec(`DELETE FROM workspaces WHERE name = $1`, ws2) })
+	want(post(member, "/workspaces/new", url.Values{"name": {ws2}, "ops-project": {proj}}), http.StatusBadRequest, "create with read")
+	if strings.Contains(get(member, "/projects/"+proj).Body.String(), "+ New workspace") {
+		t.Fatal("read access offers creating a workspace in the project")
+	}
+	if body := get(h, "/workspaces/"+ws+"/settings/access").Body.String(); !strings.Contains(body, "<code>"+group+"</code> read") {
+		t.Fatal("the workspace's Team access page shows the project grant")
+	}
+	want(post(h, "/projects/"+proj+"/access", url.Values{"group": {group}, "level": {"operate"}}), http.StatusSeeOther, "grant operate")
+	want(post(member, "/workspaces/"+ws+"/settings", url.Values{"auto_apply": {"on"}}), http.StatusSeeOther, "operate through the project")
+	want(post(member, "/workspaces/new", url.Values{"name": {ws2}, "ops-project": {proj}}), http.StatusSeeOther, "create with operate")
+	want(post(h, "/workspaces/"+ws2+"/project", url.Values{"project": {"default"}}), http.StatusSeeOther, "move it out again")
+	want(post(h, "/projects/"+proj+"/access", url.Values{"group": {group}}), http.StatusSeeOther, "revoke")
+	want(get(member, "/workspaces/"+ws), http.StatusNotFound, "revoked")
+
 	want(post(h, "/projects/"+proj+"/delete", nil), http.StatusConflict, "delete a non-empty project")
 	want(post(h, "/projects/default/delete", nil), http.StatusConflict, "delete the default project")
 

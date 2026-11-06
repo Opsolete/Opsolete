@@ -20,6 +20,7 @@ func (s *Server) projectRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /projects/{project}", s.project)
 	mux.HandleFunc("POST /projects/{project}/settings", s.admin(s.projectSettings))
 	mux.HandleFunc("POST /projects/{project}/delete", s.admin(s.deleteProject))
+	mux.HandleFunc("POST /projects/{project}/access", s.admin(s.projectAccess))
 	mux.HandleFunc("POST /workspaces/{name}/project", s.admin(s.moveWorkspace))
 }
 
@@ -84,12 +85,50 @@ func (s *Server) project(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	list, err := s.Store.ListWorkspaces(r.Context(), viewer(r), p.Name)
+	ctx := r.Context()
+	list, err := s.Store.ListWorkspaces(ctx, viewer(r), p.Name)
 	if err != nil {
 		s.internalError(w, "list workspaces", err)
 		return
 	}
-	s.render(w, r, http.StatusOK, "project.html", map[string]any{"P": p, "Workspaces": list})
+	grants, err := s.Store.ProjectGrants(ctx, p.ID)
+	if err != nil {
+		s.internalError(w, "project grants", err)
+		return
+	}
+	creatable, err := s.creatableProjects(r)
+	if err != nil {
+		s.internalError(w, "list projects", err)
+		return
+	}
+	canCreate := slices.ContainsFunc(creatable, func(c storage.Project) bool { return c.ID == p.ID })
+	var groups []string
+	if auth.FromContext(ctx).Admin() {
+		if groups, err = s.Store.KnownGroups(ctx); err != nil {
+			s.internalError(w, "known groups", err)
+			return
+		}
+	}
+	s.render(w, r, http.StatusOK, "project.html", map[string]any{"P": p, "Workspaces": list, "Grants": grants, "Groups": groups, "CanCreate": canCreate})
+}
+
+// projectAccess grants an IdP group read or operate access to all of a project's workspaces
+// (level "" revokes). Admins only (enforced by the route).
+func (s *Server) projectAccess(w http.ResponseWriter, r *http.Request) {
+	p, ok := s.loadProject(w, r)
+	if !ok {
+		return
+	}
+	group, level, ok := grantFromForm(w, r)
+	if !ok {
+		return
+	}
+	if err := s.Store.SetProjectGrant(r.Context(), p.ID, group, level); err != nil {
+		s.internalError(w, "set project grant", err)
+		return
+	}
+	s.Log.Info("project access", "project", p.Name, "group", group, "level", level, "user", auth.FromContext(r.Context()).Email)
+	http.Redirect(w, r, "/projects/"+p.Name+"#access", http.StatusSeeOther)
 }
 
 // projectSettings renames a project, sets its description and, with default=on, makes it the default.
@@ -158,21 +197,21 @@ func (s *Server) moveWorkspace(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/settings", http.StatusSeeOther)
 }
 
-// visibleProjects lists the projects the user may see, to pick one for a new workspace.
-func (s *Server) visibleProjects(r *http.Request) ([]storage.Project, error) {
+// creatableProjects lists the projects the user may create workspaces in, to pick one.
+func (s *Server) creatableProjects(r *http.Request) ([]storage.Project, error) {
 	if s.Store == nil { // only the DB-less tests
 		return nil, nil
 	}
-	return s.Store.Projects(r.Context(), viewer(r))
+	return s.Store.CreatableProjects(r.Context(), viewer(r))
 }
 
 // pickableProject checks a project name posted with a new workspace: "" (the default project) or a
-// project the user may see. It writes a 400 or 500 and returns false otherwise.
+// project the user may create workspaces in. It writes a 400 or 500 and returns false otherwise.
 func (s *Server) pickableProject(w http.ResponseWriter, r *http.Request, name string) bool {
 	if name == "" {
 		return true
 	}
-	list, err := s.visibleProjects(r)
+	list, err := s.creatableProjects(r)
 	if err != nil {
 		s.internalError(w, "list projects", err)
 		return false

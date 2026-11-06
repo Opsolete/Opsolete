@@ -533,6 +533,45 @@ func TestAccess(t *testing.T) {
 		t.Fatalf("grants: %+v", g)
 	}
 
+	// a project grant reaches every workspace of the project; the highest level wins
+	p, err := s.CreateProject(ctx, "p-"+strings.ToLower(rand.Text()[:10]), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.DB.Exec(`DELETE FROM projects WHERE id=$1`, p.ID) })
+	sibling, _ := newWorkspace(t, s, false)
+	for _, id := range []string{w.ID, sibling.ID} {
+		if err := s.MoveWorkspace(ctx, id, p.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.SetProjectGrant(ctx, p.ID, "team-a", "read"); err != nil {
+		t.Fatal(err)
+	}
+	if l, _ := s.Access(ctx, sibling.ID, member); !sees(member, false) || level(member) != "read" || l != "read" || sees(outsider, false) {
+		t.Fatalf("project read grant: %q %q", level(member), l)
+	}
+	if list, _ := s.Projects(ctx, Viewer{UserID: member}); !slices.ContainsFunc(list, func(x Project) bool { return x.ID == p.ID }) {
+		t.Fatal("a project grant shows the project")
+	}
+	s.SetGrant(ctx, w.ID, "team-b", "operate")
+	if level(member) != "operate" {
+		t.Fatalf("workspace operate over project read: %q", level(member))
+	}
+	s.SetGrant(ctx, w.ID, "team-b", "read")
+	s.SetProjectGrant(ctx, p.ID, "team-a", "operate")
+	if level(member) != "operate" {
+		t.Fatalf("project operate over workspace read: %q", level(member))
+	}
+	if g, _ := s.ProjectGrants(ctx, p.ID); len(g) != 1 || g[0] != (Grant{"team-a", "operate"}) {
+		t.Fatalf("project grants: %+v", g)
+	}
+	s.SetGrant(ctx, w.ID, "team-b", "")
+	s.SetProjectGrant(ctx, p.ID, "team-a", "")
+	if sees(member, false) || level(member) != "" {
+		t.Fatal("revoked project grant must hide the workspace again")
+	}
+
 	other, _ := newWorkspace(t, s, false)
 	if err := s.RenameWorkspace(ctx, w.ID, other.Name); !errors.Is(err, ErrNameTaken) {
 		t.Fatalf("rename onto a taken name: %v", err)
