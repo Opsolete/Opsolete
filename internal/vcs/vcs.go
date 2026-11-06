@@ -401,6 +401,9 @@ func (c Conn) Head(ctx context.Context, repo, branch string) (string, error) {
 type PullRequest struct {
 	Number int
 	Commit string
+	Branch string // the source branch
+	Body   string // its description
+	URL    string // its web page
 }
 
 // PullRequests lists the open pull requests into branch that come from the repository itself.
@@ -415,9 +418,12 @@ func (c Conn) PullRequests(ctx context.Context, repo, branch string) ([]PullRequ
 	switch c.Provider {
 	case GitHub:
 		var prs []struct {
-			Number int `json:"number"`
-			Head   struct {
+			Number  int    `json:"number"`
+			Body    string `json:"body"`
+			HTMLURL string `json:"html_url"`
+			Head    struct {
 				SHA  string `json:"sha"`
+				Ref  string `json:"ref"`
 				Repo *struct {
 					FullName string `json:"full_name"`
 				} `json:"repo"` // null once a fork is deleted
@@ -429,14 +435,16 @@ func (c Conn) PullRequests(ctx context.Context, repo, branch string) ([]PullRequ
 		}
 		for _, p := range prs {
 			if p.Head.Repo != nil && strings.EqualFold(p.Head.Repo.FullName, repo) && p.Head.SHA != "" {
-				out = append(out, PullRequest{p.Number, p.Head.SHA})
+				out = append(out, PullRequest{Number: p.Number, Commit: p.Head.SHA, Branch: p.Head.Ref, Body: p.Body, URL: p.HTMLURL})
 			}
 		}
 	case AzureDevOps:
 		var rs struct {
 			Value []struct {
-				ID     int `json:"pullRequestId"`
-				Source struct {
+				ID          int    `json:"pullRequestId"`
+				SourceRef   string `json:"sourceRefName"`
+				Description string `json:"description"`
+				Source      struct {
 					CommitID string `json:"commitId"`
 				} `json:"lastMergeSourceCommit"`
 				ForkSource *struct{} `json:"forkSource"`
@@ -449,7 +457,8 @@ func (c Conn) PullRequests(ctx context.Context, repo, branch string) ([]PullRequ
 		}
 		for _, p := range rs.Value {
 			if p.ForkSource == nil && p.Source.CommitID != "" {
-				out = append(out, PullRequest{p.ID, p.Source.CommitID})
+				out = append(out, PullRequest{Number: p.ID, Commit: p.Source.CommitID, Branch: strings.TrimPrefix(p.SourceRef, "refs/heads/"),
+					Body: p.Description, URL: azurePRURL(c.BaseURL, a, b, p.ID)})
 			}
 		}
 	default:

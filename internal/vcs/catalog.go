@@ -223,8 +223,24 @@ func writeTemplate(ctx context.Context, st *storage.Store, key []byte, cat *temp
 	title := fmt.Sprintf("%s template %s", verb, name)
 	msg := fmt.Sprintf("%s\n\nSaved in Opsolete by %s (template %s).", title, by, id)
 	branch := tc.Branch
+	if tc.Mode == "pr" && body != nil { // a save while the template's pull request is open adds a commit to it
+		pr, ok, err := c.templatePR(ctx, tc, id)
+		if err != nil {
+			return "", tokenHint(err)
+		}
+		if ok {
+			head, err := c.Head(ctx, tc.Repo, pr.Branch)
+			if err == nil { // the file is on the branch since its first commit; a push meanwhile is refused
+				err = c.commitFile(ctx, tc.Repo, pr.Branch, head, file, body, false, msg)
+			}
+			if err != nil {
+				return "", tokenHint(fmt.Errorf("update pull request %s: %w", pr.URL, err))
+			}
+			return pr.URL, nil
+		}
+	}
 	if tc.Mode == "pr" { // shortcut: a branch whose commit then fails is left behind; delete it in the provider
-		branch = "opsolete/template-" + id[:min(len(id), 8)] + "-" + strings.ToLower(rand.Text()[:6])
+		branch = "opsolete/template-" + id + "-" + strings.ToLower(rand.Text()[:6])
 		if err := c.createBranch(ctx, tc.Repo, branch, base); err != nil {
 			return "", tokenHint(fmt.Errorf("create branch %s: %w", branch, err))
 		}
@@ -326,6 +342,26 @@ func (c Conn) commitFile(ctx context.Context, repo, branch, base, file string, b
 	return fmt.Errorf("unknown VCS provider %q", c.Provider)
 }
 
+// templatePR finds the open pull request a save of template id opened: an opsolete/template- branch
+// whose description (the commit message) names the template. Removals are left alone.
+func (c Conn) templatePR(ctx context.Context, tc storage.TemplateCatalog, id string) (PullRequest, bool, error) {
+	prs, err := c.PullRequests(ctx, tc.Repo, tc.Branch)
+	if err != nil {
+		return PullRequest{}, false, err
+	}
+	for _, pr := range prs {
+		if strings.HasPrefix(pr.Branch, "opsolete/template-") && strings.Contains(pr.Body, "(template "+id+").") &&
+			!strings.HasPrefix(pr.Body, "Remove ") {
+			return pr, true, nil
+		}
+	}
+	return PullRequest{}, false, nil
+}
+
+func azurePRURL(base, project, repo string, id int) string {
+	return fmt.Sprintf("%s/%s/_git/%s/pullrequest/%d", base, project, repo, id) // project, repo: escaped by splitRepo
+}
+
 // openPR opens a pull request of branch into target and returns its web URL.
 func (c Conn) openPR(ctx context.Context, repo, branch, target, title, body string) (string, error) {
 	a, b, err := splitRepo(repo)
@@ -346,7 +382,7 @@ func (c Conn) openPR(ctx context.Context, repo, branch, target, title, body stri
 		}
 		err := c.send(ctx, http.MethodPost, fmt.Sprintf("%s/%s/_apis/git/repositories/%s/pullrequests?api-version=7.1", c.BaseURL, a, b),
 			map[string]string{"sourceRefName": "refs/heads/" + branch, "targetRefName": "refs/heads/" + target, "title": title, "description": body}, &pr)
-		return fmt.Sprintf("%s/%s/_git/%s/pullrequest/%d", c.BaseURL, a, b, pr.ID), err // a, b: escaped
+		return azurePRURL(c.BaseURL, a, b, pr.ID), err
 	}
 	return "", fmt.Errorf("unknown VCS provider %q", c.Provider)
 }

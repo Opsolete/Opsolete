@@ -50,7 +50,7 @@ In production, in a Git repository, so the app keeps no data on its disk:
 1. Add a [VCS provider]({{< relref "vcs-providers" >}}) whose token can read the repository.
 2. In **Settings → Templates** (admins), choose the connection, repository, branch and folder. The `*.json` files directly in that folder are the catalog.
 3. Choose what the [template builder]({{< relref "template-builder" >}}) does on save:
-   - **Open a pull request:** a new branch `opsolete/template-<id>-…` with the file and a pull request into the branch. The template changes once it's merged. Works with branch protection.
+   - **Open a pull request:** a new branch `opsolete/template-<id>-…` with the file and a pull request into the branch. The template changes once it's merged. Saving the template again while its pull request is open adds a commit to that pull request instead of opening another, replacing any change made to the file on its branch (it stays in the pull request's history). Removing a template always opens its own pull request. Works with branch protection.
    - **Commit to the branch:** live right away. The branch must allow direct pushes.
    - **Off:** templates are only edited in Git; a read-only token is enough.
 

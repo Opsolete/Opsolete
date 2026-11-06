@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -25,10 +26,12 @@ type fakeGitRepo struct {
 	branches map[string]string
 	commits  map[string]map[string]string
 	n        int
-	pulls    []string      // head branches
+	pulls    []fakePull    // opened, all still open
 	held     chan string   // if set, the next tarball download reports its commit here...
 	release  chan struct{} // ...and waits for this
 }
+
+type fakePull struct{ Head, Body string }
 
 func blobSHA(content string) string { return fmt.Sprintf("%x", sha256.Sum256([]byte(content))) }
 
@@ -126,10 +129,17 @@ func (g *fakeGitRepo) handler(t *testing.T) http.Handler {
 			w.WriteHeader(http.StatusCreated)
 			w.Write([]byte(`{}`))
 		case r.Method == "POST" && p == "/pulls":
-			var req struct{ Head, Base string }
+			var req struct{ Head, Base, Body string }
 			json.NewDecoder(r.Body).Decode(&req)
-			g.pulls = append(g.pulls, req.Head)
+			g.pulls = append(g.pulls, fakePull{req.Head, req.Body})
 			fmt.Fprintf(w, `{"html_url":"https://github.example/acme/catalog/pull/%d"}`, len(g.pulls))
+		case r.Method == "GET" && p == "/pulls":
+			list := []map[string]any{}
+			for i, pr := range g.pulls {
+				list = append(list, map[string]any{"number": i + 1, "body": pr.Body, "html_url": fmt.Sprintf("https://github.example/acme/catalog/pull/%d", i+1),
+					"head": map[string]any{"sha": g.branches[pr.Head], "ref": pr.Head, "repo": map[string]string{"full_name": "acme/catalog"}}})
+			}
+			json.NewEncoder(w).Encode(list)
 		default:
 			io.Copy(io.Discard, r.Body)
 			http.NotFound(w, r)
@@ -319,7 +329,7 @@ func TestTemplateCatalogInGit(t *testing.T) {
 		t.Fatalf("pull request: %d %s", rec.Code, rec.Body.String())
 	}
 	g.mu.Lock()
-	head := g.pulls[0]
+	head := g.pulls[0].Head
 	var added string
 	for f, c := range g.commits[g.branches[head]] {
 		if strings.Contains(c, `"Queue"`) {
@@ -330,6 +340,19 @@ func TestTemplateCatalogInGit(t *testing.T) {
 	g.mu.Unlock()
 	if !strings.HasPrefix(head, "opsolete/template-") || !strings.HasPrefix(added, "catalog/") || mainHasIt || len(app.Templates.List()) != n {
 		t.Fatalf("pr branch %q file %q, on main %v, catalog %d -> %d", head, added, mainHasIt, n, len(app.Templates.List()))
+	}
+	// Saving the page again while its pull request is open adds a commit to it instead of opening another.
+	kept := regexp.MustCompile(`name="id" value="([^"]+)"`).FindStringSubmatch(rec.Body.String())
+	if kept == nil {
+		t.Fatalf("the page must keep the new template's id: %s", rec.Body.String())
+	}
+	rec = post(h, "/templates/new", url.Values{"id": {kept[1]}, "name": {"Queue v2"}, "module_source": {"git::https://example.com/q.git"}, "module_ref": {"v1"}})
+	g.mu.Lock()
+	onBranch, pulls := g.commits[g.branches[head]][added], len(g.pulls)
+	g.mu.Unlock()
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "https://github.example/acme/catalog/pull/1") || pulls != 1 ||
+		!strings.Contains(onBranch, `"Queue v2"`) {
+		t.Fatalf("update pull request: %d, %d pulls, file %s", rec.Code, pulls, onBranch)
 	}
 
 	// The connection can't be deleted from under the catalog; disconnecting goes back to TEMPLATES_DIR.

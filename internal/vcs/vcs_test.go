@@ -113,8 +113,8 @@ func TestProviders(t *testing.T) {
 		head       string
 		prs        []PullRequest // forks left out
 	}{
-		{Conn{Provider: GitHub, BaseURL: srv.URL + "/gh", Token: "gh-token"}, "acme/terraform-azurerm-storage", "v1.1.0", []string{"README.md", "main.tf"}, false, "abc123", []PullRequest{{3, "pr3"}}},
-		{Conn{Provider: AzureDevOps, BaseURL: srv.URL + "/org", Token: "az-pat"}, "Platform Team/storage", "2.0.0", []string{"main.tf", "sub/x.tf"}, false, "def456", []PullRequest{{12, "pr12"}}},
+		{Conn{Provider: GitHub, BaseURL: srv.URL + "/gh", Token: "gh-token"}, "acme/terraform-azurerm-storage", "v1.1.0", []string{"README.md", "main.tf"}, false, "abc123", []PullRequest{{Number: 3, Commit: "pr3"}}},
+		{Conn{Provider: AzureDevOps, BaseURL: srv.URL + "/org", Token: "az-pat"}, "Platform Team/storage", "2.0.0", []string{"main.tf", "sub/x.tf"}, false, "def456", []PullRequest{{Number: 12, Commit: "pr12", URL: srv.URL + "/org/Platform%20Team/_git/storage/pullrequest/12"}}},
 		{Conn{Provider: GitHub, BaseURL: srv.URL + "/gh", Token: "wrong"}, "", "", nil, true, "", nil},
 		{Conn{Provider: AzureDevOps, BaseURL: srv.URL + "/org", Token: "wrong"}, "", "", nil, true, "", nil},
 	} {
