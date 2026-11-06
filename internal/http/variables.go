@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"maps"
 	"net/http"
 	"regexp"
 	"strings"
@@ -112,8 +111,8 @@ func (s *Server) varsBlock(ctx context.Context, o storage.VarOwner, base string,
 }
 
 // runVariables opens the variables of a workspace's run: environment variables for Terraform's
-// environment, and Terraform variables under the workspace's inputs (which win).
-func (s *Server) runVariables(ctx context.Context, workspaceID string, inputs map[string]any) (map[string]string, map[string]any, error) {
+// environment, and Terraform variables (the root template's inputs win over them at the caller).
+func (s *Server) runVariables(ctx context.Context, workspaceID string) (map[string]string, map[string]any, error) {
 	list, err := s.Store.RunVariables(ctx, workspaceID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("load variables: %w", err)
@@ -130,7 +129,6 @@ func (s *Server) runVariables(ctx context.Context, workspaceID string, inputs ma
 			vars[v.Key] = val
 		}
 	}
-	maps.Copy(vars, inputs)
 	return env, vars, nil
 }
 

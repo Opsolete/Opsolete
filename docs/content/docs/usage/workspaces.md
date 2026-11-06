@@ -33,7 +33,7 @@ Add any number of templates (**Deploy…** in a workspace's menu, operate access
 - Removing the last one (the workspace's only configuration) starts a destroy run instead, and the template goes once that destroy is applied.
 - The template the workspace was created from (the *root* row) can be removed the same way. Alone, that's a destroy of everything. Next to added templates, the destroy targets only the root's own resources, so the added templates and their resources stay. That needs an indexed state (run a plan first), and the added templates must configure their own providers. The root goes once the destroy is applied; with none of its resources in the state, it goes right away.
 - Their outputs show as `<name>__<output>`.
-- Workspace variables and variable sets reach the root module only: env variables (credentials) apply to all of them.
+- Workspace variables and variable sets reach every template: env variables (credentials) as the environment, Terraform variables as the root's variables and as inputs of each added template whose module declares them (a template's own inputs win). So a workspace needs no root template. Added templates on external sources (e.g. `git::`) get no Terraform variables: publish their module to the registry.
 - Each template's module should configure its own providers (see [Writing modules for templates]({{< relref "/docs/catalog/templates#writing-modules-for-templates" >}})). Otherwise it depends on provider blocks in the workspace's own configuration.
 
 ## Update to a new module version

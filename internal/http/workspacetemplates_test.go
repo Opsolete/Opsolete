@@ -3,6 +3,7 @@ package httpserver
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,6 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/terraform-config-inspect/tfconfig"
+
+	"github.com/opsolete/opsolete/internal/registry"
 	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
@@ -452,5 +456,29 @@ func TestRemoveRootTemplate(t *testing.T) {
 	}
 	if w, _ := store.GetWorkspace(ctx, empty); w.TemplateID != "" {
 		t.Fatalf("undeployed after removing: %+v", w)
+	}
+}
+
+// TestWithWorkspaceVars: an added template gets the workspace's Terraform variables its registry
+// module declares, under its own inputs; other sources and undeclared variables are left alone.
+func TestWithWorkspaceVars(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	s := newApp(t, "../../catalog", store, nil, Features{Registry: true})
+	ns := "wv" + strings.ToLower(newID()[:8])
+	t.Cleanup(func() { store.DB.Exec(`DELETE FROM modules WHERE namespace = $1`, ns) })
+	decl := []registry.Variable{{Variable: tfconfig.Variable{Name: "greeting"}}, {Variable: tfconfig.Variable{Name: "name"}}}
+	if err := store.CreateModule(ctx, storage.Module{Namespace: ns, Name: "m", System: "null", Version: "1.0.0", Variables: decl},
+		storage.ModuleDocs{}, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	src := testReg.PublicURL.Host + "/" + ns + "/m/null"
+	vars := map[string]any{"greeting": "from-set", "name": "from-set", "region": "undeclared"}
+	got, err := s.withWorkspaceVars(ctx, src, "1.0.0", map[string]any{"name": "own"}, vars)
+	if want := map[string]any{"greeting": "from-set", "name": "own"}; err != nil || !maps.Equal(got, want) {
+		t.Fatalf("registry module: %v %v", got, err)
+	}
+	if got, err := s.withWorkspaceVars(ctx, "git::https://example.com/m.git", "v1", nil, vars); err != nil || got != nil {
+		t.Fatalf("external source: %v %v", got, err)
 	}
 }

@@ -4,10 +4,12 @@ import (
 	"cmp"
 	"context"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -73,10 +75,15 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 		if ok {
 			inputs, err := s.openInputs(j.Inputs, j.WorkspaceID, "")
 			var env map[string]string
-			var vars map[string]any
+			var wsVars map[string]any
 			if err == nil {
-				env, vars, err = s.runVariables(r.Context(), j.WorkspaceID, inputs)
+				env, wsVars, err = s.runVariables(r.Context(), j.WorkspaceID)
 			}
+			vars := maps.Clone(wsVars)
+			if vars == nil {
+				vars = map[string]any{}
+			}
+			maps.Copy(vars, inputs) // the root template's inputs win
 			var src, currency string
 			if err == nil {
 				src, err = s.jobSource(r.Context(), j)
@@ -88,6 +95,9 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 			for _, m := range j.Modules {
 				in, oerr := s.openInputs(m.Inputs, j.WorkspaceID, m.Name)
 				err = cmp.Or(err, oerr)
+				if err == nil {
+					in, err = s.withWorkspaceVars(r.Context(), m.ModuleSource, m.ModuleRef, in, wsVars)
+				}
 				mods = append(mods, runnerapi.Module{Name: m.Name, Inputs: in,
 					Source: s.Registry.RunnerSource(templates.Module{Source: m.ModuleSource, Ref: m.ModuleRef}, runnerSrcTTL)})
 			}
@@ -126,6 +136,41 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 		case <-tick.C:
 		}
 	}
+}
+
+// withWorkspaceVars adds to an added template's inputs the workspace's Terraform variables (vars, from
+// the workspace and its variable sets) that its module declares, under its own inputs: as a root module
+// gets them through tfvars, but only declared ones, since an unknown module argument fails the run.
+// shortcut: registry modules only (their variables are stored); external sources such as git:: get
+// none, as Terraform validates module arguments before the runner could read them. Publish them to the
+// registry (e.g. via VCS) to get them.
+func (s *Server) withWorkspaceVars(ctx context.Context, source, ref string, in, vars map[string]any) (map[string]any, error) {
+	if !s.Features.Registry || len(vars) == 0 {
+		return in, nil
+	}
+	ns, name, sys, ok := s.Registry.ParseSource(source)
+	if !ok {
+		return in, nil
+	}
+	m, err := s.Store.GetModule(ctx, ns, name, sys, ref)
+	if errors.Is(err, sql.ErrNoRows) { // the run fails at terraform init anyway
+		return in, nil
+	}
+	if err != nil {
+		return in, fmt.Errorf("module variables: %w", err)
+	}
+	out := maps.Clone(in)
+	if out == nil {
+		out = map[string]any{}
+	}
+	for _, v := range m.Variables {
+		if val, ok := vars[v.Name]; ok {
+			if _, own := out[v.Name]; !own {
+				out[v.Name] = val
+			}
+		}
+	}
+	return out, nil
 }
 
 // jobSource is where the runner fetches the run's root configuration: the template's module, or this
