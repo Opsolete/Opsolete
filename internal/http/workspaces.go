@@ -549,15 +549,16 @@ func workspacePicker(field, label string, selected []string, all []storage.Works
 }
 
 // syncSelection attaches the names in want that have lacks, then detaches the ones want lacks.
-// An unknown workspace name fails (sql.ErrNoRows) before anything changes.
-func (s *Server) syncSelection(ctx context.Context, have, want []string, attach func(name string, on bool) error) error {
+// A name exist doesn't know (e.g. Store.WorkspacesExist) fails (sql.ErrNoRows) before anything changes.
+func (s *Server) syncSelection(ctx context.Context, have, want []string, exist func(context.Context, []string) (bool, error),
+	attach func(name string, on bool) error) error {
 	var added []string
 	for _, n := range want {
 		if !slices.Contains(have, n) {
 			added = append(added, n)
 		}
 	}
-	if ok, err := s.Store.WorkspacesExist(ctx, added); err != nil {
+	if ok, err := exist(ctx, added); err != nil {
 		return err
 	} else if !ok {
 		return sql.ErrNoRows

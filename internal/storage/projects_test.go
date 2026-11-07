@@ -79,3 +79,27 @@ func TestProjects(t *testing.T) {
 		t.Fatalf("deleting it again: %v", err)
 	}
 }
+
+func TestVCSConnectionAllows(t *testing.T) {
+	c := VCSConnection{WorkspaceScope: "selected", Workspaces: []string{"ws-a"}, Projects: []string{"p"}}
+	for _, tc := range []struct {
+		workspace, project string
+		want               bool
+	}{
+		{"ws-a", "other", true}, // selected workspace, in any project
+		{"ws-b", "p", true},     // a workspace of a selected project
+		{"", "p", true},         // a new workspace in a selected project
+		{"ws-b", "other", false},
+		{"", "other", false},
+	} {
+		if got := c.Allows(tc.workspace, tc.project); got != tc.want {
+			t.Errorf("Allows(%q, %q) = %v", tc.workspace, tc.project, got)
+		}
+	}
+	if (VCSConnection{WorkspaceScope: "", Projects: []string{"p"}}).Allows("", "p") {
+		t.Error("a connection closed to workspaces allows a selected project")
+	}
+	if !(VCSConnection{WorkspaceScope: "all"}).Allows("", "any") {
+		t.Error("an all-workspaces connection refuses a new workspace")
+	}
+}

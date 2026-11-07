@@ -304,7 +304,7 @@ func (s *Server) attachVariableSet(w http.ResponseWriter, r *http.Request) {
 	}
 	r.ParseForm()
 	want := r.PostForm["workspace"]
-	err := s.syncSelection(r.Context(), set.Workspaces, want, func(ws string, on bool) error {
+	err := s.syncSelection(r.Context(), set.Workspaces, want, s.Store.WorkspacesExist, func(ws string, on bool) error {
 		return s.Store.AttachVariableSet(r.Context(), set.ID, ws, on)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -326,26 +326,16 @@ func (s *Server) attachVariableSetProjects(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	want := r.PostForm["project"]
-	all, err := s.Store.Projects(r.Context(), storage.Viewer{Admin: true})
-	if err != nil {
-		s.internalError(w, "list projects", err)
+	err := s.syncSelection(r.Context(), set.Projects, want, s.Store.ProjectsExist, func(p string, on bool) error {
+		return s.Store.AttachVariableSetProject(r.Context(), set.ID, p, on)
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "choose existing projects", http.StatusBadRequest)
 		return
 	}
-	for _, n := range want { // before anything changes
-		if !slices.ContainsFunc(all, func(p storage.Project) bool { return p.Name == n }) {
-			http.Error(w, "choose existing projects", http.StatusBadRequest)
-			return
-		}
-	}
-	for _, p := range all {
-		on := slices.Contains(want, p.Name)
-		if on == slices.Contains(set.Projects, p.Name) {
-			continue
-		}
-		if err := s.Store.AttachVariableSetProject(r.Context(), set.ID, p.Name, on); err != nil && !errors.Is(err, sql.ErrNoRows) {
-			s.internalError(w, "attach variable set", err)
-			return
-		}
+	if err != nil {
+		s.internalError(w, "attach variable set", err)
+		return
 	}
 	s.Log.Info("variable set projects", "set", set.Name, "projects", want, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/variable-sets/"+set.Name, http.StatusSeeOther)

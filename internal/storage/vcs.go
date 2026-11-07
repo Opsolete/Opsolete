@@ -18,15 +18,18 @@ type VCSConnection struct {
 	Token                       []byte
 	WorkspaceScope              string   // workspaces that may link its repositories: "" none, "all" or "selected"
 	Workspaces                  []string // names of the selected workspaces
+	Projects                    []string // names of the selected projects: all their workspaces may link
 	CreatedAt                   time.Time
 	// what uses it, for the VCS providers page
 	LinkedWorkspaces, LinkedModules int
 	Catalog                         bool // the template catalog's repository
 }
 
-// AllowsWorkspace reports whether the named workspace may link the connection's repositories.
-func (c VCSConnection) AllowsWorkspace(name string) bool {
-	return c.WorkspaceScope == "all" || c.WorkspaceScope == "selected" && slices.Contains(c.Workspaces, name)
+// Allows reports whether the named workspace ("" for one being created) in the named project may
+// link the connection's repositories.
+func (c VCSConnection) Allows(workspace, project string) bool {
+	return c.WorkspaceScope == "all" || c.WorkspaceScope == "selected" &&
+		(workspace != "" && slices.Contains(c.Workspaces, workspace) || slices.Contains(c.Projects, project))
 }
 
 // ResealVCSToken replaces a connection's sealed token, unless it changed since it was read.
@@ -49,6 +52,8 @@ func (s *Store) CreateVCSConnection(ctx context.Context, c VCSConnection) (strin
 const connCols = `c.id, c.name, c.provider, c.base_url, c.token, c.workspace_scope, c.created_at,
 	ARRAY(SELECT w.name FROM vcs_connection_workspaces a JOIN workspaces w ON w.id = a.workspace_id
 		WHERE a.connection_id = c.id ORDER BY w.name),
+	ARRAY(SELECT p.name FROM vcs_connection_projects a JOIN projects p ON p.id = a.project_id
+		WHERE a.connection_id = c.id ORDER BY p.name),
 	(SELECT count(*) FROM workspaces w WHERE w.vcs_connection_id = c.id),
 	(SELECT count(*) FROM vcs_modules m WHERE m.connection_id = c.id),
 	EXISTS (SELECT 1 FROM template_catalog t WHERE t.connection_id = c.id)`
@@ -63,7 +68,7 @@ func scanConns(rows *sql.Rows, err error) ([]VCSConnection, error) {
 	for rows.Next() {
 		var c VCSConnection
 		if err := rows.Scan(&c.ID, &c.Name, &c.Provider, &c.BaseURL, &c.Token, &c.WorkspaceScope, &c.CreatedAt,
-			types.SQLScanner(&c.Workspaces), &c.LinkedWorkspaces, &c.LinkedModules, &c.Catalog); err != nil {
+			types.SQLScanner(&c.Workspaces), types.SQLScanner(&c.Projects), &c.LinkedWorkspaces, &c.LinkedModules, &c.Catalog); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -112,6 +117,12 @@ func (s *Store) AttachVCSWorkspace(ctx context.Context, connID, workspace string
 		return sql.ErrNoRows
 	}
 	return nil
+}
+
+// AttachVCSProject selects the named project for a connection, or deselects it (attach=false).
+// It returns sql.ErrNoRows for an unknown project.
+func (s *Store) AttachVCSProject(ctx context.Context, connID, project string, attach bool) error {
+	return s.attachProject(ctx, "vcs_connection_projects", "connection_id", connID, project, attach)
 }
 
 // DeleteVCSConnection also unlinks its modules (their published versions stay). It returns

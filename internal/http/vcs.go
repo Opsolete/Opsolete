@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -67,7 +68,8 @@ type newConnection struct {
 	Conn      storage.VCSConnection
 	Error     string
 	Form      map[string]string
-	Picker    picker // the selected workspaces, in step 3
+	Picker    picker       // the selected workspaces, in step 3
+	Projects  []pickerItem // the projects, selected ones checked, in step 3
 }
 
 func (s *Server) newConnectionPage(w http.ResponseWriter, r *http.Request) {
@@ -107,6 +109,14 @@ func (s *Server) renderNewConnection(w http.ResponseWriter, r *http.Request, sta
 		}
 		p.Picker = workspacePicker("workspace", "Workspaces that may link this connection's repositories", p.Conn.Workspaces, all,
 			func(ws storage.Workspace) bool { return ws.TemplateID == "" }) // template workspaces never link a repository
+		projects, err := s.Store.Projects(r.Context(), storage.Viewer{Admin: true})
+		if err != nil {
+			s.internalError(w, "list projects", err)
+			return
+		}
+		for _, pr := range projects {
+			p.Projects = append(p.Projects, pickerItem{pr.Name, pr.Name, slices.Contains(p.Conn.Projects, pr.Name)})
+		}
 	}
 	s.render(w, r, status, "vcsnew.html", p)
 }
@@ -205,13 +215,25 @@ func (s *Server) saveConnectionSettings(w http.ResponseWriter, r *http.Request) 
 		s.renderNewConnection(w, r, http.StatusUnprocessableEntity, newConnection{Step: 3, Edit: !wizard, Return: ret, Conn: sc, Error: err.Error(), Form: form})
 		return
 	}
-	if scope == "selected" { // else the hidden picker's selection stays for later
-		err = s.syncSelection(r.Context(), sc.Workspaces, r.PostForm["workspace"], func(ws string, on bool) error {
-			return s.Store.AttachVCSWorkspace(r.Context(), sc.ID, ws, on)
-		})
+	if scope == "selected" { // else the hidden pickers' selection stays for later
+		// check the projects before the workspaces change, so a bad form changes nothing
+		var ok bool
+		if ok, err = s.Store.ProjectsExist(r.Context(), r.PostForm["project"]); err == nil && !ok {
+			err = sql.ErrNoRows
+		}
+		if err == nil {
+			err = s.syncSelection(r.Context(), sc.Workspaces, r.PostForm["workspace"], s.Store.WorkspacesExist, func(ws string, on bool) error {
+				return s.Store.AttachVCSWorkspace(r.Context(), sc.ID, ws, on)
+			})
+		}
+		if err == nil {
+			err = s.syncSelection(r.Context(), sc.Projects, r.PostForm["project"], s.Store.ProjectsExist, func(p string, on bool) error {
+				return s.Store.AttachVCSProject(r.Context(), sc.ID, p, on)
+			})
+		}
 	}
 	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "choose existing workspaces", http.StatusBadRequest)
+		http.Error(w, "choose existing workspaces and projects", http.StatusBadRequest)
 		return
 	}
 	if err == nil {
@@ -221,7 +243,7 @@ func (s *Server) saveConnectionSettings(w http.ResponseWriter, r *http.Request) 
 		s.internalError(w, "set vcs scope", err)
 		return
 	}
-	s.Log.Info("vcs connection scope", "id", sc.ID, "workspace_scope", scope, "workspaces", r.PostForm["workspace"], "user", auth.FromContext(r.Context()).Email)
+	s.Log.Info("vcs connection scope", "id", sc.ID, "workspace_scope", scope, "workspaces", r.PostForm["workspace"], "projects", r.PostForm["project"], "user", auth.FromContext(r.Context()).Email)
 	next := "/vcs"
 	if wizard {
 		next = finishConnection(ret, sc.ID)

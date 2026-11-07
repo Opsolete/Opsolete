@@ -78,6 +78,20 @@ func (s *Store) Project(ctx context.Context, name string) (Project, error) {
 	return scanProject(s.DB.QueryRowContext(ctx, `SELECT `+projectCols+` FROM projects p WHERE p.name = $1`, name))
 }
 
+// ProjectsExist reports whether there is a project for each name.
+func (s *Store) ProjectsExist(ctx context.Context, names []string) (bool, error) {
+	var ok bool
+	err := s.DB.QueryRowContext(ctx, `SELECT NOT EXISTS (SELECT 1 FROM unnest($1::text[]) n
+		WHERE NOT EXISTS (SELECT 1 FROM projects WHERE name = n))`, names).Scan(&ok)
+	return ok, err
+}
+
+// DefaultProject is the project new workspaces go into unless another is picked.
+func (s *Store) DefaultProject(ctx context.Context) (Project, error) {
+	return scanProject(s.DB.QueryRowContext(ctx, `SELECT `+projectCols+` FROM projects p
+		WHERE p.id = (SELECT default_project_id FROM organization)`))
+}
+
 func (s *Store) CreateProject(ctx context.Context, name, description string) (Project, error) {
 	var id string
 	err := s.DB.QueryRowContext(ctx, `INSERT INTO projects (name, description) VALUES ($1, $2) RETURNING id`, name, description).Scan(&id)

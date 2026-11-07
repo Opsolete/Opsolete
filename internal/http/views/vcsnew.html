@@ -90,8 +90,15 @@
       <label class="check"><input type="radio" name="workspace_scope" value="all"{{if ne (index $f "workspace_scope") "selected"}} checked{{end}}>
         <span>All workspaces<small>Any workspace may link a repository the token can read.</small></span></label>
       <label class="check"><input type="radio" name="workspace_scope" value="selected"{{if eq (index $f "workspace_scope") "selected"}} checked{{end}}>
-        <span>Selected workspaces<small>Only the workspaces you attach below.</small></span></label>
+        <span>Selected workspaces and projects<small>Only the workspaces you attach below, and every workspace of the projects you select, new ones too.</small></span></label>
       <div class="selected-ws indent">
+        <p class="field">Projects</p>
+        <div role="group" aria-label="Projects whose workspaces may link this connection's repositories">
+        {{range .Projects}}<label class="check"><input type="checkbox" name="project" value="{{.Value}}"{{if .Selected}} checked{{end}}><span>{{.Name}}</span></label>
+        {{else}}<p class="hint">There are no projects.</p>{{end}}
+        </div>
+        <p class="hint">Anyone with operate access to a selected project may create a workspace there that links this connection's repositories. A workspace moved out of the project loses it.</p>
+        <p class="field">Workspaces</p>
         {{template "picker" .Picker}}
         <p class="hint">A selected workspace links its repository under its own Settings → Version control. Runs of a deselected workspace that links a repository through this connection fail when they start.</p>
       </div>

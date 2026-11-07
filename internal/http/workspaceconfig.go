@@ -33,9 +33,9 @@ type vcsForm struct {
 	Error string
 }
 
-// loadVCSForm lists the connections the workspace (by name, "" = a new one) may link and the repos
-// of reposOf (a connection id, "" = none); with VCS off it's empty and the form hides the part.
-func (s *Server) loadVCSForm(ctx context.Context, form map[string]string, errMsg, workspace, reposOf string) (vcsForm, error) {
+// loadVCSForm lists the connections the workspace (by name, "" = a new one) in project (by name) may
+// link and the repos of reposOf (a connection id, "" = none); with VCS off it's empty and the form hides the part.
+func (s *Server) loadVCSForm(ctx context.Context, form map[string]string, errMsg, workspace, project, reposOf string) (vcsForm, error) {
 	f := vcsForm{Form: form, Error: errMsg}
 	if !s.Features.VCS {
 		return f, nil
@@ -45,7 +45,7 @@ func (s *Server) loadVCSForm(ctx context.Context, form map[string]string, errMsg
 		return f, err
 	}
 	for _, sc := range conns {
-		if !sc.AllowsWorkspace(workspace) {
+		if !sc.Allows(workspace, project) {
 			continue
 		}
 		f.Conns = append(f.Conns, sc)
@@ -92,9 +92,10 @@ func fillTagForm(form map[string]string, tagsRegex string) {
 	}
 }
 
-// vcsLink validates the form's repository link for the workspace (by name) and checks the branch
-// exists, or for tag-based triggers (tags: their pattern) that the tags can be read; no connection = no link.
-func (s *Server) vcsLink(ctx context.Context, workspace string, form map[string]string) (connID, repo, branch, tags string, err error) {
+// vcsLink validates the form's repository link for the workspace (by name, "" = a new one) in project
+// (by name) and checks the branch exists, or for tag-based triggers (tags: their pattern) that the tags
+// can be read; no connection = no link.
+func (s *Server) vcsLink(ctx context.Context, workspace, project string, form map[string]string) (connID, repo, branch, tags string, err error) {
 	connID, repo, branch = form["vcs_connection"], form["vcs_repo"], form["vcs_branch"]
 	if connID == "" {
 		return "", "", "", "", nil
@@ -116,7 +117,7 @@ func (s *Server) vcsLink(ctx context.Context, workspace string, form map[string]
 			}
 		}
 	}
-	c, err := s.vcsConn(ctx, connID, workspace)
+	c, err := s.vcsConn(ctx, connID, workspace, project)
 	if err != nil {
 		return "", "", "", "", err
 	}
@@ -130,8 +131,8 @@ func (s *Server) vcsLink(ctx context.Context, workspace string, form map[string]
 	return connID, repo, branch, tags, nil
 }
 
-// vcsConn opens a connection the workspace (by name) may link.
-func (s *Server) vcsConn(ctx context.Context, connID, workspace string) (vcs.Conn, error) {
+// vcsConn opens a connection the workspace (by name, "" = a new one) in project (by name) may link.
+func (s *Server) vcsConn(ctx context.Context, connID, workspace, project string) (vcs.Conn, error) {
 	sc, err := s.Store.GetVCSConnection(ctx, connID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return vcs.Conn{}, errors.New("the VCS connection no longer exists")
@@ -139,7 +140,10 @@ func (s *Server) vcsConn(ctx context.Context, connID, workspace string) (vcs.Con
 	if err != nil {
 		return vcs.Conn{}, err
 	}
-	if !sc.AllowsWorkspace(workspace) {
+	if !sc.Allows(workspace, project) {
+		if workspace == "" {
+			return vcs.Conn{}, fmt.Errorf("new workspaces in project %s may not link repositories through VCS connection %s: ask an admin", project, sc.Name)
+		}
 		return vcs.Conn{}, fmt.Errorf("workspace %q may not link repositories through VCS connection %s: ask an admin", workspace, sc.Name)
 	}
 	return vcs.ConnFor(s.SecretKey, sc)
@@ -172,7 +176,12 @@ func (s *Server) renderNewWorkspace(w http.ResponseWriter, r *http.Request, stat
 	if form["type"] == "vcs" && form["vcs_repo"] == "" {
 		reposOf = form["vcs_connection"]
 	}
-	f, err := s.loadVCSForm(r.Context(), form, errMsg, "", reposOf)
+	project, err := s.newWorkspaceProject(r.Context(), form["project"])
+	if err != nil {
+		s.internalError(w, "default project", err)
+		return
+	}
+	f, err := s.loadVCSForm(r.Context(), form, errMsg, "", project, reposOf)
 	if err != nil {
 		s.internalError(w, "vcs connections", err)
 		return
@@ -209,7 +218,12 @@ func (s *Server) createEmptyWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// "": selected-scope connections list existing workspaces, so a new one only gets "all" connections
-	connID, repo, branch, tags, err := s.vcsLink(r.Context(), "", form)
+	project, err := s.newWorkspaceProject(r.Context(), form["project"])
+	if err != nil {
+		s.internalError(w, "default project", err)
+		return
+	}
+	connID, repo, branch, tags, err := s.vcsLink(r.Context(), "", project, form)
 	if err != nil {
 		fail(err.Error())
 		return
@@ -288,7 +302,7 @@ func (s *Server) renderWorkspaceVCS(w http.ResponseWriter, r *http.Request, stat
 	if edit && form["type"] == "vcs" && form["vcs_repo"] == "" {
 		reposOf = form["vcs_connection"]
 	}
-	f, err := s.loadVCSForm(r.Context(), form, errMsg, ws.Name, reposOf)
+	f, err := s.loadVCSForm(r.Context(), form, errMsg, ws.Name, ws.ProjectName, reposOf)
 	if err != nil {
 		s.internalError(w, "vcs connections", err)
 		return
@@ -313,7 +327,7 @@ func (s *Server) linkWorkspaceVCS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	form := vcsFormValues(r)
-	connID, repo, branch, tags, err := s.vcsLink(r.Context(), ws.Name, form)
+	connID, repo, branch, tags, err := s.vcsLink(r.Context(), ws.Name, ws.ProjectName, form)
 	var baseline string
 	if err == nil && (connID != ws.VCSConnectionID || repo != ws.VCSRepo || tags != ws.VCSTagsRegex) {
 		baseline, err = s.tagBaseline(r.Context(), connID, repo, tags)
@@ -370,7 +384,7 @@ func (s *Server) vcsHealth(ctx context.Context, ws storage.Workspace) (*storage.
 	if err != nil {
 		return nil, err.Error()
 	}
-	if !sc.AllowsWorkspace(ws.Name) {
+	if !sc.Allows(ws.Name, ws.ProjectName) {
 		return &sc, "an admin no longer allows this workspace to use " + sc.Name + ": its runs fail. Change source, or ask an admin to attach it under VCS providers."
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -394,7 +408,7 @@ func (s *Server) pinCommit(ctx context.Context, j storage.Job) error {
 	if err != nil {
 		return err
 	}
-	c, err := s.vcsConn(ctx, ws.VCSConnectionID, ws.Name) // fails if the admin deselected the workspace since the link
+	c, err := s.vcsConn(ctx, ws.VCSConnectionID, ws.Name, ws.ProjectName) // fails if the admin deselected the workspace since the link
 	if err != nil {
 		return fmt.Errorf("vcs: %w", err)
 	}
@@ -445,7 +459,7 @@ func (s *Server) vcsArchive(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "vcs archive", err)
 		return
 	}
-	c, err := s.vcsConn(ctx, ws.VCSConnectionID, ws.Name)
+	c, err := s.vcsConn(ctx, ws.VCSConnectionID, ws.Name, ws.ProjectName)
 	var b []byte
 	if err == nil {
 		b, err = c.Archive(ctx, ws.VCSRepo, run.VCSCommit, "commit", "")

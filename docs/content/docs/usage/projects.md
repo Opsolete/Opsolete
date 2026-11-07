@@ -41,6 +41,10 @@ You see a project if you can see one of its workspaces or hold a grant on it; ev
 
 An admin attaches a variable set to projects on the set's page (*Settings › Variable sets*); a project's *Settings › Variable sets* lists them. They apply to every workspace in the project **except repository-linked ones**: whoever operates a workspace can link it to any code, and a project set, unlike one attached to the workspace, isn't detached when the link changes. Attach a set to a repository-linked workspace itself instead. For the order between a workspace's variables and sets, see [Precedence]({{< relref "variables" >}}).
 
+## VCS connections
+
+An admin can open a [VCS connection]({{< relref "/docs/catalog/vcs-providers#which-workspaces-may-link-a-connection" >}}) to selected projects: every workspace of those projects may link its repositories, including new ones created there, without selecting each workspace. A workspace moved out of the project loses the connection, and its runs fail when they start.
+
 ## Terraform CLI
 
 Terraform's `cloud` block names a project with `workspaces { project = "…" }`: `terraform init` creates a missing workspace there. See [Terraform CLI]({{< relref "terraform-cli" >}}).

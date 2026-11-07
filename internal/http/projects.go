@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"net/http"
@@ -220,6 +221,15 @@ func (s *Server) moveWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Log.Info("workspace moved", "workspace", ws.Name, "from", ws.ProjectName, "to", p.Name, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/settings", http.StatusSeeOther)
+}
+
+// newWorkspaceProject is the name of the project a new workspace goes into: picked, else the default.
+func (s *Server) newWorkspaceProject(ctx context.Context, picked string) (string, error) {
+	if picked != "" {
+		return picked, nil
+	}
+	p, err := s.Store.DefaultProject(ctx)
+	return p.Name, err
 }
 
 // creatableProjects lists the projects the user may create workspaces in, to pick one.

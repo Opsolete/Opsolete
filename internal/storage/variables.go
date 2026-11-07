@@ -213,12 +213,18 @@ func (s *Store) AttachVariableSet(ctx context.Context, setID, workspace string, 
 // AttachVariableSetProject applies a set to the workspaces of the named project, or stops (attach=false).
 // It returns sql.ErrNoRows for an unknown project.
 func (s *Store) AttachVariableSetProject(ctx context.Context, setID, project string, attach bool) error {
-	q := `INSERT INTO variable_set_projects (set_id, project_id) SELECT $1::uuid, id FROM projects WHERE name = $2
+	return s.attachProject(ctx, "variable_set_projects", "set_id", setID, project, attach)
+}
+
+// attachProject adds or removes the (col = id, project) row of table, a project join table
+// (variable_set_projects or vcs_connection_projects; never input). sql.ErrNoRows: no such project.
+func (s *Store) attachProject(ctx context.Context, table, col, id, project string, attach bool) error {
+	q := `INSERT INTO ` + table + ` (` + col + `, project_id) SELECT $1::uuid, id FROM projects WHERE name = $2
 		ON CONFLICT DO NOTHING`
 	if !attach {
-		q = `DELETE FROM variable_set_projects WHERE set_id = $1::uuid AND project_id = (SELECT id FROM projects WHERE name = $2)`
+		q = `DELETE FROM ` + table + ` WHERE ` + col + ` = $1::uuid AND project_id = (SELECT id FROM projects WHERE name = $2)`
 	}
-	if _, err := s.DB.ExecContext(ctx, q, setID, project); err != nil {
+	if _, err := s.DB.ExecContext(ctx, q, id, project); err != nil {
 		return err
 	}
 	var ok bool
