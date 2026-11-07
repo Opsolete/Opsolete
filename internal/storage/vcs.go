@@ -211,7 +211,8 @@ func (s *Store) SetVCSSync(ctx context.Context, namespace, name, system, syncErr
 }
 
 // ConfigureWorkspace moves a workspace to a module version and inputs and queues the plan that
-// applies them. Without a free workspace (ErrRunActive) nothing changes.
+// applies them; if the run ends before its apply, they go back (configChange). Without a free
+// workspace (ErrRunActive) nothing changes.
 func (s *Store) ConfigureWorkspace(ctx context.Context, workspaceID, source, ref string, inputs map[string]any, createdBy string) (Run, error) {
 	raw, err := json.Marshal(inputs)
 	if err != nil {
@@ -222,6 +223,10 @@ func (s *Store) ConfigureWorkspace(ctx context.Context, workspaceID, source, ref
 		return Run{}, err
 	}
 	defer tx.Rollback()
+	before, err := configSnapshot(ctx, tx, workspaceID, "")
+	if err != nil {
+		return Run{}, err
+	}
 	res, err := tx.ExecContext(ctx, `UPDATE workspaces SET module_source = $2, module_ref = $3, inputs = $4, updated_at = now()
 		WHERE id = ops_uuid($1)`, workspaceID, source, ref, raw)
 	if err != nil {
@@ -234,6 +239,9 @@ func (s *Store) ConfigureWorkspace(ctx context.Context, workspaceID, source, ref
 	}
 	r, err := createRun(ctx, tx, workspaceID, "apply", createdBy)
 	if err != nil {
+		return Run{}, err
+	}
+	if err := recordConfigChanges(ctx, tx, r.ID, workspaceID, []configChange{{Before: before}}); err != nil {
 		return Run{}, err
 	}
 	return r, tx.Commit()

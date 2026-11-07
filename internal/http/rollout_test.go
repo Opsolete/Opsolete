@@ -147,14 +147,16 @@ func TestTickRollout(t *testing.T) {
 	end("a", storage.Applied)
 	tick("active", "1.1.0", "1.0.0", "1.1.0", "1.0.0") // b is busy: c is next
 	end("c", storage.Discarded)
-	tick("paused", "1.1.0", "1.0.0", "1.1.0", "1.0.0")
+	tick("paused", "1.1.0", "1.0.0", "1.0.0", "1.0.0") // the discard put c back on 1.0.0
 	if !strings.Contains(ro.Message, "discarded") {
 		t.Fatalf("pause message: %q", ro.Message)
 	}
 	store.SetRolloutStatus(ctx, ro.ID, "active", "")
 	end("b", storage.Errored) // not the rollout's run: doesn't pause it
-	tick("active", "1.1.0", "1.1.0", "1.1.0", "1.0.0")
+	tick("active", "1.1.0", "1.1.0", "1.0.0", "1.0.0")
 	end("b", storage.Applied)
+	tick("active", "1.1.0", "1.1.0", "1.1.0", "1.0.0") // resumed: c is retried
+	end("c", storage.Applied)
 	tick("done", "1.1.0", "1.1.0", "1.1.0", "1.0.0")
 
 	// a rollout to a version the template no longer pins stops

@@ -122,7 +122,7 @@ func (s *Server) tickRollout(ctx context.Context, ro storage.Rollout) error {
 		return err
 	}
 	if failed != "" {
-		return status("paused", failed+": check it, then resume")
+		return status("paused", failed+": check it, then resume (a workspace whose plan ended before its apply is back on its previous version and is retried)")
 	}
 	uses, err := s.Store.TemplateUses(ctx, t.ID, ro.ProjectID)
 	if err != nil {

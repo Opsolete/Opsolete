@@ -42,6 +42,8 @@ Add any number of templates (**Deploy…** in a workspace's menu, operate access
 
 When a template is moved to a newer module version, workspaces on an older one show *A new module version is available*. **View update** (or **Configure…** at any time) shows the form filled with the workspace's inputs, plus any new ones. Saving moves the workspace to the template's version and queues a plan, which is confirmed as usual.
 
+If that plan is discarded, or is canceled or errors before its apply starts, the workspace goes back to its previous version and inputs, so it never shows a version that wasn't applied. The same holds for adding a template (it's removed again) and for rollouts. Once the apply has started, the new version stays, even if the apply fails: the state may already hold part of it.
+
 To update many workspaces at once, an admin opens **Roll out** on the template's card. The page lists each workspace that uses the template, as its root or as an added template, with its version. You can filter the list by project.
 
 To start a rollout, pick the scope and a batch size, then click **Roll out**:
@@ -55,7 +57,7 @@ The rollout moves each workspace to the template's version, with its current inp
 - **Needs input:** the new version has a required input without a default. The rollout skips the workspace; use its update form.
 - **Local execution:** runs can't start in Opsolete, so the rollout skips the workspace.
 
-A rollout of its own that errors, is discarded or is canceled **pauses** the rollout: check it, then **Resume**. **Stop** ends a rollout; plans it already queued stay. If the template moves to another version meanwhile, the rollout stops: start a new one. A rollout is **done** when no workspace in its scope is left to upgrade and its plans have ended. A template has at most one open rollout. Each upgrade is recorded in the audit log.
+A rollout of its own that errors, is discarded or is canceled **pauses** the rollout: check it, then **Resume**. A workspace whose plan ended before its apply is back on its previous version, so resuming retries it; to skip it, **Stop** the rollout. **Stop** ends a rollout; plans it already queued stay. If the template moves to another version meanwhile, the rollout stops: start a new one. A rollout is **done** when no workspace in its scope is left to upgrade and its plans have ended. A template has at most one open rollout. Each upgrade is recorded in the audit log.
 
 ## Rename and delete
 

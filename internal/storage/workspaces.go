@@ -274,6 +274,39 @@ func createRun(ctx context.Context, tx *sql.Tx, workspaceID, action, createdBy s
 	return r, err
 }
 
+// configChange is one use's configuration (module "" = the root) before and after a run's change. A
+// run ending before its apply started puts the before back (migration 043_run_config_restore).
+type configChange struct {
+	Module string          `json:"module"`
+	Before json.RawMessage `json:"before"` // nil (null): an added template that wasn't there
+	After  json.RawMessage `json:"after"`
+}
+
+// configSnapshot reads one use's configuration in tx; nil if there is none.
+func configSnapshot(ctx context.Context, tx *sql.Tx, workspaceID, module string) (json.RawMessage, error) {
+	var b []byte
+	err := tx.QueryRowContext(ctx, `SELECT run_config_snapshot(ops_uuid($1), $2)`, workspaceID, module).Scan(&b)
+	return b, err
+}
+
+// recordConfigChanges stores on run runID the changes tx made to the uses in changes (Before read
+// before the change), reading each After now.
+func recordConfigChanges(ctx context.Context, tx *sql.Tx, runID, workspaceID string, changes []configChange) error {
+	for i := range changes {
+		after, err := configSnapshot(ctx, tx, workspaceID, changes[i].Module)
+		if err != nil {
+			return err
+		}
+		changes[i].After = after
+	}
+	b, err := json.Marshal(changes)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE runs SET config_changes = $2 WHERE id = ops_uuid($1)`, runID, b)
+	return err
+}
+
 // GetWorkspace returns sql.ErrNoRows for an unknown name.
 func (s *Store) GetWorkspace(ctx context.Context, name string) (Workspace, error) {
 	return scanWorkspace(s.DB.QueryRowContext(ctx, `SELECT `+workspaceCols+` FROM workspaces w WHERE w.name = $1`, name))

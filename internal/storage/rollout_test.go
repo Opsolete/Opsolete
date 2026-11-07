@@ -78,6 +78,11 @@ func TestUpgradeTemplates(t *testing.T) {
 	if open, failed, _ := s.RolloutRuns(ctx, ro.ID, ro.ResumedAt); open != 0 || failed != "the run in "+w.Name+": discarded" {
 		t.Fatalf("after discard: %d %q", open, failed)
 	}
+	if uses, _ := s.TemplateUses(ctx, "job-test", ""); !slices.ContainsFunc(uses, func(u TemplateUse) bool {
+		return u.WorkspaceID == w.ID && u.Module == "extra" && u.ModuleRef == "v1"
+	}) || slices.ContainsFunc(uses, func(u TemplateUse) bool { return u.WorkspaceID == w.ID && u.ModuleRef != "v1" }) {
+		t.Fatalf("a discarded rollout run must put both uses back on v1: %+v", uses)
+	}
 	if ok, err := s.SetRolloutStatus(ctx, ro.ID, "paused", ""); !ok || err != nil {
 		t.Fatalf("pause: %v %v", ok, err)
 	}

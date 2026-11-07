@@ -65,7 +65,8 @@ var ErrRolloutClosed = errors.New("the rollout is no longer active")
 // UpgradeTemplates applies ups, all of one workspace, and queues one apply run for them as part of
 // rollout rolloutID, which waits for confirmation even with auto-apply. If a use changed meanwhile
 // (sql.ErrNoRows), there is no free workspace (ErrRunActive, ErrLocalExecution) or the rollout is
-// no longer active (ErrRolloutClosed), nothing changes.
+// no longer active (ErrRolloutClosed), nothing changes. If the run ends before its apply (e.g. its
+// plan is discarded), the uses go back (configChange), and a resumed rollout retries them.
 func (s *Store) UpgradeTemplates(ctx context.Context, workspaceID string, ups []TemplateUpgrade, createdBy, rolloutID string) (Run, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -79,7 +80,13 @@ func (s *Store) UpgradeTemplates(ctx context.Context, workspaceID string, ups []
 	if status != "active" {
 		return Run{}, ErrRolloutClosed
 	}
+	var changes []configChange
 	for _, u := range ups {
+		before, err := configSnapshot(ctx, tx, workspaceID, u.Module)
+		if err != nil {
+			return Run{}, err
+		}
+		changes = append(changes, configChange{Module: u.Module, Before: before})
 		raw, err := json.Marshal(u.Inputs)
 		if err != nil {
 			return Run{}, err
@@ -111,6 +118,9 @@ func (s *Store) UpgradeTemplates(ctx context.Context, workspaceID string, ups []
 		return Run{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE runs SET rollout_id = $2 WHERE id = $1`, r.ID, rolloutID); err != nil {
+		return Run{}, err
+	}
+	if err := recordConfigChanges(ctx, tx, r.ID, workspaceID, changes); err != nil {
 		return Run{}, err
 	}
 	return r, tx.Commit()

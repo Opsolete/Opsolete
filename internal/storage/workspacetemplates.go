@@ -66,7 +66,7 @@ func (s *Store) SetWorkspaceTemplate(ctx context.Context, workspaceID string, t 
 		q = `INSERT INTO workspace_templates (workspace_id, name, template_id, module_source, module_ref, inputs)
 			VALUES ($1::uuid, $2, $3, $4, $5, $6)`
 	}
-	return s.changeTemplates(ctx, workspaceID, createdBy, q, workspaceID, t.Name, t.TemplateID, t.ModuleSource, t.ModuleRef, raw)
+	return s.changeTemplates(ctx, workspaceID, t.Name, createdBy, q, workspaceID, t.Name, t.TemplateID, t.ModuleSource, t.ModuleRef, raw)
 }
 
 // RemoveWorkspaceTemplate removes an added template. A template's module may configure its own
@@ -223,13 +223,18 @@ func rootAddresses(res []runnerapi.Resource, added []string) []string {
 	return out
 }
 
-// changeTemplates runs q (which must change one row, else sql.ErrNoRows) and queues a plan, atomically.
-func (s *Store) changeTemplates(ctx context.Context, workspaceID, createdBy, q string, args ...any) (Run, error) {
+// changeTemplates runs q (which must change one row, added template name's, else sql.ErrNoRows) and
+// queues a plan, atomically; if the run ends before its apply, the change is undone (configChange).
+func (s *Store) changeTemplates(ctx context.Context, workspaceID, name, createdBy, q string, args ...any) (Run, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return Run{}, err
 	}
 	defer tx.Rollback()
+	before, err := configSnapshot(ctx, tx, workspaceID, name)
+	if err != nil {
+		return Run{}, err
+	}
 	res, err := tx.ExecContext(ctx, q, args...)
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
 		return Run{}, ErrExists
@@ -244,6 +249,9 @@ func (s *Store) changeTemplates(ctx context.Context, workspaceID, createdBy, q s
 	}
 	r, err := createRun(ctx, tx, workspaceID, "apply", createdBy)
 	if err != nil {
+		return Run{}, err
+	}
+	if err := recordConfigChanges(ctx, tx, r.ID, workspaceID, []configChange{{Module: name, Before: before}}); err != nil {
 		return Run{}, err
 	}
 	return r, tx.Commit()
