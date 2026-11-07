@@ -350,6 +350,8 @@ func TestVCSProjectScope(t *testing.T) {
 	}
 	if page := get(h, "/vcs/"+connID+"/settings").Body.String(); !strings.Contains(page, `name="project" value="`+prj+`" checked>`) {
 		t.Fatal("the settings page shows the selected project")
+	} else if !strings.Contains(page, "(default: every user may create workspaces here)") {
+		t.Fatal("the picker must say the default project is open to every user")
 	}
 
 	// a new workspace: offered and allowed in the selected project, not in the default one

@@ -115,7 +115,7 @@ func (s *Server) renderNewConnection(w http.ResponseWriter, r *http.Request, sta
 			return
 		}
 		for _, pr := range projects {
-			p.Projects = append(p.Projects, pickerItem{pr.Name, pr.Name, slices.Contains(p.Conn.Projects, pr.Name)})
+			p.Projects = append(p.Projects, pickerItem{pr.Name, projectLabel(pr), slices.Contains(p.Conn.Projects, pr.Name)})
 		}
 	}
 	s.render(w, r, status, "vcsnew.html", p)

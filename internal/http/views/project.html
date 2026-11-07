@@ -43,7 +43,8 @@
 <p class="id"><code>{{$p.ID}}</code>
   <button type="button" class="copy" aria-label="Copy ID" title="Copy ID" onclick="navigator.clipboard.writeText('{{$p.ID}}')">⧉</button></p>
 {{if (user).Admin}}
-<form method="post" action="/projects/{{$p.Name}}/settings">
+<form method="post" action="/projects/{{$p.Name}}/settings"
+  onsubmit="return !this.elements.default.checked || this.elements.default.disabled || confirm('Make {{$p.Name}} the default? Every user may then create workspaces in it, and those get its variable sets and may link the VCS connections selected for it.')">
   <label for="name">Project name <span class="req" aria-hidden="true">*</span></label>
   <input id="name" name="name" value="{{$p.Name}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}" aria-describedby="name-hint">
   <p class="hint" id="name-hint">Lowercase letters, digits and dashes. Renaming changes the project's URL; its workspaces keep theirs.</p>
@@ -52,7 +53,8 @@
   <fieldset>
     <legend>Default project</legend>
     <label class="check"><input type="checkbox" name="default"{{if $p.Default}} checked disabled{{end}}>
-      <span>New workspaces go here<small>unless another project is picked. To change it, make another project the default.</small></span></label>
+      <span>New workspaces go here<small>unless another project is picked. To change it, make another project the default.
+        Every user may create workspaces in the default project: they get its variable sets and may link the VCS connections selected for it.</small></span></label>
   </fieldset>
   <div class="actions"><button type="submit">Update project</button></div>
 </form>

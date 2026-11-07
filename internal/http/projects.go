@@ -232,6 +232,14 @@ func (s *Server) newWorkspaceProject(ctx context.Context, picked string) (string
 	return p.Name, err
 }
 
+// projectLabel names a project in the VCS and variable set pickers; the default one says it's open to every user.
+func projectLabel(p storage.Project) string {
+	if p.Default {
+		return p.Name + " (default: every user may create workspaces here)"
+	}
+	return p.Name
+}
+
 // creatableProjects lists the projects the user may create workspaces in, to pick one.
 func (s *Server) creatableProjects(r *http.Request) ([]storage.Project, error) {
 	if s.Store == nil { // only the DB-less tests

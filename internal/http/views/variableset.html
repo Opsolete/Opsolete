@@ -25,7 +25,8 @@
 <h2>Projects</h2>
 <form method="post" action="/variable-sets/{{$v.Name}}/projects" class="card">
   <p class="muted">The set applies to every workspace of the selected projects, except those linked to a repository:
-    whoever operates one could link it to any code. Attach the set to such a workspace itself.</p>
+    whoever operates one could link it to any code. Attach the set to such a workspace itself.
+    Every user may create workspaces in the default project: a set attached to it reaches all of them.</p>
   <div role="group" aria-label="Projects to apply the set to">
   {{range .Projects}}<label class="check"><input type="checkbox" name="project" value="{{.Value}}"{{if .Selected}} checked{{end}}><span>{{.Name}}</span></label>
   {{else}}<p class="hint">There are no projects.</p>{{end}}

@@ -11,6 +11,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -96,7 +97,7 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 				in, oerr := s.openInputs(m.Inputs, j.WorkspaceID, m.Name)
 				err = cmp.Or(err, oerr)
 				if err == nil {
-					in, err = s.withWorkspaceVars(r.Context(), m.ModuleSource, m.ModuleRef, in, wsVars)
+					in, err = s.withWorkspaceVars(r.Context(), m.TemplateID, m.ModuleSource, m.ModuleRef, in, wsVars)
 				}
 				mods = append(mods, runnerapi.Module{Name: m.Name, Inputs: in,
 					Source: s.Registry.RunnerSource(templates.Module{Source: m.ModuleSource, Ref: m.ModuleRef}, runnerSrcTTL)})
@@ -143,8 +144,9 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 // gets them through tfvars, but only declared ones, since an unknown module argument fails the run.
 // shortcut: registry modules only (their variables are stored); external sources such as git:: get
 // none, as Terraform validates module arguments before the runner could read them. Publish them to the
-// registry (e.g. via VCS) to get them.
-func (s *Server) withWorkspaceVars(ctx context.Context, source, ref string, in, vars map[string]any) (map[string]any, error) {
+// registry (e.g. via VCS) to get them. Inputs the template (by id) asks for are left alone, also when
+// hidden or empty: its form decided those, and the module's default applies.
+func (s *Server) withWorkspaceVars(ctx context.Context, templateID, source, ref string, in, vars map[string]any) (map[string]any, error) {
 	if !s.Features.Registry || len(vars) == 0 {
 		return in, nil
 	}
@@ -159,13 +161,15 @@ func (s *Server) withWorkspaceVars(ctx context.Context, source, ref string, in, 
 	if err != nil {
 		return in, fmt.Errorf("module variables: %w", err)
 	}
+	t, _ := s.Templates.Get(templateID) // a deleted template: only its stored inputs are known
 	out := maps.Clone(in)
 	if out == nil {
 		out = map[string]any{}
 	}
 	for _, v := range m.Variables {
 		if val, ok := vars[v.Name]; ok {
-			if _, own := out[v.Name]; !own {
+			asked := slices.ContainsFunc(t.Inputs, func(in templates.Input) bool { return in.Name == v.Name })
+			if _, own := out[v.Name]; !own && !asked {
 				out[v.Name] = val
 			}
 		}

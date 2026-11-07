@@ -474,11 +474,15 @@ func TestWithWorkspaceVars(t *testing.T) {
 	}
 	src := testReg.PublicURL.Host + "/" + ns + "/m/null"
 	vars := map[string]any{"greeting": "from-set", "name": "from-set", "region": "undeclared"}
-	got, err := s.withWorkspaceVars(ctx, src, "1.0.0", map[string]any{"name": "own"}, vars)
+	got, err := s.withWorkspaceVars(ctx, "", src, "1.0.0", map[string]any{"name": "own"}, vars)
 	if want := map[string]any{"greeting": "from-set", "name": "own"}; err != nil || !maps.Equal(got, want) {
 		t.Fatalf("registry module: %v %v", got, err)
 	}
-	if got, err := s.withWorkspaceVars(ctx, "git::https://example.com/m.git", "v1", nil, vars); err != nil || got != nil {
+	// the greeting template asks both: unset (hidden or left empty), they keep the module's default
+	if got, err := s.withWorkspaceVars(ctx, "greeting", src, "1.0.0", map[string]any{}, vars); err != nil || len(got) != 0 {
+		t.Fatalf("inputs the template asks: %v %v", got, err)
+	}
+	if got, err := s.withWorkspaceVars(ctx, "", "git::https://example.com/m.git", "v1", nil, vars); err != nil || got != nil {
 		t.Fatalf("external source: %v %v", got, err)
 	}
 }

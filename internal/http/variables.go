@@ -233,7 +233,7 @@ func (s *Server) variableSet(w http.ResponseWriter, r *http.Request) {
 	}
 	var items []pickerItem
 	for _, pr := range projects {
-		items = append(items, pickerItem{pr.Name, pr.Name, slices.Contains(set.Projects, pr.Name)})
+		items = append(items, pickerItem{pr.Name, projectLabel(pr), slices.Contains(set.Projects, pr.Name)})
 	}
 	s.render(w, r, http.StatusOK, "variableset.html", map[string]any{"Set": set, "Variables": vars, "Picker": p, "Projects": items})
 }

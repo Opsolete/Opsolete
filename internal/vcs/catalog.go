@@ -342,15 +342,16 @@ func (c Conn) commitFile(ctx context.Context, repo, branch, base, file string, b
 	return fmt.Errorf("unknown VCS provider %q", c.Provider)
 }
 
-// templatePR finds the open pull request a save of template id opened: an opsolete/template- branch
-// whose description (the commit message) names the template. Removals are left alone.
+// templatePR finds the open pull request a save of template id opened: its opsolete/template-<id>-
+// branch, whose description (the commit message) names the template. Removals are left alone.
+// Pull requests opened before branches had the full id aren't found: a save then opens a new one.
 func (c Conn) templatePR(ctx context.Context, tc storage.TemplateCatalog, id string) (PullRequest, bool, error) {
 	prs, err := c.PullRequests(ctx, tc.Repo, tc.Branch)
 	if err != nil {
 		return PullRequest{}, false, err
 	}
 	for _, pr := range prs {
-		if strings.HasPrefix(pr.Branch, "opsolete/template-") && strings.Contains(pr.Body, "(template "+id+").") &&
+		if strings.HasPrefix(pr.Branch, "opsolete/template-"+id+"-") && strings.Contains(pr.Body, "(template "+id+").") &&
 			!strings.HasPrefix(pr.Body, "Remove ") {
 			return pr, true, nil
 		}
