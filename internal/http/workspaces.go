@@ -1121,7 +1121,7 @@ func (s *Server) logStream(w http.ResponseWriter, r *http.Request) {
 
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
-	idle, ended := 0, false
+	idle, ended, sent := 0, false, ""
 	for {
 		chunks, err := s.Store.Logs(ctx, run.ID, cursor, 200)
 		if err != nil {
@@ -1136,22 +1136,28 @@ func (s *Server) logStream(w http.ResponseWriter, r *http.Request) {
 			io.WriteString(w, "\n")
 			cursor = c.Seq
 		}
-		if len(chunks) == 0 {
+		if len(chunks) < 200 {
 			cur, _, err := s.Store.GetRun(ctx, run.ID)
 			if err != nil {
 				return
 			}
-			if !cur.Working() {
-				if !ended { // its last lines may have landed after the Logs query: read once more
-					ended = true
-					continue
-				}
-				fmt.Fprintf(w, "event: done\ndata: %s\n\n", cur.Status)
-				rc.Flush()
-				return
+			if cur.Working() && cur.Status != sent { // lets the page re-render its steps, e.g. queued → applying
+				fmt.Fprintf(w, "event: status\ndata: %s\n\n", cur.Status)
+				sent = cur.Status
 			}
-			if idle++; idle%15 == 0 {
-				io.WriteString(w, ": keepalive\n\n")
+			if len(chunks) == 0 {
+				if !cur.Working() {
+					if !ended { // its last lines may have landed after the Logs query: read once more
+						ended = true
+						continue
+					}
+					fmt.Fprintf(w, "event: done\ndata: %s\n\n", cur.Status)
+					rc.Flush()
+					return
+				}
+				if idle++; idle%15 == 0 {
+					io.WriteString(w, ": keepalive\n\n")
+				}
 			}
 		}
 		if err := rc.Flush(); err != nil {
