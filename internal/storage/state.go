@@ -78,8 +78,8 @@ func (s *Store) AddStateVersion(ctx context.Context, id, runID, cloudUser string
 			return err
 		}
 	}
-	res, err := s.DB.ExecContext(ctx, `INSERT INTO state_versions (workspace_id, serial, lineage, blob_key, md5, size, outputs)
-		SELECT $1::uuid, $2, $3, $4, $5, $6, $7::jsonb
+	res, err := s.DB.ExecContext(ctx, `INSERT INTO state_versions (workspace_id, serial, lineage, blob_key, md5, size, outputs, run_id)
+		SELECT $1::uuid, $2, $3, $4, $5, $6, $7::jsonb, ops_uuid(NULLIF($8, ''))
 		WHERE ($8 = '' OR EXISTS (SELECT 1 FROM runs WHERE id = ops_uuid($8) AND status = 'applying' AND lease_id IS NOT NULL FOR SHARE))
 			AND ($9 = '' OR EXISTS (SELECT 1 FROM workspaces WHERE id = $1::uuid
 				AND starts_with(state_lock->>'ID', $10) AND state_lock->>'UserID' = $9 FOR SHARE))`,
@@ -95,6 +95,27 @@ func (s *Store) AddStateVersion(ctx context.Context, id, runID, cloudUser string
 		return ErrLeaseLost
 	}
 	return nil
+}
+
+// DropIntermediateStates deletes the state versions a run saved before its last one: Terraform's
+// intermediate snapshots, superseded once the run ended (as HCP Terraform does). It returns their
+// blob keys, for the caller to delete.
+func (s *Store) DropIntermediateStates(ctx context.Context, runID string) ([]string, error) {
+	rows, err := s.DB.QueryContext(ctx, `DELETE FROM state_versions WHERE run_id = ops_uuid($1)
+		AND id < (SELECT max(id) FROM state_versions WHERE run_id = ops_uuid($1)) RETURNING blob_key`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var keys []string
+	for rows.Next() {
+		var k string
+		if err := rows.Scan(&k); err != nil {
+			return nil, err
+		}
+		keys = append(keys, k)
+	}
+	return keys, rows.Err()
 }
 
 // StateVersionBlob returns the blob key of one of a workspace's state versions; sql.ErrNoRows if unknown.

@@ -242,6 +242,7 @@ func (s *Server) jobFinish(w http.ResponseWriter, r *http.Request) {
 		if status != storage.NeedsConfirmation && status != storage.ApplyQueued {
 			s.DeleteArtifacts(context.WithoutCancel(r.Context()), id) // the saved plan has been applied, or will never be
 		}
+		s.dropIntermediateStates(context.WithoutCancel(r.Context()), id)
 	}
 	s.leaseResult(w, err)
 }
@@ -310,6 +311,20 @@ func (s *Server) DeleteArtifacts(ctx context.Context, runID string) {
 	for _, name := range []string{runnerapi.ArtifactPlan, runnerapi.ArtifactLockfile} {
 		if err := s.StateStore.Delete(ctx, artifactKey(runID, name)); err != nil && gcerrors.Code(err) != gcerrors.NotFound {
 			s.Log.Warn("delete artifact", "run", runID, "name", name, "err", err)
+		}
+	}
+}
+
+// dropIntermediateStates deletes the intermediate state snapshots of a finished run; failures only
+// leave them listed (or a stale file behind).
+func (s *Server) dropIntermediateStates(ctx context.Context, runID string) {
+	keys, err := s.Store.DropIntermediateStates(ctx, runID)
+	if err != nil {
+		s.Log.Warn("drop intermediate states", "run", runID, "err", err)
+	}
+	for _, k := range keys {
+		if err := s.StateStore.Delete(ctx, k); err != nil && gcerrors.Code(err) != gcerrors.NotFound {
+			s.Log.Warn("delete intermediate state", "run", runID, "key", k, "err", err)
 		}
 	}
 }

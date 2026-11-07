@@ -7,7 +7,7 @@ Each workspace has exactly one Terraform state. Opsolete is the state backend: r
 
 ## Storage and versions
 
-- **Storage:** every saved state is a new, immutable **state version**: a file in `STATE_STORE` under `opsolete/<template, or "workspaces">/<workspace>/<serial>-<random>.tfstate`. Postgres keeps only the version list. Writes with an older serial, a different lineage, or the same serial with other content are refused.
+- **Storage:** every saved state is a new, immutable **state version**: a file in `STATE_STORE` under `opsolete/<template, or "workspaces">/<workspace>/<serial>-<random>.tfstate`. Postgres keeps only the version list. Writes with an older serial, a different lineage, or the same serial with other content are refused. During a long apply, Terraform also saves intermediate snapshots (every 20 seconds at most, `TF_STATE_PERSIST_INTERVAL`) so a crash loses little. As in HCP Terraform, the snapshots a run's final state supersedes are deleted when the run ends.
 - **Outputs** belong to a state version: they are read from the state file when it's saved, sensitive ones stored as `(sensitive)`. The workspace page shows the current version's.
 - **Resources:** a workspace page lists the resources (address, type, provider, module) in its **current state version**. The index belongs to a state version. At the end of a run, the runner reads the state back (`terraform show -json`, parsed with HashiCorp's `terraform-json`) and sends names and types only. Attribute values never reach Postgres or the UI.
 

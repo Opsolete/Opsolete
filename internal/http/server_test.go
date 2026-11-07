@@ -703,8 +703,9 @@ func TestWorkspaceFlow(t *testing.T) {
 	if rec := stateCall("GET", "", job.StateToken, ""); rec.Body.String() != v1 {
 		t.Fatalf("read back state: %q", rec.Body.String())
 	}
-	if vs, _ := store.StateVersions(ctx, ws.ID, 10); len(vs) != 1 || vs[0].Serial != 1 || vs[0].Indexed {
-		t.Fatalf("state versions: %+v", vs)
+	v1s, _ := store.StateVersions(ctx, ws.ID, 10)
+	if len(v1s) != 1 || v1s[0].Serial != 1 || v1s[0].Indexed {
+		t.Fatalf("state versions: %+v", v1s)
 	}
 	v2 := strings.Replace(state(2, "lin", `{"mode":"managed","type":"azurerm_storage_account","name":"this"}`), "{",
 		`{"outputs":{"id":{"value":"abc","type":"string"},"key":{"value":"s3cret","type":"string","sensitive":true}},`, 1)
@@ -722,6 +723,10 @@ func TestWorkspaceFlow(t *testing.T) {
 	vs, _ := store.StateVersions(ctx, ws.ID, 10)
 	if vs[0].Serial != 2 || !vs[0].Indexed || vs[0].Resources != 1 {
 		t.Fatalf("the apply must index the current state version: %+v", vs)
+	}
+	// v1 was this run's intermediate snapshot: superseded by v2, so gone with its file
+	if ok, _ := app.StateStore.Exists(ctx, v1s[0].BlobKey); len(vs) != 1 || ok {
+		t.Fatalf("intermediate state versions must be dropped when the run ends: %+v, file kept %v", vs, ok)
 	}
 	assertSealed(vs[0].BlobKey, "s3cret") // indexing read it back, so sealed state still works
 
