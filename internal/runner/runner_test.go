@@ -426,6 +426,32 @@ func TestAddedTemplates(t *testing.T) {
 	if res, logs = f.do(t, r, root); res.Status != "succeeded" || res.Plan == nil || res.Plan.Add != 1 || res.Plan.Destroy != 1 {
 		t.Fatalf("plan with root module: %+v\n%s", res, logs)
 	}
+
+	// Removing a template: the destroy limited to it also drops its outputs, which Terraform keeps.
+	d := job("m3", "plan", "destroy", "", nil)
+	d.Modules, d.Target = mods, []string{"module.a"}
+	if res, logs = f.do(t, r, d); res.Status != "succeeded" || res.Plan == nil || res.Plan.Destroy != 1 {
+		t.Fatalf("destroy plan: %+v\n%s", res, logs)
+	}
+	d.Phase = "apply"
+	res, logs = f.do(t, r, d)
+	var st struct{ Outputs map[string]any }
+	json.Unmarshal(f.states["ws1"], &st)
+	if _, kept := st.Outputs["a__msg"]; res.Status != "succeeded" || kept || st.Outputs["b-2__msg"] == nil || len(res.Resources) != 1 ||
+		!strings.Contains(logs, "terraform apply (outputs only)") || strings.Contains(logs, "hunter2") {
+		t.Fatalf("destroy apply: %+v, outputs %v\n%s", res, st.Outputs, logs)
+	}
+	// the last one: no configuration is left
+	d = job("m4", "plan", "destroy", "", nil)
+	d.Modules, d.Target = mods[1:], []string{"module.b-2"}
+	f.do(t, r, d)
+	d.Phase = "apply"
+	res, logs = f.do(t, r, d)
+	st.Outputs = nil
+	json.Unmarshal(f.states["ws1"], &st)
+	if res.Status != "succeeded" || len(st.Outputs) != 0 || len(res.Resources) != 0 || strings.Contains(logs, "outputs kept") {
+		t.Fatalf("destroy of the last template: %+v, outputs %v\n%s", res, st.Outputs, logs)
+	}
 }
 
 // TestJobHome: Terraform gets a HOME of the job's own, so a job can't leave a

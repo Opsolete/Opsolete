@@ -263,6 +263,12 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 		return fail("apply", err)
 	}
 	if job.Action == "destroy" {
+		if len(job.Target) > 0 {
+			if err := dropRemoved(ctx, tf, dir, job, w); err != nil {
+				// the destroy itself succeeded: the next apply drops them instead
+				fmt.Fprintf(w, "\n==> outputs kept until the next apply: %v\n", err)
+			}
+		}
 		fmt.Fprintln(w, "\n==> done")
 		return runnerapi.FinishRequest{Status: "succeeded"}
 	}
@@ -286,6 +292,48 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	}
 	fmt.Fprintln(w, "\n==> done")
 	return runnerapi.FinishRequest{Status: "succeeded", Outputs: outputs}
+}
+
+// dropRemoved finishes removing templates after the destroy limited to them (-target=module.<name>):
+// Terraform keeps all outputs on a targeted destroy, so it plans the configuration without those
+// templates (their resources are gone, so their providers aren't needed anymore) and applies that
+// plan if it only changes outputs. -refresh=false: no API calls, and drift can't sneak in.
+func dropRemoved(ctx context.Context, tf *tfexec.Terraform, dir string, job runnerapi.Job, w io.Writer) error {
+	left := slices.DeleteFunc(slices.Clone(job.Modules), func(m runnerapi.Module) bool { return slices.Contains(job.Target, "module."+m.Name) })
+	for _, f := range []string{modulesFile, outputsFile} {
+		if err := os.Remove(filepath.Join(dir, f)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	if len(left) > 0 { // an empty module block list is invalid
+		if err := writeModules(dir, left); err != nil {
+			return err
+		}
+	}
+	if err := writeOutputs(dir, left); err != nil {
+		return err
+	}
+	const cleanupPlan = "opsolete-cleanup.tfplan"
+	tf.SetStdout(w)
+	tf.SetStderr(w)
+	fmt.Fprintln(w, "\n==> terraform plan -refresh=false (without the removed templates, to drop their outputs)")
+	changes, err := tf.Plan(ctx, tfexec.Out(cleanupPlan), tfexec.Refresh(false))
+	if err != nil || !changes {
+		return err
+	}
+	tf.SetStdout(io.Discard) // show -json includes values
+	p, err := tf.ShowPlanFile(ctx, cleanupPlan)
+	tf.SetStdout(w)
+	if err != nil {
+		return err
+	}
+	for _, rc := range p.ResourceChanges {
+		if rc.Change != nil && !rc.Change.Actions.NoOp() && !rc.Change.Actions.Read() {
+			return fmt.Errorf("the plan also changes %s: not applied", rc.Address)
+		}
+	}
+	fmt.Fprintln(w, "\n==> terraform apply (outputs only)")
+	return tf.Apply(ctx, tfexec.DirOrPlan(cleanupPlan))
 }
 
 // templateEscape keeps an input a value: strings in .tf.json are templates, so "${...}" in a form
