@@ -85,11 +85,12 @@ func TestUpgradeTemplates(t *testing.T) {
 		t.Fatalf("paused rollout: %v", err)
 	}
 	s.SetRolloutStatus(ctx, ro.ID, "active", "")
-	if due, err := s.DueRollouts(ctx, time.Minute); err != nil || !slices.ContainsFunc(due, func(o Rollout) bool { return o.ID == ro.ID }) {
-		t.Fatalf("resumed rollout not due: %v", err)
+	// the resuming request ticks it itself: no other turn within the interval, so the batch limit holds
+	if due, err := s.DueRollouts(ctx, time.Minute); err != nil || slices.ContainsFunc(due, func(o Rollout) bool { return o.ID == ro.ID }) {
+		t.Fatalf("resumed rollout handed out next to the resuming request's turn: %v", err)
 	}
-	if due, _ := s.DueRollouts(ctx, time.Minute); slices.ContainsFunc(due, func(o Rollout) bool { return o.ID == ro.ID }) {
-		t.Fatal("claimed twice within the interval")
+	if due, err := s.DueRollouts(ctx, 0); err != nil || !slices.ContainsFunc(due, func(o Rollout) bool { return o.ID == ro.ID }) {
+		t.Fatalf("resumed rollout not due after the interval: %v", err)
 	}
 	ro, _ = s.LatestRollout(ctx, "job-test")
 	if _, failed, _ := s.RolloutRuns(ctx, ro.ID, ro.ResumedAt); failed != "" {

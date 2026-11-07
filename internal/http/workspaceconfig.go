@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -176,6 +177,15 @@ func (s *Server) renderNewWorkspace(w http.ResponseWriter, r *http.Request, stat
 	if form["type"] == "vcs" && form["vcs_repo"] == "" {
 		reposOf = form["vcs_connection"]
 	}
+	projects, err := s.creatableProjects(r)
+	if err != nil {
+		s.internalError(w, "list projects", err)
+		return
+	}
+	// ?project= is a URL parameter: one the user can't create in falls back to the default, else its connections' repos would list
+	if !slices.ContainsFunc(projects, func(p storage.Project) bool { return p.Name == form["project"] }) {
+		form["project"] = ""
+	}
 	project, err := s.newWorkspaceProject(r.Context(), form["project"])
 	if err != nil {
 		s.internalError(w, "default project", err)
@@ -184,11 +194,6 @@ func (s *Server) renderNewWorkspace(w http.ResponseWriter, r *http.Request, stat
 	f, err := s.loadVCSForm(r.Context(), form, errMsg, "", project, reposOf)
 	if err != nil {
 		s.internalError(w, "vcs connections", err)
-		return
-	}
-	projects, err := s.creatableProjects(r)
-	if err != nil {
-		s.internalError(w, "list projects", err)
 		return
 	}
 	data := map[string]any{"Templates": s.Templates.List(), "VCS": f, "Providers": vcs.Providers, "Projects": projects, "Project": form["project"]}

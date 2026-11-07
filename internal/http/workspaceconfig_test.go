@@ -359,6 +359,11 @@ func TestVCSProjectScope(t *testing.T) {
 	if page := get(member, "/workspaces/new?type=vcs").Body.String(); strings.Contains(page, connName) {
 		t.Fatal("the wizard offers the connection in the default project")
 	}
+	outsider := newApp(t, "../../catalog", store, devAuth(t, store, "vp-outsider-"+id+"@example.com", false), f).Handler()
+	if page := get(outsider, "/workspaces/new?type=vcs&conn="+connID+"&project="+prj).Body.String(); strings.Contains(page, connName) ||
+		strings.Contains(page, "acme/infra") {
+		t.Fatal("?project= of a project the user can't create in must not list its connections or their repos")
+	}
 	link := func(name, project string) *httptest.ResponseRecorder {
 		return post(member, "/workspaces/new", url.Values{"name": {name}, fieldProject: {project}, "vcs_connection": {connID},
 			"vcs_repo": {"acme/infra"}, "vcs_branch": {"main"}})

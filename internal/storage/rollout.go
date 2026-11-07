@@ -142,11 +142,12 @@ func scanRollout(row interface{ Scan(...any) error }) (Rollout, error) {
 	return o, err
 }
 
-// CreateRollout starts a rollout, due for its first batch now; ErrExists if the template has an open one.
+// CreateRollout starts a rollout; ErrExists if the template has an open one. Its first turn is the
+// caller's (ticked_at now): DueRollouts doesn't hand it out meanwhile, so the batch limit holds.
 func (s *Store) CreateRollout(ctx context.Context, o Rollout) (Rollout, error) {
 	var id string
-	err := s.DB.QueryRowContext(ctx, `INSERT INTO template_rollouts (template_id, module_source, module_ref, project_id, batch_size, created_by)
-		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, NULLIF($6, '')::uuid) RETURNING id`,
+	err := s.DB.QueryRowContext(ctx, `INSERT INTO template_rollouts (template_id, module_source, module_ref, project_id, batch_size, created_by, ticked_at)
+		VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, NULLIF($6, '')::uuid, now()) RETURNING id`,
 		o.TemplateID, o.ModuleSource, o.ModuleRef, o.ProjectID, o.BatchSize, o.CreatedBy).Scan(&id)
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
 		return Rollout{}, ErrExists
@@ -186,11 +187,11 @@ func (s *Store) DueRollouts(ctx context.Context, every time.Duration) ([]Rollout
 }
 
 // SetRolloutStatus changes an open rollout's status; reports false if it's no longer open. Resuming
-// (active) makes it due now and forgets the run failures before.
+// (active) forgets the run failures before, and its next turn is the caller's, as with CreateRollout.
 func (s *Store) SetRolloutStatus(ctx context.Context, id, status, message string) (bool, error) {
 	res, err := s.DB.ExecContext(ctx, `UPDATE template_rollouts SET status = $2, message = $3,
 			resumed_at = CASE WHEN $2 = 'active' THEN now() ELSE resumed_at END,
-			ticked_at = CASE WHEN $2 = 'active' THEN NULL ELSE ticked_at END
+			ticked_at = CASE WHEN $2 = 'active' THEN now() ELSE ticked_at END
 		WHERE id = ops_uuid($1) AND status IN ('active', 'paused')`, id, status, message)
 	if err != nil {
 		return false, err

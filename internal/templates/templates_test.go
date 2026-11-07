@@ -132,6 +132,10 @@ func TestSensitiveKeepsSpacesAndFormatValue(t *testing.T) {
 	if len(errs) != 0 || vals["pw"] != " hunter2 " || vals["pin"] != 42.0 || vals["s"] != "x" {
 		t.Errorf("got %v %v", vals, errs)
 	}
+	// only spaces is no new value: sealInputs then keeps the stored one
+	if vals, _ := tpl.Validate(map[string]string{"pw": "   "}); vals["pw"] != nil {
+		t.Errorf("spaces-only password became a value: %q", vals["pw"])
+	}
 	for v, want := range map[any]string{1e6: "1000000", 1.5: "1.5", true: "true", "a": "a"} {
 		if got := FormatValue(v); got != want {
 			t.Errorf("FormatValue(%v) = %q, want %q", v, got, want)

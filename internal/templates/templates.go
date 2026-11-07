@@ -483,7 +483,8 @@ func (t Template) Validate(raw map[string]string) (map[string]any, map[string]st
 			continue
 		}
 		v := raw[in.Name]
-		if !in.Sensitive || in.Type != "string" { // a password may start or end with a space
+		// a password may start or end with a space, but only spaces is empty: a sensitive input keeps its stored value
+		if !in.Sensitive || in.Type != "string" || strings.TrimSpace(v) == "" {
 			v = strings.TrimSpace(v)
 		}
 		if in.Type == "bool" {
