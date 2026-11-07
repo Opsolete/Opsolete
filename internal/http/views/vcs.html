@@ -16,7 +16,7 @@
   <td><a href="/vcs/{{.ID}}/settings"><strong>{{.Name}}</strong></a></td>
   <td>{{.Provider}}</td>
   <td><code>{{.BaseURL}}</code></td>
-  <td>{{if eq .WorkspaceScope "all"}}All workspaces{{else if eq .WorkspaceScope "selected"}}{{len .Workspaces}} selected{{else}}<span class="muted">Off</span>{{end}}</td>
+  <td>{{if eq .WorkspaceScope "all"}}All workspaces{{else if eq .WorkspaceScope "selected"}}{{len .Workspaces}} workspace(s){{with .Projects}}, {{len .}} project(s){{end}}{{else}}<span class="muted">Off</span>{{end}}</td>
   <td>{{if or .LinkedWorkspaces .LinkedModules .Catalog}}
     {{- with .LinkedWorkspaces}}{{.}} workspace{{if gt . 1}}s{{end}}{{end}}
     {{- if and .LinkedWorkspaces .LinkedModules}} · {{end}}{{with .LinkedModules}}{{.}} module{{if gt . 1}}s{{end}}{{end}}

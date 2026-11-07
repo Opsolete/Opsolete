@@ -1,0 +1,65 @@
+{{template "top"}}
+<div class="page-head">
+  <div>
+    <h1>Projects</h1>
+    <p class="muted">Projects in the {{.Org}} organization. Create or select a project to get started.</p>
+  </div>
+  {{if (user).Admin}}<button type="button" onclick="document.getElementById('new-project').showModal()">+ New project</button>{{end}}
+</div>
+
+<div class="inline" style="margin-bottom:1rem">
+  <input type="search" id="project-search" placeholder="Search by project name" aria-label="Search by project name" aria-describedby="project-search-hint"
+    autocomplete="off" oninput="filterProjects(this.value)" style="max-width:24rem">
+  <span id="project-search-hint" class="sr-hint">This table updates as you type a name.</span>
+</div>
+<div class="card flush">
+<table>
+<tr><th>Project name</th><th>Description</th><th>Teams</th><th>Workspaces</th>{{if (user).Admin}}<th><span class="sr-hint">Actions</span></th>{{end}}</tr>
+{{range .Projects}}
+<tr data-name="{{.Name}}">
+  <td><a href="/projects/{{.Name}}"><strong>{{.Name}}</strong></a>{{if .Default}} <span class="tag" title="new workspaces go here unless another project is picked">default</span>{{end}}</td>
+  <td>{{with .Description}}{{.}}{{else}}<span class="muted">No description</span>{{end}}</td>
+  <td><a href="/projects/{{.Name}}/settings/access">{{.Grants}}</a></td>
+  <td><a href="/projects/{{.Name}}/workspaces">{{.Workspaces}}</a></td>
+  {{if (user).Admin}}<td class="nowrap"><details class="menu kebab">
+    <summary aria-label="Actions for {{.Name}}">…</summary>
+    <div role="menu"><a role="menuitem" href="/projects/{{.Name}}/settings">Edit project</a></div>
+  </details></td>{{end}}
+</tr>
+{{end}}
+<tr id="no-projects"{{if .Projects}} hidden{{end}}><td colspan="5" class="empty">No projects{{if .Projects}} match{{else}} you can see{{end}}.</td></tr>
+</table>
+</div>
+
+{{if (user).Admin}}
+<dialog id="new-project" aria-labelledby="new-project-title">
+  <form method="post" action="/projects">
+    <header><h3 id="new-project-title">Create a new project</h3>
+      <button type="button" class="secondary small" aria-label="close" onclick="this.closest('dialog').close()">✕</button></header>
+    <fieldset>
+      <p class="muted" style="margin-top:0">Projects are groups of workspaces, letting you manage team access and variable sets in bulk.</p>
+      <label for="name">Project name <span class="req" aria-hidden="true">*</span></label>
+      <input id="name" name="name" required pattern="[a-z0-9][a-z0-9\-]{1,62}" placeholder="networking" aria-describedby="name-hint">
+      <p class="hint" id="name-hint">Must be unique: 2–63 lowercase letters, digits and dashes.</p>
+      <label for="description">Project description <span class="muted">(optional)</span></label>
+      <textarea id="description" name="description" rows="3" maxlength="1000" aria-describedby="description-hint"></textarea>
+      <p class="hint" id="description-hint">1000 characters allowed</p>
+    </fieldset>
+    <footer><button type="submit">Create</button>
+      <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancel</button></footer>
+  </form>
+</dialog>
+{{end}}
+<script>
+  // shows the projects whose name contains the search text
+  function filterProjects(q) {
+    q = q.trim().toLowerCase();
+    let n = 0;
+    for (const tr of document.querySelectorAll('tr[data-name]')) {
+      tr.hidden = !tr.dataset.name.includes(q);
+      n += !tr.hidden;
+    }
+    document.getElementById('no-projects').hidden = n > 0;
+  }
+</script>
+{{template "bottom"}}

@@ -18,13 +18,15 @@ All pages require login. Health checks, the registry protocol (`/v1/…`, which 
 Teams are your IdP's groups. At every login Opsolete records the ID token's `groups` claim for the user, in Postgres because it can be too large for a cookie.
 
 - On a workspace page, an admin grants a group `read` (see the workspace, its runs, logs, outputs and resources) or `operate` (also runs, confirm/discard, destroy, cancel, settings and rename). If a user is in several granted groups, the strongest grant wins.
+- On a [project]({{< relref "/docs/usage/projects#access" >}}), a grant reaches all of its workspaces; a user gets the higher of the workspace and project levels. `operate` on a project also allows creating workspaces in it.
+- *Account settings › Profile* (click your email at the top) shows the groups recorded at your last login.
 - Workspaces and their runs only show what the user may see. Workspaces created before login existed have no creator, so only admins see them until a group is granted.
 - **Entra ID:** in the app registration, under *Token configuration*, choose *Add groups claim* and select *Security groups* for the ID token. Entra sends group **object IDs**, so grant those. Users in more than 200 groups get an "overage" reference instead of the list, which Opsolete doesn't follow (shortcut: assign groups to the app so the list stays short, or add a Microsoft Graph lookup if that's not enough). Keycloak and Dex need a `groups` mapper or scope.
 - Group membership changes take effect at the user's next login. Grants and revokes take effect immediately.
 
 ## Audit log
 
-Admins, **Settings → Audit log**: every state-changing request, every sign-in (`GET /auth/callback`, successful or not), and every request refused as unauthenticated or forbidden (401/403), reads included. The page shows the changes; sign-ins and refused requests are on their own tab (`/audit?show=access`).
+Admins, **Settings → Audit log**: every state-changing request, every sign-in (`GET /auth/callback`, successful or not), and every request refused as unauthenticated or forbidden (401/403), reads included. Each workspace a [template rollout]({{< relref "/docs/usage/workspaces#update-to-a-new-module-version" >}}) upgrades gets its own entry (`template rollout`, with the workspace, module, versions and run), in the name of the admin who started it. The page shows the changes; sign-ins and refused requests are on their own tab (`/audit?show=access`).
 
 - Each entry records the principal (`user` for a browser session, `token` for the Terraform CLI, `system` for VCS polling (actor `vcs`) and `opsolete token` (actor `cli`), or `anonymous`) with its id, role and groups; the client address, `X-Forwarded-For` as sent and user agent; method, path and form; and the status and error message.
 - Variable values, tokens and OAuth codes are recorded as `(redacted)`.

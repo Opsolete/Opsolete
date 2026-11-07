@@ -86,29 +86,42 @@ func (s *Store) DeleteVariable(ctx context.Context, o VarOwner, id string) error
 const globalApplies = `(vs.global AND NOT EXISTS (SELECT 1 FROM workspaces gw
 	WHERE gw.id = $1::uuid AND gw.vcs_connection_id IS NOT NULL))`
 
+// workspaceSets are the ids of the sets attached to workspace $1.
+const workspaceSets = `(SELECT set_id FROM variable_set_workspaces WHERE workspace_id = $1::uuid)`
+
+// projectSets are the ids of the sets attached to workspace $1's project, unless the workspace is
+// linked to a repository: anyone who operates it may relink it, and a project set, unlike an
+// attached one, isn't detached when the link changes.
+const projectSets = `(SELECT sp.set_id FROM variable_set_projects sp JOIN workspaces pw ON pw.project_id = sp.project_id
+	WHERE pw.id = $1::uuid AND pw.vcs_connection_id IS NULL)`
+
 // RunVariables returns the variables a workspace's runs get, one per category and key. The
-// workspace's own win over attached sets, attached sets over global ones (not for VCS-linked
-// workspaces, see globalApplies), and between sets of one kind the first by name wins.
+// workspace's own win over sets attached to it, those over sets attached to its project, those
+// over global ones (project and global sets not for VCS-linked workspaces), and between sets of
+// one kind the first by name wins.
 func (s *Store) RunVariables(ctx context.Context, workspaceID string) ([]Variable, error) {
 	return scanVariables(s.DB.QueryContext(ctx, `SELECT DISTINCT ON (v.category, v.key) `+varCols+`
 		FROM variables v LEFT JOIN variable_sets vs ON vs.id = v.set_id
-		WHERE v.workspace_id = $1::uuid OR `+globalApplies+`
-			OR v.set_id IN (SELECT set_id FROM variable_set_workspaces WHERE workspace_id = $1::uuid)
-		ORDER BY v.category, v.key, v.workspace_id IS NULL, vs.global, vs.name`, workspaceID))
+		WHERE v.workspace_id = $1::uuid OR `+globalApplies+` OR v.set_id IN `+workspaceSets+` OR v.set_id IN `+projectSets+`
+		ORDER BY v.category, v.key, CASE WHEN v.workspace_id IS NOT NULL THEN 0 WHEN v.set_id IN `+workspaceSets+` THEN 1
+			WHEN v.set_id IN `+projectSets+` THEN 2 ELSE 3 END, vs.name`, workspaceID))
 }
 
 // VariableSet is a reusable group of variables, applied to all workspaces (Global) or to the
-// Workspaces (names) it's attached to.
+// Workspaces and the workspaces of the Projects (names) it's attached to.
 type VariableSet struct {
 	ID, Name, Description string
 	Global                bool
 	Workspaces            []string
+	Projects              []string
 	CreatedAt             time.Time
 }
 
 const setCols = `vs.id, vs.name, vs.description, vs.global, vs.created_at,
 	ARRAY(SELECT w.name FROM variable_set_workspaces a JOIN workspaces w ON w.id = a.workspace_id
-		WHERE a.set_id = vs.id ORDER BY w.name)`
+		WHERE a.set_id = vs.id ORDER BY w.name),
+	ARRAY(SELECT p.name FROM variable_set_projects a JOIN projects p ON p.id = a.project_id
+		WHERE a.set_id = vs.id ORDER BY p.name)`
 
 func scanSets(rows *sql.Rows, err error) ([]VariableSet, error) {
 	if err != nil {
@@ -119,7 +132,7 @@ func scanSets(rows *sql.Rows, err error) ([]VariableSet, error) {
 	types := pgtype.NewMap()
 	for rows.Next() {
 		var v VariableSet
-		if err := rows.Scan(&v.ID, &v.Name, &v.Description, &v.Global, &v.CreatedAt, types.SQLScanner(&v.Workspaces)); err != nil {
+		if err := rows.Scan(&v.ID, &v.Name, &v.Description, &v.Global, &v.CreatedAt, types.SQLScanner(&v.Workspaces), types.SQLScanner(&v.Projects)); err != nil {
 			return nil, err
 		}
 		out = append(out, v)
@@ -140,10 +153,17 @@ func (s *Store) VariableSets(ctx context.Context) ([]VariableSet, error) {
 	return scanSets(s.DB.QueryContext(ctx, `SELECT `+setCols+` FROM variable_sets vs ORDER BY vs.name`))
 }
 
-// WorkspaceVariableSets lists the sets that apply to a workspace: global (see globalApplies) and attached ones.
+// WorkspaceVariableSets lists the sets that apply to a workspace: global ones (see globalApplies),
+// and those attached to it or to its project (see projectSets).
 func (s *Store) WorkspaceVariableSets(ctx context.Context, workspaceID string) ([]VariableSet, error) {
 	return scanSets(s.DB.QueryContext(ctx, `SELECT `+setCols+` FROM variable_sets vs WHERE `+globalApplies+`
-		OR vs.id IN (SELECT set_id FROM variable_set_workspaces WHERE workspace_id = $1::uuid) ORDER BY vs.name`, workspaceID))
+		OR vs.id IN `+workspaceSets+` OR vs.id IN `+projectSets+` ORDER BY vs.name`, workspaceID))
+}
+
+// ProjectVariableSets lists the sets attached to a project.
+func (s *Store) ProjectVariableSets(ctx context.Context, projectID string) ([]VariableSet, error) {
+	return scanSets(s.DB.QueryContext(ctx, `SELECT `+setCols+` FROM variable_sets vs
+		WHERE vs.id IN (SELECT set_id FROM variable_set_projects WHERE project_id = ops_uuid($1)) ORDER BY vs.name`, projectID))
 }
 
 // GetVariableSet returns sql.ErrNoRows for an unknown name.
@@ -182,6 +202,33 @@ func (s *Store) AttachVariableSet(ctx context.Context, setID, workspace string, 
 	}
 	var ok bool
 	if err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM workspaces WHERE name = $1)`, workspace).Scan(&ok); err != nil {
+		return err
+	}
+	if !ok {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// AttachVariableSetProject applies a set to the workspaces of the named project, or stops (attach=false).
+// It returns sql.ErrNoRows for an unknown project.
+func (s *Store) AttachVariableSetProject(ctx context.Context, setID, project string, attach bool) error {
+	return s.attachProject(ctx, "variable_set_projects", "set_id", setID, project, attach)
+}
+
+// attachProject adds or removes the (col = id, project) row of table, a project join table
+// (variable_set_projects or vcs_connection_projects; never input). sql.ErrNoRows: no such project.
+func (s *Store) attachProject(ctx context.Context, table, col, id, project string, attach bool) error {
+	q := `INSERT INTO ` + table + ` (` + col + `, project_id) SELECT $1::uuid, id FROM projects WHERE name = $2
+		ON CONFLICT DO NOTHING`
+	if !attach {
+		q = `DELETE FROM ` + table + ` WHERE ` + col + ` = $1::uuid AND project_id = (SELECT id FROM projects WHERE name = $2)`
+	}
+	if _, err := s.DB.ExecContext(ctx, q, id, project); err != nil {
+		return err
+	}
+	var ok bool
+	if err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM projects WHERE name = $1)`, project).Scan(&ok); err != nil {
 		return err
 	}
 	if !ok {

@@ -4,3 +4,4 @@ result
 docs/public/
 docs/resources/
 .hugo_build.lock
+claude.md

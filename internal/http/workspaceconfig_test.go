@@ -202,7 +202,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	claimVCS("apply", "# at sha3")
 	claimVCS("plan", "# at pr9") // the branch's commits all had their run
 
-	// The version control page checks the connection, like HCP Terraform's "Connected to VCS" mark.
+	// The version control page checks the connection: its "Connected to VCS" mark.
 	if page := get(h, "/workspaces/"+linked+"/vcs").Body.String(); !strings.Contains(page, `class="vcs-health ok"`) {
 		t.Fatalf("a working link must show as connected: %s", page)
 	}
@@ -255,7 +255,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	if page := get(h, "/vcs/"+connID+"/settings").Body.String(); !strings.Contains(page, `name="workspace" value="`+linked+`" checked>`) || !strings.Contains(page, "1 selected") {
 		t.Fatalf("settings page must show the selected workspace: %s", page)
 	}
-	// Workspace level, as in HCP Terraform: a linked workspace shows its source; Change source is a wizard.
+	// Workspace level: a linked workspace shows its source; Change source is a wizard.
 	if page := get(h, "/workspaces/"+linked+"/vcs").Body.String(); !strings.Contains(page, "Connected to VCS") ||
 		!strings.Contains(page, "acme/infra") || !strings.Contains(page, `href="/workspaces/`+linked+`/vcs/edit"`) || strings.Contains(page, "no longer allows") {
 		t.Fatalf("linked workspace vcs page: %s", page)
@@ -295,5 +295,94 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	}
 	if ws, _ := store.GetWorkspace(ctx, linked); ws.HasConfig() {
 		t.Fatal("unlinked workspace still has configuration")
+	}
+}
+
+// A connection scoped to projects: every workspace of a selected project may link its repositories,
+// a new one too; moving a workspace out of the project takes that away.
+func TestVCSProjectScope(t *testing.T) {
+	store := testStore(t)
+	id := strings.ToLower(newID()[:8])
+	prj, other, connName, group := "vp-"+id, "vq-"+id, "gh-p-"+id, "grp-vp-"+id
+	inPrj, outside := "vp-ws-"+id, "vd-ws-"+id
+	t.Cleanup(func() {
+		store.DB.Exec(`DELETE FROM workspaces WHERE name IN ($1, $2)`, inPrj, outside)
+		store.DB.Exec(`DELETE FROM projects WHERE name IN ($1, $2)`, prj, other)
+		store.DB.Exec(`DELETE FROM vcs_connections WHERE name = $1`, connName)
+	})
+	gh := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/user/repos":
+			w.Write([]byte(`[{"full_name":"acme/infra"}]`))
+		case "/repos/acme/infra/branches/main":
+			w.Write([]byte(`{"commit":{"sha":"sha1"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer gh.Close()
+	old := vcs.HTTPClient
+	vcs.HTTPClient = gh.Client()
+	t.Cleanup(func() { vcs.HTTPClient = old })
+
+	f := Features{Deployments: true, Registry: true, VCS: true}
+	h := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), f).Handler()
+	member := newApp(t, "../../catalog", store, devAuth(t, store, "vp-member-"+id+"@example.com", false, group), f).Handler()
+	rec := post(h, "/vcs", url.Values{"name": {connName}, "provider": {"github"}, "base_url": {gh.URL}, "token": {"pat"}})
+	connID := strings.TrimSuffix(strings.TrimPrefix(rec.Header().Get("Location"), "/vcs/new?connection="), "&return=")
+	for _, p := range []string{prj, other} {
+		if rec := post(h, "/projects", url.Values{"name": {p}}); rec.Code != http.StatusSeeOther {
+			t.Fatalf("create project %s: %d", p, rec.Code)
+		}
+	}
+	post(h, "/projects/"+prj+"/access", url.Values{"group": {group}, "level": {"operate"}})
+
+	scope := url.Values{"workspaces": {"1"}, "workspace_scope": {"selected"}, "project": {prj, "nope-" + id}}
+	if rec := post(h, "/vcs/"+connID+"/settings", scope); rec.Code != http.StatusBadRequest {
+		t.Fatalf("an unknown project: %d", rec.Code)
+	}
+	if c, _ := store.GetVCSConnection(t.Context(), connID); c.WorkspaceScope != "" || len(c.Projects) != 0 {
+		t.Fatalf("a rejected form must change nothing: %+v", c)
+	}
+	scope["project"] = []string{prj}
+	if rec := post(h, "/vcs/"+connID+"/settings", scope); rec.Code != http.StatusSeeOther {
+		t.Fatalf("select the project: %d %s", rec.Code, rec.Body.String())
+	}
+	if page := get(h, "/vcs/"+connID+"/settings").Body.String(); !strings.Contains(page, `name="project" value="`+prj+`" checked>`) {
+		t.Fatal("the settings page shows the selected project")
+	} else if !strings.Contains(page, "(default: every user may create workspaces here)") {
+		t.Fatal("the picker must say the default project is open to every user")
+	}
+
+	// a new workspace: offered and allowed in the selected project, not in the default one
+	if page := get(member, "/workspaces/new?type=vcs&project="+prj).Body.String(); !strings.Contains(page, connName) {
+		t.Fatal("the wizard offers the connection for a new workspace in the project")
+	}
+	if page := get(member, "/workspaces/new?type=vcs").Body.String(); strings.Contains(page, connName) {
+		t.Fatal("the wizard offers the connection in the default project")
+	}
+	outsider := newApp(t, "../../catalog", store, devAuth(t, store, "vp-outsider-"+id+"@example.com", false), f).Handler()
+	if page := get(outsider, "/workspaces/new?type=vcs&conn="+connID+"&project="+prj).Body.String(); strings.Contains(page, connName) ||
+		strings.Contains(page, "acme/infra") {
+		t.Fatal("?project= of a project the user can't create in must not list its connections or their repos")
+	}
+	link := func(name, project string) *httptest.ResponseRecorder {
+		return post(member, "/workspaces/new", url.Values{"name": {name}, fieldProject: {project}, "vcs_connection": {connID},
+			"vcs_repo": {"acme/infra"}, "vcs_branch": {"main"}})
+	}
+	if rec := link(outside, ""); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "may not link") {
+		t.Fatalf("linking in the default project: %d", rec.Code)
+	}
+	if rec := link(inPrj, prj); rec.Code != http.StatusSeeOther {
+		t.Fatalf("linking in the project: %d %s", rec.Code, rec.Body.String())
+	}
+	if page := get(member, "/workspaces/"+inPrj+"/vcs").Body.String(); !strings.Contains(page, "Connected to VCS") {
+		t.Fatal("the project's workspace is connected")
+	}
+
+	// moved out of the project, the workspace may no longer use the connection
+	post(h, "/workspaces/"+inPrj+"/project", url.Values{"project": {other}})
+	if page := get(h, "/workspaces/"+inPrj+"/vcs").Body.String(); !strings.Contains(page, "no longer allows") {
+		t.Fatal("a workspace moved out of the project loses the connection")
 	}
 }

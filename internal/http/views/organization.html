@@ -1,9 +1,14 @@
 {{template "top"}}
+<nav class="back" aria-label="breadcrumb">Organization settings: General</nav>
 <div class="page-head">
   <div>
-    <h1>Organization settings</h1>
+    <h1>General settings</h1>
     <p class="muted">Settings for the whole <strong>{{.Name}}</strong> organization.</p>
   </div>
+</div>
+<div class="settings">
+<div class="field">Name</div>
+<p>{{.Name}} <span class="muted">(ORGANIZATION on the server; Terraform's cloud block names it)</span></p>
 </div>
 {{if .Saved}}<p class="alert" role="status">Settings saved.</p>{{end}}
 <form class="settings" method="post" action="/organization">

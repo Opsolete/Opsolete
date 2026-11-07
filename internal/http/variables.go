@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/opsolete/opsolete/internal/auth"
@@ -28,6 +29,7 @@ func (s *Server) variableRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /variable-sets/{set}/variables", s.admin(s.setSetVariable))
 	mux.HandleFunc("POST /variable-sets/{set}/variables/{id}/delete", s.admin(s.deleteSetVariable))
 	mux.HandleFunc("POST /variable-sets/{set}/workspaces", s.admin(s.attachVariableSet))
+	mux.HandleFunc("POST /variable-sets/{set}/projects", s.admin(s.attachVariableSetProjects))
 }
 
 var (
@@ -218,13 +220,22 @@ func (s *Server) variableSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// shortcut: offers the 200 most recently active workspaces; add search if there are more.
-	all, err := s.Store.ListWorkspaces(r.Context(), storage.Viewer{Admin: true}) // admin-only page
+	all, err := s.Store.ListWorkspaces(r.Context(), storage.Viewer{Admin: true}, "") // admin-only page
 	if err != nil {
 		s.internalError(w, "list workspaces", err)
 		return
 	}
 	p := workspacePicker("workspace", "Workspaces to apply the set to", set.Workspaces, all, func(storage.Workspace) bool { return true })
-	s.render(w, r, http.StatusOK, "variableset.html", map[string]any{"Set": set, "Variables": vars, "Picker": p})
+	projects, err := s.Store.Projects(r.Context(), storage.Viewer{Admin: true})
+	if err != nil {
+		s.internalError(w, "list projects", err)
+		return
+	}
+	var items []pickerItem
+	for _, pr := range projects {
+		items = append(items, pickerItem{pr.Name, projectLabel(pr), slices.Contains(set.Projects, pr.Name)})
+	}
+	s.render(w, r, http.StatusOK, "variableset.html", map[string]any{"Set": set, "Variables": vars, "Picker": p, "Projects": items})
 }
 
 func (s *Server) updateVariableSet(w http.ResponseWriter, r *http.Request) {
@@ -293,7 +304,7 @@ func (s *Server) attachVariableSet(w http.ResponseWriter, r *http.Request) {
 	}
 	r.ParseForm()
 	want := r.PostForm["workspace"]
-	err := s.syncSelection(r.Context(), set.Workspaces, want, func(ws string, on bool) error {
+	err := s.syncSelection(r.Context(), set.Workspaces, want, s.Store.WorkspacesExist, func(ws string, on bool) error {
 		return s.Store.AttachVariableSet(r.Context(), set.ID, ws, on)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -305,5 +316,27 @@ func (s *Server) attachVariableSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Log.Info("variable set workspaces", "set", set.Name, "workspaces", want, "user", auth.FromContext(r.Context()).Email)
+	http.Redirect(w, r, "/variable-sets/"+set.Name, http.StatusSeeOther)
+}
+
+// attachVariableSetProjects applies the set to exactly the projects (by name) in the project fields.
+func (s *Server) attachVariableSetProjects(w http.ResponseWriter, r *http.Request) {
+	set, ok := s.loadSet(w, r)
+	if !ok {
+		return
+	}
+	want := r.PostForm["project"]
+	err := s.syncSelection(r.Context(), set.Projects, want, s.Store.ProjectsExist, func(p string, on bool) error {
+		return s.Store.AttachVariableSetProject(r.Context(), set.ID, p, on)
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		http.Error(w, "choose existing projects", http.StatusBadRequest)
+		return
+	}
+	if err != nil {
+		s.internalError(w, "attach variable set", err)
+		return
+	}
+	s.Log.Info("variable set projects", "set", set.Name, "projects", want, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/variable-sets/"+set.Name, http.StatusSeeOther)
 }

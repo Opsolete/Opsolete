@@ -41,7 +41,7 @@ func testStore(t *testing.T) *Store {
 func newWorkspace(t *testing.T, s *Store, autoApply bool) (Workspace, Run) {
 	ctx := context.Background()
 	name := "t-" + strings.ToLower(rand.Text()[:10]) // the test DB is reused
-	w, run, err := s.CreateWorkspace(ctx, "", name, "job-test", "git::x", "v1", map[string]any{"n": 1.0}, autoApply, "")
+	w, run, err := s.CreateWorkspace(ctx, "", name, "", "job-test", "git::x", "v1", map[string]any{"n": 1.0}, autoApply, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,11 +404,11 @@ func TestRunVariables(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	name := "t-" + strings.ToLower(rand.Text()[:10])
-	w, _, err := s.CreateWorkspace(ctx, "", name, "job-test", "git::x", "v1", nil, false, "")
+	w, _, err := s.CreateWorkspace(ctx, "", name, "", "job-test", "git::x", "v1", nil, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, _, err := s.CreateWorkspace(ctx, "", name+"-other", "job-test", "git::x", "v1", nil, false, "")
+	other, _, err := s.CreateWorkspace(ctx, "", name+"-other", "", "job-test", "git::x", "v1", nil, false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -479,6 +479,59 @@ func TestRunVariables(t *testing.T) {
 	if m := got(w.ID); m["env:"+k+"_X"] != "c" {
 		t.Fatalf("after detaching b, c must win: %v", m)
 	}
+
+	// Project sets rank between the workspace's attached sets and global ones, whatever their names:
+	// "a-project" sorts before every set but "a-global".
+	p, err := s.CreateProject(ctx, name, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { // before the workspaces' own cleanups: RESTRICT keeps a project with workspaces
+		s.DB.Exec(`DELETE FROM workspaces WHERE project_id = $1`, p.ID)
+		s.DB.Exec(`DELETE FROM projects WHERE id = $1`, p.ID)
+	})
+	if err := s.MoveWorkspace(ctx, w.ID, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CreateVariableSet(ctx, name+"a-project", "", false); err != nil {
+		t.Fatal(err)
+	}
+	ps, _ := s.GetVariableSet(ctx, name+"a-project")
+	if err := s.AttachVariableSetProject(ctx, ps.ID, p.Name, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AttachVariableSetProject(ctx, ps.ID, "no-such-project", true); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("attach to an unknown project: %v", err)
+	}
+	if ps, _ = s.GetVariableSet(ctx, ps.Name); !slices.Equal(ps.Projects, []string{p.Name}) {
+		t.Fatalf("set's projects: %v", ps.Projects)
+	}
+	for _, key := range []string{"_G", "_X", "_P", "_W"} {
+		set(VarOwner{SetID: ps.ID}, "env", k+key, "project")
+	}
+	want = map[string]string{"env:" + k + "_G": "project", "env:" + k + "_X": "c", "env:" + k + "_P": "project",
+		"env:" + k + "_W": "workspace", "terraform:" + k + "_W": "tf"}
+	if m := got(w.ID); !maps.Equal(m, want) {
+		t.Fatalf("with a project set: got %v, want %v", m, want)
+	}
+	if m := got(other.ID); m["env:"+k+"_P"] != "" {
+		t.Fatalf("a workspace of another project gets the set: %v", m)
+	}
+
+	// A VCS-linked workspace gets neither project nor global sets, only those attached to it.
+	if _, err := s.CreateVCSConnection(ctx, VCSConnection{Name: name, Provider: "github", Token: []byte("x")}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.DB.Exec(`DELETE FROM vcs_connections WHERE name = $1`, name) })
+	if _, err := s.DB.Exec(`UPDATE workspaces SET vcs_connection_id = (SELECT id FROM vcs_connections WHERE name = $2) WHERE id = $1`, w.ID, name); err != nil {
+		t.Fatal(err)
+	}
+	if m := got(w.ID); m["env:"+k+"_P"] != "" || m["env:"+k+"_G"] != "" || m["env:"+k+"_X"] != "c" {
+		t.Fatalf("VCS-linked: %v", m)
+	}
+	if shown, _ := s.WorkspaceVariableSets(ctx, w.ID); slices.ContainsFunc(shown, func(vs VariableSet) bool { return vs.ID == ps.ID }) {
+		t.Fatal("a VCS-linked workspace lists the project set")
+	}
 }
 
 func TestAccess(t *testing.T) {
@@ -488,14 +541,14 @@ func TestAccess(t *testing.T) {
 	member, _ := s.UpsertUser(ctx, "", "member@example.com", "user", []string{"team-a", "team-b"})
 	outsider, _ := s.UpsertUser(ctx, "", "outsider@example.com", "user", []string{"team-c"})
 	name := "t-" + strings.ToLower(rand.Text()[:10])
-	w, _, err := s.CreateWorkspace(ctx, "", name, "job-test", "git::x", "v1", nil, false, creator)
+	w, _, err := s.CreateWorkspace(ctx, "", name, "", "job-test", "git::x", "v1", nil, false, creator)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.DB.Exec(`DELETE FROM workspaces WHERE id=$1`, w.ID) })
 
 	sees := func(user string, admin bool) bool {
-		list, err := s.ListWorkspaces(ctx, Viewer{UserID: user, Admin: admin})
+		list, err := s.ListWorkspaces(ctx, Viewer{UserID: user, Admin: admin}, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -531,6 +584,48 @@ func TestAccess(t *testing.T) {
 	}
 	if g, _ := s.Grants(ctx, w.ID); len(g) != 0 {
 		t.Fatalf("grants: %+v", g)
+	}
+
+	// a project grant reaches every workspace of the project; the highest level wins
+	p, err := s.CreateProject(ctx, "p-"+strings.ToLower(rand.Text()[:10]), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { // before the workspaces' own cleanups: RESTRICT keeps a project with workspaces
+		s.DB.Exec(`DELETE FROM workspaces WHERE project_id = $1`, p.ID)
+		s.DB.Exec(`DELETE FROM projects WHERE id = $1`, p.ID)
+	})
+	sibling, _ := newWorkspace(t, s, false)
+	for _, id := range []string{w.ID, sibling.ID} {
+		if err := s.MoveWorkspace(ctx, id, p.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.SetProjectGrant(ctx, p.ID, "team-a", "read"); err != nil {
+		t.Fatal(err)
+	}
+	if l, _ := s.Access(ctx, sibling.ID, member); !sees(member, false) || level(member) != "read" || l != "read" || sees(outsider, false) {
+		t.Fatalf("project read grant: %q %q", level(member), l)
+	}
+	if list, _ := s.Projects(ctx, Viewer{UserID: member}); !slices.ContainsFunc(list, func(x Project) bool { return x.ID == p.ID }) {
+		t.Fatal("a project grant shows the project")
+	}
+	s.SetGrant(ctx, w.ID, "team-b", "operate")
+	if level(member) != "operate" {
+		t.Fatalf("workspace operate over project read: %q", level(member))
+	}
+	s.SetGrant(ctx, w.ID, "team-b", "read")
+	s.SetProjectGrant(ctx, p.ID, "team-a", "operate")
+	if level(member) != "operate" {
+		t.Fatalf("project operate over workspace read: %q", level(member))
+	}
+	if g, _ := s.ProjectGrants(ctx, p.ID); len(g) != 1 || g[0] != (Grant{"team-a", "operate"}) {
+		t.Fatalf("project grants: %+v", g)
+	}
+	s.SetGrant(ctx, w.ID, "team-b", "")
+	s.SetProjectGrant(ctx, p.ID, "team-a", "")
+	if sees(member, false) || level(member) != "" {
+		t.Fatal("revoked project grant must hide the workspace again")
 	}
 
 	other, _ := newWorkspace(t, s, false)
@@ -631,7 +726,7 @@ func TestVCSWorkspaceVariableSets(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	name := "t-" + strings.ToLower(rand.Text()[:10])
-	w, err := s.CreateEmptyWorkspace(ctx, name, false, "")
+	w, err := s.CreateEmptyWorkspace(ctx, name, "", false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -716,7 +811,7 @@ func TestQueueVCSRun(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	name := "t-" + strings.ToLower(rand.Text()[:10])
-	w, err := s.CreateEmptyWorkspace(ctx, name, false, "")
+	w, err := s.CreateEmptyWorkspace(ctx, name, "", false, "")
 	if err != nil {
 		t.Fatal(err)
 	}

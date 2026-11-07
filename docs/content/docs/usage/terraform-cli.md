@@ -1,6 +1,6 @@
 ---
 title: Terraform CLI
-weight: 5
+weight: 6
 ---
 
 Run Terraform on your own machine with Opsolete as the state backend, using Terraform's [`cloud` block](https://developer.hashicorp.com/terraform/cli/cloud/settings):
@@ -14,15 +14,19 @@ terraform {
   cloud {
     hostname     = "opsolete.example.com"
     organization = "opsolete"            # ORGANIZATION on the server
-    workspaces { name = "network-dev" }
+    workspaces {
+      name    = "network-dev"
+      project = "networking"             # optional; else the default project
+    }
   }
 }
 ```
 
 - **Local execution only.** `terraform plan` and `apply` run on your machine with your credentials; Opsolete doesn't run them on its runners. Workspace variables and variable sets aren't used.
-- **Workspaces:** `terraform init` creates the named workspace if it doesn't exist, as a blank workspace owned by you. An existing one needs **operate** access (read access is a 404 for the state, which holds secrets). Only `workspaces { name = … }` works: tags and projects aren't supported.
+- **Workspaces:** `terraform init` creates the named workspace if it doesn't exist, as a blank workspace owned by you. An existing one needs **operate** access (read access is a 404 for the state, which holds secrets). Only `workspaces { name = … }` works, optionally with `project`: tags aren't supported.
+- **Projects:** `project` (or `TF_CLOUD_PROJECT`) is where `terraform init` creates a missing workspace: the default project if unset. Creating a workspace in another project needs **operate** access to that project. A missing project is created only for admins; others get an error. An existing workspace stays in its project, whatever the block says.
 - **State** works like a run's: every save is a state version with outputs (sensitive ones masked) and a resource list, rollback works, and the CLI takes the same state lock as runs, so a run and a CLI never write at the same time. `terraform force-unlock` only releases locks held by a CLI, not by a run.
-- **Tokens** from `terraform login` act as you (your role and groups from your last browser login) and expire after 30 days: run `terraform login` again. They also work for the [module registry]({{< relref "/docs/catalog/module-registry" >}}) on the same host. There's no page to revoke them yet: `DELETE FROM api_tokens WHERE scope = 'user'` revokes them all.
+- **Tokens** from `terraform login` act as you (your role and groups from your last browser login) and expire after 30 days: run `terraform login` again. They also work for the [module registry]({{< relref "/docs/catalog/module-registry" >}}) on the same host. Revoke them under *Account settings › Tokens* (click your email at the top): one, e.g. from a lost laptop, or all of them.
 
 ## Local development over HTTP
 

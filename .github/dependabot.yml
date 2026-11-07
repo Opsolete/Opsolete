@@ -18,3 +18,7 @@ updates:
     directory: /
     schedule: { interval: weekly }
     commit-message: { prefix: "ci" }
+    # init and analyze must run the same version, separate PRs each fail with a version mismatch.
+    groups:
+      codeql:
+        patterns: ["github/codeql-action*"]

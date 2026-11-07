@@ -43,7 +43,7 @@ func TestWorkspaceTemplates(t *testing.T) {
 		if json.Unmarshal(rec.Body.Bytes(), &j); rec.Code != 200 {
 			t.Fatalf("claim: %d %s", rec.Code, rec.Body.String())
 		}
-		store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE id = $1`, j.RunID) // free the workspace
+		store.DB.Exec(`UPDATE runs SET status = 'applied' WHERE id = $1`, j.RunID) // free the workspace
 		return j
 	}
 	base := "/workspaces/" + ws + "/templates/"
@@ -280,7 +280,7 @@ func TestSensitiveInputs(t *testing.T) {
 		if json.Unmarshal(rec.Body.Bytes(), &j); rec.Code != 200 {
 			t.Fatalf("claim: %d %s", rec.Code, rec.Body.String())
 		}
-		store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE id = $1`, j.RunID)
+		store.DB.Exec(`UPDATE runs SET status = 'applied' WHERE id = $1`, j.RunID)
 		return j
 	}
 	leaks := func(what, s string) {
@@ -369,7 +369,7 @@ func TestRemoveRootTemplate(t *testing.T) {
 	t.Cleanup(func() { store.DB.Exec(`DELETE FROM workspaces WHERE name IN ($1, $2, $3)`, ws, solo, empty) })
 	h := newServer(t, "../../catalog", false, store)
 	free := func() {
-		store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE status IN ('plan_queued', 'needs_confirmation')`)
+		store.DB.Exec(`UPDATE runs SET status = 'applied' WHERE status IN ('plan_queued', 'needs_confirmation')`)
 	}
 	create := func(name string) storage.Workspace {
 		t.Helper()
@@ -474,11 +474,15 @@ func TestWithWorkspaceVars(t *testing.T) {
 	}
 	src := testReg.PublicURL.Host + "/" + ns + "/m/null"
 	vars := map[string]any{"greeting": "from-set", "name": "from-set", "region": "undeclared"}
-	got, err := s.withWorkspaceVars(ctx, src, "1.0.0", map[string]any{"name": "own"}, vars)
+	got, err := s.withWorkspaceVars(ctx, "", src, "1.0.0", map[string]any{"name": "own"}, vars)
 	if want := map[string]any{"greeting": "from-set", "name": "own"}; err != nil || !maps.Equal(got, want) {
 		t.Fatalf("registry module: %v %v", got, err)
 	}
-	if got, err := s.withWorkspaceVars(ctx, "git::https://example.com/m.git", "v1", nil, vars); err != nil || got != nil {
+	// the greeting template asks both: unset (hidden or left empty), they keep the module's default
+	if got, err := s.withWorkspaceVars(ctx, "greeting", src, "1.0.0", map[string]any{}, vars); err != nil || len(got) != 0 {
+		t.Fatalf("inputs the template asks: %v %v", got, err)
+	}
+	if got, err := s.withWorkspaceVars(ctx, "", "git::https://example.com/m.git", "v1", nil, vars); err != nil || got != nil {
 		t.Fatalf("external source: %v %v", got, err)
 	}
 }

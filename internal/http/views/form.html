@@ -42,6 +42,7 @@
       <p class="hint" id="ops-workspace-hint">Lowercase letters, digits and dashes. It holds this deployment's state and runs.</p>
       {{with index $e "ops-workspace"}}<p class="err">{{.}}</p>{{end}}
     </div>
+    {{if .Projects}}<div class="row">{{template "projectpick" .}}</div>{{end}}
     <div class="row">
       <label for="ops-auto-apply">Auto-apply</label>
       <input type="checkbox" id="ops-auto-apply" name="ops-auto-apply"{{if .AutoApply}} checked{{end}} aria-describedby="ops-auto-apply-hint">

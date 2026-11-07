@@ -23,15 +23,16 @@ var (
 )
 
 // Viewer is who asks: admins see everything, others their own workspaces and those granted to
-// one of their groups.
+// one of their groups, directly or through the workspace's project.
 type Viewer struct {
 	UserID string
 	Admin  bool
 }
 
 // visible is the SQL condition for "viewer ($1 = user id, $2 = admin) may see workspace w".
-const visible = `($2 OR w.created_by = NULLIF($1, '')::uuid OR EXISTS (SELECT 1 FROM workspace_access a
-	JOIN users u ON u.id = NULLIF($1, '')::uuid WHERE a.workspace_id = w.id AND a.group_name = ANY(u.groups)))`
+const visible = `($2 OR w.created_by = NULLIF($1, '')::uuid OR EXISTS (SELECT 1 FROM users u WHERE u.id = NULLIF($1, '')::uuid AND (
+	EXISTS (SELECT 1 FROM workspace_access a WHERE a.workspace_id = w.id AND a.group_name = ANY(u.groups))
+	OR EXISTS (SELECT 1 FROM project_access a WHERE a.project_id = w.project_id AND a.group_name = ANY(u.groups)))))`
 
 // Workspace is a long-lived home for one Terraform state. Its configuration comes from a template
 // (TemplateID, ModuleSource, ModuleRef, Inputs), from a VCS branch (VCS*), or from nowhere yet: an
@@ -59,6 +60,8 @@ type Workspace struct {
 	Drifted           bool   // the latest assessment found drift and nothing was applied since
 	CreatedBy         string // email; empty for workspaces from before login
 	CreatedAt         time.Time
+	ProjectID         string
+	ProjectName       string
 	Latest            *Run // most recent run
 }
 
@@ -129,14 +132,15 @@ const workspaceCols = `w.id, w.name, COALESCE(w.template_id, ''), COALESCE(w.mod
 	COALESCE((SELECT a.status = 'drifted' AND NOT EXISTS (SELECT 1 FROM runs x WHERE x.workspace_id = w.id
 		AND x.status = 'applied' AND x.updated_at > a.updated_at) FROM runs a
 		WHERE a.workspace_id = w.id AND a.action = 'assess' AND a.status IN ('no_changes', 'drifted')
-		ORDER BY a.created_at DESC LIMIT 1), false), COALESCE((SELECT email FROM users u WHERE u.id = w.created_by), ''), w.created_at`
+		ORDER BY a.created_at DESC LIMIT 1), false), COALESCE((SELECT email FROM users u WHERE u.id = w.created_by), ''), w.created_at,
+	w.project_id, (SELECT p.name FROM projects p WHERE p.id = w.project_id)`
 
 func scanWorkspace(row interface{ Scan(...any) error }, extra ...any) (Workspace, error) {
 	var w Workspace
 	var raw []byte
 	dest := append([]any{&w.ID, &w.Name, &w.TemplateID, &w.ModuleSource, &w.ModuleRef, &raw,
 		&w.VCSConnectionID, &w.VCSRepo, &w.VCSBranch, &w.VCSTrigger, &w.VCSPullRequests, &w.VCSTagsRegex, &w.VCSTagBaseline, &w.StateKey, &w.Templates,
-		&w.AutoApply, &w.DriftDetection, &w.GlobalRemoteState, &w.ExecutionMode, &w.Drifted, &w.CreatedBy, &w.CreatedAt}, extra...)
+		&w.AutoApply, &w.DriftDetection, &w.GlobalRemoteState, &w.ExecutionMode, &w.Drifted, &w.CreatedBy, &w.CreatedAt, &w.ProjectID, &w.ProjectName}, extra...)
 	if err := row.Scan(dest...); err != nil {
 		return w, err
 	}
@@ -174,18 +178,19 @@ func scanRun(row interface{ Scan(...any) error }) (Run, error) {
 
 // CreateWorkspace creates a workspace from a template and queues its first plan. createdBy is a user id, or empty.
 // id is the new workspace's id ("" = a random one): set when inputs are sealed to it beforehand.
-func (s *Store) CreateWorkspace(ctx context.Context, id, name, templateID, moduleSource, moduleRef string,
+// project is the name of the project it goes into; "" is the default project.
+func (s *Store) CreateWorkspace(ctx context.Context, id, name, project, templateID, moduleSource, moduleRef string,
 	inputs map[string]any, autoApply bool, createdBy string) (Workspace, Run, error) {
-	return s.createWorkspace(ctx, id, name, templateID, moduleSource, moduleRef, inputs, autoApply, createdBy, true)
+	return s.createWorkspace(ctx, id, name, project, templateID, moduleSource, moduleRef, inputs, autoApply, createdBy, true)
 }
 
 // CreateEmptyWorkspace creates a workspace without configuration and without a run.
-func (s *Store) CreateEmptyWorkspace(ctx context.Context, name string, autoApply bool, createdBy string) (Workspace, error) {
-	w, _, err := s.createWorkspace(ctx, "", name, "", "", "", map[string]any{}, autoApply, createdBy, false)
+func (s *Store) CreateEmptyWorkspace(ctx context.Context, name, project string, autoApply bool, createdBy string) (Workspace, error) {
+	w, _, err := s.createWorkspace(ctx, "", name, project, "", "", "", map[string]any{}, autoApply, createdBy, false)
 	return w, err
 }
 
-func (s *Store) createWorkspace(ctx context.Context, id, name, templateID, moduleSource, moduleRef string,
+func (s *Store) createWorkspace(ctx context.Context, id, name, project, templateID, moduleSource, moduleRef string,
 	inputs map[string]any, autoApply bool, createdBy string, plan bool) (Workspace, Run, error) {
 	raw, err := json.Marshal(inputs)
 	if err != nil {
@@ -198,10 +203,13 @@ func (s *Store) createWorkspace(ctx context.Context, id, name, templateID, modul
 	defer tx.Rollback()
 	err = tx.QueryRowContext(ctx, `
 		WITH id AS (SELECT COALESCE(NULLIF($8, '')::uuid, gen_random_uuid()) AS v)
-		INSERT INTO workspaces (id, name, template_id, module_source, module_ref, inputs, state_key, auto_apply, created_by)
+		INSERT INTO workspaces (id, name, template_id, module_source, module_ref, inputs, state_key, auto_apply, created_by, project_id)
 		SELECT v, $1, NULLIF($2, ''), NULLIF($3, ''), NULLIF($4, ''), $5,
-			'opsolete/' || COALESCE(NULLIF($2, ''), 'workspaces') || '/' || v || '.tfstate', $6, NULLIF($7, '')::uuid FROM id
-		RETURNING id`, name, templateID, moduleSource, moduleRef, raw, autoApply, createdBy, id).Scan(&id)
+			'opsolete/' || COALESCE(NULLIF($2, ''), 'workspaces') || '/' || v || '.tfstate', $6, NULLIF($7, '')::uuid,
+			-- an unknown project name is NULL: the insert fails instead of silently using the default
+			CASE WHEN $9 = '' THEN o.default_project_id ELSE (SELECT p.id FROM projects p WHERE p.name = $9) END
+		FROM id, organization o
+		RETURNING id`, name, templateID, moduleSource, moduleRef, raw, autoApply, createdBy, id, project).Scan(&id)
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
 		return Workspace{}, Run{}, ErrNameTaken
 	}
@@ -266,6 +274,39 @@ func createRun(ctx context.Context, tx *sql.Tx, workspaceID, action, createdBy s
 	return r, err
 }
 
+// configChange is one use's configuration (module "" = the root) before and after a run's change. A
+// run ending before its apply started puts the before back (migration 043_run_config_restore).
+type configChange struct {
+	Module string          `json:"module"`
+	Before json.RawMessage `json:"before"` // nil (null): an added template that wasn't there
+	After  json.RawMessage `json:"after"`
+}
+
+// configSnapshot reads one use's configuration in tx; nil if there is none.
+func configSnapshot(ctx context.Context, tx *sql.Tx, workspaceID, module string) (json.RawMessage, error) {
+	var b []byte
+	err := tx.QueryRowContext(ctx, `SELECT run_config_snapshot(ops_uuid($1), $2)`, workspaceID, module).Scan(&b)
+	return b, err
+}
+
+// recordConfigChanges stores on run runID the changes tx made to the uses in changes (Before read
+// before the change), reading each After now.
+func recordConfigChanges(ctx context.Context, tx *sql.Tx, runID, workspaceID string, changes []configChange) error {
+	for i := range changes {
+		after, err := configSnapshot(ctx, tx, workspaceID, changes[i].Module)
+		if err != nil {
+			return err
+		}
+		changes[i].After = after
+	}
+	b, err := json.Marshal(changes)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `UPDATE runs SET config_changes = $2 WHERE id = ops_uuid($1)`, runID, b)
+	return err
+}
+
 // GetWorkspace returns sql.ErrNoRows for an unknown name.
 func (s *Store) GetWorkspace(ctx context.Context, name string) (Workspace, error) {
 	return scanWorkspace(s.DB.QueryRowContext(ctx, `SELECT `+workspaceCols+` FROM workspaces w WHERE w.name = $1`, name))
@@ -276,13 +317,14 @@ func (s *Store) GetWorkspaceByID(ctx context.Context, id string) (Workspace, err
 	return scanWorkspace(s.DB.QueryRowContext(ctx, `SELECT `+workspaceCols+` FROM workspaces w WHERE w.id = ops_uuid($1)`, id))
 }
 
-// ListWorkspaces returns the 200 most recently active workspaces v may see, with their latest run.
-func (s *Store) ListWorkspaces(ctx context.Context, v Viewer) ([]Workspace, error) {
+// ListWorkspaces returns the 200 most recently active workspaces v may see, with their latest run;
+// project (a name) limits them to one project, "" lists all.
+func (s *Store) ListWorkspaces(ctx context.Context, v Viewer, project string) ([]Workspace, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT `+workspaceCols+`, l.status, l.action, l.updated_at
 		FROM workspaces w LEFT JOIN LATERAL (SELECT status, action, updated_at FROM runs
 			WHERE workspace_id = w.id AND action NOT IN ('assess', 'plan') ORDER BY created_at DESC LIMIT 1) l ON true
-		WHERE `+visible+`
-		ORDER BY COALESCE(l.updated_at, w.created_at) DESC LIMIT 200`, v.UserID, v.Admin)
+		WHERE `+visible+` AND ($3 = '' OR w.project_id = (SELECT p.id FROM projects p WHERE p.name = $3))
+		ORDER BY COALESCE(l.updated_at, w.created_at) DESC LIMIT 200`, v.UserID, v.Admin, project)
 	if err != nil {
 		return nil, err
 	}
@@ -387,7 +429,8 @@ func requireIdle(ctx context.Context, tx *sql.Tx, id string) error {
 }
 
 // Access returns what userID may do in a workspace through being its creator or through a group
-// grant: "operate", "read" or "". Admins are handled by the caller.
+// grant on the workspace or its project, the highest of them: "operate", "read" or "". Admins are
+// handled by the caller.
 func (s *Store) Access(ctx context.Context, workspaceID, userID string) (string, error) {
 	var level string
 	err := s.DB.QueryRowContext(ctx, `SELECT CASE
@@ -396,12 +439,13 @@ func (s *Store) Access(ctx context.Context, workspaceID, userID string) (string,
 			WHEN count(a.level) > 0 THEN 'read' ELSE '' END
 		FROM workspaces w
 		LEFT JOIN users u ON u.id = NULLIF($2, '')::uuid
-		LEFT JOIN workspace_access a ON a.workspace_id = w.id AND a.group_name = ANY(u.groups)
+		LEFT JOIN LATERAL (SELECT level FROM workspace_access WHERE workspace_id = w.id AND group_name = ANY(u.groups)
+			UNION ALL SELECT level FROM project_access WHERE project_id = w.project_id AND group_name = ANY(u.groups)) a ON true
 		WHERE w.id = ops_uuid($1) GROUP BY w.id, w.created_by`, workspaceID, userID).Scan(&level)
 	return level, err
 }
 
-// Grant is one group's access to a workspace.
+// Grant is one group's access to a workspace or project.
 type Grant struct {
 	Group string
 	Level string // read | operate
@@ -409,8 +453,18 @@ type Grant struct {
 
 // Grants lists a workspace's group grants.
 func (s *Store) Grants(ctx context.Context, workspaceID string) ([]Grant, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT group_name, level FROM workspace_access
-		WHERE workspace_id = ops_uuid($1) ORDER BY group_name`, workspaceID)
+	return s.grants(ctx, "workspace_access", "workspace_id", workspaceID)
+}
+
+// ProjectGrants lists a project's group grants; they reach all of its workspaces.
+func (s *Store) ProjectGrants(ctx context.Context, projectID string) ([]Grant, error) {
+	return s.grants(ctx, "project_access", "project_id", projectID)
+}
+
+// grants lists the grants of table (workspace_access or project_access) whose col is id.
+func (s *Store) grants(ctx context.Context, table, col, id string) ([]Grant, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT group_name, level FROM `+table+`
+		WHERE `+col+` = ops_uuid($1) ORDER BY group_name`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -446,12 +500,22 @@ func (s *Store) KnownGroups(ctx context.Context) ([]string, error) {
 
 // SetGrant gives a group read or operate access to a workspace; level "" removes the grant.
 func (s *Store) SetGrant(ctx context.Context, workspaceID, group, level string) error {
+	return s.setGrant(ctx, "workspace_access", "workspace_id", workspaceID, group, level)
+}
+
+// SetProjectGrant gives a group read or operate access to all of a project's workspaces; level "" removes it.
+func (s *Store) SetProjectGrant(ctx context.Context, projectID, group, level string) error {
+	return s.setGrant(ctx, "project_access", "project_id", projectID, group, level)
+}
+
+// setGrant: table and col are workspace_access/workspace_id or project_access/project_id, never input.
+func (s *Store) setGrant(ctx context.Context, table, col, id, group, level string) error {
 	if level == "" {
-		_, err := s.DB.ExecContext(ctx, `DELETE FROM workspace_access WHERE workspace_id = ops_uuid($1) AND group_name = $2`, workspaceID, group)
+		_, err := s.DB.ExecContext(ctx, `DELETE FROM `+table+` WHERE `+col+` = ops_uuid($1) AND group_name = $2`, id, group)
 		return err
 	}
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO workspace_access (workspace_id, group_name, level) VALUES ($1::uuid, $2, $3)
-		ON CONFLICT (workspace_id, group_name) DO UPDATE SET level = EXCLUDED.level`, workspaceID, group, level)
+	_, err := s.DB.ExecContext(ctx, `INSERT INTO `+table+` (`+col+`, group_name, level) VALUES ($1::uuid, $2, $3)
+		ON CONFLICT (`+col+`, group_name) DO UPDATE SET level = EXCLUDED.level`, id, group, level)
 	return err
 }
 

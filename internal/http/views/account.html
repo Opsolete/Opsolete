@@ -1,0 +1,44 @@
+{{template "top" .}}
+{{if eq .Page "profile"}}{{with user}}
+<nav class="back" aria-label="breadcrumb">Account settings: Profile</nav>
+<h1>Profile</h1>
+<p class="muted">Your account comes from the identity provider: change it there. It's updated at every login.</p>
+<div class="settings">
+<div class="field">Email address</div><p>{{.Email}}</p>
+<div class="field">Role</div><p>{{if .Admin}}Admin: everything, in every workspace and project{{else}}User{{end}}</p>
+{{end}}
+<div class="field">Groups</div>
+{{with .Groups}}<p>{{range $i, $g := .}}{{if $i}}, {{end}}<code>{{$g}}</code>{{end}}</p>
+{{else}}<p class="muted">None</p>{{end}}
+<p class="hint">As your identity provider sent them at your last login. Workspaces and projects grant access to groups: log out and in again after a change.</p>
+</div>
+
+{{else}}
+<nav class="back" aria-label="breadcrumb">Account settings: Tokens</nav>
+<div class="page-head">
+  <div>
+    <h1>Tokens</h1>
+    <p class="muted"><code>terraform login {{.Host}}</code> creates a token that acts as you for 30 days: for Terraform's cloud block and the module registry.
+      Revoke one you no longer trust, e.g. from a lost laptop; Terraform then needs a new <code>terraform login</code>.</p>
+  </div>
+  {{if .Tokens}}<form method="post" action="/account/tokens/revoke" onsubmit="return confirm('Revoke all your tokens? Every Terraform logged in as you must log in again.')">
+    <button type="submit" class="danger">Revoke all</button></form>{{end}}
+</div>
+<div class="card flush">
+<table>
+<tr><th>Description</th><th>Created</th><th>Expires</th><th><span class="sr-hint">Actions</span></th></tr>
+{{range .Tokens}}
+<tr>
+  <td>{{.Name}}</td>
+  <td class="nowrap" title="{{.CreatedAt.Format "2006-01-02 15:04"}}">{{ago .CreatedAt}}</td>
+  <td class="nowrap">{{.ExpiresAt.Format "2006-01-02 15:04"}}</td>
+  <td class="nowrap"><form method="post" action="/account/tokens/{{.ID}}/revoke" onsubmit="return confirm('Revoke this token?')">
+    <button type="submit" class="secondary small">Revoke</button></form></td>
+</tr>
+{{else}}
+<tr><td colspan="4" class="empty">You have no tokens. <code>terraform login {{.Host}}</code> creates one.</td></tr>
+{{end}}
+</table>
+</div>
+{{end}}
+{{template "bottom"}}

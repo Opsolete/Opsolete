@@ -1,6 +1,6 @@
 {{template "top" .}}
 {{$w := .W}}{{$tab := tab}}{{$p := .Page}}
-<nav class="back" aria-label="breadcrumb"><a href="/workspaces">Workspaces</a> / <a href="/workspaces/{{$w.Name}}">{{$w.Name}}</a> / {{if eq $tab "runs"}}Runs{{else if eq $tab "states"}}{{if .State}}<a href="/workspaces/{{$w.Name}}/states">States</a> / v{{.State.Serial}}{{else}}States{{end}}{{else if eq $tab "variables"}}Variables{{else if eq $tab "deploy"}}Deploy{{else if eq $tab "settings"}}<a href="/workspaces/{{$w.Name}}/settings">Settings</a> / {{if eq $p "health"}}Health{{else if eq $p "lock"}}Locking{{else if eq $p "access"}}Team access{{else if eq $p "deletion"}}Destruction and deletion{{else}}General{{end}}{{else}}Overview{{end}}</nav>
+<nav class="back" aria-label="breadcrumb">{{template "wscrumb" $w}} / {{if eq $tab "runs"}}Runs{{else if eq $tab "states"}}{{if .State}}<a href="/workspaces/{{$w.Name}}/states">States</a> / v{{.State.Serial}}{{else}}States{{end}}{{else if eq $tab "variables"}}Variables{{else if eq $tab "deploy"}}Deploy{{else if eq $tab "settings"}}<a href="/workspaces/{{$w.Name}}/settings">Settings</a> / {{if eq $p "health"}}Health{{else if eq $p "lock"}}Locking{{else if eq $p "access"}}Team access{{else if eq $p "deletion"}}Destruction and deletion{{else}}General{{end}}{{else}}Overview{{end}}</nav>
 {{if ne $tab "settings"}}
 <div class="page-head">
   <div>
@@ -233,13 +233,13 @@
 {{template "variables" .Variables}}
 
 <h3>Variable sets <span class="tag">{{len .Sets}}</span></h3>
-<p class="muted">Variable sets let admins reuse variables across workspaces. Between sets, attached sets win over global ones, then the first by name.</p>
+<p class="muted">Variable sets let admins reuse variables across workspaces. Between sets, those attached to this workspace win over those of its project, those over global ones, then the first by name.</p>
 {{range .Sets}}
 <div class="card">
   <div class="section-head"><h3 style="margin:0">{{if $.Admin}}<a href="/variable-sets/{{.Name}}">{{.Name}}</a>{{else}}{{.Name}}{{end}}</h3>
     {{if $.Admin}}<a class="btn secondary small" href="/variable-sets/{{.Name}}">Edit…</a>{{end}}</div>
   {{with .Description}}<p class="muted">{{.}}</p>{{end}}
-  <p class="meta">{{if .Global}}<span>Global: applies to all workspaces</span>{{else}}<span>{{len .Workspaces}} workspace{{if ne (len .Workspaces) 1}}s{{end}}</span>{{end}}
+  <p class="meta">{{if .Global}}<span>Global: applies to all workspaces</span>{{else}}{{with .Projects}}<span>Projects: {{join . ", "}}</span>{{end}}<span>{{len .Workspaces}} workspace{{if ne (len .Workspaces) 1}}s{{end}}</span>{{end}}
     <span>{{len .Vars.Vars}} variable{{if ne (len .Vars.Vars) 1}}s{{end}}</span><span>Created {{.CreatedAt.Format "2006-01-02 15:04"}}</span></p>
 </div>
 {{template "variables" .Vars}}
@@ -256,6 +256,16 @@
 <div class="field">ID</div>
 <p class="id"><code>{{$w.ID}}</code>
   <button type="button" class="copy" aria-label="Copy ID" title="Copy ID" onclick="navigator.clipboard.writeText('{{$w.ID}}')">⧉</button></p>
+{{if .Projects}}
+<form method="post" action="/workspaces/{{$w.Name}}/project" class="inline">
+  <label for="project">Project</label>
+  <select id="project" name="project">{{range .Projects}}<option value="{{.Name}}"{{if eq .ID $w.ProjectID}} selected{{end}}>{{.Name}}</option>{{end}}</select>
+  <button type="submit" class="secondary">Move to project</button>
+</form>
+<p class="hint">The workspace gets the new project's team access and variable sets; a run under way gets them from its next phase.</p>
+{{else}}
+<div class="field">Project</div><p><a href="/projects/{{$w.ProjectName}}">{{$w.ProjectName}}</a></p>
+{{end}}
 {{if .CanOperate}}
 <form method="post" action="/workspaces/{{$w.Name}}/settings">
   <!-- one settings endpoint: keep the Health page's value -->
@@ -356,7 +366,8 @@
 
 {{else if eq $p "access"}}
 <h1>Team access</h1>
-<p class="muted">Visible to its creator, admins and these IdP groups. <strong>operate</strong>: runs, confirm, destroy, settings, rename; <strong>read</strong>: view only.</p>
+<p class="muted">Visible to its creator, admins, these IdP groups and those of its project. <strong>operate</strong>: runs, confirm, destroy, settings, rename; <strong>read</strong>: view only.
+  A group gets the higher of its workspace and project access.</p>
 <div class="card">
   {{with .Grants}}
   <table>
@@ -365,8 +376,10 @@
     {{if $.Admin}}<td><form method="post" action="/workspaces/{{$w.Name}}/access"><input type="hidden" name="group" value="{{.Group}}">
       <button type="submit" class="secondary small">Revoke</button></form></td>{{end}}</tr>{{end}}
   </table>
-  {{else}}<p class="muted" style="margin:0">No groups have access.</p>
+  {{else}}<p class="muted" style="margin:0">No groups have access to this workspace itself.</p>
   {{end}}
+  {{with .ProjectGrants}}<p class="hint">Through the project <a href="/projects/{{$w.ProjectName}}/settings/access">{{$w.ProjectName}}</a>:
+    {{range $i, $g := .}}{{if $i}}, {{end}}<code>{{$g.Group}}</code> {{$g.Level}}{{end}}</p>{{end}}
   {{if .Admin}}
   <form method="post" action="/workspaces/{{$w.Name}}/access" class="inline" style="margin-top:1rem">
     <!-- datalist, not select: a group may be granted before any of its members has logged in -->

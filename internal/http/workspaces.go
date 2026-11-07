@@ -32,6 +32,7 @@ import (
 const (
 	fieldWorkspace = "ops-workspace"
 	fieldAutoApply = "ops-auto-apply"
+	fieldProject   = "ops-project"
 )
 
 var workspaceNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`)
@@ -105,6 +106,8 @@ type formPage struct {
 	Errors    map[string]string
 	Workspace string
 	AutoApply bool
+	Project   string             // the project picked for the new workspace; "" is the default
+	Projects  []storage.Project  // to pick from, when creating a workspace
 	Configure *storage.Workspace // set: change this workspace's inputs and module version instead of creating one
 	Module    string             // with Configure: the added template to change (or add, with Adding)
 	Adding    bool
@@ -133,7 +136,13 @@ func (s *Server) form(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	vals, _ := formDefaults(t, nil)
-	s.render(w, r, http.StatusOK, "form.html", formPage{T: t, Editor: s.canEditTemplates(r), Values: vals})
+	projects, err := s.creatableProjects(r)
+	if err != nil {
+		s.internalError(w, "list projects", err)
+		return
+	}
+	s.render(w, r, http.StatusOK, "form.html", formPage{T: t, Editor: s.canEditTemplates(r), Values: vals,
+		Project: r.URL.Query().Get("project"), Projects: projects})
 }
 
 // createWorkspace creates a workspace from a template and queues its first plan.
@@ -158,7 +167,14 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 		errs[fieldWorkspace] = workspaceNameRule
 	}
 	page := formPage{T: t, Editor: s.canEditTemplates(r), Values: raw, Errors: errs, Workspace: name,
-		AutoApply: r.PostForm.Get(fieldAutoApply) != ""}
+		AutoApply: r.PostForm.Get(fieldAutoApply) != "", Project: r.PostForm.Get(fieldProject)}
+	if !s.pickableProject(w, r, page.Project) {
+		return
+	}
+	if page.Projects, err = s.creatableProjects(r); err != nil {
+		s.internalError(w, "list projects", err)
+		return
+	}
 	id := newID() // sensitive inputs are sealed to the workspace's id
 	if err := s.sealInputs(t, raw, vals, nil, errs, id, ""); err != nil {
 		page.Error = err.Error()
@@ -168,7 +184,7 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := auth.FromContext(r.Context())
-	ws, run, err := s.Store.CreateWorkspace(r.Context(), id, name, t.ID, t.Module.Source, t.Module.Ref, vals, page.AutoApply, u.ID)
+	ws, run, err := s.Store.CreateWorkspace(r.Context(), id, name, page.Project, t.ID, t.Module.Source, t.Module.Ref, vals, page.AutoApply, u.ID)
 	if errors.Is(err, storage.ErrNameTaken) {
 		errs[fieldWorkspace] = err.Error()
 		s.render(w, r, http.StatusUnprocessableEntity, "form.html", page)
@@ -182,13 +198,20 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID, http.StatusSeeOther)
 }
 
+// workspaces lists the workspaces the user may see; ?project= (a name) filters by project.
 func (s *Server) workspaces(w http.ResponseWriter, r *http.Request) {
-	list, err := s.Store.ListWorkspaces(r.Context(), viewer(r))
+	project := r.URL.Query().Get("project")
+	list, err := s.Store.ListWorkspaces(r.Context(), viewer(r), project)
 	if err != nil {
 		s.internalError(w, "list workspaces", err)
 		return
 	}
-	s.render(w, r, http.StatusOK, "workspaces.html", list)
+	projects, err := s.Store.Projects(r.Context(), viewer(r))
+	if err != nil {
+		s.internalError(w, "list projects", err)
+		return
+	}
+	s.render(w, r, http.StatusOK, "workspaces.html", map[string]any{"Workspaces": list, "Projects": projects, "Project": project})
 }
 
 // loadWorkspace loads the {name} workspace if the user has at least the given access level; it
@@ -447,6 +470,10 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 				s.internalError(w, "workspace grants", err)
 				return
 			}
+			if data["ProjectGrants"], err = s.Store.ProjectGrants(ctx, ws.ProjectID); err != nil {
+				s.internalError(w, "project grants", err)
+				return
+			}
 			if auth.FromContext(ctx).Admin() {
 				if groups, err = s.Store.KnownGroups(ctx); err != nil {
 					s.internalError(w, "known groups", err)
@@ -463,7 +490,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 				s.internalError(w, "remote state consumers", err)
 				return
 			}
-			all, err := s.Store.ListWorkspaces(ctx, viewer(r))
+			all, err := s.Store.ListWorkspaces(ctx, viewer(r), "")
 			if err != nil {
 				s.internalError(w, "list workspaces", err)
 				return
@@ -480,7 +507,15 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		maps.Copy(data, map[string]any{"Grants": grants, "Groups": groups, "StateConsumers": stateConsumers,
+		var projects []storage.Project // General: where an admin can move it
+		if page == "" && auth.FromContext(ctx).Admin() {
+			var err error
+			if projects, err = s.Store.Projects(ctx, viewer(r)); err != nil {
+				s.internalError(w, "list projects", err)
+				return
+			}
+		}
+		maps.Copy(data, map[string]any{"Grants": grants, "Groups": groups, "StateConsumers": stateConsumers, "Projects": projects,
 			"StateAddress": s.Registry.PublicURL.JoinPath(runnerapi.StatePrefix, ws.ID).String()})
 	}
 	s.render(w, r, http.StatusOK, "workspace.html", data)
@@ -514,15 +549,16 @@ func workspacePicker(field, label string, selected []string, all []storage.Works
 }
 
 // syncSelection attaches the names in want that have lacks, then detaches the ones want lacks.
-// An unknown workspace name fails (sql.ErrNoRows) before anything changes.
-func (s *Server) syncSelection(ctx context.Context, have, want []string, attach func(name string, on bool) error) error {
+// A name exist doesn't know (e.g. Store.WorkspacesExist) fails (sql.ErrNoRows) before anything changes.
+func (s *Server) syncSelection(ctx context.Context, have, want []string, exist func(context.Context, []string) (bool, error),
+	attach func(name string, on bool) error) error {
 	var added []string
 	for _, n := range want {
 		if !slices.Contains(have, n) {
 			added = append(added, n)
 		}
 	}
-	if ok, err := s.Store.WorkspacesExist(ctx, added); err != nil {
+	if ok, err := exist(ctx, added); err != nil {
 		return err
 	} else if !ok {
 		return sql.ErrNoRows
@@ -759,7 +795,7 @@ func (s *Server) workspaceSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 // lockWorkspace locks (action=lock, with an optional reason), unlocks or force-unlocks a workspace,
-// like HCP Terraform's Locking page. The lock is a state lock as the cloud block's CLI takes it, so
+// from its Locking page. The lock is a state lock as the cloud block's CLI takes it, so
 // the CLI, `terraform force-unlock` and the cloud API see it too; runs wait until it is released.
 // Unlock releases only the user's own lock, force-unlock anyone's; locks of runs and rollbacks end with them.
 func (s *Server) lockWorkspace(w http.ResponseWriter, r *http.Request) {
@@ -838,9 +874,8 @@ func (s *Server) workspaceAccess(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	group, level := strings.TrimSpace(r.PostFormValue("group")), r.PostFormValue("level")
-	if group == "" || len(group) > 256 || (level != "" && level != levelRead && level != levelOperate) {
-		http.Error(w, "group is required, and level must be read, operate or empty (revoke)", http.StatusBadRequest)
+	group, level, ok := grantFromForm(w, r)
+	if !ok {
 		return
 	}
 	if err := s.Store.SetGrant(r.Context(), ws.ID, group, level); err != nil {
@@ -849,6 +884,16 @@ func (s *Server) workspaceAccess(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Log.Info("workspace access", "workspace", ws.Name, "group", group, "level", level, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/settings/access", http.StatusSeeOther)
+}
+
+// grantFromForm reads a grant's group and level ("" revokes); it writes a 400 and returns false if invalid.
+func grantFromForm(w http.ResponseWriter, r *http.Request) (group, level string, ok bool) {
+	group, level = strings.TrimSpace(r.PostFormValue("group")), r.PostFormValue("level")
+	if group == "" || len(group) > 256 || (level != "" && level != levelRead && level != levelOperate) {
+		http.Error(w, "group is required, and level must be read, operate or empty (revoke)", http.StatusBadRequest)
+		return "", "", false
+	}
+	return group, level, true
 }
 
 func (s *Server) run(w http.ResponseWriter, r *http.Request) {
@@ -906,7 +951,7 @@ func humanDuration(d time.Duration) string {
 	return d.Round(time.Second).String()
 }
 
-// ago renders t relative to now, HCP style: "just now", "5 minutes ago", "3 days ago".
+// ago renders t relative to now: "just now", "5 minutes ago", "3 days ago".
 func ago(t time.Time) string {
 	d := time.Since(t)
 	plural := func(n int, unit string) string {
@@ -1076,7 +1121,7 @@ func (s *Server) logStream(w http.ResponseWriter, r *http.Request) {
 
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
-	idle, ended := 0, false
+	idle, ended, sent := 0, false, ""
 	for {
 		chunks, err := s.Store.Logs(ctx, run.ID, cursor, 200)
 		if err != nil {
@@ -1091,22 +1136,28 @@ func (s *Server) logStream(w http.ResponseWriter, r *http.Request) {
 			io.WriteString(w, "\n")
 			cursor = c.Seq
 		}
-		if len(chunks) == 0 {
+		if len(chunks) < 200 {
 			cur, _, err := s.Store.GetRun(ctx, run.ID)
 			if err != nil {
 				return
 			}
-			if !cur.Working() {
-				if !ended { // its last lines may have landed after the Logs query: read once more
-					ended = true
-					continue
-				}
-				fmt.Fprintf(w, "event: done\ndata: %s\n\n", cur.Status)
-				rc.Flush()
-				return
+			if cur.Working() && cur.Status != sent { // lets the page re-render its steps, e.g. queued → applying
+				fmt.Fprintf(w, "event: status\ndata: %s\n\n", cur.Status)
+				sent = cur.Status
 			}
-			if idle++; idle%15 == 0 {
-				io.WriteString(w, ": keepalive\n\n")
+			if len(chunks) == 0 {
+				if !cur.Working() {
+					if !ended { // its last lines may have landed after the Logs query: read once more
+						ended = true
+						continue
+					}
+					fmt.Fprintf(w, "event: done\ndata: %s\n\n", cur.Status)
+					rc.Flush()
+					return
+				}
+				if idle++; idle%15 == 0 {
+					io.WriteString(w, ": keepalive\n\n")
+				}
 			}
 		}
 		if err := rc.Flush(); err != nil {

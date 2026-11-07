@@ -346,13 +346,19 @@ func TestTemplateCatalogInGit(t *testing.T) {
 	if kept == nil {
 		t.Fatalf("the page must keep the new template's id: %s", rec.Body.String())
 	}
+	// a lookalike pull request listed first, whose description names the template but whose branch isn't its own, is ignored
+	g.mu.Lock()
+	g.branches["opsolete/template-other-abcdef"] = g.branches["main"]
+	g.pulls = append([]fakePull{{"opsolete/template-other-abcdef", "Add template X\n\nSaved in Opsolete by x (template " + kept[1] + ")."}}, g.pulls...)
+	g.mu.Unlock()
 	rec = post(h, "/templates/new", url.Values{"id": {kept[1]}, "name": {"Queue v2"}, "module_source": {"git::https://example.com/q.git"}, "module_ref": {"v1"}})
 	g.mu.Lock()
 	onBranch, pulls := g.commits[g.branches[head]][added], len(g.pulls)
+	lookalike := g.branches["opsolete/template-other-abcdef"] != g.branches["main"]
 	g.mu.Unlock()
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "https://github.example/acme/catalog/pull/1") || pulls != 1 ||
-		!strings.Contains(onBranch, `"Queue v2"`) {
-		t.Fatalf("update pull request: %d, %d pulls, file %s", rec.Code, pulls, onBranch)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "https://github.example/acme/catalog/pull/2") || pulls != 2 ||
+		!strings.Contains(onBranch, `"Queue v2"`) || lookalike {
+		t.Fatalf("update pull request: %d, %d pulls, file %s, lookalike changed %v", rec.Code, pulls, onBranch, lookalike)
 	}
 
 	// The connection can't be deleted from under the catalog; disconnecting goes back to TEMPLATES_DIR.

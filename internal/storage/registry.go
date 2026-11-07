@@ -222,6 +222,43 @@ func (s *Store) TokenUser(ctx context.Context, token string) (id, email string, 
 	return id, email, err
 }
 
+// UserToken is one of a user's unexpired `terraform login` tokens; the token itself is only stored hashed.
+type UserToken struct {
+	ID, Name             string
+	CreatedAt, ExpiresAt time.Time
+}
+
+// UserTokens lists a user's unexpired tokens, newest first.
+func (s *Store) UserTokens(ctx context.Context, userID string) ([]UserToken, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT id, name, created_at, expires_at FROM api_tokens
+		WHERE scope = $2 AND user_id = ops_uuid($1) AND expires_at > now() ORDER BY created_at DESC`, userID, ScopeUser)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UserToken
+	for rows.Next() {
+		var t UserToken
+		if err := rows.Scan(&t.ID, &t.Name, &t.CreatedAt, &t.ExpiresAt); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// RevokeUserToken deletes one of the user's tokens; other users' token ids are ignored.
+func (s *Store) RevokeUserToken(ctx context.Context, userID, id string) error {
+	_, err := s.DB.ExecContext(ctx, `DELETE FROM api_tokens WHERE scope = $3 AND user_id = ops_uuid($1) AND id = ops_uuid($2)`, userID, id, ScopeUser)
+	return err
+}
+
+// RevokeUserTokens deletes all of the user's tokens.
+func (s *Store) RevokeUserTokens(ctx context.Context, userID string) error {
+	_, err := s.DB.ExecContext(ctx, `DELETE FROM api_tokens WHERE scope = $2 AND user_id = ops_uuid($1)`, userID, ScopeUser)
+	return err
+}
+
 // SigningKey returns the registry's HMAC key, creating it on first use.
 func (s *Store) SigningKey(ctx context.Context) ([]byte, error) {
 	if _, err := s.DB.ExecContext(ctx, `INSERT INTO registry_signing_key (id, key) VALUES (1, $1) ON CONFLICT DO NOTHING`,

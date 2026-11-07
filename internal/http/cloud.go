@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -26,7 +27,7 @@ import (
 )
 
 // Terraform's cloud block and `terraform login`: https://developer.hashicorp.com/terraform/cli/cloud/settings
-// Opsolete serves the part of the HCP Terraform API (tfe.v2) that Terraform uses with local
+// Opsolete serves the part of Terraform's remote API (tfe.v2) that Terraform uses with local
 // execution: the organization (one, ORGANIZATION), workspaces by name, state versions and locks.
 // Entitlements say "no remote operations", so plan and apply always run on the user's machine and
 // Opsolete is the state backend, with the same versions, locks and outputs as its runs.
@@ -35,7 +36,7 @@ const cloudPrefix = "/api/v2"
 const (
 	oauthClient = "terraform-cli"
 	codeTTL     = 5 * time.Minute
-	// shortcut: no token list or revoke page; tokens just expire. Add one if users must revoke them early.
+	// users list and revoke their own tokens under Account settings › Tokens
 	userTokenTTL = 30 * 24 * time.Hour
 )
 
@@ -66,10 +67,14 @@ func (s *Server) cloudRoutes(mux *http.ServeMux) {
 	p := cloudPrefix
 	mux.HandleFunc("GET "+p+"/organizations/{org}/entitlement-set", s.cloudUser(func(w http.ResponseWriter, r *http.Request) {
 		writeAPI(w, http.StatusOK, apiObject{"entitlement-sets", s.Organization,
-			map[string]any{"operations": false, "state-storage": true}})
+			map[string]any{"operations": false, "state-storage": true}, nil})
 	}))
 	mux.HandleFunc("GET "+p+"/organizations/{org}/workspaces/{name}", s.cloudUser(s.cloudGetWorkspace))
 	mux.HandleFunc("POST "+p+"/organizations/{org}/workspaces", s.cloudUser(s.cloudCreateWorkspace))
+	// cloud { workspaces { project = "x" } }: Terraform looks the project up by name, creates it if
+	// it's missing and the workspace is too, then creates the workspace in it.
+	mux.HandleFunc("GET "+p+"/organizations/{org}/projects", s.cloudUser(s.cloudProjects))
+	mux.HandleFunc("POST "+p+"/organizations/{org}/projects", s.cloudUser(s.cloudCreateProject))
 	// Terraform sets the new workspace's terraform-version; with local execution that's the CLI's business.
 	mux.HandleFunc("PATCH "+p+"/workspaces/{id}", s.cloudUser(s.cloudGetWorkspace))
 	mux.HandleFunc("POST "+p+"/workspaces/{id}/actions/{action}", s.cloudUser(s.cloudLock))
@@ -81,9 +86,15 @@ func (s *Server) cloudRoutes(mux *http.ServeMux) {
 
 // apiObject is a JSON:API resource object, the shape go-tfe decodes.
 type apiObject struct {
-	Type       string         `json:"type"`
-	ID         string         `json:"id"`
-	Attributes map[string]any `json:"attributes"`
+	Type          string         `json:"type"`
+	ID            string         `json:"id"`
+	Attributes    map[string]any `json:"attributes"`
+	Relationships map[string]any `json:"relationships,omitempty"`
+}
+
+// apiRef is a JSON:API relationship to one object.
+func apiRef(typ, id string) map[string]any {
+	return map[string]any{"data": map[string]string{"type": typ, "id": id}}
 }
 
 func writeAPI(w http.ResponseWriter, status int, data any) {
@@ -166,7 +177,8 @@ func (s *Server) writeWorkspace(w http.ResponseWriter, r *http.Request, status i
 	// Terraform runs locally whatever the mode (entitlements: no operations); remote mode refuses it the lock.
 	// "latest" tells Terraform not to compare versions; any CLI version may use the state.
 	writeAPI(w, status, apiObject{"workspaces", ws.ID, map[string]any{"name": ws.Name, "locked": lock != "",
-		"execution-mode": ws.ExecutionMode, "operations": false, "terraform-version": "latest"}})
+		"execution-mode": ws.ExecutionMode, "operations": false, "terraform-version": "latest"},
+		map[string]any{"project": apiRef("projects", ws.ProjectID)}})
 }
 
 func (s *Server) cloudGetWorkspace(w http.ResponseWriter, r *http.Request) {
@@ -187,6 +199,13 @@ func (s *Server) cloudCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 			Attributes struct {
 				Name string `json:"name"`
 			} `json:"attributes"`
+			Relationships struct {
+				Project struct {
+					Data struct {
+						ID string `json:"id"`
+					} `json:"data"`
+				} `json:"project"`
+			} `json:"relationships"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
@@ -198,8 +217,22 @@ func (s *Server) cloudCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusUnprocessableEntity, "workspace name: "+workspaceNameRule)
 		return
 	}
+	project := "" // no project in the cloud block: the default one
+	if id := body.Data.Relationships.Project.Data.ID; id != "" {
+		list, err := s.Store.CreatableProjects(r.Context(), viewer(r))
+		if err != nil {
+			s.cloudError(w, "list projects", err)
+			return
+		}
+		i := slices.IndexFunc(list, func(p storage.Project) bool { return p.ID == id })
+		if i < 0 { // 422, not 404: Terraform shows the message
+			writeAPIError(w, http.StatusUnprocessableEntity, "you may not create workspaces in this project: that needs operate access to it")
+			return
+		}
+		project = list[i].Name
+	}
 	u := auth.FromContext(r.Context())
-	ws, err := s.Store.CreateEmptyWorkspace(r.Context(), name, false, u.ID)
+	ws, err := s.Store.CreateEmptyWorkspace(r.Context(), name, project, false, u.ID)
 	if errors.Is(err, storage.ErrNameTaken) {
 		writeAPIError(w, http.StatusUnprocessableEntity, err.Error())
 		return
@@ -217,8 +250,66 @@ func (s *Server) cloudCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ws.ExecutionMode = "local"
-	s.Log.Info("workspace created", "workspace", ws.Name, "via", "terraform cloud block", "user", u.Email)
+	s.Log.Info("workspace created", "workspace", ws.Name, "project", ws.ProjectName, "via", "terraform cloud block", "user", u.Email)
 	s.writeWorkspace(w, r, http.StatusCreated, ws)
+}
+
+func projectObject(p storage.Project) apiObject {
+	return apiObject{Type: "projects", ID: p.ID, Attributes: map[string]any{"name": p.Name, "description": p.Description}}
+}
+
+// cloudProjects lists the projects the user may see; filter[names] (comma-separated) picks by name.
+func (s *Server) cloudProjects(w http.ResponseWriter, r *http.Request) {
+	list, err := s.Store.Projects(r.Context(), viewer(r))
+	if err != nil {
+		s.cloudError(w, "list projects", err)
+		return
+	}
+	names := strings.Split(r.URL.Query().Get("filter[names]"), ",")
+	out := []apiObject{} // [] not null: go-tfe decodes a list
+	for _, p := range list {
+		if names[0] == "" || slices.Contains(names, p.Name) {
+			out = append(out, projectObject(p))
+		}
+	}
+	writeAPI(w, http.StatusOK, out)
+}
+
+// cloudCreateProject: Terraform creates the cloud block's project if it's missing. Admins only, as in the UI.
+func (s *Server) cloudCreateProject(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Data struct {
+			Attributes struct {
+				Name        string `json:"name"`
+				Description string `json:"description"`
+			} `json:"attributes"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&body); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "body must be a JSON:API project")
+		return
+	}
+	name := body.Data.Attributes.Name
+	u := auth.FromContext(r.Context())
+	if !u.Admin() {
+		writeAPIError(w, http.StatusForbidden, fmt.Sprintf("there is no project %q you may use: an Opsolete admin creates projects", name))
+		return
+	}
+	if !validWorkspaceName(name) {
+		writeAPIError(w, http.StatusUnprocessableEntity, "project name: "+workspaceNameRule)
+		return
+	}
+	p, err := s.Store.CreateProject(r.Context(), name, body.Data.Attributes.Description)
+	if errors.Is(err, storage.ErrProjectNameTaken) {
+		writeAPIError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	if err != nil {
+		s.cloudError(w, "create project", err)
+		return
+	}
+	s.Log.Info("project created", "project", p.Name, "via", "terraform cloud block", "user", u.Email)
+	writeAPI(w, http.StatusCreated, projectObject(p))
 }
 
 // cloudLock: actions/lock, unlock and force-unlock. The lock is the same state lock runs take, so
@@ -280,7 +371,7 @@ func (s *Server) cloudLock(w http.ResponseWriter, r *http.Request) {
 
 func stateVersionObject(workspaceID string, v storage.StateVersion) apiObject {
 	return apiObject{"state-versions", strconv.FormatInt(v.ID, 10), map[string]any{"serial": v.Serial, "status": "finalized",
-		"hosted-state-download-url": fmt.Sprintf("%s/workspaces/%s/state-versions/%d/download", cloudPrefix, workspaceID, v.ID)}}
+		"hosted-state-download-url": fmt.Sprintf("%s/workspaces/%s/state-versions/%d/download", cloudPrefix, workspaceID, v.ID)}, nil}
 }
 
 func (s *Server) cloudCurrentState(w http.ResponseWriter, r *http.Request) {
@@ -314,7 +405,7 @@ func (s *Server) cloudOutputs(w http.ResponseWriter, r *http.Request) {
 	}
 	list := []apiObject{}
 	for name := range outputs {
-		list = append(list, apiObject{"state-version-outputs", "wsout-" + name, map[string]any{"name": name}})
+		list = append(list, apiObject{"state-version-outputs", "wsout-" + name, map[string]any{"name": name}, nil})
 	}
 	writeAPI(w, http.StatusOK, list)
 }

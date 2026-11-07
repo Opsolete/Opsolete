@@ -1,4 +1,4 @@
--- VCS-driven runs (as in HCP Terraform), found by polling (see vcs.TriggerRuns):
+-- VCS-driven runs, found by polling (see vcs.TriggerRuns):
 -- vcs_trigger: a new commit on the linked branch queues an apply run of that commit.
 -- vcs_pull_requests: open pull requests into the branch get a speculative plan ('plan' runs: never applied).
 -- Off for workspaces linked before: their runs were only ever started by hand.

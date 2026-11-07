@@ -51,6 +51,7 @@
   .logo { display: grid; place-items: center; width: 1.75rem; height: 1.75rem; border-radius: 4px; font-size: .62rem; font-weight: 700;
     background: #7b42bc; color: #fff; letter-spacing: -.03em; }
   .who { margin-left: auto; display: flex; align-items: center; gap: .6rem; font-size: .85rem; color: var(--nav-text); }
+  .who a { color: inherit; }
   .who .tag { background: var(--nav-hover); color: #fff; border-color: var(--nav-hover); }
   .sidenav { position: sticky; top: 3.75rem; height: calc(100vh - 3.75rem); overflow-y: auto; padding: 1.25rem 1rem;
     border-right: 1px solid var(--border); }
@@ -64,7 +65,7 @@
   @media (max-width: 52rem) {
     body { display: block; }
     .topbar { position: static; }
-    .who > span:first-child { display: none; }
+    .who > a:first-child { display: none; }
     .sidenav { position: static; height: auto; padding: .5rem 1rem; border-right: 0; border-bottom: 1px solid var(--border); }
     .sidenav nav { flex-direction: row; flex-wrap: wrap; align-items: center; }
     .sidenav a[aria-current="page"]::before { display: none; }
@@ -81,6 +82,7 @@
   .back a:hover { color: var(--text); }
   .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 1.25rem; margin-bottom: 1rem; }
   .card.flush { padding: 0; overflow-x: auto; }
+  .card.flush:has(.menu[open]) { overflow: visible; } /* else a row's actions menu is clipped */
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); gap: 1rem; }
   .tile { display: flex; flex-direction: column; margin: 0; transition: box-shadow .15s, border-color .15s; }
   .tile:hover { border-color: #c2c5cb; box-shadow: 0 2px 6px rgb(12 12 14 / 10%); }
@@ -254,7 +256,7 @@
   .vcs-health path { fill: none; stroke: var(--surface); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
   .vcs-health.ok circle { fill: var(--ok); }
   .vcs-health.bad circle { fill: var(--danger); }
-  /* option cards, like HCP Terraform's: the radio sits in a footer strip, the chosen card is outlined */
+  /* option cards: the radio sits in a footer strip, the chosen card is outlined */
   .radio-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; max-width: 42rem; margin: .5rem 0 1.25rem; }
   .radio-card { display: flex; flex-direction: column; margin: 0; font-weight: normal; cursor: pointer; overflow: hidden;
     background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
@@ -310,6 +312,16 @@
   .menu summary::-webkit-details-marker { display: none; }
   .menu summary::after { content: "⌄"; margin-left: auto; color: var(--muted); }
   .menu[open] summary::after { content: "⌃"; }
+  /* row actions ("…"): a menu of links, right-aligned under its button */
+  .menu.kebab { display: inline-block; }
+  .menu.kebab summary { padding: .15rem .6rem; }
+  .menu.kebab summary::after { content: none; }
+  .menu [role="menu"] { position: absolute; z-index: 1; top: calc(100% + .3rem); right: 0; min-width: 11rem;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: .35rem 0; box-shadow: 0 8px 24px rgb(12 12 14 / 30%); }
+  .menu [role="menu"] a { display: block; padding: .5rem 1rem; }
+  .menu [role="menu"] a:hover, .menu [role="menu"] a:focus-visible { background: var(--code); }
+  /* for screen readers only */
+  .sr-hint { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .menu [role="radiogroup"] { position: absolute; z-index: 1; top: calc(100% + .3rem); left: 0; width: min(28rem, 100%);
     background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: .35rem 0;
     box-shadow: 0 8px 24px rgb(12 12 14 / 30%); }
@@ -345,7 +357,7 @@
   .form-rows button:disabled { opacity: .65; cursor: progress; } /* submitting */
   .secondary { background: var(--code); color: var(--text); border-color: #8c909c; }
   .secondary:hover { background: var(--border); color: var(--text); }
-  /* HCP/Helios "critical" button: soft red until hovered */
+  /* "critical" button: soft red until hovered */
   .danger { background: var(--danger-soft); color: var(--danger); border-color: var(--danger); }
   .danger:hover { background: var(--btn-danger); color: #fff; border-color: #940004; }
   .danger:active { background: #940004; color: #fff; border-color: #940004; box-shadow: none; }
@@ -460,7 +472,7 @@
   <a class="brand" href="/"><span class="logo" aria-hidden="true">OPS</span>Opsolete</a>
   {{with user}}{{if .Email}}
   <form class="who" method="post" action="/auth/logout">
-    <span>{{.Email}}</span>{{if .Admin}}<span class="tag">admin</span>{{end}}
+    <a href="/account/profile" title="Account settings">{{.Email}}</a>{{if .Admin}}<span class="tag">admin</span>{{end}}
     <button type="submit" class="secondary small">Log out</button>
   </form>
   {{end}}{{end}}
@@ -491,33 +503,73 @@
     <a href="/workspaces/{{.}}/settings"{{if eq $t "settings"}} aria-current="page"{{end}}>Settings ›</a>
   </nav>
   {{end}}
+  {{else}}{{with project}}{{$t := tab}}
+  {{if and (eq $t "settings") $}}{{$p := $.Page}}
+  <!-- the side nav becomes the project's settings menu, like a workspace's -->
+  <nav aria-label="Project settings">
+    <a href="/projects/{{.}}">‹ {{.}}</a>
+    <span class="nav-label">Project settings</span>
+    <a href="/projects/{{.}}/settings"{{if eq $p ""}} aria-current="page"{{end}}>General</a>
+    <a href="/projects/{{.}}/settings/access"{{if eq $p "access"}} aria-current="page"{{end}}>Team access</a>
+    <a href="/projects/{{.}}/settings/variable-sets"{{if eq $p "variable-sets"}} aria-current="page"{{end}}>Variable sets</a>
+  </nav>
+  {{else}}
+  <nav aria-label="Project">
+    <a href="/projects">‹ Projects</a>
+    <span class="nav-head">{{.}}</span>
+    <a href="/projects/{{.}}"{{if eq $t "overview"}} aria-current="page"{{end}}>Overview</a>
+    <a href="/projects/{{.}}/workspaces"{{if eq $t "workspaces"}} aria-current="page"{{end}}>Workspaces{{with $}}{{with .P}} <span class="tag">{{.Workspaces}}</span>{{end}}{{end}}</a>
+    <a href="/projects/{{.}}/settings"{{if eq $t "settings"}} aria-current="page"{{end}}>Settings ›</a>
+  </nav>
+  {{end}}
   {{else}}
   {{$s := section}}{{with features}}
-  {{if and (or (eq $s "organization") (eq $s "vcs") (eq $s "catalog") (eq $s "audit")) (user).Admin}}
-  <!-- the side nav becomes the settings menu, like a workspace's -->
-  <nav aria-label="Settings">
-    <a href="/">‹ Home</a>
-    <span class="nav-label">Settings</span>
-    <a href="/organization"{{if eq $s "organization"}} aria-current="page"{{end}}>Organization</a>
-    {{if .VCS}}<a href="/vcs"{{if eq $s "vcs"}} aria-current="page"{{end}}>VCS providers</a>{{end}}
-    {{if and .Deployments .VCS}}<a href="/catalog"{{if eq $s "catalog"}} aria-current="page"{{end}}>Templates</a>{{end}}
+  {{if eq $s "account"}}{{$p := ""}}{{with $}}{{$p = .Page}}{{end}}
+  <!-- the side nav becomes the account settings menu -->
+  <nav aria-label="Account settings">
+    {{if .Deployments}}<a href="/projects">‹ Projects</a>{{else}}<a href="/registry">‹ Registry</a>{{end}}
+    <span class="nav-label">Account settings</span>
+    <a href="/account/profile"{{if eq $p "profile"}} aria-current="page"{{end}}>Profile</a>
+    <a href="/account/tokens"{{if eq $p "tokens"}} aria-current="page"{{end}}>Tokens</a>
+  </nav>
+  {{else if and (or (eq $s "organization") (eq $s "variable-sets") (eq $s "vcs") (eq $s "catalog") (eq $s "audit")) (user).Admin}}
+  <!-- the side nav becomes the organization settings menu, in groups -->
+  <nav aria-label="Organization settings">
+    {{if .Deployments}}<a href="/projects">‹ Projects</a>{{else}}<a href="/registry">‹ Registry</a>{{end}}
+    <span class="nav-label">Organization settings</span>
+    <a href="/organization"{{if eq $s "organization"}} aria-current="page"{{end}}>General</a>
+    {{if .Deployments}}<a href="/variable-sets"{{if eq $s "variable-sets"}} aria-current="page"{{end}}>Variable sets</a>{{end}}
+    <span class="nav-label">Security</span>
     <a href="/audit"{{if eq $s "audit"}} aria-current="page"{{end}}>Audit log</a>
+    {{if .VCS}}<span class="nav-label">Version control</span>
+    <a href="/vcs"{{if eq $s "vcs"}} aria-current="page"{{end}}>Providers</a>
+    {{if .Deployments}}<a href="/catalog"{{if eq $s "catalog"}} aria-current="page"{{end}}>Template catalog</a>{{end}}{{end}}
   </nav>
   {{else}}
   <nav aria-label="Main">
+    <span class="nav-label">Manage</span>
     {{if .Deployments}}
-    <a href="/"{{if or (eq $s "") (eq $s "templates")}} aria-current="page"{{end}}>Templates</a>
+    <a href="/projects"{{if eq $s "projects"}} aria-current="page"{{end}}>Projects</a>
     <a href="/workspaces"{{if eq $s "workspaces"}} aria-current="page"{{end}}>Workspaces</a>
+    <a href="/"{{if or (eq $s "") (eq $s "templates")}} aria-current="page"{{end}}>Templates</a>
     {{end}}
-    {{if and .Deployments (user).Admin}}<a href="/variable-sets"{{if eq $s "variable-sets"}} aria-current="page"{{end}}>Variable sets</a>{{end}}
     {{if .Registry}}<a href="/registry"{{if eq $s "registry"}} aria-current="page"{{end}}>Registry</a>{{end}}
     {{if (user).Admin}}<a href="/organization">Settings ›</a>{{end}}
   </nav>
   {{end}}
   {{end}}
-  {{end}}
+  {{end}}{{end}}
 </aside>
 <main class="wrap">
+{{end}}
+{{define "wscrumb"}}<!-- a workspace's breadcrumb: its project first -->
+<a href="/projects">Projects</a> / <a href="/projects/{{.ProjectName}}">{{.ProjectName}}</a> / <a href="/projects/{{.ProjectName}}/workspaces">Workspaces</a> / <a href="/workspaces/{{.Name}}">{{.Name}}</a>{{end}}
+{{define "projectpick"}}<!-- the project of a new workspace: .Projects to pick from, .Project the picked name ("" = the default) -->
+<label for="ops-project">Project</label>
+<select id="ops-project" name="ops-project" aria-describedby="ops-project-hint">
+  {{$sel := .Project}}{{range .Projects}}<option value="{{.Name}}"{{if or (eq .Name $sel) (and (not $sel) .Default)}} selected{{end}}>{{.Name}}{{if .Default}} (default){{end}}</option>{{end}}
+</select>
+<p class="hint" id="ops-project-hint">The project's grants and variable sets apply to the workspace.</p>
 {{end}}
 {{define "picker"}}<!-- searchable multi-select (a picker value from Go): checkboxes in a dropdown; closed <details> still submit their boxes -->
 <details class="menu picker">
@@ -550,7 +602,7 @@
     d.querySelector('summary span').textContent = n ? n + ' selected' : 'Select workspaces';
   }
   document.addEventListener('click', e => { // a click outside closes it, like a select
-    for (const d of document.querySelectorAll('details.picker[open]')) if (!d.contains(e.target)) d.open = false;
+    for (const d of document.querySelectorAll('details.picker[open], details.kebab[open]')) if (!d.contains(e.target)) d.open = false;
   });
 </script>
 </body>
