@@ -13,7 +13,7 @@ A run can also end as `no_changes`, `discarded` (plan not confirmed), `errored` 
 
 The plan phase saves a plan file and reports what it will do (`+2 ~1 −0`, plus the resource addresses, never values). Confirming queues the apply phase, which may run on any runner and applies exactly the saved plan. Terraform refuses the apply if the state changed since the plan, so a stale plan can't be applied.
 
-- **Auto-apply** (per workspace, off by default) applies plans without confirmation. **Destroy runs always ask.**
+- **Auto-apply** (per workspace, off by default) applies plans without confirmation. **Destroy runs and [template rollout]({{< relref "workspaces#update-to-a-new-module-version" >}}) runs always ask.**
 - **One active run per workspace.** A new run waits until the current one is applied, discarded or finished.
 - **Cost estimation:** when the runners have an Infracost key, the run page shows the estimated monthly cost before anyone confirms. See [Cost estimation]({{< relref "/docs/operations/runners#cost-estimation" >}}).
 

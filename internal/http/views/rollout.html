@@ -1,0 +1,72 @@
+{{template "top"}}
+<a class="back" href="/">← Templates</a>
+<div class="page-head">
+  <div>
+    <h1>Roll out {{.T.Name}} <span class="tag" title="module version">{{.T.Module.Ref}}</span></h1>
+    <p class="muted">Moves the workspaces that use this template on another module version to <code>{{.T.Module.Ref}}</code>, with their current inputs and the defaults of new ones. Each workspace gets one plan, which waits for confirmation even with auto-apply: review it for replaced or destroyed resources. Busy workspaces are retried until the rollout is done; a failed or discarded run pauses it.</p>
+  </div>
+</div>
+
+{{with .Rollout}}
+<div class="alert{{if eq .Status "paused"}} warn{{end}}" role="status">
+  {{if .Open}}Rollout to <code>{{.ModuleRef}}</code>{{else}}Last rollout, to <code>{{.ModuleRef}}</code>,{{end}}
+  in {{with .ProjectName}}project <a href="/projects/{{.}}">{{.}}</a>{{else}}all projects{{end}},
+  {{if .BatchSize}}{{.BatchSize}} workspace(s) at a time{{else}}all at once{{end}}:
+  <strong>{{.Status}}</strong>{{with .Message}} ({{.}}){{end}}.
+  {{if .Open}}{{$.OpenRuns}} plan(s) open.
+  <form method="post" action="/templates/{{$.T.ID}}/rollout/{{if eq .Status "paused"}}resume{{else}}pause{{end}}" class="inline">
+    <button type="submit" class="secondary">{{if eq .Status "paused"}}Resume{{else}}Pause{{end}}</button></form>
+  <form method="post" action="/templates/{{$.T.ID}}/rollout/stop" class="inline" onsubmit="return confirm('Stop this rollout? Plans it already queued stay.')">
+    <button type="submit" class="danger">Stop</button></form>
+  {{end}}
+  <small class="muted">Started by {{or .CreatedByEmail "a deleted user"}}, {{ago .CreatedAt}}.</small>
+</div>
+{{end}}
+
+<form method="get" class="inline" style="margin-bottom:1rem">
+  <label for="project-filter">Project</label>
+  <select id="project-filter" name="project">
+    <option value="">All projects</option>
+    {{range .Projects}}<option value="{{.Name}}"{{if eq .Name $.Project}} selected{{end}}>{{.Name}}</option>{{end}}
+  </select>
+  <button type="submit" class="secondary">Filter</button>
+</form>
+
+{{if and .Pending (not (and .Rollout .Rollout.Open))}}
+<form method="post" class="inline" style="margin-bottom:1rem"
+  onsubmit="return confirm('Roll out {{.T.Module.Ref}} to {{.Pending}} workspace(s){{with .Project}} in project {{.}}{{end}}?')">
+  <input type="hidden" name="source" value="{{.T.Module.Source}}">
+  <input type="hidden" name="ref" value="{{.T.Module.Ref}}">
+  <input type="hidden" name="project" value="{{.Project}}">
+  <label for="batch">Workspaces at a time</label>
+  <input id="batch" name="batch" type="number" min="0" value="0" style="width:6rem" aria-describedby="batch-hint">
+  <button type="submit">Roll out to {{.Pending}} workspace{{if ne .Pending 1}}s{{end}}{{with .Project}} in {{.}}{{end}}</button>
+  <small id="batch-hint" class="muted">0: all at once. Otherwise the next ones start as earlier plans are applied.</small>
+</form>
+{{end}}
+
+<div class="card flush">
+<table>
+<tr><th>Workspace</th><th>Project</th><th>Module</th><th>Version</th><th>Status</th></tr>
+{{range .Rows}}
+<tr>
+  <td><a href="/workspaces/{{.Workspace}}"><strong>{{.Workspace}}</strong></a></td>
+  <td><a href="/projects/{{.ProjectName}}">{{.ProjectName}}</a></td>
+  <td>{{if .Module}}<code>module.{{.Module}}</code>{{else}}<span class="muted">root</span>{{end}}</td>
+  <td><span class="tag">{{.ModuleRef}}</span></td>
+  <td>
+    {{if eq .State "current"}}Up to date
+    {{else if eq .State "ready"}}Ready to roll out
+    {{else if eq .State "needs_input"}}Needs input: {{range $i, $n := .Missing}}{{if $i}}, {{end}}<code>{{$n}}</code>{{end}}.
+      <a href="/workspaces/{{.Workspace}}/{{if .Module}}templates/{{.Module}}{{else}}configure{{end}}">Update by hand →</a>
+    {{else if eq .State "busy"}}Busy: retried once its active run ends
+    {{else}}Local execution: runs can't start here; switch it to remote execution first{{end}}
+    {{if .RunID}} · <a href="/workspaces/{{.Workspace}}/runs/{{.RunID}}"><span class="status {{.RunStatus}}">{{status .RunStatus}}</span></a>{{end}}
+  </td>
+</tr>
+{{else}}
+<tr><td colspan="5" class="empty">No workspace{{if .Project}} in this project{{end}} uses this template.</td></tr>
+{{end}}
+</table>
+</div>
+{{template "bottom"}}

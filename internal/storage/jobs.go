@@ -200,7 +200,7 @@ func (s *Store) CancelRun(ctx context.Context, id, email string, force bool) (st
 // FinishJob records the result of a phase, releases the lease and the workspace's state lock, and
 // returns the run's new status:
 //   - plan with changes: needs_confirmation, or apply_queued for apply runs of auto-apply workspaces
-//     (destroys and refresh-only runs always wait for a human), or drifted for assess runs and
+//     (destroys, refresh-only runs and template rollouts always wait for a human), or drifted for assess runs and
 //     planned for speculative plans, which are never applied; without changes: no_changes
 //   - apply: applied
 //   - failed / canceled: errored / canceled
@@ -214,11 +214,11 @@ func (s *Store) FinishJob(ctx context.Context, runID, lease, result, message str
 	}
 	defer tx.Rollback()
 	var status, action, workspaceID string
-	var autoApply, cancelRequested bool
-	err = tx.QueryRowContext(ctx, `SELECT r.status, r.action, r.workspace_id, w.auto_apply, r.cancel_requested FROM runs r
+	var autoApply, confirm, cancelRequested bool
+	err = tx.QueryRowContext(ctx, `SELECT r.status, r.action, r.workspace_id, w.auto_apply, r.rollout_id IS NOT NULL, r.cancel_requested FROM runs r
 		JOIN workspaces w ON w.id = r.workspace_id
 		WHERE r.id = ops_uuid($1) AND r.lease_id = $2 AND r.`+working+` FOR UPDATE OF r`, runID, lease).
-		Scan(&status, &action, &workspaceID, &autoApply, &cancelRequested)
+		Scan(&status, &action, &workspaceID, &autoApply, &confirm, &cancelRequested)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrLeaseLost
 	}
@@ -236,7 +236,7 @@ func (s *Store) FinishJob(ctx context.Context, runID, lease, result, message str
 		final = Drifted
 	case action == "plan":
 		final = Planned
-	case autoApply && action == "apply":
+	case autoApply && action == "apply" && !confirm: // confirm: a template rollout's run (see template_rollouts)
 		final = ApplyQueued
 	default:
 		final = NeedsConfirmation

@@ -9,6 +9,8 @@ weight: 6
 | `/readyz` | Readiness (checks the DB) |
 | `/` | Templates |
 | `/templates/{id}` | Form, creates a workspace |
+| `GET\|POST /templates/{id}/rollout` | Roll out the template's module version to the workspaces using it (admins); `?project=` filters, the form takes `project`, `batch` |
+| `POST /templates/{id}/rollout/{pause\|resume\|stop}` | Pause, resume or stop the template's open rollout (admins) |
 | `/workspaces` | Workspace list |
 | `/workspaces/new` | Blank, VCS-linked or from a template |
 | `/workspaces/{name}` | Overview, runs, outputs, resources, state versions |

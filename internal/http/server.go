@@ -149,6 +149,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /templates/{id}/edit", s.admin(s.editor(s.builder)))
 	mux.HandleFunc("POST /templates/{id}/edit", s.admin(s.editor(s.saveTemplate)))
 	mux.HandleFunc("POST /templates/{id}/delete", s.admin(s.editor(s.deleteTemplate)))
+	mux.HandleFunc("GET /templates/{id}/rollout", s.admin(s.rolloutPage))
+	mux.HandleFunc("POST /templates/{id}/rollout", s.admin(s.startRollout))
+	mux.HandleFunc("POST /templates/{id}/rollout/{action}", s.admin(s.rolloutAction))
 	if s.Features.VCS {
 		mux.HandleFunc("GET /catalog", s.admin(s.catalogPage))
 		mux.HandleFunc("POST /catalog", s.admin(s.saveCatalog))

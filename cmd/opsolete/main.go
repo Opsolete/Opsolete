@@ -246,7 +246,7 @@ func serve(log *slog.Logger) error {
 const driftInterval = 24 * time.Hour
 
 // reapLostRunners fails running jobs whose runner stopped heartbeating (crash, node loss), and
-// releases orphaned state locks, and queues the drift checks that are due.
+// releases orphaned state locks, queues the next batches of template rollouts and the drift checks that are due.
 func reapLostRunners(ctx context.Context, store *storage.Store, app *httpserver.Server, staleLock time.Duration, log *slog.Logger) {
 	t := time.NewTicker(15 * time.Second)
 	defer t.Stop()
@@ -270,6 +270,7 @@ func reapLostRunners(ctx context.Context, store *storage.Store, app *httpserver.
 			for ws, info := range released {
 				log.Warn("orphaned state lock released", "workspace", ws, "lock", info)
 			}
+			app.TickRollouts(ctx)
 			if n, err := store.QueueAssessments(ctx, driftInterval); err != nil {
 				log.Error("queue drift checks", "err", err)
 			} else if n > 0 {
