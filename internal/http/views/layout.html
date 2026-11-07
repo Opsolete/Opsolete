@@ -256,7 +256,7 @@
   .vcs-health path { fill: none; stroke: var(--surface); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
   .vcs-health.ok circle { fill: var(--ok); }
   .vcs-health.bad circle { fill: var(--danger); }
-  /* option cards, like HCP Terraform's: the radio sits in a footer strip, the chosen card is outlined */
+  /* option cards: the radio sits in a footer strip, the chosen card is outlined */
   .radio-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; max-width: 42rem; margin: .5rem 0 1.25rem; }
   .radio-card { display: flex; flex-direction: column; margin: 0; font-weight: normal; cursor: pointer; overflow: hidden;
     background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
@@ -357,7 +357,7 @@
   .form-rows button:disabled { opacity: .65; cursor: progress; } /* submitting */
   .secondary { background: var(--code); color: var(--text); border-color: #8c909c; }
   .secondary:hover { background: var(--border); color: var(--text); }
-  /* HCP/Helios "critical" button: soft red until hovered */
+  /* "critical" button: soft red until hovered */
   .danger { background: var(--danger-soft); color: var(--danger); border-color: var(--danger); }
   .danger:hover { background: var(--btn-danger); color: #fff; border-color: #940004; }
   .danger:active { background: #940004; color: #fff; border-color: #940004; box-shadow: none; }
@@ -533,7 +533,7 @@
     <a href="/account/tokens"{{if eq $p "tokens"}} aria-current="page"{{end}}>Tokens</a>
   </nav>
   {{else if and (or (eq $s "organization") (eq $s "variable-sets") (eq $s "vcs") (eq $s "catalog") (eq $s "audit")) (user).Admin}}
-  <!-- the side nav becomes the organization settings menu, grouped like HCP Terraform's -->
+  <!-- the side nav becomes the organization settings menu, in groups -->
   <nav aria-label="Organization settings">
     {{if .Deployments}}<a href="/projects">‹ Projects</a>{{else}}<a href="/registry">‹ Registry</a>{{end}}
     <span class="nav-label">Organization settings</span>
@@ -562,7 +562,7 @@
 </aside>
 <main class="wrap">
 {{end}}
-{{define "wscrumb"}}<!-- a workspace's breadcrumb, as in HCP Terraform: its project first -->
+{{define "wscrumb"}}<!-- a workspace's breadcrumb: its project first -->
 <a href="/projects">Projects</a> / <a href="/projects/{{.ProjectName}}">{{.ProjectName}}</a> / <a href="/projects/{{.ProjectName}}/workspaces">Workspaces</a> / <a href="/workspaces/{{.Name}}">{{.Name}}</a>{{end}}
 {{define "projectpick"}}<!-- the project of a new workspace: .Projects to pick from, .Project the picked name ("" = the default) -->
 <label for="ops-project">Project</label>

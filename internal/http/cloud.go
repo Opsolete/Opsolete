@@ -27,7 +27,7 @@ import (
 )
 
 // Terraform's cloud block and `terraform login`: https://developer.hashicorp.com/terraform/cli/cloud/settings
-// Opsolete serves the part of the HCP Terraform API (tfe.v2) that Terraform uses with local
+// Opsolete serves the part of Terraform's remote API (tfe.v2) that Terraform uses with local
 // execution: the organization (one, ORGANIZATION), workspaces by name, state versions and locks.
 // Entitlements say "no remote operations", so plan and apply always run on the user's machine and
 // Opsolete is the state backend, with the same versions, locks and outputs as its runs.

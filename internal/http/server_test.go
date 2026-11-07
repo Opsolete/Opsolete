@@ -1216,7 +1216,7 @@ func TestRemoteStateSharing(t *testing.T) {
 	}
 }
 
-// Locking, like HCP Terraform's: a lock (with its reason) keeps runs queued, except plans that are
+// Locking: a lock (with its reason) keeps runs queued, except plans that are
 // never applied; only its holder unlocks,
 // anyone with operate access force-unlocks.
 func TestWorkspaceLock(t *testing.T) {
@@ -1248,7 +1248,7 @@ func TestWorkspaceLock(t *testing.T) {
 		t.Fatal("others see Force unlock")
 	}
 
-	// as in HCP Terraform, plans that are never applied run anyway; the runner plans them without the lock
+	// plans that are never applied run anyway; the runner plans them without the lock
 	assess, err := store.CreateRun(ctx, ws.ID, "assess", "", nil)
 	if err != nil {
 		t.Fatal(err)

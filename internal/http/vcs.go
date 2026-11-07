@@ -56,7 +56,7 @@ func (s *Server) renderVCS(w http.ResponseWriter, r *http.Request, status int, e
 	s.render(w, r, status, "vcs.html", vcsPage{Connections: conns, Error: errMsg})
 }
 
-// newConnection is the add-VCS-provider wizard, like HCP Terraform's: 1 choose a provider,
+// newConnection is the add-VCS-provider wizard: 1 choose a provider,
 // 2 set it up (name, URL, token), 3 advanced settings (which workspaces may link it) of the created connection.
 // Return is the page that sent the user here; finishing continues it with the new connection.
 type newConnection struct {

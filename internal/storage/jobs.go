@@ -34,7 +34,7 @@ type Job struct {
 // ClaimJob hands the longest-waiting queued phase (plan or confirmed apply) to runner, or returns
 // ok=false if there is none. SKIP LOCKED lets any number of runners claim without handing out a
 // job twice. Runs of a locked workspace (a lock from the UI, the CLI or a rollback) wait until it
-// is unlocked, as in HCP Terraform; speculative plans and drift checks, never applied, go ahead
+// is unlocked; speculative plans and drift checks, never applied, go ahead
 // without taking the state lock.
 func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration) (Job, bool, error) {
 	tx, err := s.DB.BeginTx(ctx, nil)

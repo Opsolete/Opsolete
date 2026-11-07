@@ -75,7 +75,7 @@ func vcsFormValues(r *http.Request) map[string]string {
 	return form
 }
 
-// tagFormats are the tag-based trigger formats HCP Terraform offers, as the patterns they stand for.
+// tagFormats are the tag-based trigger formats offered, as the patterns they stand for.
 var tagFormats = map[string]string{"semantic": `^\d+\.\d+\.\d+$`, "prefix": `\d+\.\d+\.\d+$`, "suffix": `^\d+\.\d+\.\d+`}
 
 // fillTagForm sets the form's trigger type and tag format from a workspace's tag pattern.
@@ -149,7 +149,7 @@ func (s *Server) vcsConn(ctx context.Context, connID, workspace, project string)
 	return vcs.ConnFor(s.SecretKey, sc)
 }
 
-// newWorkspacePage is a wizard, like HCP Terraform's: ?type= picks the workflow (vcs, cli, template),
+// newWorkspacePage is a wizard: ?type= picks the workflow (vcs, cli, template),
 // then for vcs ?conn= the connection and ?repo= the repository, before the settings form.
 func (s *Server) newWorkspacePage(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
@@ -269,7 +269,7 @@ func (s *Server) loadLinkable(w http.ResponseWriter, r *http.Request) (storage.W
 	return ws, true
 }
 
-// workspaceVCSPage is the workspace's version control settings, like HCP Terraform's: a linked
+// workspaceVCSPage is the workspace's version control settings: a linked
 // workspace sees its repository and branch settings; "Change source" (/vcs/edit, or any unlinked
 // workspace) is a wizard: ?type= the workflow, then for vcs ?conn= the connection and ?repo= the repository.
 func (s *Server) workspaceVCSPage(w http.ResponseWriter, r *http.Request) {
@@ -282,7 +282,7 @@ func (s *Server) workspaceVCSPage(w http.ResponseWriter, r *http.Request) {
 		branch = "main"
 	}
 	form := map[string]string{"vcs_connection": ws.VCSConnectionID, "vcs_repo": ws.VCSRepo, "vcs_branch": branch}
-	if ws.VCSTrigger || ws.VCSConnectionID == "" { // on by default for a new link, as in HCP Terraform
+	if ws.VCSTrigger || ws.VCSConnectionID == "" { // on by default for a new link
 		form["vcs_trigger"] = "1"
 	}
 	if ws.VCSPullRequests {
@@ -336,7 +336,7 @@ func (s *Server) linkWorkspaceVCS(w http.ResponseWriter, r *http.Request) {
 		s.renderWorkspaceVCS(w, r, http.StatusUnprocessableEntity, ws, form, err.Error())
 		return
 	}
-	// tag-based: tags always trigger, and pull requests get no plans, as in HCP Terraform
+	// tag-based: tags always trigger, and pull requests get no plans
 	err = s.Store.SetWorkspaceVCS(r.Context(), ws.ID, connID, repo, branch, tags, baseline, form["vcs_trigger"] != "" || tags != "", form["vcs_pull_requests"] != "" && tags == "")
 	if errors.Is(err, storage.ErrRunActive) {
 		s.renderWorkspaceVCS(w, r, http.StatusConflict, ws, form, err.Error())

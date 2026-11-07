@@ -202,7 +202,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	claimVCS("apply", "# at sha3")
 	claimVCS("plan", "# at pr9") // the branch's commits all had their run
 
-	// The version control page checks the connection, like HCP Terraform's "Connected to VCS" mark.
+	// The version control page checks the connection: its "Connected to VCS" mark.
 	if page := get(h, "/workspaces/"+linked+"/vcs").Body.String(); !strings.Contains(page, `class="vcs-health ok"`) {
 		t.Fatalf("a working link must show as connected: %s", page)
 	}
@@ -255,7 +255,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	if page := get(h, "/vcs/"+connID+"/settings").Body.String(); !strings.Contains(page, `name="workspace" value="`+linked+`" checked>`) || !strings.Contains(page, "1 selected") {
 		t.Fatalf("settings page must show the selected workspace: %s", page)
 	}
-	// Workspace level, as in HCP Terraform: a linked workspace shows its source; Change source is a wizard.
+	// Workspace level: a linked workspace shows its source; Change source is a wizard.
 	if page := get(h, "/workspaces/"+linked+"/vcs").Body.String(); !strings.Contains(page, "Connected to VCS") ||
 		!strings.Contains(page, "acme/infra") || !strings.Contains(page, `href="/workspaces/`+linked+`/vcs/edit"`) || strings.Contains(page, "no longer allows") {
 		t.Fatalf("linked workspace vcs page: %s", page)

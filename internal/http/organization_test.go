@@ -34,7 +34,7 @@ func TestSettingsNav(t *testing.T) {
 		strings.Contains(body, ">Variable sets<") {
 		t.Fatalf("main nav: %s", body)
 	}
-	// grouped like HCP Terraform's organization settings; variable sets live there, not in the main nav
+	// grouped organization settings; variable sets live there, not in the main nav
 	for path, current := range map[string]string{"/audit": "Audit log", "/organization": "General", "/variable-sets": "Variable sets"} {
 		if body := get(h, path).Body.String(); !strings.Contains(body, `aria-label="Organization settings"`) ||
 			!strings.Contains(body, `href="`+path+`" aria-current="page">`+current) {

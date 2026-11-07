@@ -85,7 +85,7 @@ func (s *Server) loadProject(w http.ResponseWriter, r *http.Request) (storage.Pr
 	return list[i], true
 }
 
-// project serves a project's menu, like HCP Terraform's: Overview, Workspaces and Settings (General,
+// project serves a project's menu: Overview, Workspaces and Settings (General,
 // Team access, Variable sets). Everyone who sees the project sees them; only admins change them.
 func (s *Server) project(w http.ResponseWriter, r *http.Request) {
 	page := r.PathValue("page") // settings sub-pages; "" is General

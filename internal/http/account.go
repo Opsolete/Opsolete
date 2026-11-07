@@ -7,7 +7,7 @@ import (
 	"github.com/opsolete/opsolete/internal/auth"
 )
 
-// Account settings, like HCP Terraform's: the signed-in user's profile and `terraform login`
+// Account settings: the signed-in user's profile and `terraform login`
 // tokens. Login is OIDC, so there are no passwords or second factors here; sessions are signed
 // cookies, so there is no session list either.
 func (s *Server) accountRoutes(mux *http.ServeMux) {

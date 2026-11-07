@@ -1,4 +1,4 @@
--- Projects group workspaces (as in HCP Terraform): every workspace is in exactly one, and grants and
+-- Projects group workspaces: every workspace is in exactly one, and grants and
 -- variable sets on a project reach all of its workspaces. Workspace names stay unique instance-wide.
 CREATE TABLE projects (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),

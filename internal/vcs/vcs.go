@@ -922,7 +922,7 @@ func TriggerRuns(ctx context.Context, st *storage.Store, key []byte, group []sto
 		if !sc.Allows(ws.Name, ws.ProjectName) { // deselected (or moved out of a selected project) since the link; manual runs fail with the reason
 			continue
 		}
-		if ws.VCSTagsRegex != "" { // tag-based: no branch commits, no pull requests, as in HCP Terraform
+		if ws.VCSTagsRegex != "" { // tag-based: no branch commits, no pull requests
 			list, err := tags()
 			if err != nil {
 				errs = append(errs, fmt.Errorf("%s: tags: %w", ws.Name, err))

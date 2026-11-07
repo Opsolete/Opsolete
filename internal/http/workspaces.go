@@ -795,7 +795,7 @@ func (s *Server) workspaceSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 // lockWorkspace locks (action=lock, with an optional reason), unlocks or force-unlocks a workspace,
-// like HCP Terraform's Locking page. The lock is a state lock as the cloud block's CLI takes it, so
+// from its Locking page. The lock is a state lock as the cloud block's CLI takes it, so
 // the CLI, `terraform force-unlock` and the cloud API see it too; runs wait until it is released.
 // Unlock releases only the user's own lock, force-unlock anyone's; locks of runs and rollbacks end with them.
 func (s *Server) lockWorkspace(w http.ResponseWriter, r *http.Request) {
@@ -951,7 +951,7 @@ func humanDuration(d time.Duration) string {
 	return d.Round(time.Second).String()
 }
 
-// ago renders t relative to now, HCP style: "just now", "5 minutes ago", "3 days ago".
+// ago renders t relative to now: "just now", "5 minutes ago", "3 days ago".
 func ago(t time.Time) string {
 	d := time.Since(t)
 	plural := func(n int, unit string) string {
