@@ -21,6 +21,7 @@ A template's module is deployed by people who never write Terraform, so it has t
 - **No credentials in the module.** Pass them as environment variables (`ARM_CLIENT_ID`, `AWS_ACCESS_KEY_ID`, …) through a [variable set]({{< relref "/docs/usage/variables" >}}). Environment variables reach every template in the workspace.
 - **Resources in the module's root directory**, in the standard module structure (`main.tf`, `variables.tf`, `outputs.tf`), so the [registry]({{< relref "module-registry" >}}) can generate the docs and the form from it.
 - **One specific use case, few decisions.** Hard-code what your standards fix (SKU, region list, logging, network rules) and expose only what users must choose.
+- **Settings outside the form:** a variable the form doesn't ask can still be set per project with a variable set. Give it a safe default, and take maps and lists as a JSON string (see [Settings outside the template's form]({{< relref "/docs/usage/variables#settings-outside-the-templates-form" >}})).
 - **Defaults wherever possible**, and a `select` input for variables that have no default, so users pick from approved values instead of typing them.
 - **Pin an approved version** in the template's `ref`. Moving the template to a newer one offers existing workspaces a module update, which admins can [roll out]({{< relref "/docs/usage/workspaces#update-to-a-new-module-version" >}}) to all of them, in batches and per project. Give inputs that are new and required a `default`, or each workspace needs its update form.
 
