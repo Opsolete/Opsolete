@@ -573,7 +573,8 @@ func TestWorkspaceFlow(t *testing.T) {
 		t.Fatalf("a wrong runner token must not claim jobs: %d", rec.Code)
 	}
 	claimJob("plan")
-	if job.Vars["name"] != "acct01" || job.Vars["retention_days"] != 7.0 || job.ModuleSource != "git::https://dev.azure.com/your-org/infra/_git/terraform-modules//storage-account?ref=v1.0.0" {
+	if len(job.Modules) != 1 || job.Modules[0].Inputs["name"] != "acct01" || job.Modules[0].Inputs["retention_days"] != 7.0 || job.ModuleSource != "" ||
+		job.Modules[0].Source != "git::https://dev.azure.com/your-org/infra/_git/terraform-modules//storage-account?ref=v1.0.0" {
 		t.Fatalf("plan job: %+v", job)
 	}
 	noJob("one job per run phase")
@@ -758,7 +759,7 @@ func TestWorkspaceFlow(t *testing.T) {
 		}
 	}
 	if tp := get(h, "/workspaces/"+name+"?show=templates").Body.String(); !strings.Contains(tp, "Templates 1<") || !strings.Contains(tp, `href="/templates/storage-account"`) {
-		t.Error("templates tab lacks the template the workspace was created from")
+		t.Error("templates tab lacks the template the workspace was created with")
 	}
 	if dp := get(h, "/workspaces/"+name+"/deploy").Body.String(); !strings.Contains(dp, `href="/workspaces/`+name+`/templates/new?template=storage-account"`) {
 		t.Errorf("deploy page lacks the catalog: %s", dp)
@@ -1014,7 +1015,6 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 		{"category": {"env"}, "key": {"TF_CLI_ARGS"}, "value": {"-x"}},
 		{"category": {"env"}, "key": {"TF_VAR_tags"}, "value": {"x"}},
 		{"category": {"env"}, "key": {"GIT_SSH_COMMAND"}, "value": {"sh"}},
-		{"category": {"terraform"}, "key": {"location"}, "value": {"x"}}, // a template input
 		{"category": {"nope"}, "key": {"A"}},
 	} {
 		if rec := post(operator, wsURL+"/variables", v); rec.Code != http.StatusBadRequest {
@@ -1069,8 +1069,8 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 		t.Fatalf("claim: %d %s", rec.Code, rec.Body.String())
 	}
 	if job.Env["ARM_CLIENT_SECRET"] != "s3cret-ws" || job.Env["ARM_CLIENT_ID"] != "client-ws" || job.Env["ARM_TENANT_ID"] != "tenant-set" ||
-		job.Vars["tags"] != "from-ws" || job.Vars["location"] != "westeurope" {
-		t.Fatalf("job variables: env %v vars %v", job.Env, job.Vars)
+		job.Vars["tags"] != "from-ws" || len(job.Modules) != 1 || job.Modules[0].Inputs["location"] != "westeurope" {
+		t.Fatalf("job variables: env %v vars %v modules %+v", job.Env, job.Vars, job.Modules)
 	}
 
 	// Cancel: an operator asks; the runner hears it on its next heartbeat and keeps its lease.

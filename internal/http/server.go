@@ -441,7 +441,7 @@ func (s *Server) saveTemplate(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/templates/"+t.ID, http.StatusSeeOther)
 }
 
-// deleteTemplate removes a template from the catalog. Workspaces created from it keep running
+// deleteTemplate removes a template from the catalog. Workspaces using it keep running
 // their pinned module; they just can't be reconfigured from it.
 func (s *Server) deleteTemplate(w http.ResponseWriter, r *http.Request) {
 	t, ok := s.Templates.Get(r.PathValue("id"))

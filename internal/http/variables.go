@@ -113,7 +113,7 @@ func (s *Server) varsBlock(ctx context.Context, o storage.VarOwner, base string,
 }
 
 // runVariables opens the variables of a workspace's run: environment variables for Terraform's
-// environment, and Terraform variables (the root template's inputs win over them at the caller).
+// environment, and Terraform variables.
 func (s *Server) runVariables(ctx context.Context, workspaceID string) (map[string]string, map[string]any, error) {
 	list, err := s.Store.RunVariables(ctx, workspaceID)
 	if err != nil {
@@ -140,9 +140,6 @@ func (s *Server) setWorkspaceVariable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v, err := s.variableFromForm(r, storage.VarOwner{WorkspaceID: ws.ID})
-	if _, input := ws.Inputs[v.Key]; err == nil && v.Category == "terraform" && input {
-		err = fmt.Errorf("%s is an input of the workspace's template: change it with Configure", v.Key)
-	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -225,7 +222,7 @@ func (s *Server) variableSet(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "list workspaces", err)
 		return
 	}
-	p := workspacePicker("workspace", "Workspaces to apply the set to", set.Workspaces, all, func(storage.Workspace) bool { return true })
+	p := workspacePicker("workspace", "Workspaces to apply the set to", set.Workspaces, all)
 	projects, err := s.Store.Projects(r.Context(), storage.Viewer{Admin: true})
 	if err != nil {
 		s.internalError(w, "list projects", err)

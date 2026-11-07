@@ -21,8 +21,8 @@ import (
 	"github.com/opsolete/opsolete/internal/vcs"
 )
 
-// Workspaces without a template: empty, or holding only variables,
-// or taking their configuration from a VCS branch. Runs need configuration (a template or a branch).
+// Workspaces' own configuration: none (empty, or holding only variables, or only added templates),
+// or a VCS branch. Runs need configuration (an added template or a branch).
 
 var branchRe = regexp.MustCompile(`^[A-Za-z0-9._/-]{1,255}$`)
 
@@ -260,25 +260,11 @@ func (s *Server) createEmptyWorkspace(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/workspaces/"+ws.Name, http.StatusSeeOther)
 }
 
-// loadLinkable loads a workspace whose repository link may change: operate access and no template
-// (SetWorkspaceVCS refuses it during an active run: its apply must fetch from the repository its plan used).
-func (s *Server) loadLinkable(w http.ResponseWriter, r *http.Request) (storage.Workspace, bool) {
-	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
-	if !ok {
-		return ws, false
-	}
-	if ws.TemplateID != "" {
-		http.Error(w, "this workspace gets its configuration from its template", http.StatusConflict)
-		return ws, false
-	}
-	return ws, true
-}
-
 // workspaceVCSPage is the workspace's version control settings: a linked
 // workspace sees its repository and branch settings; "Change source" (/vcs/edit, or any unlinked
 // workspace) is a wizard: ?type= the workflow, then for vcs ?conn= the connection and ?repo= the repository.
 func (s *Server) workspaceVCSPage(w http.ResponseWriter, r *http.Request) {
-	ws, ok := s.loadLinkable(w, r)
+	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
 	if !ok {
 		return
 	}
@@ -327,7 +313,8 @@ func (s *Server) renderWorkspaceVCS(w http.ResponseWriter, r *http.Request, stat
 }
 
 func (s *Server) linkWorkspaceVCS(w http.ResponseWriter, r *http.Request) {
-	ws, ok := s.loadLinkable(w, r)
+	// SetWorkspaceVCS refuses a change during an active run: its apply must fetch from the repository its plan used.
+	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
 	if !ok {
 		return
 	}

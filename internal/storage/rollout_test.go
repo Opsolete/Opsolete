@@ -11,13 +11,13 @@ import (
 	"github.com/opsolete/opsolete/internal/runnerapi"
 )
 
-// A rollout moves root and added uses in one run, which waits for confirmation despite auto-apply;
+// A rollout moves all uses of a workspace in one run, which waits for confirmation despite auto-apply;
 // a use that changed since it was read isn't overwritten; a discarded run counts as failed until
 // the rollout is resumed; a closed rollout queues nothing.
 func TestUpgradeTemplates(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	w, run := newWorkspace(t, s, true) // root: template job-test, git::x v1
+	w, run := newWorkspace(t, s, true) // template main: job-test, git::x v1
 	j := claim(t, s, "plan")
 	if _, err := s.FinishJob(ctx, run.ID, j.LeaseID, "succeeded", "", nil, nil, nil); err != nil {
 		t.Fatal(err)
@@ -46,13 +46,13 @@ func TestUpgradeTemplates(t *testing.T) {
 				Inputs: map[string]any{"n": 2.0}, From: u})
 		}
 	}
-	if len(ups) != 2 || ups[0].Module != "" || ups[1].Module != "extra" {
+	if len(ups) != 2 || ups[0].Module != "extra" || ups[1].Module != "main" {
 		t.Fatalf("uses: %+v", ups)
 	}
 
-	stale := ups[0]
+	stale := ups[1]
 	stale.From.Inputs = map[string]any{"n": 9.0} // read before someone changed it
-	if _, err := s.UpgradeTemplates(ctx, w.ID, []TemplateUpgrade{ups[1], stale}, "", ro.ID); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := s.UpgradeTemplates(ctx, w.ID, []TemplateUpgrade{ups[0], stale}, "", ro.ID); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("stale use: %v", err)
 	}
 	r, err := s.UpgradeTemplates(ctx, w.ID, ups, "", ro.ID)

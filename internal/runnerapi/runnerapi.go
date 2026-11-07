@@ -39,7 +39,7 @@ type Job struct {
 	Target       []string       `json:"target,omitempty"`  // addresses the plan is limited to (-target)
 	LeaseID      string         `json:"lease_id"`
 	LeaseSeconds int            `json:"lease_seconds"`
-	ModuleSource string         `json:"module_source"` // go-getter address; a leading "/" is relative to the server URL; "" = none
+	ModuleSource string         `json:"module_source"` // root configuration (a VCS commit archive): go-getter address; a leading "/" is relative to the server URL; "" = none
 	Modules      []Module       `json:"modules,omitempty"`
 	StateToken   string         `json:"state_token"` // state backend password; valid while this run is planning or applying
 	Vars         map[string]any `json:"vars"`

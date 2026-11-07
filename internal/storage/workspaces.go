@@ -34,16 +34,12 @@ const visible = `($2 OR w.created_by = NULLIF($1, '')::uuid OR EXISTS (SELECT 1 
 	EXISTS (SELECT 1 FROM workspace_access a WHERE a.workspace_id = w.id AND a.group_name = ANY(u.groups))
 	OR EXISTS (SELECT 1 FROM project_access a WHERE a.project_id = w.project_id AND a.group_name = ANY(u.groups)))))`
 
-// Workspace is a long-lived home for one Terraform state. Its configuration comes from a template
-// (TemplateID, ModuleSource, ModuleRef, Inputs), from a VCS branch (VCS*), or from nowhere yet: an
+// Workspace is a long-lived home for one Terraform state. Its configuration is the templates added
+// to it (WorkspaceTemplates), next to the root configuration of a VCS branch (VCS*) or none: an
 // empty workspace may hold just variables.
 type Workspace struct {
 	ID                string
 	Name              string
-	TemplateID        string // "" if not created from a template
-	ModuleSource      string
-	ModuleRef         string
-	Inputs            map[string]any
 	VCSConnectionID   string // "" if not linked to a repository
 	VCSRepo           string
 	VCSBranch         string
@@ -67,7 +63,7 @@ type Workspace struct {
 
 // HasConfig: there is Terraform configuration to plan, so runs can start.
 func (w Workspace) HasConfig() bool {
-	return w.ModuleSource != "" || w.VCSConnectionID != "" || w.Templates > 0
+	return w.VCSConnectionID != "" || w.Templates > 0
 }
 
 // Run statuses. A workspace has at most one active run (enforced by runs_one_active_idx).
@@ -126,8 +122,7 @@ type StatusEntry struct {
 	CreatedAt time.Time
 }
 
-const workspaceCols = `w.id, w.name, COALESCE(w.template_id, ''), COALESCE(w.module_source, ''), COALESCE(w.module_ref, ''),
-	w.inputs, COALESCE(w.vcs_connection_id::text, ''), COALESCE(w.vcs_repo, ''), COALESCE(w.vcs_branch, ''), w.vcs_trigger, w.vcs_pull_requests, w.vcs_tags_regex, w.vcs_tag_baseline, w.state_key,
+const workspaceCols = `w.id, w.name, COALESCE(w.vcs_connection_id::text, ''), COALESCE(w.vcs_repo, ''), COALESCE(w.vcs_branch, ''), w.vcs_trigger, w.vcs_pull_requests, w.vcs_tags_regex, w.vcs_tag_baseline, w.state_key,
 	(SELECT count(*) FROM workspace_templates t WHERE t.workspace_id = w.id), w.auto_apply, w.drift_detection, w.global_remote_state, w.execution_mode,
 	COALESCE((SELECT a.status = 'drifted' AND NOT EXISTS (SELECT 1 FROM runs x WHERE x.workspace_id = w.id
 		AND x.status = 'applied' AND x.updated_at > a.updated_at) FROM runs a
@@ -137,14 +132,10 @@ const workspaceCols = `w.id, w.name, COALESCE(w.template_id, ''), COALESCE(w.mod
 
 func scanWorkspace(row interface{ Scan(...any) error }, extra ...any) (Workspace, error) {
 	var w Workspace
-	var raw []byte
-	dest := append([]any{&w.ID, &w.Name, &w.TemplateID, &w.ModuleSource, &w.ModuleRef, &raw,
-		&w.VCSConnectionID, &w.VCSRepo, &w.VCSBranch, &w.VCSTrigger, &w.VCSPullRequests, &w.VCSTagsRegex, &w.VCSTagBaseline, &w.StateKey, &w.Templates,
+	dest := append([]any{&w.ID, &w.Name, &w.VCSConnectionID, &w.VCSRepo, &w.VCSBranch, &w.VCSTrigger, &w.VCSPullRequests, &w.VCSTagsRegex, &w.VCSTagBaseline, &w.StateKey, &w.Templates,
 		&w.AutoApply, &w.DriftDetection, &w.GlobalRemoteState, &w.ExecutionMode, &w.Drifted, &w.CreatedBy, &w.CreatedAt, &w.ProjectID, &w.ProjectName}, extra...)
-	if err := row.Scan(dest...); err != nil {
-		return w, err
-	}
-	return w, json.Unmarshal(raw, &w.Inputs)
+	err := row.Scan(dest...)
+	return w, err
 }
 
 const runCols = `r.id, r.workspace_id, r.action, r.status, r.replace, r.plan, r.outputs, r.runner,
@@ -176,25 +167,23 @@ func scanRun(row interface{ Scan(...any) error }) (Run, error) {
 	return r, nil
 }
 
-// CreateWorkspace creates a workspace from a template and queues its first plan. createdBy is a user id, or empty.
-// id is the new workspace's id ("" = a random one): set when inputs are sealed to it beforehand.
-// project is the name of the project it goes into; "" is the default project.
-func (s *Store) CreateWorkspace(ctx context.Context, id, name, project, templateID, moduleSource, moduleRef string,
-	inputs map[string]any, autoApply bool, createdBy string) (Workspace, Run, error) {
-	return s.createWorkspace(ctx, id, name, project, templateID, moduleSource, moduleRef, inputs, autoApply, createdBy, true)
+// CreateWorkspace creates a workspace with template t added to it and queues its first plan. createdBy
+// is a user id, or empty. id is the new workspace's id ("" = a random one): set when inputs are sealed
+// to it beforehand. project is the name of the project it goes into; "" is the default project.
+func (s *Store) CreateWorkspace(ctx context.Context, id, name, project string, t WorkspaceTemplate, autoApply bool, createdBy string) (Workspace, Run, error) {
+	return s.createWorkspace(ctx, id, name, project, &t, autoApply, createdBy)
 }
 
 // CreateEmptyWorkspace creates a workspace without configuration and without a run.
 func (s *Store) CreateEmptyWorkspace(ctx context.Context, name, project string, autoApply bool, createdBy string) (Workspace, error) {
-	w, _, err := s.createWorkspace(ctx, "", name, project, "", "", "", map[string]any{}, autoApply, createdBy, false)
+	w, _, err := s.createWorkspace(ctx, "", name, project, nil, autoApply, createdBy)
 	return w, err
 }
 
-func (s *Store) createWorkspace(ctx context.Context, id, name, project, templateID, moduleSource, moduleRef string,
-	inputs map[string]any, autoApply bool, createdBy string, plan bool) (Workspace, Run, error) {
-	raw, err := json.Marshal(inputs)
-	if err != nil {
-		return Workspace{}, Run{}, err
+func (s *Store) createWorkspace(ctx context.Context, id, name, project string, t *WorkspaceTemplate, autoApply bool, createdBy string) (Workspace, Run, error) {
+	templateID := ""
+	if t != nil {
+		templateID = t.TemplateID
 	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -202,14 +191,13 @@ func (s *Store) createWorkspace(ctx context.Context, id, name, project, template
 	}
 	defer tx.Rollback()
 	err = tx.QueryRowContext(ctx, `
-		WITH id AS (SELECT COALESCE(NULLIF($8, '')::uuid, gen_random_uuid()) AS v)
-		INSERT INTO workspaces (id, name, template_id, module_source, module_ref, inputs, state_key, auto_apply, created_by, project_id)
-		SELECT v, $1, NULLIF($2, ''), NULLIF($3, ''), NULLIF($4, ''), $5,
-			'opsolete/' || COALESCE(NULLIF($2, ''), 'workspaces') || '/' || v || '.tfstate', $6, NULLIF($7, '')::uuid,
+		WITH id AS (SELECT COALESCE(NULLIF($5, '')::uuid, gen_random_uuid()) AS v)
+		INSERT INTO workspaces (id, name, state_key, auto_apply, created_by, project_id)
+		SELECT v, $1, 'opsolete/' || COALESCE(NULLIF($2, ''), 'workspaces') || '/' || v || '.tfstate', $3, NULLIF($4, '')::uuid,
 			-- an unknown project name is NULL: the insert fails instead of silently using the default
-			CASE WHEN $9 = '' THEN o.default_project_id ELSE (SELECT p.id FROM projects p WHERE p.name = $9) END
+			CASE WHEN $6 = '' THEN o.default_project_id ELSE (SELECT p.id FROM projects p WHERE p.name = $6) END
 		FROM id, organization o
-		RETURNING id`, name, templateID, moduleSource, moduleRef, raw, autoApply, createdBy, id, project).Scan(&id)
+		RETURNING id`, name, templateID, autoApply, createdBy, id, project).Scan(&id)
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
 		return Workspace{}, Run{}, ErrNameTaken
 	}
@@ -217,7 +205,15 @@ func (s *Store) createWorkspace(ctx context.Context, id, name, project, template
 		return Workspace{}, Run{}, err
 	}
 	var run Run
-	if plan {
+	if t != nil {
+		raw, err := json.Marshal(t.Inputs)
+		if err != nil {
+			return Workspace{}, Run{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO workspace_templates (workspace_id, name, template_id, module_source, module_ref, inputs)
+			VALUES ($1::uuid, $2, $3, $4, $5, $6)`, id, t.Name, t.TemplateID, t.ModuleSource, t.ModuleRef, raw); err != nil {
+			return Workspace{}, Run{}, err
+		}
 		if run, err = createRun(ctx, tx, id, "apply", createdBy); err != nil {
 			return Workspace{}, Run{}, err
 		}
@@ -274,7 +270,7 @@ func createRun(ctx context.Context, tx *sql.Tx, workspaceID, action, createdBy s
 	return r, err
 }
 
-// configChange is one use's configuration (module "" = the root) before and after a run's change. A
+// configChange is one added template's configuration before and after a run's change. A
 // run ending before its apply started puts the before back (migration 043_run_config_restore).
 type configChange struct {
 	Module string          `json:"module"`
@@ -519,7 +515,7 @@ func (s *Store) setGrant(ctx context.Context, table, col, id, group, level strin
 	return err
 }
 
-// SetWorkspaceVCS links a workspace without a template to a repository branch; connID "" unlinks it.
+// SetWorkspaceVCS links a workspace to a repository branch, its root configuration; connID "" unlinks it.
 // trigger, pullRequests and tagsRegex (tag-based triggers) set which VCS events queue runs; with a
 // changed connection, repository or tag format, tagBaseline becomes the tag commit never to queue.
 // A changed link or tag format, or turning on pull request plans, detaches the workspace's variable
@@ -536,7 +532,7 @@ func (s *Store) SetWorkspaceVCS(ctx context.Context, workspaceID, connID, repo, 
 	err = tx.QueryRowContext(ctx, `SELECT (vcs_connection_id, vcs_repo, vcs_branch, vcs_tags_regex) IS DISTINCT FROM
 		(NULLIF($2, '')::uuid, NULLIF($3, ''), NULLIF($4, ''), $6) OR (NOT vcs_pull_requests AND $5),
 		EXISTS (SELECT 1 FROM runs WHERE workspace_id = w.id AND status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying'))
-		FROM workspaces w WHERE id = ops_uuid($1) AND template_id IS NULL FOR UPDATE OF w`,
+		FROM workspaces w WHERE id = ops_uuid($1) FOR UPDATE OF w`,
 		workspaceID, connID, repo, branch, pullRequests && connID != "", tagsRegex).Scan(&detach, &active)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil // deleted meanwhile, or a template workspace: nothing to link
@@ -551,7 +547,7 @@ func (s *Store) SetWorkspaceVCS(ctx context.Context, workspaceID, connID, repo, 
 		vcs_repo = NULLIF($3, ''), vcs_branch = NULLIF($4, ''), vcs_trigger = $5, vcs_pull_requests = $6, vcs_tags_regex = $7,
 		vcs_tag_baseline = CASE WHEN (vcs_connection_id, vcs_repo, vcs_tags_regex) IS DISTINCT FROM (NULLIF($2, '')::uuid, NULLIF($3, ''), $7)
 			THEN $8 ELSE vcs_tag_baseline END, updated_at = now()
-		WHERE id = ops_uuid($1) AND template_id IS NULL`, workspaceID, connID, repo, branch, trigger && connID != "", pullRequests && connID != "", tagsRegex, tagBaseline); err != nil {
+		WHERE id = ops_uuid($1)`, workspaceID, connID, repo, branch, trigger && connID != "", pullRequests && connID != "", tagsRegex, tagBaseline); err != nil {
 		return err
 	}
 	// The admin who attached sets vouched for the old repository and branch, not for the new one,
@@ -708,7 +704,7 @@ func (s *Store) QueueAssessments(ctx context.Context, every time.Duration) (int,
 		WITH due AS (
 			SELECT w.id FROM workspaces w
 			WHERE w.drift_detection AND w.execution_mode = 'remote'
-				AND (w.module_source IS NOT NULL OR w.vcs_connection_id IS NOT NULL
+				AND (w.vcs_connection_id IS NOT NULL
 					OR EXISTS (SELECT 1 FROM workspace_templates t WHERE t.workspace_id = w.id))
 				AND EXISTS (SELECT 1 FROM state_version_resources r WHERE r.state_version_id =
 					(SELECT max(v.id) FROM state_versions v WHERE v.workspace_id = w.id))
@@ -780,7 +776,7 @@ func (s *Store) CurrentOutputs(ctx context.Context, workspaceID string) (outputs
 	var raw []byte
 	err = s.DB.QueryRowContext(ctx, `SELECT
 		(SELECT outputs FROM state_versions WHERE workspace_id = ops_uuid($1) ORDER BY id DESC LIMIT 1),
-		COALESCE((SELECT action = 'destroy' AND remove_template IS NULL AND target IS NULL FROM runs WHERE workspace_id = ops_uuid($1) AND status = $2
+		COALESCE((SELECT action = 'destroy' AND remove_template IS NULL FROM runs WHERE workspace_id = ops_uuid($1) AND status = $2
 			ORDER BY created_at DESC LIMIT 1), false)`, workspaceID, Applied).Scan(&raw, &destroyed)
 	if err != nil || raw == nil {
 		return nil, destroyed, err

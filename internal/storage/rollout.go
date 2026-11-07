@@ -10,8 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// TemplateUse is one place a template is used: the root configuration of a workspace created from
-// it (Module ""), or a template added to a workspace (module.<Module>).
+// TemplateUse is one place a template is used: a template added to a workspace (module.<Module>).
 type TemplateUse struct {
 	WorkspaceID, Workspace, ProjectName, ExecutionMode string
 	Module                                             string
@@ -25,8 +24,7 @@ type TemplateUse struct {
 func (s *Store) TemplateUses(ctx context.Context, templateID, projectID string) ([]TemplateUse, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT w.id, w.name, (SELECT p.name FROM projects p WHERE p.id = w.project_id), w.execution_mode,
 			u.module, u.module_source, u.module_ref, u.inputs, COALESCE(r.id::text, ''), COALESCE(r.status, '')
-		FROM (SELECT id AS workspace_id, '' AS module, module_source, module_ref, inputs FROM workspaces WHERE template_id = $1
-			UNION ALL SELECT workspace_id, name, module_source, module_ref, inputs FROM workspace_templates WHERE template_id = $1) u
+		FROM (SELECT workspace_id, name AS module, module_source, module_ref, inputs FROM workspace_templates WHERE template_id = $1) u
 		JOIN workspaces w ON w.id = u.workspace_id
 		LEFT JOIN runs r ON r.workspace_id = w.id AND r.status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')
 		WHERE $2 = '' OR w.project_id::text = $2
@@ -51,7 +49,7 @@ func (s *Store) TemplateUses(ctx context.Context, templateID, projectID string) 
 	return out, rows.Err()
 }
 
-// TemplateUpgrade moves one use of template TemplateID (Module "" = the root) from the version and
+// TemplateUpgrade moves one use of template TemplateID from the version and
 // inputs it was read with (From) to a module version and inputs.
 type TemplateUpgrade struct {
 	TemplateID, Module, ModuleSource, ModuleRef string
@@ -96,13 +94,8 @@ func (s *Store) UpgradeTemplates(ctx context.Context, workspaceID string, ups []
 			return Run{}, err
 		}
 		// only if it still runs what the new inputs were made from: a change meanwhile isn't overwritten
-		q := `UPDATE workspace_templates SET module_source = $4, module_ref = $5, inputs = $6
-			WHERE workspace_id = $1::uuid AND name = $2 AND template_id = $3 AND module_source = $7 AND module_ref = $8 AND inputs = $9::jsonb`
-		if u.Module == "" {
-			q = `UPDATE workspaces SET module_source = $4, module_ref = $5, inputs = $6, updated_at = now()
-				WHERE id = $1::uuid AND $2::text = '' AND template_id = $3 AND module_source = $7 AND module_ref = $8 AND inputs = $9::jsonb`
-		}
-		res, err := tx.ExecContext(ctx, q, workspaceID, u.Module, u.TemplateID, u.ModuleSource, u.ModuleRef, raw,
+		res, err := tx.ExecContext(ctx, `UPDATE workspace_templates SET module_source = $4, module_ref = $5, inputs = $6
+			WHERE workspace_id = $1::uuid AND name = $2 AND template_id = $3 AND module_source = $7 AND module_ref = $8 AND inputs = $9::jsonb`, workspaceID, u.Module, u.TemplateID, u.ModuleSource, u.ModuleRef, raw,
 			u.From.ModuleSource, u.From.ModuleRef, old)
 		if err != nil {
 			return Run{}, err

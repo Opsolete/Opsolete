@@ -15,7 +15,7 @@ An input's `label` is the question the form asks. Text after its first `: ` is h
 
 A template's module is deployed by people who never write Terraform, so it has to stand on its own. Follow these principles:
 
-- **Configure the providers in the module.** Declare `required_providers` and write the `provider` blocks in the module itself, e.g. `provider "azurerm" { features {} }`. The workspace writes no provider configuration, and a template runs either as the workspace's root configuration or as `module.<name>` next to other templates. With its own providers, each template works on its own, whatever else the workspace holds.
+- **Configure the providers in the module.** Declare `required_providers` and write the `provider` blocks in the module itself, e.g. `provider "azurerm" { features {} }`. The workspace writes no provider configuration, and a template always runs as `module.<name>`, next to other templates. With its own providers, each template works on its own, whatever else the workspace holds.
 
   Reusable modules called from your own Terraform normally *leave out* provider blocks. A module that has them can't be called with `count`, `for_each` or `depends_on`. Opsolete never writes those arguments, so that limit doesn't apply. Terraform also needs a module's provider configuration to destroy its resources, so removing an added template first runs a destroy targeted at `module.<name>` while its block is still there, and only then drops the block.
 - **No credentials in the module.** Pass them as environment variables (`ARM_CLIENT_ID`, `AWS_ACCESS_KEY_ID`, …) through a [variable set]({{< relref "/docs/usage/variables" >}}). Environment variables reach every template in the workspace.

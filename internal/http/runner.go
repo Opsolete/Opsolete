@@ -74,17 +74,7 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if ok {
-			inputs, err := s.openInputs(j.Inputs, j.WorkspaceID, "")
-			var env map[string]string
-			var wsVars map[string]any
-			if err == nil {
-				env, wsVars, err = s.runVariables(r.Context(), j.WorkspaceID)
-			}
-			vars := maps.Clone(wsVars)
-			if vars == nil {
-				vars = map[string]any{}
-			}
-			maps.Copy(vars, inputs) // the root template's inputs win
+			env, vars, err := s.runVariables(r.Context(), j.WorkspaceID)
 			var src, currency string
 			if err == nil {
 				src, err = s.jobSource(r.Context(), j)
@@ -97,7 +87,7 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 				in, oerr := s.openInputs(m.Inputs, j.WorkspaceID, m.Name)
 				err = cmp.Or(err, oerr)
 				if err == nil {
-					in, err = s.withWorkspaceVars(r.Context(), m.TemplateID, m.ModuleSource, m.ModuleRef, in, wsVars)
+					in, err = s.withWorkspaceVars(r.Context(), m.TemplateID, m.ModuleSource, m.ModuleRef, in, vars)
 				}
 				mods = append(mods, runnerapi.Module{Name: m.Name, Inputs: in,
 					Source: s.Registry.RunnerSource(templates.Module{Source: m.ModuleSource, Ref: m.ModuleRef}, runnerSrcTTL)})
@@ -143,8 +133,10 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 // the workspace and its variable sets) that its module declares, under its own inputs: as a root module
 // gets them through tfvars, but only declared ones, since an unknown module argument fails the run.
 // shortcut: registry modules only (their variables are stored); external sources such as git:: get
-// none, as Terraform validates module arguments before the runner could read them. Publish them to the
-// registry (e.g. via VCS) to get them. Inputs the template (by id) asks for are left alone, also when
+// none, as the server can't read their variables. Publish them to the registry (e.g. via VCS) to get
+// them, as HCP Terraform's no-code modules must be. To upgrade: the runner has every module on disk
+// after init (writeOutputs reads them there) and could add the declared ones itself, if the job also
+// lists the inputs each template's form asks, which keep winning. Inputs the template (by id) asks for are left alone, also when
 // hidden or empty: its form decided those, and the module's default applies.
 func (s *Server) withWorkspaceVars(ctx context.Context, templateID, source, ref string, in, vars map[string]any) (map[string]any, error) {
 	if !s.Features.Registry || len(vars) == 0 {
@@ -177,9 +169,9 @@ func (s *Server) withWorkspaceVars(ctx context.Context, templateID, source, ref 
 	return out, nil
 }
 
-// jobSource is where the runner fetches the run's root configuration: the template's module, or this
-// server's archive of the VCS commit the run plans (pinned at the plan phase, reused by the apply), or
-// none when added templates are the whole configuration.
+// jobSource is where the runner fetches the run's root configuration: this server's archive of the
+// VCS commit the run plans (pinned at the plan phase, reused by the apply), or none when added
+// templates are the whole configuration.
 func (s *Server) jobSource(ctx context.Context, j storage.Job) (string, error) {
 	switch {
 	case j.VCS:
@@ -189,12 +181,10 @@ func (s *Server) jobSource(ctx context.Context, j storage.Job) (string, error) {
 			}
 		}
 		return s.Registry.SignedArchiveURL(vcsArchivePath(j.RunID), runnerSrcTTL), nil
-	case j.ModuleSource != "":
-		return s.Registry.RunnerSource(templates.Module{Source: j.ModuleSource, Ref: j.ModuleRef}, runnerSrcTTL), nil
 	case len(j.Modules) > 0:
 		return "", nil
 	}
-	return "", errors.New("the workspace has no configuration: link a repository or create it from a template")
+	return "", errors.New("the workspace has no configuration: add a template or link a repository")
 }
 
 func (s *Server) jobLogs(w http.ResponseWriter, r *http.Request) {

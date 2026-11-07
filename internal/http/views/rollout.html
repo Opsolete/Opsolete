@@ -52,13 +52,13 @@
 <tr>
   <td><a href="/workspaces/{{.Workspace}}"><strong>{{.Workspace}}</strong></a></td>
   <td><a href="/projects/{{.ProjectName}}">{{.ProjectName}}</a></td>
-  <td>{{if .Module}}<code>module.{{.Module}}</code>{{else}}<span class="muted">root</span>{{end}}</td>
+  <td><code>module.{{.Module}}</code></td>
   <td><span class="tag">{{.ModuleRef}}</span></td>
   <td>
     {{if eq .State "current"}}Up to date
     {{else if eq .State "ready"}}Ready to roll out
     {{else if eq .State "needs_input"}}Needs input: {{range $i, $n := .Missing}}{{if $i}}, {{end}}<code>{{$n}}</code>{{end}}.
-      <a href="/workspaces/{{.Workspace}}/{{if .Module}}templates/{{.Module}}{{else}}configure{{end}}">Update by hand →</a>
+      <a href="/workspaces/{{.Workspace}}/templates/{{.Module}}">Update by hand →</a>
     {{else if eq .State "busy"}}Busy: retried once its active run ends
     {{else}}Local execution: runs can't start here; switch it to remote execution first{{end}}
     {{if .RunID}} · <a href="/workspaces/{{.Workspace}}/runs/{{.RunID}}"><span class="status {{.RunStatus}}">{{status .RunStatus}}</span></a>{{end}}

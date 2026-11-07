@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"slices"
 	"time"
@@ -208,41 +207,4 @@ func (s *Store) SetVCSSync(ctx context.Context, namespace, name, system, syncErr
 	_, err := s.DB.ExecContext(ctx, `UPDATE vcs_modules SET synced_at = now(), sync_error = $4
 		WHERE namespace=$1 AND name=$2 AND system=$3`, namespace, name, system, syncErr)
 	return err
-}
-
-// ConfigureWorkspace moves a workspace to a module version and inputs and queues the plan that
-// applies them; if the run ends before its apply, they go back (configChange). Without a free
-// workspace (ErrRunActive) nothing changes.
-func (s *Store) ConfigureWorkspace(ctx context.Context, workspaceID, source, ref string, inputs map[string]any, createdBy string) (Run, error) {
-	raw, err := json.Marshal(inputs)
-	if err != nil {
-		return Run{}, err
-	}
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return Run{}, err
-	}
-	defer tx.Rollback()
-	before, err := configSnapshot(ctx, tx, workspaceID, "")
-	if err != nil {
-		return Run{}, err
-	}
-	res, err := tx.ExecContext(ctx, `UPDATE workspaces SET module_source = $2, module_ref = $3, inputs = $4, updated_at = now()
-		WHERE id = ops_uuid($1)`, workspaceID, source, ref, raw)
-	if err != nil {
-		return Run{}, err
-	}
-	if n, err := res.RowsAffected(); err != nil {
-		return Run{}, err
-	} else if n == 0 {
-		return Run{}, sql.ErrNoRows
-	}
-	r, err := createRun(ctx, tx, workspaceID, "apply", createdBy)
-	if err != nil {
-		return Run{}, err
-	}
-	if err := recordConfigChanges(ctx, tx, r.ID, workspaceID, []configChange{{Before: before}}); err != nil {
-		return Run{}, err
-	}
-	return r, tx.Commit()
 }

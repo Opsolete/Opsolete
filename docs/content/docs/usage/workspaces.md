@@ -9,10 +9,10 @@ A workspace holds exactly one Terraform [state]({{< relref "state" >}}). Every c
 
 Every workspace is in a [project]({{< relref "projects" >}}): pick it when creating the workspace (the default project unless you pick another; other projects need `operate` on them).
 
-- **From a template:** pick a template, name the workspace and fill in the form.
+- **From a template:** pick a template, name the workspace and fill in the form. The template is added to the new workspace like any other (`module.<name>`, see below).
 - **Workspaces don't need a template** (**Workspaces → New workspace**). A blank workspace can stay empty or hold only [variables]({{< relref "variables" >}}).
 
-Runs need configuration: a template, a linked branch, or added templates.
+Runs need configuration: added templates, a linked branch, or both.
 
 ## Link a VCS repository branch
 
@@ -29,22 +29,22 @@ A workspace still has one active run at a time, so VCS runs wait their turn; if 
 
 ## Add templates to a workspace
 
-Add any number of templates (**Deploy…** in a workspace's menu, operate access). Each becomes a module block, `module.<name>`, next to the workspace's own configuration (the template it was created from, its branch, or nothing), in the same state; add one template several times under different names.
+Add any number of templates (**Deploy…** in a workspace's menu, operate access). Each becomes a module block, `module.<name>`, next to the workspace's own configuration (its branch, or nothing), in the same state; add one template several times under different names.
 
 - Adding, configuring or removing one starts a plan; removing one plans the destruction of its resources.
 - Removing the last one (the workspace's only configuration) starts a destroy run instead, and the template goes once that destroy is applied.
-- The template the workspace was created from (the *root* row) can be removed the same way. Alone, that's a destroy of everything. Next to added templates, the destroy targets only the root's own resources, so the added templates and their resources stay. That needs an indexed state (run a plan first), and the added templates must configure their own providers. The root goes once the destroy is applied; with none of its resources in the state, it goes right away.
 - Their outputs show as `<name>__<output>`.
-- Workspace variables and variable sets reach every template: env variables (credentials) as the environment, Terraform variables as the root's variables and as inputs of each added template whose module declares them and whose form doesn't ask for them (inputs the form asks keep their value, and a hidden or empty one the module's default). So a workspace needs no root template. Added templates on external sources (e.g. `git::`) get no Terraform variables: publish their module to the registry.
-- Each template's module should configure its own providers (see [Writing modules for templates]({{< relref "/docs/catalog/templates#writing-modules-for-templates" >}})). Otherwise it depends on provider blocks in the workspace's own configuration.
+- Workspace variables and variable sets reach every template: env variables (credentials) as the environment, Terraform variables as the variables of a linked branch's configuration and as inputs of each template whose module declares them and whose form doesn't ask for them (inputs the form asks keep their value, and a hidden or empty one the module's default). Templates on external sources (e.g. `git::`) get no Terraform variables, only environment variables: publish their module to the registry (it can sync from VCS). HCP Terraform's no-code provisioning has the same rule: only private registry modules.
+  - *Possible improvement:* the runner has every template's module on disk after `terraform init`, `git::` ones too. It could add the workspace Terraform variables each module declares itself, if the job also lists the inputs each template's form asks for, so those keep winning.
+- Each template's module configures its own providers (see [Writing modules for templates]({{< relref "/docs/catalog/templates#writing-modules-for-templates" >}})).
 
 ## Update to a new module version
 
-When a template is moved to a newer module version, workspaces on an older one show *A new module version is available*. **View update** (or **Configure…** at any time) shows the form filled with the workspace's inputs, plus any new ones. Saving moves the workspace to the template's version and queues a plan, which is confirmed as usual.
+When a template is moved to a newer module version, the workspace's **Templates** tab shows *update: <version>* next to it. **Configure…** shows the form filled with its inputs, plus any new ones. Saving moves it to the template's version and queues a plan, which is confirmed as usual.
 
-If that plan is discarded, or is canceled or errors before its apply starts, the workspace goes back to its previous version and inputs, so it never shows a version that wasn't applied. The same holds for adding a template (it's removed again) and for rollouts. Once the apply has started, the new version stays, even if the apply fails: the state may already hold part of it.
+If that plan is discarded, or is canceled or errors before its apply starts, the template goes back to its previous version and inputs, so it never shows a version that wasn't applied. The same holds for adding a template (it's removed again) and for rollouts. Once the apply has started, the new version stays, even if the apply fails: the state may already hold part of it.
 
-To update many workspaces at once, an admin opens **Roll out** on the template's card. The page lists each workspace that uses the template, as its root or as an added template, with its version. You can filter the list by project.
+To update many workspaces at once, an admin opens **Roll out** on the template's card. The page lists each workspace that uses the template, with its module name and version. You can filter the list by project.
 
 To start a rollout, pick the scope and a batch size, then click **Roll out**:
 

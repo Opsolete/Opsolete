@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/opsolete/opsolete/internal/registry/registrytest"
+	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
 	"github.com/opsolete/opsolete/internal/vcs"
 )
@@ -171,26 +172,38 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if page := get(h, "/workspaces/"+wsName).Body.String(); !strings.Contains(page, "A new module version is available") {
+	ws, err := store.GetWorkspace(ctx, wsName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	added := func() storage.WorkspaceTemplate { // the template, added to the workspace
+		t.Helper()
+		a, err := store.WorkspaceTemplates(ctx, ws.ID)
+		if err != nil || len(a) != 1 {
+			t.Fatalf("added templates: %+v %v", a, err)
+		}
+		return a[0]
+	}
+	configure := "/workspaces/" + wsName + "/templates/" + added().Name
+	if page := get(h, "/workspaces/"+wsName+"?show=templates").Body.String(); !strings.Contains(page, `<span class="tag">update: 1.0.1</span>`) {
 		t.Fatalf("no update notice: %s", page)
 	}
-	if page := get(h, "/workspaces/"+wsName+"/configure").Body.String(); !strings.Contains(page, `value="nocode"`) ||
+	if page := get(h, configure).Body.String(); !strings.Contains(page, `value="nocode"`) ||
 		!strings.Contains(page, "<code>1.0.0</code> → <code>1.0.1</code>") || !strings.Contains(page, `name="db_encrypted"`) {
 		t.Fatalf("configure form: %s", page)
 	}
-	rec = post(h, "/workspaces/"+wsName+"/configure", url.Values{"db_name": {"nocode"}, "db_encrypted": {"on"}})
+	rec = post(h, configure, url.Values{"db_name": {"nocode"}, "db_encrypted": {"on"}})
 	if rec.Code != http.StatusSeeOther || !strings.HasPrefix(rec.Header().Get("Location"), "/workspaces/"+wsName+"/runs/") {
 		t.Fatalf("configure: %d %s", rec.Code, rec.Body.String())
 	}
-	ws, err := store.GetWorkspace(ctx, wsName)
-	if err != nil || ws.ModuleRef != "1.0.1" || ws.Inputs["db_encrypted"] != true {
-		t.Fatalf("workspace after configure: %+v %v", ws, err)
+	if a := added(); a.ModuleRef != "1.0.1" || a.Inputs["db_encrypted"] != true {
+		t.Fatalf("template after configure: %+v", a)
 	}
 	// The plan is now active, so a second change has to wait.
-	if rec := post(h, "/workspaces/"+wsName+"/configure", url.Values{"db_name": {"other"}}); rec.Code != http.StatusConflict {
+	if rec := post(h, configure, url.Values{"db_name": {"other"}}); rec.Code != http.StatusConflict {
 		t.Fatalf("configure during a run: %d", rec.Code)
 	}
-	if ws, _ := store.GetWorkspace(ctx, wsName); ws.Inputs["db_name"] != "nocode" {
+	if added().Inputs["db_name"] != "nocode" {
 		t.Fatal("rejected configure changed the inputs")
 	}
 

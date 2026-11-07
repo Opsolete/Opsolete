@@ -1,7 +1,6 @@
 package httpserver
 
 import (
-	"cmp"
 	"database/sql"
 	"errors"
 	"net/http"
@@ -148,34 +147,27 @@ func (s *Server) saveWorkspaceTemplate(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID, http.StatusSeeOther)
 }
 
-// removeWorkspaceTemplate removes an added template, or on the root route the one the workspace was
-// created from, and starts the plan that destroys its resources.
+// removeWorkspaceTemplate removes an added template, and starts the plan that destroys its resources.
 func (s *Server) removeWorkspaceTemplate(w http.ResponseWriter, r *http.Request) {
 	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
 	if !ok {
 		return
 	}
 	u := auth.FromContext(r.Context())
-	mod := r.PathValue("module") // "" on the root route: the template the workspace was created from
-	var run storage.Run
-	var err error
-	if mod == "" {
-		run, err = s.Store.RemoveRootTemplate(r.Context(), ws.ID, u.ID)
-	} else {
-		run, err = s.Store.RemoveWorkspaceTemplate(r.Context(), ws.ID, mod, u.ID)
-	}
+	mod := r.PathValue("module")
+	run, err := s.Store.RemoveWorkspaceTemplate(r.Context(), ws.ID, mod, u.ID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		http.NotFound(w, r)
 		return
-	case errors.Is(err, storage.ErrRunActive), errors.Is(err, storage.ErrLocalExecution), errors.Is(err, storage.ErrNotIndexed):
+	case errors.Is(err, storage.ErrRunActive), errors.Is(err, storage.ErrLocalExecution):
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	case err != nil:
 		s.internalError(w, "remove workspace template", err)
 		return
 	}
-	s.Log.Info("workspace template removed", "workspace", ws.Name, "module", cmp.Or(mod, "(root)"), "run", run.ID, "user", u.Email)
+	s.Log.Info("workspace template removed", "workspace", ws.Name, "module", mod, "run", run.ID, "user", u.Email)
 	if run.ID == "" { // nothing was deployed, so nothing to plan
 		http.Redirect(w, r, "/workspaces/"+ws.Name, http.StatusSeeOther)
 		return

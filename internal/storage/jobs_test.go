@@ -41,12 +41,17 @@ func testStore(t *testing.T) *Store {
 func newWorkspace(t *testing.T, s *Store, autoApply bool) (Workspace, Run) {
 	ctx := context.Background()
 	name := "t-" + strings.ToLower(rand.Text()[:10]) // the test DB is reused
-	w, run, err := s.CreateWorkspace(ctx, "", name, "", "job-test", "git::x", "v1", map[string]any{"n": 1.0}, autoApply, "")
+	w, run, err := s.CreateWorkspace(ctx, "", name, "", testTemplate(map[string]any{"n": 1.0}), autoApply, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.DB.Exec(`DELETE FROM workspaces WHERE id=$1`, w.ID) })
 	return w, run
+}
+
+// testTemplate is template job-test as a workspace's added template "main".
+func testTemplate(inputs map[string]any) WorkspaceTemplate {
+	return WorkspaceTemplate{Name: "main", TemplateID: "job-test", ModuleSource: "git::x", ModuleRef: "v1", Inputs: inputs}
 }
 
 func claim(t *testing.T, s *Store, phase string) Job {
@@ -93,7 +98,7 @@ func TestRunLifecycle(t *testing.T) {
 	}
 	wg.Wait()
 	if len(won) != 1 || won[0].RunID != run.ID || won[0].WorkspaceID != w.ID || won[0].Phase != "plan" ||
-		won[0].ModuleSource != "git::x" || won[0].Inputs["n"] != 1.0 {
+		len(won[0].Modules) != 1 || won[0].Modules[0].ModuleSource != "git::x" || won[0].Modules[0].Inputs["n"] != 1.0 {
 		t.Fatalf("claims: %+v", won)
 	}
 	plan := won[0]
@@ -404,11 +409,11 @@ func TestRunVariables(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	name := "t-" + strings.ToLower(rand.Text()[:10])
-	w, _, err := s.CreateWorkspace(ctx, "", name, "", "job-test", "git::x", "v1", nil, false, "")
+	w, _, err := s.CreateWorkspace(ctx, "", name, "", testTemplate(nil), false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, _, err := s.CreateWorkspace(ctx, "", name+"-other", "", "job-test", "git::x", "v1", nil, false, "")
+	other, _, err := s.CreateWorkspace(ctx, "", name+"-other", "", testTemplate(nil), false, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -541,7 +546,7 @@ func TestAccess(t *testing.T) {
 	member, _ := s.UpsertUser(ctx, "", "member@example.com", "user", []string{"team-a", "team-b"})
 	outsider, _ := s.UpsertUser(ctx, "", "outsider@example.com", "user", []string{"team-c"})
 	name := "t-" + strings.ToLower(rand.Text()[:10])
-	w, _, err := s.CreateWorkspace(ctx, "", name, "", "job-test", "git::x", "v1", nil, false, creator)
+	w, _, err := s.CreateWorkspace(ctx, "", name, "", testTemplate(nil), false, creator)
 	if err != nil {
 		t.Fatal(err)
 	}

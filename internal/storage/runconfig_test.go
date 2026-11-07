@@ -13,22 +13,23 @@ import (
 func TestRunConfigRestore(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
-	w, run := newWorkspace(t, s, false) // root: job-test git::x v1, n=1
+	w, run := newWorkspace(t, s, false) // template main: job-test git::x v1, n=1
 	j := claim(t, s, "plan")
 	if _, err := s.FinishJob(ctx, run.ID, j.LeaseID, "succeeded", "", nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	root := func() string {
 		t.Helper()
-		got, err := s.GetWorkspaceByID(ctx, w.ID)
-		if err != nil {
+		var ref string
+		if err := s.DB.QueryRow(`SELECT module_ref FROM workspace_templates WHERE workspace_id = $1 AND name = 'main'`, w.ID).Scan(&ref); err != nil {
 			t.Fatal(err)
 		}
-		return got.ModuleRef
+		return ref
 	}
 	configure := func(ref string) Run {
 		t.Helper()
-		r, err := s.ConfigureWorkspace(ctx, w.ID, "git::x", ref, map[string]any{"n": 2.0}, "")
+		r, err := s.SetWorkspaceTemplate(ctx, w.ID, WorkspaceTemplate{Name: "main", TemplateID: "job-test", ModuleSource: "git::x", ModuleRef: ref,
+			Inputs: map[string]any{"n": 2.0}}, false, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -80,12 +81,12 @@ func TestRunConfigRestore(t *testing.T) {
 	// changed since the run's change: left alone
 	r = configure("v2")
 	plan(r, true)
-	s.DB.Exec(`UPDATE workspaces SET module_ref = 'v9' WHERE id = $1`, w.ID)
+	s.DB.Exec(`UPDATE workspace_templates SET module_ref = 'v9' WHERE workspace_id = $1 AND name = 'main'`, w.ID)
 	s.DiscardRun(ctx, r.ID, "x")
 	if got := root(); got != "v9" {
 		t.Fatalf("a later change was overwritten: %s", got)
 	}
-	s.DB.Exec(`UPDATE workspaces SET module_ref = 'v1' WHERE id = $1`, w.ID)
+	s.DB.Exec(`UPDATE workspace_templates SET module_ref = 'v1' WHERE workspace_id = $1 AND name = 'main'`, w.ID)
 	// no changes to make: the new version stays
 	r = configure("v2")
 	plan(r, false)
@@ -115,7 +116,7 @@ func TestRunConfigRestore(t *testing.T) {
 	plan(r, true)
 	s.DiscardRun(ctx, r.ID, "x")
 	var n int
-	s.DB.QueryRow(`SELECT count(*) FROM workspace_templates WHERE workspace_id = $1`, w.ID).Scan(&n)
+	s.DB.QueryRow(`SELECT count(*) FROM workspace_templates WHERE workspace_id = $1 AND name = 'extra'`, w.ID).Scan(&n)
 	if n != 0 {
 		t.Fatal("a discarded added template must be removed again")
 	}

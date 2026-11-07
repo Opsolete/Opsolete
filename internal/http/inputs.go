@@ -18,7 +18,7 @@ import (
 // secretPrefix names the form fields of sensitive inputs, so the audit log redacts them.
 const secretPrefix = "secret."
 
-// inputAD binds a sealed input to its workspace, its module ("" = root) and its name.
+// inputAD binds a sealed input to its workspace, its module and its name.
 func inputAD(workspaceID, module, name string) string {
 	return "template input\x00" + workspaceID + "\x00" + module + "\x00" + name
 }

@@ -5,12 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"slices"
-	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
-
-	"github.com/opsolete/opsolete/internal/runnerapi"
 )
 
 // WorkspaceTemplate is a template added to a workspace: the module block module.<Name>, pinned to
@@ -107,120 +103,6 @@ func (s *Store) RemoveWorkspaceTemplate(ctx context.Context, workspaceID, name, 
 		return Run{}, err
 	}
 	return Run{}, tx.Commit()
-}
-
-// ErrNotIndexed: the current state version's resources aren't known, so a destroy can't be limited to some of them.
-var ErrNotIndexed = errors.New("the current state isn't indexed, so the root template's resources can't be told from the added templates': run a plan first")
-
-const clearRoot = `template_id = NULL, module_source = NULL, module_ref = NULL, inputs = '{}'`
-
-// RemoveRootTemplate removes the template a workspace was created from (its root configuration), like
-// RemoveWorkspaceTemplate: if the state manages resources, it queues a destroy run that clears the root
-// once applied. With added templates next to it, that destroy targets only the root's own resources,
-// so the added ones stay (they need their own provider configuration then). sql.ErrNoRows: no root template.
-func (s *Store) RemoveRootTemplate(ctx context.Context, workspaceID, createdBy string) (Run, error) {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return Run{}, err
-	}
-	defer tx.Rollback()
-	var root bool
-	if err := tx.QueryRowContext(ctx, `SELECT template_id IS NOT NULL FROM workspaces WHERE id = $1::uuid FOR UPDATE`,
-		workspaceID).Scan(&root); err != nil {
-		return Run{}, err
-	}
-	if !root {
-		return Run{}, sql.ErrNoRows
-	}
-	switch err := requireIdle(ctx, tx, workspaceID); {
-	case errors.Is(err, ErrHasResources):
-		added, err := workspaceTemplates(ctx, tx, workspaceID)
-		if err != nil {
-			return Run{}, err
-		}
-		var target []string // nil: destroy everything, all of it is the root's
-		if len(added) > 0 {
-			if target, err = rootTargets(ctx, tx, workspaceID, added); err != nil {
-				return Run{}, err
-			}
-			if len(target) == 0 {
-				break // only the added templates have resources: nothing of the root's to destroy
-			}
-		}
-		r, err := createRun(ctx, tx, workspaceID, "destroy", createdBy)
-		if err != nil {
-			return Run{}, err
-		}
-		var raw []byte
-		if target != nil {
-			raw, _ = json.Marshal(target)
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE runs SET remove_root = true, target = $2 WHERE id = $1`, r.ID, nullJSON(raw)); err != nil {
-			return Run{}, err
-		}
-		return r, tx.Commit()
-	case err != nil:
-		return Run{}, err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE workspaces SET `+clearRoot+` WHERE id = $1::uuid`, workspaceID); err != nil {
-		return Run{}, err
-	}
-	return Run{}, tx.Commit()
-}
-
-// rootTargets returns the -target addresses of the root configuration's resources in the current state.
-func rootTargets(ctx context.Context, tx *sql.Tx, workspaceID string, added []WorkspaceTemplate) ([]string, error) {
-	var version int64
-	var indexed bool
-	if err := tx.QueryRowContext(ctx, `SELECT id, indexed FROM state_versions WHERE workspace_id = $1::uuid ORDER BY id DESC LIMIT 1`,
-		workspaceID).Scan(&version, &indexed); err != nil {
-		return nil, err
-	}
-	if !indexed {
-		return nil, ErrNotIndexed
-	}
-	rows, err := tx.QueryContext(ctx, `SELECT address, module FROM state_version_resources WHERE state_version_id = $1 ORDER BY address`, version)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var res []runnerapi.Resource
-	for rows.Next() {
-		var r runnerapi.Resource
-		if err := rows.Scan(&r.Address, &r.Module); err != nil {
-			return nil, err
-		}
-		res = append(res, r)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	names := make([]string, len(added))
-	for i, a := range added {
-		names[i] = a.Name
-	}
-	return rootAddresses(res, names), nil
-}
-
-// rootAddresses picks the resources that aren't in an added template's module: root resources by
-// address, and the root's own module calls whole (module.net["a"].x is module.net).
-func rootAddresses(res []runnerapi.Resource, added []string) []string {
-	var out []string
-	for _, r := range res {
-		t := r.Address
-		if r.Module != "" {
-			top, _, _ := strings.Cut(r.Module, ".module.")
-			call, _, _ := strings.Cut(strings.TrimPrefix(top, "module."), "[")
-			if slices.Contains(added, call) {
-				continue
-			}
-			t = "module." + call
-		}
-		if !slices.Contains(out, t) {
-			out = append(out, t)
-		}
-	}
-	return out
 }
 
 // changeTemplates runs q (which must change one row, added template name's, else sql.ErrNoRows) and

@@ -41,7 +41,6 @@
           <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancel</button></footer>
       </form>
     </dialog>
-    {{if .HasTemplate}}<a class="btn secondary" href="/workspaces/{{$w.Name}}/configure">Configure…</a>{{end}}
     {{end}}
   </div>
   {{end}}
@@ -49,15 +48,6 @@
 {{end}}
 
 {{if eq $tab "overview"}}
-{{if and .Update $.CanOperate}}
-<div class="alert warn" role="status">
-  A new module version is available: the template now uses <code>{{.Update.Ref}}</code>, this workspace runs <code>{{$w.ModuleRef}}</code>.
-  <a href="/workspaces/{{$w.Name}}/configure">View update →</a>
-</div>
-{{else if .Update}}
-<div class="alert warn" role="status">A new module version (<code>{{.Update.Ref}}</code>) is available; someone with operate access can apply it.</div>
-{{end}}
-
 {{if $w.Drifted}}{{with .Assessment}}
 <div class="alert warn" role="status">
   Drift detected {{.UpdatedAt.Format "2006-01-02 15:04"}}{{with .Plan}}: {{.Change}} changed, {{.Destroy}} deleted outside Terraform{{end}}.
@@ -128,18 +118,11 @@
 {{else}}<p class="muted">No outputs.</p>{{end}}
 {{else}}
 <p class="muted">Templates added to this workspace: each is a module (<code>module.&lt;name&gt;</code>) planned and applied with the rest of its configuration, in its one state. Their outputs show as <code>&lt;name&gt;__&lt;output&gt;</code>.</p>
-{{if or .Added $w.TemplateID}}
+{{if .Added}}
 <div class="card flush">
 <table>
 <tr><th>Name</th><th>Template</th><th>Module</th><th>Inputs</th>{{if $.CanOperate}}<th></th>{{end}}</tr>
 {{$indexed := and .Versions (index .Versions 0).Indexed}}
-{{with $w.TemplateID}}<tr><td class="muted">root{{if $indexed}}{{template "deployed" index $.TemplateResources ""}}{{end}}</td><td><a href="/templates/{{.}}">{{or (index $.TemplateNames .) .}}</a></td>
-  <td><code>{{$w.ModuleSource}}</code> <span class="tag">{{$w.ModuleRef}}</span>{{with $.Update}} <span class="tag">update: {{.Ref}}</span>{{end}}</td>
-  <td>{{template "inputs" $.RootInputs}}</td>
-  {{if $.CanOperate}}<td class="nowrap">{{if not $.Active}}<div class="inline">{{if $.HasTemplate}}<a class="btn secondary small" href="/workspaces/{{$w.Name}}/configure">Configure…</a>{{end}}
-    <form method="post" action="/workspaces/{{$w.Name}}/root/remove" class="inline"
-      onsubmit="return confirm('Remove the root template? This starts a plan that destroys its resources{{if $.Added}}; the added templates stay{{end}}.')">
-      <button type="submit" class="danger small">Remove…</button></form></div>{{end}}</td>{{end}}</tr>{{end}}
 {{range .Added}}<tr><td><code>{{.Name}}</code>{{if $indexed}}{{template "deployed" index $.TemplateResources .Name}}{{end}}</td><td><a href="/templates/{{.TemplateID}}">{{or (index $.TemplateNames .TemplateID) .TemplateID}}</a></td>
   <td><code>{{.ModuleSource}}</code> <span class="tag">{{.ModuleRef}}</span>{{with index $.Updates .Name}} <span class="tag">update: {{.}}</span>{{end}}</td>
   <td>{{template "inputs" index $.AddedInputs .Name}}</td>
@@ -156,18 +139,13 @@
 
 <aside class="side">
   <ul class="facts">
-    {{if $w.ModuleSource}}<li>Module: <code>{{$w.ModuleSource}}</code> <span class="tag">{{$w.ModuleRef}}</span></li>{{end}}
-    {{if not $w.TemplateID}}<li>Repository: {{if $w.VCSConnectionID}}<code>{{$w.VCSRepo}}</code> <span class="tag">{{$w.VCSBranch}}</span>{{else}}<span class="muted">none{{with $w.VCSRepo}} (was {{.}}; its VCS connection was deleted){{end}}</span>{{end}}
-      {{if and .CanOperate (features).VCS}} · <a href="/workspaces/{{$w.Name}}/vcs">{{if $w.VCSConnectionID}}Change{{else}}Link{{end}}…</a>{{end}}</li>{{end}}
+    <li>Repository: {{if $w.VCSConnectionID}}<code>{{$w.VCSRepo}}</code> <span class="tag">{{$w.VCSBranch}}</span>{{else}}<span class="muted">none{{with $w.VCSRepo}} (was {{.}}; its VCS connection was deleted){{end}}</span>{{end}}
+      {{if and .CanOperate (features).VCS}} · <a href="/workspaces/{{$w.Name}}/vcs">{{if $w.VCSConnectionID}}Change{{else}}Link{{end}}…</a>{{end}}</li>
     <li>Execution mode: <a href="/workspaces/{{$w.Name}}/settings">{{if eq $w.ExecutionMode "local"}}Local{{else}}Remote{{end}}</a></li>
     <li>Auto-apply: <a href="/workspaces/{{$w.Name}}/settings">{{if $w.AutoApply}}On{{else}}Off{{end}}</a></li>
     <li>Drift detection: <a href="/workspaces/{{$w.Name}}/settings/health">{{if $w.DriftDetection}}On{{else}}Off{{end}}</a></li>
     <li>Last drift check: {{with .Assessment}}<a href="/workspaces/{{$w.Name}}/runs/{{.ID}}"><span class="status {{.Status}}">{{status .Status}}</span></a> {{.UpdatedAt.Format "2006-01-02 15:04"}}{{else}}<span class="muted">never</span>{{end}}</li>
   </ul>
-  {{if $w.TemplateID}}
-  <h3>Inputs</h3>
-  <ul class="facts">{{range .RootInputs}}<li title="{{.Name}}">{{.Title}}: {{if .Sensitive}}<span class="muted">(sensitive)</span>{{else}}<code>{{.Text}}</code>{{end}}</li>{{else}}<li class="muted">none</li>{{end}}</ul>
-  {{end}}
   <h3>Metrics <small>(last {{.Metrics.Runs}} runs)</small></h3>
   <dl class="metrics">
     <dt>Average plan duration</dt><dd>{{or (duration .Metrics.AvgPlan) "—"}}</dd>

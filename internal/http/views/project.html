@@ -24,7 +24,7 @@
 {{range .Workspaces}}
 <tr>
   <td><a href="/workspaces/{{.Name}}"><strong>{{.Name}}</strong></a>{{if .Drifted}} <span class="status drifted">drifted</span>{{end}}</td>
-  <td>{{if .TemplateID}}{{.TemplateID}}{{else if .VCSConnectionID}}<code>{{.VCSRepo}}</code>{{else}}<span class="muted">none</span>{{end}}</td>
+  <td>{{if .VCSConnectionID}}<code>{{.VCSRepo}}</code>{{if .Templates}} + {{end}}{{end}}{{with .Templates}}{{.}} template{{if ne . 1}}s{{end}}{{end}}{{if not (or .VCSConnectionID .Templates)}}<span class="muted">none</span>{{end}}</td>
   <td>{{with .Latest}}<span class="status {{.Status}}">{{status .Status}}</span>{{if eq .Action "destroy"}} <small>destroy</small>{{end}}{{else}}<span class="muted">none</span>{{end}}</td>
   <td>{{.CreatedBy}}</td>
   <td class="nowrap">{{with .Latest}}<span title="{{.UpdatedAt.Format "2006-01-02 15:04"}}">{{ago .UpdatedAt}}</span>{{else}}<span title="{{.CreatedAt.Format "2006-01-02 15:04"}}">{{ago .CreatedAt}}</span>{{end}}</td>

@@ -5,13 +5,13 @@ weight: 4
 
 A workspace's runs get **variables**: **env** (environment variables, e.g. cloud credentials) and **terraform** (Terraform input variables, passed as strings). Any runner runs any workspace; the server sends the variables with each claimed job.
 
-- **Workspace variables:** the *Variables* section of a workspace page (operate access). A terraform variable can't share a name with one of the template's inputs: change those with *Configure*.
+- **Workspace variables:** the *Variables* section of a workspace page (operate access).
 - **Variable sets** (admins, *Settings › Variable sets*): a named group of variables that's **global** (every workspace not linked to a repository) or attached to chosen workspaces and [projects]({{< relref "projects" >}}) (every workspace of the project not linked to a repository). Use one per subscription or service principal, e.g. `azure-prod` with `ARM_TENANT_ID`, `ARM_SUBSCRIPTION_ID`, `ARM_CLIENT_ID` and a sensitive `ARM_CLIENT_SECRET`.
 - **Precedence** (same category and key): template inputs > workspace variables > sets attached to the workspace > sets attached to its project > global sets. Between sets of the same kind, the first by name wins. A workspace's *Variables* page lists the sets that apply to it.
 
 ## Settings outside the template's form
 
-A template's form asks only what users must choose, but a project can still set other module variables: a terraform variable in a set attached to the [project]({{< relref "projects" >}}) (or on the workspace) reaches every template whose module declares it, with the precedence above. The module declares the variable with a safe default, so other projects keep the standard. Added templates only get it from a [registry]({{< relref "/docs/catalog/module-registry" >}}) module (see [Add templates to a workspace]({{< relref "workspaces#add-templates-to-a-workspace" >}})).
+A template's form asks only what users must choose, but a project can still set other module variables: a terraform variable in a set attached to the [project]({{< relref "projects" >}}) (or on the workspace) reaches every template whose module declares it, with the precedence above. The module declares the variable with a safe default, so other projects keep the standard. Templates only get it from a [registry]({{< relref "/docs/catalog/module-registry" >}}) module (see [Add templates to a workspace]({{< relref "workspaces#add-templates-to-a-workspace" >}})).
 
 Anyone who operates a workspace can set its terraform variables, so a variable the form doesn't show is not locked. Hard-code what must not change, or restrict the allowed values with a `validation` block.
 

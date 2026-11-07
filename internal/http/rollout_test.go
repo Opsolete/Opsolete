@@ -65,10 +65,10 @@ func TestRenderRollout(t *testing.T) {
 	s.render(w, httptest.NewRequest("GET", "/", nil), 200, "rollout.html", rolloutPage{T: templates.Template{ID: "sa", Name: "SA"},
 		Pending: 1, Rollout: ro, OpenRuns: 1, Rows: []rolloutRow{
 			{TemplateUse: storage.TemplateUse{Workspace: "a", Module: "m", RunID: "r1", RunStatus: "needs_confirmation"}, State: rolloutCurrent},
-			{TemplateUse: storage.TemplateUse{Workspace: "b"}, State: rolloutNeedsInput, Missing: []string{"x", "y"}},
+			{TemplateUse: storage.TemplateUse{Workspace: "b", Module: "n"}, State: rolloutNeedsInput, Missing: []string{"x", "y"}},
 		}})
 	body := w.Body.String()
-	for _, want := range []string{"/workspaces/a/runs/r1", "/workspaces/b/configure", "<code>y</code>", "/rollout/resume", "2 workspace(s) at a time",
+	for _, want := range []string{"/workspaces/a/runs/r1", "/workspaces/b/templates/n", "<code>y</code>", "/rollout/resume", "2 workspace(s) at a time",
 		"the run in a: errored"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q in:\n%s", want, body)
@@ -98,8 +98,8 @@ func TestTickRollout(t *testing.T) {
 		if n == "other" {
 			project = "" // the default project: outside the rollout
 		}
-		w, _, err := store.CreateWorkspace(ctx, "", "ro-"+sfx+"-"+n, project, "greeting", tpl.Module.Source, "1.0.0",
-			map[string]any{"greeting": "hi", "name": "x"}, true, "")
+		w, _, err := store.CreateWorkspace(ctx, "", "ro-"+sfx+"-"+n, project, storage.WorkspaceTemplate{Name: "hello", TemplateID: "greeting",
+			ModuleSource: tpl.Module.Source, ModuleRef: "1.0.0", Inputs: map[string]any{"greeting": "hi", "name": "x"}}, true, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -136,9 +136,9 @@ func TestTickRollout(t *testing.T) {
 			t.Fatalf("status %q (%s), want %q", ro.Status, ro.Message, wantStatus)
 		}
 		for i, n := range []string{"a", "b", "c", "other"} {
-			w, err := store.GetWorkspaceByID(ctx, ws[n])
-			if err != nil || w.ModuleRef != wantRefs[i] {
-				t.Fatalf("%s runs %q, want %q (%v)", n, w.ModuleRef, wantRefs[i], err)
+			added, err := store.WorkspaceTemplates(ctx, ws[n])
+			if err != nil || len(added) != 1 || added[0].ModuleRef != wantRefs[i] {
+				t.Fatalf("%s runs %+v, want %q (%v)", n, added, wantRefs[i], err)
 			}
 		}
 	}

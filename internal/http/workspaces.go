@@ -63,15 +63,12 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /workspaces/{name}/runs", s.newRun)
 	mux.HandleFunc("POST /workspaces/{name}/settings", s.workspaceSettings)
 	mux.HandleFunc("POST /workspaces/{name}/lock", s.lockWorkspace)
-	mux.HandleFunc("GET /workspaces/{name}/configure", s.configureForm)
-	mux.HandleFunc("POST /workspaces/{name}/configure", s.configureWorkspace)
 	mux.HandleFunc("POST /workspaces/{name}/delete", s.deleteWorkspace)
 	mux.HandleFunc("GET /workspaces/{name}/templates/new", s.workspaceTemplateForm)
 	mux.HandleFunc("POST /workspaces/{name}/templates/new", s.saveWorkspaceTemplate)
 	mux.HandleFunc("GET /workspaces/{name}/templates/{module}", s.workspaceTemplateForm)
 	mux.HandleFunc("POST /workspaces/{name}/templates/{module}", s.saveWorkspaceTemplate)
 	mux.HandleFunc("POST /workspaces/{name}/templates/{module}/remove", s.removeWorkspaceTemplate)
-	mux.HandleFunc("POST /workspaces/{name}/root/remove", s.removeWorkspaceTemplate) // the root template
 	mux.HandleFunc("POST /workspaces/{name}/access", s.admin(s.workspaceAccess))
 	mux.HandleFunc("GET /workspaces/{name}/runs/{run}", s.run)
 	mux.HandleFunc("POST /workspaces/{name}/runs/{run}/confirm", s.confirmRun)
@@ -145,7 +142,7 @@ func (s *Server) form(w http.ResponseWriter, r *http.Request) {
 		Project: r.URL.Query().Get("project"), Projects: projects})
 }
 
-// createWorkspace creates a workspace from a template and queues its first plan.
+// createWorkspace creates a workspace with the template added to it and queues its first plan.
 func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 	t, ok, err := s.template(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -175,8 +172,9 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "list projects", err)
 		return
 	}
-	id := newID() // sensitive inputs are sealed to the workspace's id
-	if err := s.sealInputs(t, raw, vals, nil, errs, id, ""); err != nil {
+	id := newID() // sensitive inputs are sealed to the workspace's id and module name
+	module := defaultModule(t, raw, nil)
+	if err := s.sealInputs(t, raw, vals, nil, errs, id, module); err != nil {
 		page.Error = err.Error()
 	}
 	if len(errs) > 0 || page.Error != "" {
@@ -184,7 +182,8 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := auth.FromContext(r.Context())
-	ws, run, err := s.Store.CreateWorkspace(r.Context(), id, name, page.Project, t.ID, t.Module.Source, t.Module.Ref, vals, page.AutoApply, u.ID)
+	ws, run, err := s.Store.CreateWorkspace(r.Context(), id, name, page.Project, storage.WorkspaceTemplate{Name: module, TemplateID: t.ID,
+		ModuleSource: t.Module.Source, ModuleRef: t.Module.Ref, Inputs: vals}, page.AutoApply, u.ID)
 	if errors.Is(err, storage.ErrNameTaken) {
 		errs[fieldWorkspace] = err.Error()
 		s.render(w, r, http.StatusUnprocessableEntity, "form.html", page)
@@ -326,33 +325,20 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "state lock", err)
 		return
 	}
-	t, hasTemplate := s.Templates.Get(ws.TemplateID)
 	data := map[string]any{"W": ws, "Lock": lock, "Me": auth.FromContext(ctx).ID, "Runs": runs, "Active": active, "Current": current, "Page": page,
-		"HasTemplate": hasTemplate, "Resources": res, "Versions": versions, "Outputs": outputs, "Destroyed": destroyed,
-		"Assessment": assessment, "CanOperate": level == levelOperate, "Admin": auth.FromContext(ctx).Admin(),
-		"RootInputs": t.Describe(ws.Inputs)} // a deleted template: its inputs by name
+		"Resources": res, "Versions": versions, "Outputs": outputs, "Destroyed": destroyed,
+		"Assessment": assessment, "CanOperate": level == levelOperate, "Admin": auth.FromContext(ctx).Admin()}
 
 	switch tab {
 	case "overview":
-		// the template now pins another module version than the workspace runs.
-		if hasTemplate && (t.Module.Source != ws.ModuleSource || t.Module.Ref != ws.ModuleRef) {
-			data["Update"] = &t.Module
-		}
 		added, err := s.Store.WorkspaceTemplates(ctx, ws.ID)
 		if err != nil {
 			s.internalError(w, "workspace templates", err)
 			return
 		}
-		templateCount := len(added)
-		if ws.TemplateID != "" { // the template the workspace was created from counts too
-			templateCount++
-		}
 		updates := map[string]string{}                 // added template name -> module version its template pins now
 		names := map[string]string{}                   // template id -> display name; a deleted template shows its id
 		inputs := map[string][]templates.StoredValue{} // added template name -> its inputs as its form asks them
-		if hasTemplate {
-			names[t.ID] = t.Name
-		}
 		for _, a := range added {
 			t, ok := s.Templates.Get(a.TemplateID)
 			if ok {
@@ -377,13 +363,13 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 			s.internalError(w, "run metrics", err)
 			return
 		}
-		groups := groupResources(res, ws, added, names)
+		groups := groupResources(res, added, names)
 		counts := map[string]int{} // module call ("" = root) -> resources in the current state
 		for _, g := range groups {
 			call, _, _ := strings.Cut(strings.TrimPrefix(g.Module, "module."), "[")
 			counts[call] += len(g.Rows)
 		}
-		maps.Copy(data, map[string]any{"Added": added, "TemplateCount": templateCount, "Updates": updates, "TemplateNames": names, "AddedInputs": inputs,
+		maps.Copy(data, map[string]any{"Added": added, "TemplateCount": len(added), "Updates": updates, "TemplateNames": names, "AddedInputs": inputs,
 			"ResourceGroups": groups, "TemplateResources": counts,
 			"LatestPlan": latestPlan, "LatestApply": latestApply, "Metrics": metrics, "Show": r.URL.Query().Get("show")})
 
@@ -535,13 +521,13 @@ type pickerItem struct {
 
 // workspacePicker offers the workspaces by name, the selected ones first: they stay selected
 // even if all (a capped list) lacks them.
-func workspacePicker(field, label string, selected []string, all []storage.Workspace, offer func(storage.Workspace) bool) picker {
+func workspacePicker(field, label string, selected []string, all []storage.Workspace) picker {
 	p := picker{Name: field, Label: label, Selected: len(selected)}
 	for _, n := range selected {
 		p.Items = append(p.Items, pickerItem{n, n, true})
 	}
 	for _, ws := range all {
-		if !slices.Contains(selected, ws.Name) && offer(ws) {
+		if !slices.Contains(selected, ws.Name) {
 			p.Items = append(p.Items, pickerItem{ws.Name, ws.Name, false})
 		}
 	}
@@ -578,7 +564,7 @@ func (s *Server) syncSelection(ctx context.Context, have, want []string, exist f
 	return nil
 }
 
-// resourceGroup is the resources of one top-level module ("" = root), with the template it comes from.
+// resourceGroup is the resources of one top-level module ("" = the root: a VCS branch's), with the template it comes from.
 type resourceGroup struct {
 	Module, Template, Ref string
 	Rows                  []resourceRow
@@ -592,7 +578,7 @@ type resourceRow struct {
 
 // groupResources groups resources by top-level module (nested modules stay in their parent's group),
 // modules by name and the root last.
-func groupResources(res []storage.Resource, ws storage.Workspace, added []storage.WorkspaceTemplate, names map[string]string) []resourceGroup {
+func groupResources(res []storage.Resource, added []storage.WorkspaceTemplate, names map[string]string) []resourceGroup {
 	var groups []resourceGroup
 	idx := map[string]int{}
 	for _, r := range res {
@@ -600,9 +586,6 @@ func groupResources(res []storage.Resource, ws storage.Workspace, added []storag
 		i, ok := idx[top]
 		if !ok {
 			g := resourceGroup{Module: top}
-			if top == "" && ws.TemplateID != "" {
-				g.Template, g.Ref = cmp.Or(names[ws.TemplateID], ws.TemplateID), ws.ModuleRef
-			}
 			call, _, _ := strings.Cut(strings.TrimPrefix(top, "module."), "[") // module.vm["a"] is the call vm
 			for _, a := range added {
 				if top != "" && a.Name == call {
@@ -678,70 +661,6 @@ func (s *Server) newRun(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Log.Info("run queued", "workspace", ws.Name, "run", run.ID, "action", action, "user", u.Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID, http.StatusSeeOther)
-}
-
-// configureForm shows the template's form filled with the workspace's inputs, for its current template
-// version: new inputs get their defaults, removed ones are dropped on save.
-func (s *Server) configureForm(w http.ResponseWriter, r *http.Request) {
-	ws, t, ok := s.loadConfigure(w, r)
-	if !ok {
-		return
-	}
-	vals, set := formDefaults(t, ws.Inputs)
-	s.render(w, r, http.StatusOK, "form.html", formPage{T: t, Values: vals, Set: set, Configure: &ws,
-		Cur: templates.Module{Source: ws.ModuleSource, Ref: ws.ModuleRef}})
-}
-
-// configureWorkspace saves new inputs and the template's module version, and starts a plan.
-func (s *Server) configureWorkspace(w http.ResponseWriter, r *http.Request) {
-	ws, t, ok := s.loadConfigure(w, r)
-	if !ok {
-		return
-	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad form", http.StatusBadRequest)
-		return
-	}
-	raw := formValues(r, t)
-	vals, errs := t.Validate(raw)
-	_, set := formDefaults(t, ws.Inputs)
-	page := formPage{T: t, Values: raw, Set: set, Errors: errs, Configure: &ws, Cur: templates.Module{Source: ws.ModuleSource, Ref: ws.ModuleRef}}
-	if err := s.sealInputs(t, raw, vals, ws.Inputs, errs, ws.ID, ""); err != nil {
-		page.Error = err.Error()
-	}
-	if len(errs) > 0 || page.Error != "" {
-		s.render(w, r, http.StatusUnprocessableEntity, "form.html", page)
-		return
-	}
-	u := auth.FromContext(r.Context())
-	run, err := s.Store.ConfigureWorkspace(r.Context(), ws.ID, t.Module.Source, t.Module.Ref, vals, u.ID)
-	if errors.Is(err, storage.ErrRunActive) || errors.Is(err, storage.ErrLocalExecution) {
-		page.Error = err.Error()
-		s.render(w, r, http.StatusConflict, "form.html", page)
-		return
-	}
-	if err != nil {
-		s.internalError(w, "configure workspace", err)
-		return
-	}
-	s.Log.Info("workspace configured", "workspace", ws.Name, "module", t.Module.Source, "ref", t.Module.Ref, "run", run.ID, "user", u.Email)
-	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID, http.StatusSeeOther)
-}
-
-func (s *Server) loadConfigure(w http.ResponseWriter, r *http.Request) (storage.Workspace, templates.Template, bool) {
-	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
-	if !ok {
-		return ws, templates.Template{}, false
-	}
-	t, ok, err := s.template(r.Context(), ws.TemplateID)
-	if err != nil {
-		s.internalError(w, "template", err)
-		return ws, t, false
-	}
-	if !ok {
-		http.Error(w, "this workspace's template no longer exists", http.StatusNotFound)
-	}
-	return ws, t, ok
 }
 
 // workspaceSettings saves the General (name, execution mode, auto-apply, remote state sharing) and Health pages. A new name changes

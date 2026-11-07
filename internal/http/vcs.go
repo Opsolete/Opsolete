@@ -107,8 +107,7 @@ func (s *Server) renderNewConnection(w http.ResponseWriter, r *http.Request, sta
 			s.internalError(w, "list workspaces", err)
 			return
 		}
-		p.Picker = workspacePicker("workspace", "Workspaces that may link this connection's repositories", p.Conn.Workspaces, all,
-			func(ws storage.Workspace) bool { return ws.TemplateID == "" }) // template workspaces never link a repository
+		p.Picker = workspacePicker("workspace", "Workspaces that may link this connection's repositories", p.Conn.Workspaces, all)
 		projects, err := s.Store.Projects(r.Context(), storage.Viewer{Admin: true})
 		if err != nil {
 			s.internalError(w, "list projects", err)
