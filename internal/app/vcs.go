@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/opsolete/opsolete/internal/registry"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/vcs"
 )
@@ -34,7 +35,19 @@ func (a *App) vcsConn(ctx context.Context, connID uuid.UUID, workspace, project 
 		}
 		return vcs.Conn{}, invalid("vcs_connection", fmt.Sprintf("workspace %q may not link repositories through VCS connection %s: ask an admin", workspace, sc.Name))
 	}
-	return a.VCS.ConnFor(a.OpenToken, sc)
+	return a.conn(sc)
+}
+
+// conn opens a stored connection's token: a connection sending through a.VCS.
+func (a *App) conn(sc storage.VCSConnection) (vcs.Conn, error) {
+	token, err := a.OpenToken(sc)
+	return a.VCS.Conn(sc.Provider, sc.BaseURL, token), err
+}
+
+// moduleArchive is c.Archive within the registry's archive size limit: module versions and run
+// sources alike.
+func moduleArchive(ctx context.Context, c vcs.Conn, repo, ref, refType, dir string) ([]byte, error) {
+	return c.Archive(ctx, repo, ref, refType, dir, registry.MaxArchiveSize)
 }
 
 // pinCommit records the commit a plan job runs, unless the run was queued with its commit: the head
@@ -57,7 +70,7 @@ func (a *App) pinCommit(ctx context.Context, j storage.Job) error {
 		if err != nil {
 			return fmt.Errorf("vcs: %w", err)
 		}
-		tag, ok := vcs.LatestTag(tags, ws.VCSTagsRegex)
+		tag, ok := latestTag(tags, ws.VCSTagsRegex)
 		if !ok {
 			return fmt.Errorf("vcs: no tag of %s matches %s", ws.VCSRepo, ws.VCSTagsRegex)
 		}
@@ -95,7 +108,7 @@ func (a *App) VCSArchive(ctx context.Context, runID uuid.UUID, expires, sig stri
 	c, err := a.vcsConn(ctx, ws.VCSConnectionID, ws.Name, ws.ProjectName)
 	var b []byte
 	if err == nil {
-		b, err = c.Archive(ctx, ws.VCSRepo, run.VCSCommit, "commit", "")
+		b, err = moduleArchive(ctx, c, ws.VCSRepo, run.VCSCommit, "commit", "")
 	}
 	if err != nil {
 		a.Log.Warn("vcs archive", "run", run.ID, "repo", ws.VCSRepo, "err", err)

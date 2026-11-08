@@ -191,7 +191,7 @@ func (a *App) VCSRepos(ctx context.Context, actor Actor, id uuid.UUID) ([]string
 	if err != nil {
 		return nil, err
 	}
-	c, err := a.VCS.ConnFor(a.OpenToken, sc)
+	c, err := a.conn(sc)
 	if err != nil {
 		return nil, err
 	}

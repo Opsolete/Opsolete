@@ -15,7 +15,7 @@ import (
 )
 
 // The template catalog: TEMPLATES_DIR, or a Git repository of a VCS connection (Settings → Templates,
-// see vcs.Client.SyncCatalog) that replaces it. Admins edit templates in the builder when it's on: with
+// see PullCatalog) that replaces it. Admins edit templates in the builder when it's on: with
 // TEMPLATE_EDITOR it writes into TEMPLATES_DIR, with a Git catalog it commits or opens a pull request
 // as the catalog's editor mode says. Everyone reads the catalog (Template).
 
@@ -70,7 +70,7 @@ func (a *App) SetTemplateCatalog(ctx context.Context, actor Actor, in CatalogSet
 	} else if err != nil {
 		return err
 	}
-	c, err := a.VCS.ConnFor(a.OpenToken, sc)
+	c, err := a.conn(sc)
 	if err == nil {
 		_, err = c.Head(ctx, tc.Repo, tc.Branch)
 	}
@@ -81,7 +81,7 @@ func (a *App) SetTemplateCatalog(ctx context.Context, actor Actor, in CatalogSet
 		return err
 	}
 	a.Log.Info("template catalog set", "connection", sc.Name, "repo", tc.Repo, "branch", tc.Branch, "dir", tc.Dir, "mode", tc.Mode, "user", actor.Email)
-	if err := a.VCS.SyncCatalog(ctx, a.Store, a.OpenToken, a.Templates); err != nil {
+	if err := a.PullCatalog(ctx); err != nil {
 		return &ValidationError{Message: "Saved, but loading the templates failed: " + err.Error()}
 	}
 	return nil
@@ -98,7 +98,7 @@ func (a *App) SyncCatalog(ctx context.Context, actor Actor) error {
 }
 
 func (a *App) syncCatalog(ctx context.Context) {
-	if err := a.VCS.SyncCatalog(ctx, a.Store, a.OpenToken, a.Templates); err != nil {
+	if err := a.PullCatalog(ctx); err != nil {
 		a.Log.Warn("template catalog sync", "err", err) // recorded as the sync error
 	}
 }
@@ -229,7 +229,7 @@ func (a *App) SaveCatalogTemplate(ctx context.Context, actor Actor, t templates.
 		return t, "", err
 	}
 	if mode, _ := a.Templates.Source(); mode != "" {
-		pr, err = a.VCS.SaveTemplate(ctx, a.Store, a.OpenToken, a.Templates, t, actor.Email)
+		pr, err = a.saveGitTemplate(ctx, t, actor.Email)
 	} else {
 		err = a.Templates.Save(t, editing)
 	}
@@ -251,7 +251,7 @@ func (a *App) DeleteCatalogTemplate(ctx context.Context, actor Actor, id string)
 		return t, "", ErrNotFound
 	}
 	if mode, _ := a.Templates.Source(); mode != "" {
-		pr, err = a.VCS.DeleteTemplate(ctx, a.Store, a.OpenToken, a.Templates, t.ID, actor.Email)
+		pr, err = a.deleteGitTemplate(ctx, t.ID, actor.Email)
 	} else {
 		err = a.Templates.Delete(t.ID)
 	}

@@ -66,20 +66,20 @@ func TestAzureDevOpsRequests(t *testing.T) {
 	if want := []PullRequest{{7, "p7", "feature", "d", ts.URL + "/org/Platform%20Team/_git/cat/pullrequest/7"}}; err != nil || !slices.Equal(prs, want) {
 		t.Fatalf("pull requests (fork left out): %v %v", prs, err)
 	}
-	archive, err := c.Archive(ctx, repo, "c1", "commit", "catalog")
+	archive, err := c.Archive(ctx, repo, "c1", "commit", "catalog", 1<<20)
 	if files, _ := readTarGz(archive); err != nil || len(files) != 1 || files[0].name != "a.json" {
 		t.Fatalf("archive: %v %v", files, err)
 	}
-	if err := c.createBranch(ctx, repo, "opsolete/x", "c1"); err != nil {
+	if err := c.CreateBranch(ctx, repo, "opsolete/x", "c1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.commitFile(ctx, repo, "opsolete/x", "c1", "catalog/new.json", []byte("{}"), true, "Add"); err != nil {
+	if err := c.CommitFile(ctx, repo, "opsolete/x", "c1", "catalog/new.json", []byte("{}"), true, "Add"); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.commitFile(ctx, repo, "main", "h1", "catalog/a.json", nil, false, "Remove"); err != nil {
+	if err := c.CommitFile(ctx, repo, "main", "h1", "catalog/a.json", nil, false, "Remove"); err != nil {
 		t.Fatal(err)
 	}
-	if u, err := c.openPR(ctx, repo, "opsolete/x", "main", "Add", "body"); err != nil || u != ts.URL+"/org/Platform%20Team/_git/cat/pullrequest/9" {
+	if u, err := c.OpenPR(ctx, repo, "opsolete/x", "main", "Add", "body"); err != nil || u != ts.URL+"/org/Platform%20Team/_git/cat/pullrequest/9" {
 		t.Fatalf("pr: %q %v", u, err)
 	}
 	p := "/org/Platform Team/_apis/git/repositories/cat"
@@ -98,5 +98,8 @@ func TestAzureDevOpsRequests(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("requests:\n%s", strings.Join(got, "\n"))
+	} // after the request list: an archive over the caller's limit is refused
+	if _, err := c.Archive(ctx, repo, "c1", "commit", "catalog", 10); err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("an archive over the limit: %v", err)
 	}
 }

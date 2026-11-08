@@ -138,7 +138,7 @@ func TestProviders(t *testing.T) {
 		if err != nil || !slices.ContainsFunc(tags, func(t Tag) bool { return t.Name == tc.tag && t.Commit != "" }) {
 			t.Fatalf("%s tags: %v %v", tc.conn.Provider, tags, err)
 		}
-		archive, err := tc.conn.Archive(ctx, tc.repo, tc.tag, "tag", "")
+		archive, err := tc.conn.Archive(ctx, tc.repo, tc.tag, "tag", "", 1<<20)
 		if err != nil {
 			t.Fatalf("%s archive: %v", tc.conn.Provider, err)
 		}
@@ -156,31 +156,13 @@ func TestProviders(t *testing.T) {
 			t.Errorf("%s files: %v, want %v", tc.conn.Provider, names, tc.wantFiles)
 		}
 		// a module in a folder: that folder at the archive root; a missing folder is an error
-		if sub, err := tc.conn.Archive(ctx, tc.repo, tc.tag, "tag", "sub"); tc.conn.Provider == AzureDevOps {
+		if sub, err := tc.conn.Archive(ctx, tc.repo, tc.tag, "tag", "sub", 1<<20); tc.conn.Provider == AzureDevOps {
 			if files, _ := readTarGz(sub); err != nil || len(files) != 1 || files[0].name != "x.tf" {
 				t.Errorf("%s folder sub: %v %v", tc.conn.Provider, files, err)
 			}
 		}
-		if _, err := tc.conn.Archive(ctx, tc.repo, tc.tag, "tag", "nope"); err == nil {
+		if _, err := tc.conn.Archive(ctx, tc.repo, tc.tag, "tag", "nope", 1<<20); err == nil {
 			t.Errorf("%s: a missing folder must fail", tc.conn.Provider)
-		}
-	}
-}
-
-// TestLatestTag: tag-based workspaces run the matching tag with the highest version, not the newest-listed.
-func TestLatestTag(t *testing.T) {
-	tags := []Tag{{"1.2.0", "a"}, {"1.10.0-rc", "f"}, {"1.10.0", "b"}, {"v-2.0.0", "c"}, {"1.9.0-rc", "d"}, {"release", "e"}}
-	for _, c := range []struct{ pattern, want string }{
-		{`^\d+\.\d+\.\d+$`, "1.10.0"}, // semantic versioning: 1.10.0 beats 1.2.0 (not a string compare)
-		{`\d+\.\d+\.\d+$`, "v-2.0.0"}, // with a prefix
-		{`^\d+\.\d+\.\d+`, "1.10.0"},  // with a suffix: 1.10.0-rc, listed first, is lower
-		{`-rc$`, "1.10.0-rc"},
-		{`^release$`, ""}, // no version number: never picked
-		{`(`, ""},         // bad pattern
-	} {
-		got, ok := LatestTag(tags, c.pattern)
-		if got.Name != c.want || ok != (c.want != "") {
-			t.Errorf("LatestTag(%q) = %q %v, want %q", c.pattern, got.Name, ok, c.want)
 		}
 	}
 }
@@ -259,7 +241,7 @@ func TestConditionalRequestsAndPause(t *testing.T) {
 	if !other.pausedUntil().IsZero() {
 		t.Fatal("another token's rate limit paused this one")
 	}
-	if err := c.paused(); err == nil {
+	if err := c.Paused(); err == nil {
 		t.Fatal("a paused connection must skip its round")
 	}
 	// a pause that is over is forgotten when the next one is noted

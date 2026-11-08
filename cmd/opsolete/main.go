@@ -238,7 +238,7 @@ func serve(log *slog.Logger) error {
 	server.RunnerToken = cfg.RunnerToken
 	// A catalog in Git (Settings → Templates) replaces TEMPLATES_DIR: its last loaded commit now, then what the leader syncs.
 	if cfg.Deployments {
-		if err := vcs.LoadCatalog(ctx, store, tpls); err != nil {
+		if err := ops.LoadCatalog(ctx); err != nil {
 			return err
 		}
 		if mode, commit := tpls.Source(); mode != "" {
@@ -295,7 +295,7 @@ func jobs(cfg config.Config, a *app.App) []app.Job {
 	var js []app.Job
 	if cfg.Registry {
 		js = append(js, app.Job{Name: "vcs modules", Every: 5 * time.Minute,
-			Run: func(ctx context.Context) error { return a.VCS.Poll(ctx, a.Store, a.OpenToken, a.Log) }})
+			Run: a.PollVCSModules})
 	}
 	if !cfg.Deployments {
 		return js
@@ -313,11 +313,11 @@ func jobs(cfg config.Config, a *app.App) []app.Job {
 		app.Job{Name: "retention", Every: time.Hour,
 			Run: func(ctx context.Context) error { _, err := a.Retention(ctx); return err }},
 		app.Job{Name: "vcs runs", Every: time.Minute,
-			Run: func(ctx context.Context) error { return a.VCS.PollRuns(ctx, a.Store, a.OpenToken, a.Log) }},
+			Run: a.PollVCSRuns},
 		app.Job{Name: "catalog sync", Every: time.Minute,
-			Run: func(ctx context.Context) error { return a.VCS.SyncCatalog(ctx, a.Store, a.OpenToken, a.Templates) }},
+			Run: a.PullCatalog},
 		// every replica serves templates from memory: reload them when the leader (or an edit) changed the snapshot
 		app.Job{Name: "catalog reload", Every: 10 * time.Second, Local: true,
-			Run: func(ctx context.Context) error { return vcs.ReloadCatalog(ctx, a.Store, a.Templates) }},
+			Run: a.ReloadCatalog},
 	)
 }

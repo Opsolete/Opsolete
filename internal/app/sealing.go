@@ -47,7 +47,7 @@ func InputAD(workspaceID uuid.UUID, module, name string) string {
 // BlobAD binds a sealed file to its key.
 func BlobAD(key string) string { return "blob\x00" + key }
 
-// OpenToken opens a stored VCS connection's token (vcs.OpenToken).
+// OpenToken opens a stored VCS connection's token.
 func (a *App) OpenToken(c storage.VCSConnection) (string, error) {
 	return a.Secrets.Open(c.Token, TokenAD(c))
 }

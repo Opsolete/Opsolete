@@ -11,16 +11,15 @@ import (
 	"io"
 	"path"
 	"strings"
-
-	"github.com/opsolete/opsolete/internal/registry"
 )
 
 // ErrNoFolder is a module's folder missing at a ref, e.g. a monorepo tag from before the module existed.
 var ErrNoFolder = errors.New("folder missing at this ref")
 
 // Archive downloads the repository at a tag or commit (refType "tag" | "commit") as a module
-// archive: a .tar.gz with folder dir of the repo ("" = the root) at the archive root.
-func (c Conn) Archive(ctx context.Context, repo, ref, refType, dir string) ([]byte, error) {
+// archive: a .tar.gz with folder dir of the repo ("" = the root) at the archive root, at most max
+// bytes (a required limit: archives are kept in memory and stored).
+func (c Conn) Archive(ctx context.Context, repo, ref, refType, dir string, max int) ([]byte, error) {
 	files, err := c.download(ctx, repo, ref, refType)
 	if err != nil {
 		return nil, err
@@ -31,11 +30,24 @@ func (c Conn) Archive(ctx context.Context, repo, ref, refType, dir string) ([]by
 			return nil, fmt.Errorf("no folder %q in the repository: %w", dir, ErrNoFolder)
 		}
 	}
-	out, err := writeTarGz(files)
-	if err == nil && len(out) > registry.MaxArchiveSize {
-		err = fmt.Errorf("module archive larger than %d MB", registry.MaxArchiveSize>>20)
+	b, err := writeTarGz(files)
+	if err == nil && len(b) > max {
+		err = fmt.Errorf("module archive larger than %d MB", max>>20)
 	}
-	return out, err
+	return b, err
+}
+
+// Files returns the files of repo at a tag or commit (refType "tag" | "commit"), named relative to the repo root.
+func (c Conn) Files(ctx context.Context, repo, ref, refType string) (map[string][]byte, error) {
+	files, err := c.download(ctx, repo, ref, refType)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]byte, len(files))
+	for _, f := range files {
+		out[f.name] = f.body
+	}
+	return out, nil
 }
 
 // download returns the files of repo at a tag or commit, named relative to the repo root.

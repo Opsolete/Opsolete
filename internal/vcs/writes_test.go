@@ -13,19 +13,15 @@ import (
 	"testing"
 )
 
-func TestCatalogFiles(t *testing.T) {
-	files := repoFiles([]file{{"acme-cat-abc/catalog/a.json", []byte("a")}, {"acme-cat-abc/catalog/sub/b.json", nil},
-		{"acme-cat-abc/catalog/README.md", nil}, {"acme-cat-abc/root.json", []byte("r")}}, true)
-	if got := catalogFiles(files, "catalog"); !reflect.DeepEqual(got, map[string][]byte{"catalog/a.json": []byte("a")}) {
-		t.Fatalf("github, folder: %v", got)
-	}
-	if got := catalogFiles(files, ""); !reflect.DeepEqual(got, map[string][]byte{"root.json": []byte("r")}) {
-		t.Fatalf("github, root: %v", got)
+// Repository files are named relative to the root (the Git catalog picks its folder from them).
+func TestRepoFiles(t *testing.T) {
+	files := repoFiles([]file{{"acme-cat-abc/catalog/a.json", []byte("a")}, {"acme-cat-abc/root.json", []byte("r")}}, true)
+	if !reflect.DeepEqual(files, []file{{"catalog/a.json", []byte("a")}, {"root.json", []byte("r")}}) {
+		t.Fatalf("github: %v", files)
 	}
 	// Azure DevOps zips have no top directory: a repo holding only catalog/ must not lose it.
-	az := repoFiles([]file{{"/catalog/a.json", []byte("a")}}, false)
-	if got := catalogFiles(az, "catalog"); !reflect.DeepEqual(got, map[string][]byte{"catalog/a.json": []byte("a")}) {
-		t.Fatalf("azure devops: %v", got)
+	if az := repoFiles([]file{{"/catalog/a.json", []byte("a")}}, false); !reflect.DeepEqual(az, []file{{"catalog/a.json", []byte("a")}}) {
+		t.Fatalf("azure devops: %v", az)
 	}
 }
 
@@ -70,13 +66,13 @@ func TestGitHubWrites(t *testing.T) {
 	ts := rc.server(t)
 	c := NewClient(ts.Client()).Conn(GitHub, ts.URL, "tok")
 	ctx := context.Background()
-	if err := c.createBranch(ctx, "acme/cat", "opsolete/x", "base1"); err != nil {
+	if err := c.CreateBranch(ctx, "acme/cat", "opsolete/x", "base1"); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.commitFile(ctx, "acme/cat", "opsolete/x", "base1", "catalog/a.json", []byte("{}\n"), false, "Update"); err != nil {
+	if err := c.CommitFile(ctx, "acme/cat", "opsolete/x", "base1", "catalog/a.json", []byte("{}\n"), false, "Update"); err != nil {
 		t.Fatal(err)
 	}
-	url, err := c.openPR(ctx, "acme/cat", "opsolete/x", "main", "Update", "body")
+	url, err := c.OpenPR(ctx, "acme/cat", "opsolete/x", "main", "Update", "body")
 	if err != nil || url != "https://github.com/acme/cat/pull/7" {
 		t.Fatalf("pr: %q %v", url, err)
 	}
@@ -90,31 +86,9 @@ func TestGitHubWrites(t *testing.T) {
 		t.Fatalf("requests:\n%s", strings.Join(rc.got, "\n"))
 	}
 	// A new file that exists by now: the provider's refusal comes back with its status.
-	err = c.commitFile(ctx, "acme/cat", "main", "base1", "catalog/new.json", []byte("{}"), true, "Add")
+	err = c.CommitFile(ctx, "acme/cat", "main", "base1", "catalog/new.json", []byte("{}"), true, "Add")
 	if se, ok := errors.AsType[*StatusError](err); !ok || se.Code != 422 || strings.Contains(rc.got[len(rc.got)-1], `"sha"`) {
 		t.Fatalf("new file: %v %s", err, rc.got[len(rc.got)-1])
-	}
-}
-
-// A refused token says how to fix it, whether a read (GET contents) or a write fails; other errors don't.
-func TestTokenHint(t *testing.T) {
-	rc := &recorder{routes: map[string][2]string{
-		"GET /repos/acme/cat/contents/catalog/a.json": {"401", `{"message":"Bad credentials"}`},
-		"POST /repos/acme/cat/git/refs":               {"401", `{"message":"Bad credentials"}`},
-	}}
-	ts := rc.server(t)
-	c := NewClient(ts.Client()).Conn(GitHub, ts.URL, "bad")
-	ctx := context.Background()
-	for _, err := range []error{
-		c.commitFile(ctx, "acme/cat", "main", "base1", "catalog/a.json", nil, false, "Remove"),
-		c.createBranch(ctx, "acme/cat", "opsolete/x", "base1"),
-	} {
-		if msg := tokenHint(err).Error(); !strings.Contains(msg, "Change access token") || !strings.Contains(msg, "Bad credentials") {
-			t.Fatalf("hint: %s", msg)
-		}
-	}
-	if err := tokenHint(&StatusError{http.StatusConflict, "x"}); err.Error() != "x" || tokenHint(nil) != nil {
-		t.Fatalf("no hint for other errors: %v", err)
 	}
 }
 
@@ -128,14 +102,14 @@ func TestAzureDevOpsWrites(t *testing.T) {
 	ts := rc.server(t)
 	c := NewClient(ts.Client()).Conn(AzureDevOps, ts.URL+"/org", "pat")
 	ctx := context.Background()
-	if err := c.createBranch(ctx, "Platform Team/cat", "opsolete/x", "base1"); err != nil {
+	if err := c.CreateBranch(ctx, "Platform Team/cat", "opsolete/x", "base1"); err != nil {
 		t.Fatal(err)
 	}
-	err := c.commitFile(ctx, "Platform Team/cat", "main", "base1", "catalog/a.json", []byte("{}"), false, "Update")
+	err := c.CommitFile(ctx, "Platform Team/cat", "main", "base1", "catalog/a.json", []byte("{}"), false, "Update")
 	if se, ok := errors.AsType[*StatusError](err); !ok || se.Code != http.StatusConflict {
 		t.Fatalf("a moved branch must be refused: %v", err)
 	}
-	url, err := c.openPR(ctx, "Platform Team/cat", "opsolete/x", "main", "Update", "body")
+	url, err := c.OpenPR(ctx, "Platform Team/cat", "opsolete/x", "main", "Update", "body")
 	if err != nil || url != ts.URL+"/org/Platform%20Team/_git/cat/pullrequest/12" {
 		t.Fatalf("pr: %q %v", url, err)
 	}

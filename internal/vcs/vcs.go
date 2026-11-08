@@ -1,7 +1,7 @@
-// Package vcs publishes registry modules from GitHub and Azure DevOps repositories (every
-// semver tag of a linked repo becomes an immutable module version), and starts the runs of
-// workspaces linked to a branch on pushes and pull requests (see PollRuns). It talks
-// to the providers' REST APIs with an access token, so the server needs no git binary.
+// Package vcs is the client of GitHub and Azure DevOps: repositories, tags, branch heads, pull
+// requests, archives and the commits and pull requests of the template editor. It talks to the
+// providers' REST APIs with an access token, so the server needs no git binary. What Opsolete does
+// with them (module versions, VCS runs, the Git template catalog) is internal/app's.
 package vcs
 
 import (
@@ -18,8 +18,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/opsolete/opsolete/internal/storage"
 )
 
 const (
@@ -37,14 +35,13 @@ var Providers = []struct{ ID, Label, DefaultURL, Placeholder string }{
 	{AzureDevOps, "Azure DevOps", "", "https://dev.azure.com/<organization>"},
 }
 
-// Client talks to the providers and keeps what polling learns between rounds: cached responses,
-// rate-limit pauses and tags without a module's folder. App owns one; tests build their own.
+// Client talks to the providers and keeps what polling learns between rounds: cached responses and
+// rate-limit pauses. App owns one; tests build their own.
 type Client struct {
-	http     *http.Client
-	mu       sync.Mutex
-	cache    map[string]cachedResponse
-	pauses   map[string]time.Time        // token hash + API root -> when the provider wants polling to resume
-	noFolder map[string]map[string]error // module (connection, repo, folder) -> tag commit -> the ErrNoFolder Archive gave there
+	http   *http.Client
+	mu     sync.Mutex
+	cache  map[string]cachedResponse
+	pauses map[string]time.Time // token hash + API root -> when the provider wants polling to resume
 }
 
 // NewClient returns a client sending through hc; nil uses a client with a 2 minute timeout.
@@ -52,7 +49,7 @@ func NewClient(hc *http.Client) *Client {
 	if hc == nil {
 		hc = &http.Client{Timeout: 2 * time.Minute}
 	}
-	return &Client{http: hc, cache: map[string]cachedResponse{}, pauses: map[string]time.Time{}, noFolder: map[string]map[string]error{}}
+	return &Client{http: hc, cache: map[string]cachedResponse{}, pauses: map[string]time.Time{}}
 }
 
 // Conn is a usable connection: provider, API root and plain token, sending through its client.
@@ -172,8 +169,8 @@ func (c Conn) pausedUntil() time.Time {
 	return time.Time{}
 }
 
-// paused is an error while the provider asked to wait: pollers skip a round instead of hammering it.
-func (c Conn) paused() error {
+// Paused is an error while the provider asked to wait: pollers skip a round instead of hammering it.
+func (c Conn) Paused() error {
 	if until := c.pausedUntil(); !until.IsZero() {
 		return fmt.Errorf("%s asked to wait: polling resumes at %s", c.Provider, until.Format(time.TimeOnly))
 	}
@@ -218,7 +215,7 @@ func later(a, b time.Time) time.Time {
 }
 
 // get fetches u; conditional (GitHub only, see cache) makes it a conditional request.
-// errNoClient: a Conn built as a literal, not by Client.Conn or Client.ConnFor (a bug).
+// errNoClient: a Conn built as a literal, not by Client.Conn (a bug).
 var errNoClient = errors.New("vcs: connection without a client (build it with Client.Conn)")
 
 func (c Conn) get(ctx context.Context, u string, limit int64, conditional bool) ([]byte, error) {
@@ -380,13 +377,4 @@ func (c Conn) PullRequests(ctx context.Context, repo, branch string) ([]PullRequ
 		return nil, err
 	}
 	return p.pullRequests(ctx, c, repo, a, b, branch)
-}
-
-// OpenToken opens a stored connection's sealed token (app.App.OpenToken).
-type OpenToken func(storage.VCSConnection) (string, error)
-
-// ConnFor opens a stored connection's token.
-func (cl *Client) ConnFor(open OpenToken, c storage.VCSConnection) (Conn, error) {
-	token, err := open(c)
-	return cl.Conn(c.Provider, c.BaseURL, token), err
 }

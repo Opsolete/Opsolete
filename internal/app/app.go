@@ -36,6 +36,8 @@ type App struct {
 	VCS             *vcs.Client // talks to GitHub and Azure DevOps; its caches live on this replica
 	Notify          *Notifier   // wakes runner claims and log streams; nil: they look every NotifyFallback
 	Log             *slog.Logger
+
+	noFolder noFolderCache // tag commits without a linked module's folder (vcssync.go)
 }
 
 // Actor is who performs an operation. A system actor (VCS poller, rollouts) has UserID uuid.Nil,

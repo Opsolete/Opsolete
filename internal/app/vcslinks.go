@@ -11,7 +11,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/opsolete/opsolete/internal/storage"
-	"github.com/opsolete/opsolete/internal/vcs"
 )
 
 // A workspace's own configuration can be a VCS branch (or its tags) of a repository that one of the
@@ -78,7 +77,7 @@ func (a *App) resolveVCSLink(ctx context.Context, ws storage.Workspace, in VCSLi
 	}
 	// storage keeps the baseline of an unchanged link (connection, repository, tag format)
 	if l.ConnectionID != ws.VCSConnectionID || l.Repo != ws.VCSRepo || l.TagsRegex != ws.VCSTagsRegex {
-		t, _ := vcs.LatestTag(tags, l.TagsRegex)
+		t, _ := latestTag(tags, l.TagsRegex)
 		l.TagBaseline = t.Commit
 	}
 	return &l, nil
@@ -143,7 +142,7 @@ func (a *App) LinkableVCS(ctx context.Context, actor Actor, workspace, project s
 		if sc.ID != reposOf {
 			continue
 		}
-		c, err := a.VCS.ConnFor(a.OpenToken, sc)
+		c, err := a.conn(sc)
 		if err == nil {
 			repos, err = c.Repos(ctx)
 		}
@@ -174,7 +173,7 @@ func (a *App) VCSHealth(ctx context.Context, actor Actor, workspace string) (*st
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	c, err := a.VCS.ConnFor(a.OpenToken, sc)
+	c, err := a.conn(sc)
 	if err == nil && ws.VCSTagsRegex != "" {
 		_, err = c.Tags(ctx, ws.VCSRepo)
 	} else if err == nil {
