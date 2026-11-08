@@ -131,11 +131,32 @@
   // Follow the log live; reload once a runner is done with the run (finished, or waiting for confirmation).
   const log = document.getElementById("log"), wasWorking = {{$r.Working}};
   const es = new EventSource(location.pathname + "/logs/stream");
-  // Terraform's own plan colors (tfexec forces -no-color), applied per whole line.
-  const styles = [[/^==> .*failed$/, "tf-del tf-b"], [/^==> /, "tf-step"], [/^\s*(-\/\+|\+\/-)\s/, "tf-chg"],
-    [/^\s*\+\s/, "tf-add"], [/^\s*-\s/, "tf-del"], [/^\s*~\s/, "tf-chg"], [/^\s*<=\s/, "tf-read"],
-    [/^\s*#\s/, "tf-b"], [/^Error: /, "tf-del tf-b"], [/^Warning: /, "tf-chg tf-b"],
-    [/^(Plan:|Apply complete!|Destroy complete!|No changes\.)/, "tf-b"]];
+  // Terraform's own plan colors (tfexec forces -no-color): like its renderer, only the action
+  // symbols, "->" and a few comments, and only in plan output (init prints "- Installing ...").
+  const span = (cls, text) => Object.assign(document.createElement("span"), { className: cls, textContent: text });
+  const symbols = { "+": [["tf-add", "+"]], "-": [["tf-del", "-"]], "~": [["tf-chg", "~"]], "<=": [["tf-read", "<="]],
+    "-/+": [["tf-del", "-"], ["", "/"], ["tf-add", "+"]], "+/-": [["tf-add", "+"], ["", "/"], ["tf-del", "-"]] };
+  const inline = { " -> null": "tf-dim", "->": "tf-chg", "# forces replacement": "tf-del" };
+  let inPlan = false;
+  const render = (line) => {
+    if (line.startsWith("==> ")) {
+      inPlan = line.startsWith("==> terraform plan");
+      return span(line.endsWith("failed") ? "tf-del tf-b" : "tf-step", line);
+    }
+    if (/^Error: /.test(line)) return span("tf-del tf-b", line);
+    if (/^Warning: /.test(line)) return span("tf-chg tf-b", line);
+    if (/^(Apply|Destroy) complete!/.test(line)) return span("tf-add tf-b", line);
+    if (!inPlan) return line;
+    if (/^\s*# \(\d+ unchanged .* hidden\)$/.test(line)) return span("tf-dim", line);
+    if (/^\s*# |^Plan: |^No changes\./.test(line)) return span("tf-b", line);
+    const f = document.createDocumentFragment(), m = line.match(/^(\s*)(-\/\+|\+\/-|<=|[+~-])( .*|)$/);
+    if (m) {
+      f.append(m[1], ...symbols[m[2]].map(([c, t]) => c ? span(c, t) : t));
+      line = m[3];
+    }
+    line.split(/( -> null|->|# forces replacement)/).forEach((t, i) => f.append(i % 2 ? span(inline[t], t) : t));
+    return f;
+  };
   let first = true, rest = "", tail = null;
   es.onmessage = (e) => {
     if (first) { log.textContent = ""; first = false; }
@@ -143,14 +164,7 @@
     const lines = (rest + e.data).split("\n");
     rest = lines.pop(); // a chunk can end mid-line: style it once it's complete
     tail?.remove();
-    for (const line of lines) {
-      const cls = styles.find(([re]) => re.test(line))?.[1];
-      if (!cls) { log.append(line + "\n"); continue; } // text nodes: += would re-render the whole log
-      const s = document.createElement("span");
-      s.className = cls;
-      s.textContent = line + "\n";
-      log.append(s);
-    }
+    for (const line of lines) log.append(render(line), "\n"); // nodes: += would re-render the whole log
     tail = document.createTextNode(rest);
     log.append(tail);
     if (atBottom) log.scrollTop = log.scrollHeight;
