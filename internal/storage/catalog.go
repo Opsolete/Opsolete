@@ -32,6 +32,12 @@ func (s *Store) GetTemplateCatalog(ctx context.Context) (TemplateCatalog, error)
 	return c, json.Unmarshal(r.Files, &c.Files)
 }
 
+// TemplateCatalogVersion returns the editor mode and commit of the stored catalog; ErrNotFound like GetTemplateCatalog.
+func (s *Store) TemplateCatalogVersion(ctx context.Context) (mode, commit string, err error) {
+	r, err := s.q.TemplateCatalogVersion(ctx)
+	return r.Mode, r.CommitSha, notFound(err)
+}
+
 // SetTemplateCatalog points the catalog at a repository. The next sync loads it afresh (another folder
 // may have the same commit); until then the last files stay, as the fallback if it fails.
 func (s *Store) SetTemplateCatalog(ctx context.Context, c TemplateCatalog) error {

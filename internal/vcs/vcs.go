@@ -865,62 +865,46 @@ func syncModule(ctx context.Context, st *storage.Store, key []byte, m storage.VC
 	return added, errors.Join(errs...)
 }
 
-// Poll syncs every linked module now and then every interval, until ctx ends. It needs no inbound
-// webhooks, so Opsolete can stay private.
-func Poll(ctx context.Context, st *storage.Store, key []byte, interval time.Duration, log *slog.Logger) {
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	for {
-		mods, err := st.VCSModules(ctx)
+// Poll syncs every linked module once (a scheduler job). It needs no inbound webhooks, so Opsolete
+// can stay private. A module's error is logged and doesn't stop the others.
+func Poll(ctx context.Context, st *storage.Store, key []byte, log *slog.Logger) error {
+	mods, err := st.VCSModules(ctx)
+	if err != nil {
+		return fmt.Errorf("list vcs modules: %w", err)
+	}
+	for _, m := range mods {
+		added, err := Sync(ctx, st, key, m)
 		if err != nil && ctx.Err() == nil {
-			log.Error("list vcs modules", "err", err)
+			log.Warn("vcs sync", "module", m.Namespace+"/"+m.Name+"/"+m.System, "repo", m.Repo, "err", err)
 		}
-		for _, m := range mods {
-			added, err := Sync(ctx, st, key, m)
-			if err != nil && ctx.Err() == nil {
-				log.Warn("vcs sync", "module", m.Namespace+"/"+m.Name+"/"+m.System, "repo", m.Repo, "err", err)
-			}
-			if len(added) > 0 {
-				log.Info("module versions published from vcs", "module", m.Namespace+"/"+m.Name+"/"+m.System, "versions", added)
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
+		if len(added) > 0 {
+			log.Info("module versions published from vcs", "module", m.Namespace+"/"+m.Name+"/"+m.System, "versions", added)
 		}
 	}
+	return nil
 }
 
-// PollRuns queues the runs VCS events call for, now and then every interval, until ctx ends: an
-// apply run for a new commit on a workspace's branch, a speculative plan for each new commit of a
-// pull request into it. Polling, like Poll, needs no inbound webhooks, so Opsolete can stay
-// internal. Each repository branch is polled once per round however many workspaces link it, and
-// on GitHub with conditional requests, so an unchanged branch costs no rate limit.
-func PollRuns(ctx context.Context, st *storage.Store, key []byte, interval time.Duration, log *slog.Logger) {
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	for {
-		wss, err := st.VCSTriggered(ctx)
-		if err != nil && ctx.Err() == nil {
-			log.Error("list vcs-triggered workspaces", "err", err)
-		}
-		groups := map[string][]storage.Workspace{}
-		for _, ws := range wss {
-			k := ws.VCSConnectionID.String() + "\n" + strings.ToLower(ws.VCSRepo) + "\n" + ws.VCSBranch
-			groups[k] = append(groups[k], ws)
-		}
-		for _, g := range groups {
-			if err := TriggerRuns(ctx, st, key, g); err != nil && ctx.Err() == nil {
-				log.Warn("vcs trigger", "repo", g[0].VCSRepo, "branch", g[0].VCSBranch, "workspaces", len(g), "err", err)
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
+// PollRuns queues the runs VCS events call for, once (a scheduler job): an apply run for a new
+// commit on a workspace's branch, a speculative plan for each new commit of a pull request into it.
+// Polling, like Poll, needs no inbound webhooks, so Opsolete can stay internal. Each repository
+// branch is polled once per round however many workspaces link it, and on GitHub with conditional
+// requests, so an unchanged branch costs no rate limit.
+func PollRuns(ctx context.Context, st *storage.Store, key []byte, log *slog.Logger) error {
+	wss, err := st.VCSTriggered(ctx)
+	if err != nil {
+		return fmt.Errorf("list vcs-triggered workspaces: %w", err)
+	}
+	groups := map[string][]storage.Workspace{}
+	for _, ws := range wss {
+		k := ws.VCSConnectionID.String() + "\n" + strings.ToLower(ws.VCSRepo) + "\n" + ws.VCSBranch
+		groups[k] = append(groups[k], ws)
+	}
+	for _, g := range groups {
+		if err := TriggerRuns(ctx, st, key, g); err != nil && ctx.Err() == nil {
+			log.Warn("vcs trigger", "repo", g[0].VCSRepo, "branch", g[0].VCSBranch, "workspaces", len(g), "err", err)
 		}
 	}
+	return nil
 }
 
 // TriggerRuns queues the runs a branch and its pull requests call for (see PollRuns) on the

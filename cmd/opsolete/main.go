@@ -229,29 +229,28 @@ func serve(log *slog.Logger) error {
 	} else if n > 0 {
 		log.Info("re-sealed variables and VCS tokens", "count", n)
 	}
-	if vcsOn {
-		if cfg.Registry {
-			go vcs.Poll(ctx, store, ops.SecretKey, 5*time.Minute, log)
+	// A catalog in Git (Settings → Templates) replaces TEMPLATES_DIR: its last loaded commit now, then what the leader syncs.
+	if cfg.Deployments {
+		if err := vcs.LoadCatalog(ctx, store, tpls); err != nil {
+			return err
 		}
-		if cfg.Deployments {
-			go vcs.PollRuns(ctx, store, ops.SecretKey, time.Minute, log)
-			// A catalog in Git (Settings → Templates) replaces TEMPLATES_DIR: its last loaded commit now, then the branch head.
-			if err := vcs.LoadCatalog(ctx, store, tpls); err != nil {
-				return err
-			}
-			if mode, commit := tpls.Source(); mode != "" {
-				log.Info("templates loaded from git", "count", len(tpls.List()), "commit", commit, "editor", mode)
-			}
-			go vcs.PollCatalog(ctx, store, ops.SecretKey, tpls, time.Minute, log)
+		if mode, commit := tpls.Source(); mode != "" {
+			log.Info("templates loaded from git", "count", len(tpls.List()), "commit", commit, "editor", mode)
 		}
 	}
 	if err := server.App.CheckTemplates(); err != nil {
 		return err
 	}
 	log.Info("components", "deployments", cfg.Deployments, "registry", cfg.Registry, "vcs", vcsOn)
-	if cfg.Deployments {
-		go reapLostRunners(ctx, server, cfg.StaleLockTimeout)
-	}
+	sched := &app.Scheduler{Jobs: jobs(cfg, ops), DB: store.Pool.Config().ConnConfig, Retry: 5 * time.Second, Log: log,
+		OnLead: func(on bool) {
+			v := 0.0
+			if on {
+				v = 1
+			}
+			httpserver.SchedulerLeader.Set(v)
+		}}
+	defer sched.Start(ctx)() // runs before store.Close: jobs stop first
 
 	if cfg.MetricsAddr != "" { // its own listener, so /metrics isn't reachable through the public ingress
 		ln, err := net.Listen("tcp", cfg.MetricsAddr)
@@ -283,20 +282,32 @@ func serve(log *slog.Logger) error {
 	return nil
 }
 
-// reapLostRunners fails running jobs whose runner stopped heartbeating (crash, node loss), and
-// releases orphaned state locks, queues the next batches of template rollouts and the drift checks that are due.
-func reapLostRunners(ctx context.Context, server *httpserver.Server, staleLock time.Duration) {
-	t := time.NewTicker(15 * time.Second)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			server.App.ReapLeases(ctx)
-			server.App.ReleaseOrphanedLocks(ctx, staleLock)
-			server.App.TickRollouts(ctx)
-			server.App.QueueDriftChecks(ctx)
-		}
+// jobs is the server's background work. It runs on one replica at a time (app.Scheduler), except Local jobs.
+func jobs(cfg config.Config, a *app.App) []app.Job {
+	var js []app.Job
+	if cfg.Registry {
+		js = append(js, app.Job{Name: "vcs modules", Every: 5 * time.Minute,
+			Run: func(ctx context.Context) error { return vcs.Poll(ctx, a.Store, a.SecretKey, a.Log) }})
 	}
+	if !cfg.Deployments {
+		return js
+	}
+	logged := func(f func(context.Context)) func(context.Context) error { // these log their own errors
+		return func(ctx context.Context) error { f(ctx); return nil }
+	}
+	return append(js,
+		// runs whose runner stopped heartbeating (crash, node loss) fail
+		app.Job{Name: "reap leases", Every: 15 * time.Second, Run: logged(a.ReapLeases)},
+		app.Job{Name: "orphaned locks", Every: 15 * time.Second,
+			Run: logged(func(ctx context.Context) { a.ReleaseOrphanedLocks(ctx, cfg.StaleLockTimeout) })},
+		app.Job{Name: "rollouts", Every: 15 * time.Second, Run: logged(a.TickRollouts)},
+		app.Job{Name: "drift checks", Every: 15 * time.Second, Run: logged(a.QueueDriftChecks)},
+		app.Job{Name: "vcs runs", Every: time.Minute,
+			Run: func(ctx context.Context) error { return vcs.PollRuns(ctx, a.Store, a.SecretKey, a.Log) }},
+		app.Job{Name: "catalog sync", Every: time.Minute,
+			Run: func(ctx context.Context) error { return vcs.SyncCatalog(ctx, a.Store, a.SecretKey, a.Templates) }},
+		// every replica serves templates from memory: reload them when the leader (or an edit) changed the snapshot
+		app.Job{Name: "catalog reload", Every: 10 * time.Second, Local: true,
+			Run: func(ctx context.Context) error { return vcs.ReloadCatalog(ctx, a.Store, a.Templates) }},
+	)
 }

@@ -5,6 +5,10 @@
 -- name: GetTemplateCatalog :one
 SELECT connection_id, repo, branch, dir, mode, commit_sha, files, synced_at, sync_error FROM template_catalog;
 
+-- name: TemplateCatalogVersion :one
+-- what a replica compares with its loaded catalog, without reading the files
+SELECT mode, commit_sha FROM template_catalog;
+
 -- name: SetTemplateCatalog :exec
 -- commit_sha '': the next sync loads it afresh (another folder may have the same commit)
 INSERT INTO template_catalog (connection_id, repo, branch, dir, mode)

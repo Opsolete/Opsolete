@@ -307,6 +307,24 @@ func TestTemplateCatalogInGit(t *testing.T) {
 			t.Fatalf("stale write: fetched %s, stored %s, loaded %s (%q), want %s", older, stored.Commit, loaded, tpl.Name, newer)
 		}
 	})
+	// Only the scheduler's leader syncs from Git; every other replica reloads the snapshot from Postgres.
+	step(t, "a replica that doesn't lead reloads the snapshot the leader synced", func(t *testing.T) {
+		g.mu.Lock()
+		g.commit("main", map[string]string{"catalog/web.json": tplJSON("web-"+id, "From the leader")})
+		g.mu.Unlock()
+		if err := vcs.SyncCatalog(ctx, store, app.App.SecretKey, app.App.Templates); err != nil {
+			t.Fatal(err)
+		}
+		if tpl, _ := other.App.Templates.Get("web-" + id); tpl.Name == "From the leader" {
+			t.Fatal("the follower has it before reloading")
+		}
+		if err := vcs.ReloadCatalog(ctx, store, other.App.Templates); err != nil {
+			t.Fatal(err)
+		}
+		if tpl, _ := other.App.Templates.Get("web-" + id); tpl.Name != "From the leader" {
+			t.Fatalf("follower after reload: %+v", tpl)
+		}
+	})
 	// A commit with an invalid template isn't loaded: the last good one stays, the error is shown.
 	step(t, "a commit with an invalid template keeps the last good catalog", func(t *testing.T) {
 		g.mu.Lock()

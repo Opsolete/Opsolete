@@ -19,6 +19,12 @@ var httpDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 	Help: "HTTP requests by route pattern. Log streams and runner long-polls land in the top bucket.",
 }, []string{"code", "method", "route"})
 
+// SchedulerLeader is set by main from app.Scheduler.OnLead.
+var SchedulerLeader = promauto.NewGauge(prometheus.GaugeOpts{
+	Name: "opsolete_scheduler_leader",
+	Help: "1 while this replica runs the background jobs (lease reaper, drift checks, rollouts, VCS polling, catalog sync), else 0.",
+})
+
 type routeKey struct{}
 
 // instrument records every request under its mux pattern, not its path: IDs in paths would explode label cardinality.

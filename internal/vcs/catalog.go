@@ -6,21 +6,20 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"path"
 	"strings"
-	"time"
 
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
 )
 
 // The template catalog can come from a Git repository instead of TEMPLATES_DIR (Settings → Templates):
-// every app instance polls the branch and loads the *.json files of its folder at each new commit, and
-// the editor commits a saved template to the branch or opens a pull request with it. Postgres keeps the
-// last loaded files, so the catalog doesn't depend on the provider at startup.
+// the scheduler's leader polls the branch and stores the *.json files of its folder at each new commit,
+// every instance loads them from Postgres (ReloadCatalog), and the editor commits a saved template to
+// the branch or opens a pull request with it. Postgres keeps the last loaded files, so the catalog
+// doesn't depend on the provider at startup.
 
 // catalogFiles picks the *.json files directly in dir ("" = the repository root).
 func catalogFiles(files []file, dir string) map[string][]byte {
@@ -47,6 +46,25 @@ func LoadCatalog(ctx context.Context, st *storage.Store, cat *templates.Catalog)
 		return err
 	}
 	return loadSnapshot(cat, tc)
+}
+
+// ReloadCatalog brings cat to the snapshot in Postgres when it changed (another instance synced or
+// reconfigured it): every instance runs it, only the leader fetches from Git (SyncCatalog).
+func ReloadCatalog(ctx context.Context, st *storage.Store, cat *templates.Catalog) error {
+	mode, commit, err := st.TemplateCatalogVersion(ctx)
+	if errors.Is(err, storage.ErrNotFound) { // disconnected
+		if m, _ := cat.Source(); m != "" {
+			return cat.Reopen()
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if m, c := cat.Source(); m == mode && c == commit {
+		return nil
+	}
+	return LoadCatalog(ctx, st, cat)
 }
 
 func loadSnapshot(cat *templates.Catalog, tc storage.TemplateCatalog) error {
@@ -152,22 +170,6 @@ func catalogConn(ctx context.Context, st *storage.Store, key []byte, tc storage.
 		return Conn{}, fmt.Errorf("VCS connection: %w", err)
 	}
 	return ConnFor(key, sc)
-}
-
-// PollCatalog syncs the template catalog now and then every interval, until ctx ends.
-func PollCatalog(ctx context.Context, st *storage.Store, key []byte, cat *templates.Catalog, interval time.Duration, log *slog.Logger) {
-	t := time.NewTicker(interval)
-	defer t.Stop()
-	for {
-		if err := SyncCatalog(ctx, st, key, cat); err != nil && ctx.Err() == nil {
-			log.Warn("template catalog sync", "err", err)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-		}
-	}
 }
 
 // SaveTemplate writes t to the catalog's repository, as the editor mode says: a commit to the branch

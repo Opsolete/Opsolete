@@ -176,3 +176,20 @@ func (q *Queries) SetTemplateCatalog(ctx context.Context, arg SetTemplateCatalog
 	)
 	return err
 }
+
+const templateCatalogVersion = `-- name: TemplateCatalogVersion :one
+SELECT mode, commit_sha FROM template_catalog
+`
+
+type TemplateCatalogVersionRow struct {
+	Mode      string
+	CommitSha string
+}
+
+// what a replica compares with its loaded catalog, without reading the files
+func (q *Queries) TemplateCatalogVersion(ctx context.Context) (TemplateCatalogVersionRow, error) {
+	row := q.db.QueryRow(ctx, templateCatalogVersion)
+	var i TemplateCatalogVersionRow
+	err := row.Scan(&i.Mode, &i.CommitSha)
+	return i, err
+}

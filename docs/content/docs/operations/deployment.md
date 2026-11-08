@@ -32,6 +32,13 @@ helm install opsolete opsolete/opsolete --set secrets.existingSecret=opsolete \
 - Point `OPS_SERVER_URL` at the app's Service, so registry downloads stay inside the cluster.
 - Optionally mount a volume at `TF_PLUGIN_CACHE_DIR` to keep providers between restarts.
 - Set the runner pods' `terminationGracePeriodSeconds` to cover a job (see [Shutdown]({{< relref "runners#how-it-works" >}})).
+- Scale the app with `replicas` too; background work runs on one of them (below).
+
+## Background work
+
+Background work runs on one app replica at a time, the leader: failing jobs of lost runners (every 15 s), releasing orphaned state locks, queueing rollout batches and drift checks (every 15 s), queueing VCS-triggered runs and syncing the template catalog from Git (every minute), publishing registry module versions from VCS (every 5 minutes). The leader holds a PostgreSQL session advisory lock on a connection of its own; the other replicas try to take it every 5 seconds. When the leader stops or loses its database connection, Postgres releases the lock and another replica takes over within about 5 seconds (up to ~30 s if the leader's node vanishes without closing its connection); a job the old leader was running is cancelled. Every replica reloads the template catalog from Postgres every 10 seconds.
+
+`opsolete_scheduler_leader` (see `METRICS_ADDR`) is 1 on the leader and 0 on the others: alert if `sum` isn't 1. The lock needs a session: connect through a transaction-pooling proxy (PgBouncer `pool_mode=transaction`) and the leader isn't exclusive.
 
 ## NixOS
 
