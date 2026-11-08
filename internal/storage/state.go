@@ -63,6 +63,10 @@ var ErrNotCloudLocked = errors.New("the workspace must be locked by you to save 
 // lock, nothing is recorded and ErrNotCloudLocked returned. FOR SHARE makes both checks hold until
 // commit: a force-cancel or force-unlock waits for the insert, or the insert sees its result.
 func (s *Store) AddStateVersion(ctx context.Context, id, runID uuid.UUID, cloudUser string, v StateVersion) error {
+	return addStateVersion(ctx, s.q, id, runID, cloudUser, v)
+}
+
+func addStateVersion(ctx context.Context, q *db.Queries, id, runID uuid.UUID, cloudUser string, v StateVersion) error {
 	var out []byte
 	if v.Outputs != nil {
 		var err error
@@ -70,7 +74,7 @@ func (s *Store) AddStateVersion(ctx context.Context, id, runID uuid.UUID, cloudU
 			return err
 		}
 	}
-	n, err := s.q.AddStateVersion(ctx, db.AddStateVersionParams{WorkspaceID: id, Serial: v.Serial, Lineage: v.Lineage, BlobKey: v.BlobKey,
+	n, err := q.AddStateVersion(ctx, db.AddStateVersionParams{WorkspaceID: id, Serial: v.Serial, Lineage: v.Lineage, BlobKey: v.BlobKey,
 		Md5: v.MD5, Size: v.Size, Outputs: out, RunID: optID(runID), CloudUser: cloudUser, CloudPrefix: CloudLockPrefix})
 	switch {
 	case err != nil:
@@ -96,10 +100,15 @@ func (s *Store) StateVersionBlob(ctx context.Context, workspaceID uuid.UUID, id 
 	return key, notFound(err)
 }
 
-// CopyStateIndex gives the workspace's current state version the resource index of version from,
-// and records it as a copy of from: a rollback.
-func (s *Store) CopyStateIndex(ctx context.Context, workspaceID uuid.UUID, from int64) error {
-	return s.q.CopyStateIndex(ctx, db.CopyStateIndexParams{WorkspaceID: workspaceID, FromID: from})
+// AddRollbackVersion records v, a copy of version from written to blob storage, as the workspace's
+// current state with from's resource index, and as a copy of from: a rollback, all or nothing.
+func (s *Store) AddRollbackVersion(ctx context.Context, workspaceID uuid.UUID, from int64, v StateVersion) error {
+	return s.tx(ctx, func(q *db.Queries) error {
+		if err := addStateVersion(ctx, q, workspaceID, uuid.Nil, "", v); err != nil {
+			return err
+		}
+		return q.CopyStateIndex(ctx, db.CopyStateIndexParams{WorkspaceID: workspaceID, FromID: from})
+	})
 }
 
 // LockState takes the workspace's state lock for the Terraform LockInfo in info. If another lock

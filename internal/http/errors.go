@@ -21,7 +21,8 @@ func (s *Server) internalError(w http.ResponseWriter, what string, err error) {
 
 // uiError answers an app error on the UI: not found 404, forbidden 403, conflict 409 and a
 // validation error 400, each with its message; anything else 500. Handlers whose form shows a
-// ValidationError re-render it before calling this.
+// ValidationError re-render it before calling this. The Terraform http state backend answers in the
+// same plain-text shape.
 func (s *Server) uiError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, app.ErrNotFound):

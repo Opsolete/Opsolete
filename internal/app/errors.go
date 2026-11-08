@@ -22,6 +22,12 @@ var (
 	// ErrNoConfig: a run can't start on a workspace without configuration (no template, no repository).
 	ErrNoConfig = errors.New("this workspace has no configuration to plan: link a repository first")
 
+	// ErrStateConflict: a state file that doesn't continue the workspace's state (lineage, serial), or
+	// a change of it without the lock it needs.
+	ErrStateConflict = errors.New("the state conflicts with the workspace's state")
+	// ErrRemoteExecution: the CLI may not lock or write the state of a workspace its runs plan and apply.
+	ErrRemoteExecution = errors.New("the workspace uses remote execution: only its runs use its state")
+
 	errReadOnly   = reason{ErrForbidden, "you have read-only access to this workspace"}
 	errAdminsOnly = reason{ErrForbidden, "admins only"}
 )
@@ -35,10 +41,12 @@ type reason struct {
 func (r reason) Error() string { return r.msg }
 func (r reason) Unwrap() error { return r.kind }
 
-// conflicts are the errors that mean "not now, the current state refuses it".
-var conflicts = []error{storage.ErrNameTaken, storage.ErrRunActive, storage.ErrNotConfirmable, storage.ErrNotCancelable,
-	storage.ErrHasResources, storage.ErrStateLocked, storage.ErrLocalExecution, storage.ErrExists, storage.ErrProjectNameTaken,
-	storage.ErrLeaseLost, ErrNoConfig}
+// conflicts are the errors that mean "not now, the current state refuses it". A name the user typed
+// that is taken is not one: it is a ValidationError on that field (the input must change, not the state).
+var conflicts = []error{storage.ErrRunActive, storage.ErrNotConfirmable, storage.ErrNotCancelable,
+	storage.ErrHasResources, storage.ErrStateLocked, storage.ErrLocalExecution, storage.ErrExists,
+	storage.ErrProjectNotEmpty, storage.ErrDefaultProject,
+	storage.ErrLeaseLost, storage.ErrNotCloudLocked, ErrNoConfig, ErrStateConflict, ErrRemoteExecution}
 
 // IsConflict reports whether err is a conflict (HTTP 409); its message says why.
 func IsConflict(err error) bool {

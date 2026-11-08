@@ -208,7 +208,8 @@ func (a *App) SetGrant(ctx context.Context, actor Actor, workspace, group, level
 	return nil
 }
 
-// Access is who may use a workspace besides admins and its creator, for its Access page.
+// Access is who may use a workspace besides admins and its creator, for its Access page (or a
+// project's: then only ProjectGrants and Groups).
 type Access struct {
 	Grants        []storage.Grant // the workspace's own
 	ProjectGrants []storage.Grant // its project's

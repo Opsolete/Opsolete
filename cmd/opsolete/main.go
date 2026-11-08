@@ -102,7 +102,7 @@ func rotateKey(log *slog.Logger) error {
 		}
 		defer state.Close()
 	}
-	n, err := httpserver.RotateKey(ctx, store, state, vcs.Key(cfg.SecretKeyPrevious), vcs.Key(cfg.SecretKey), log)
+	n, err := app.RotateKey(ctx, store, state, vcs.Key(cfg.SecretKeyPrevious), vcs.Key(cfg.SecretKey), log)
 	if err != nil {
 		return fmt.Errorf("re-sealed %d values, then: %w (fix it and run rotate-key again)", n, err)
 	}
@@ -250,7 +250,7 @@ func serve(log *slog.Logger) error {
 	}
 	log.Info("components", "deployments", cfg.Deployments, "registry", cfg.Registry, "vcs", vcsOn)
 	if cfg.Deployments {
-		go reapLostRunners(ctx, store, server, cfg.StaleLockTimeout, log)
+		go reapLostRunners(ctx, server, cfg.StaleLockTimeout)
 	}
 
 	if cfg.MetricsAddr != "" { // its own listener, so /metrics isn't reachable through the public ingress
@@ -285,7 +285,7 @@ func serve(log *slog.Logger) error {
 
 // reapLostRunners fails running jobs whose runner stopped heartbeating (crash, node loss), and
 // releases orphaned state locks, queues the next batches of template rollouts and the drift checks that are due.
-func reapLostRunners(ctx context.Context, store *storage.Store, server *httpserver.Server, staleLock time.Duration, log *slog.Logger) {
+func reapLostRunners(ctx context.Context, server *httpserver.Server, staleLock time.Duration) {
 	t := time.NewTicker(15 * time.Second)
 	defer t.Stop()
 	for {
@@ -294,13 +294,7 @@ func reapLostRunners(ctx context.Context, store *storage.Store, server *httpserv
 			return
 		case <-t.C:
 			server.App.ReapLeases(ctx)
-			released, err := store.ReleaseOrphanedLocks(ctx, staleLock)
-			if err != nil {
-				log.Error("release orphaned state locks", "err", err)
-			}
-			for ws, info := range released {
-				log.Warn("orphaned state lock released", "workspace", ws, "lock", info)
-			}
+			server.App.ReleaseOrphanedLocks(ctx, staleLock)
 			server.TickRollouts(ctx)
 			server.App.QueueDriftChecks(ctx)
 		}

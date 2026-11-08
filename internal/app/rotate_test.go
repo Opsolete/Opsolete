@@ -1,4 +1,4 @@
-package httpserver
+package app
 
 import (
 	"context"
@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 	"gocloud.dev/blob/memblob"
 
-	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/vcs"
 )
@@ -18,10 +17,10 @@ import (
 // rotate-key re-seals variables, VCS tokens, sensitive inputs and state store files from the old
 // SECRET_KEY to the new one, refuses while a run is active, and a second run has nothing to do.
 func TestRotateKey(t *testing.T) {
-	store := testStore(t)
-	ctx := context.Background()
+	a := testApp(t)
+	store, ctx := a.Store, context.Background()
 	store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE run_active(status)`)
-	oldKey, newKey := vcs.Key("rotate-old-"+newID()), vcs.Key("rotate-new-"+newID())
+	oldKey, newKey := vcs.Key("rotate-old-"+uniq("")), vcs.Key("rotate-new-"+uniq(""))
 	seal := func(plain, ad string) []byte {
 		b, err := vcs.Seal(oldKey, plain, ad)
 		if err != nil {
@@ -29,7 +28,7 @@ func TestRotateKey(t *testing.T) {
 		}
 		return b
 	}
-	name := "rotate-" + newID()[:8]
+	name := uniq("rotate-")
 
 	if err := store.CreateVariableSet(ctx, name, "", false); err != nil {
 		t.Fatal(err)
@@ -48,7 +47,7 @@ func TestRotateKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	wsID := uuid.New()
-	input := map[string]any{"sealed": base64.StdEncoding.EncodeToString(seal(`"pw"`, app.InputAD(wsID, "main", "password")))}
+	input := map[string]any{"sealed": base64.StdEncoding.EncodeToString(seal(`"pw"`, InputAD(wsID, "main", "password")))}
 	ws, run, err := store.CreateWorkspace(ctx, wsID, name, "", storage.WorkspaceTemplate{Name: "main", TemplateID: "t",
 		ModuleSource: "git::https://x//m", ModuleRef: "v1", Inputs: map[string]any{"password": input, "plain": "x"}}, false, uuid.Nil)
 	if err != nil {
@@ -61,10 +60,10 @@ func TestRotateKey(t *testing.T) {
 	})
 
 	bucket := memblob.OpenBucket(nil)
-	(&app.App{Blobs: bucket, SecretKey: oldKey}).WriteBlob(ctx, "opsolete/x/1.tfstate", []byte("state"))
+	(&App{Blobs: bucket, SecretKey: oldKey}).WriteBlob(ctx, "opsolete/x/1.tfstate", []byte("state"))
 	legacy, _ := vcs.Seal(oldKey, "legacy", "") // sealed before files were bound to their key
 	legacy = legacy[len("opsolete-v2:"):]
-	bucket.WriteAll(ctx, "opsolete/x/0.tfstate", append([]byte(app.SealedPrefix), legacy...), nil)
+	bucket.WriteAll(ctx, "opsolete/x/0.tfstate", append([]byte(SealedPrefix), legacy...), nil)
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	if _, err := RotateKey(ctx, store, bucket, oldKey, newKey, log); err == nil {
@@ -84,12 +83,12 @@ func TestRotateKey(t *testing.T) {
 		t.Fatalf("token: %v", err)
 	}
 	uses, _ := store.WorkspaceTemplates(ctx, ws.ID)
-	s := &Server{App: &app.App{Blobs: bucket, SecretKey: newKey}}
-	if in, _, err := s.App.OpenInputs(uses[0].Inputs, ws.ID, "main"); err != nil || in["password"] != "pw" || in["plain"] != "x" {
+	rotated := &App{Blobs: bucket, SecretKey: newKey}
+	if in, _, err := rotated.OpenInputs(uses[0].Inputs, ws.ID, "main"); err != nil || in["password"] != "pw" || in["plain"] != "x" {
 		t.Fatalf("inputs: %v %v", in, err)
 	}
 	for key, want := range map[string]string{"opsolete/x/1.tfstate": "state", "opsolete/x/0.tfstate": "legacy"} {
-		if b, err := s.App.ReadBlob(ctx, key); err != nil || string(b) != want {
+		if b, err := rotated.ReadBlob(ctx, key); err != nil || string(b) != want {
 			t.Fatalf("file %s: %q %v", key, b, err)
 		}
 	}

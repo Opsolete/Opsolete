@@ -2,8 +2,6 @@ package httpserver
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -403,87 +401,20 @@ func (s *Server) vcsArchive(w http.ResponseWriter, r *http.Request) {
 	w.Write(b)
 }
 
-// rollbackState makes a copy of an older state version the workspace's current state:
-// same content, serial one above the current one, older versions kept.
-// It holds the state lock and refuses during a run, so no run writes or applies a plan meanwhile.
+// rollbackState makes a copy of an older state version the workspace's current state (app.State.Rollback).
 func (s *Server) rollbackState(w http.ResponseWriter, r *http.Request) {
-	ws, _, ok := s.loadWorkspace(w, r, app.LevelOperate)
-	if !ok {
-		return
-	}
-	ctx := r.Context()
 	from, err := strconv.ParseInt(r.PathValue("version"), 10, 64)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	u := auth.FromContext(ctx)
-	lockID := rand.Text()
-	info, _ := json.Marshal(map[string]string{"ID": lockID, "Operation": "OperationTypeRollback", "Who": u.Email})
-	if _, ok, err := s.App.Store.LockState(ctx, ws.ID, lockID, uuid.Nil, info); err != nil {
-		s.internalError(w, "lock state", err)
-		return
-	} else if !ok {
-		http.Error(w, "the state is locked", http.StatusConflict)
-		return
-	}
-	defer func() {
-		if err := s.App.Store.UnlockState(context.WithoutCancel(ctx), ws.ID, lockID, uuid.Nil); err != nil {
-			s.App.Log.Error("unlock state", "workspace", ws.Name, "err", err)
-		}
-	}()
-	// After locking: a run that starts now can't touch the state until the rollback is done, and one
-	// that is between phases (e.g. waiting for confirmation) would apply a plan made against the old state.
-	runs, err := s.App.Store.Runs(ctx, ws.ID, 1)
-	if err != nil {
-		s.internalError(w, "list runs", err)
-		return
-	}
-	if len(runs) > 0 && runs[0].Active() {
-		http.Error(w, storage.ErrRunActive.Error(), http.StatusConflict)
-		return
-	}
-	key, err := s.App.Store.StateVersionBlob(ctx, ws.ID, from)
-	if errors.Is(err, storage.ErrNotFound) {
-		http.NotFound(w, r)
-		return
+	st, err := s.App.State(r.Context(), actor(r), r.PathValue("name"), app.LevelOperate)
+	if err == nil {
+		err = st.Rollback(r.Context(), from)
 	}
 	if err != nil {
-		s.internalError(w, "state version", err)
+		s.uiError(w, r, err)
 		return
 	}
-	cur, err := s.App.Store.StateVersions(ctx, ws.ID, 1)
-	if err != nil {
-		s.internalError(w, "list state versions", err)
-		return
-	}
-	if cur[0].ID == from {
-		http.Error(w, "this is already the current state version", http.StatusConflict)
-		return
-	}
-	old, err := s.App.ReadBlob(ctx, key)
-	if err != nil {
-		s.internalError(w, "read state", err)
-		return
-	}
-	var state map[string]json.RawMessage
-	if err := json.Unmarshal(old, &state); err != nil {
-		s.internalError(w, "parse state", err)
-		return
-	}
-	state["serial"] = json.RawMessage(strconv.FormatInt(cur[0].Serial+1, 10))
-	body, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		s.internalError(w, "encode state", err)
-		return
-	}
-	if code, msg := s.saveState(ctx, ws.ID, uuid.Nil, "", body); code != http.StatusOK {
-		http.Error(w, msg, code) // e.g. a version of another lineage
-		return
-	}
-	if err := s.App.Store.CopyStateIndex(ctx, ws.ID, from); err != nil {
-		s.App.Log.Error("copy state index", "workspace", ws.Name, "err", err) // the next apply indexes it
-	}
-	s.App.Log.Info("state rolled back", "workspace", ws.Name, "version", from, "user", u.Email)
-	http.Redirect(w, r, "/workspaces/"+ws.Name, http.StatusSeeOther)
+	http.Redirect(w, r, "/workspaces/"+st.Workspace.Name, http.StatusSeeOther)
 }

@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/opsolete/opsolete/internal/auth"
 )
 
 func TestProjectPages(t *testing.T) {
@@ -29,7 +31,7 @@ func TestProjectPages(t *testing.T) {
 	want(post(user, "/projects", url.Values{"name": {proj}}), http.StatusForbidden, "a user creates a project")
 	want(post(h, "/projects", url.Values{"name": {"new"}}), http.StatusBadRequest, "reserved name")
 	want(post(h, "/projects", url.Values{"name": {proj}, "description": {"d"}}), http.StatusSeeOther, "create")
-	want(post(h, "/projects", url.Values{"name": {proj}}), http.StatusConflict, "duplicate")
+	want(post(h, "/projects", url.Values{"name": {proj}}), http.StatusBadRequest, "duplicate: a taken name is a field error")
 	want(get(user, "/projects/"+proj), http.StatusNotFound, "a user without a workspace in it")
 	if body := get(user, "/projects").Body.String(); strings.Contains(body, proj) || !strings.Contains(body, "default") {
 		t.Fatal("a user lists only the default project")
@@ -145,4 +147,29 @@ func TestProjectPages(t *testing.T) {
 	want(post(h, "/workspaces/"+ws+"/project", url.Values{"project": {"default"}}), http.StatusSeeOther, "move")
 	want(post(h, "/projects/"+proj+"-x/delete", nil), http.StatusSeeOther, "delete the emptied project")
 	want(get(h, "/projects/"+proj+"-x"), http.StatusNotFound, "deleted project")
+}
+
+// A handler parses its own form: called without the audit middleware (which also parses it), the
+// posted projects are still attached.
+func TestAttachProjectsParsesForm(t *testing.T) {
+	store := testStore(t)
+	srv := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), Features{})
+	sfx := strings.ToLower(newID()[:8])
+	set := "form-set-" + sfx
+	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM variable_sets WHERE name = $1`, set) })
+	if err := store.CreateVariableSet(context.Background(), set, "", false); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("POST", "/variable-sets/"+set+"/projects", strings.NewReader(url.Values{"project": {"default"}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetPathValue("set", set)
+	req = req.WithContext(auth.WithUser(req.Context(), auth.User{Email: "admin@example.com", Role: "admin"}))
+	rec := httptest.NewRecorder()
+	srv.attachVariableSetProjects(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("%d: %s", rec.Code, rec.Body.String())
+	}
+	if got, err := store.GetVariableSet(context.Background(), set); err != nil || len(got.Projects) != 1 || got.Projects[0] != "default" {
+		t.Fatalf("attached: %+v %v", got.Projects, err)
+	}
 }

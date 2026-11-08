@@ -1,26 +1,23 @@
-package httpserver
+package app
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"maps"
 	"regexp"
 	"slices"
 	"strconv"
-
-	"github.com/opsolete/opsolete/internal/storage"
 )
 
-// stateChange is a resource instance or root output that differs between two state versions.
-type stateChange struct {
+// StateChange is a resource instance or root output that differs between two state versions.
+type StateChange struct {
 	Address string
 	Action  string // create, update or delete, as in plans
-	Attrs   []attrChange
+	Attrs   []AttrChange
 }
 
-// attrChange is one changed leaf value, JSON encoded; Old or New is "" where the leaf doesn't exist.
-type attrChange struct{ Path, Old, New string }
+// AttrChange is one changed leaf value, JSON encoded; Old or New is "" where the leaf doesn't exist.
+type AttrChange struct{ Path, Old, New string }
 
 type leaf struct {
 	val    string
@@ -144,7 +141,7 @@ func walkJSON(path string, v any, emit func(path, val string)) {
 }
 
 // diffStates lists what changes from state file a to b (nil: no state), sorted by address and path.
-func diffStates(a, b []byte) ([]stateChange, error) {
+func diffStates(a, b []byte) ([]StateChange, error) {
 	from, err := stateLeaves(a)
 	if err != nil {
 		return nil, err
@@ -162,11 +159,11 @@ func diffStates(a, b []byte) ([]stateChange, error) {
 		}
 		return l.val
 	}
-	var out []stateChange
+	var out []StateChange
 	for _, addr := range slices.Sorted(maps.Keys(mergeKeys(from, to))) {
 		f, inA := from[addr]
 		t, inB := to[addr]
-		c := stateChange{Address: addr, Action: "update"}
+		c := StateChange{Address: addr, Action: "update"}
 		if !inA {
 			c.Action = "create"
 		} else if !inB {
@@ -177,7 +174,7 @@ func diffStates(a, b []byte) ([]stateChange, error) {
 			y, okB := t[p]
 			if okA != okB || x.val != y.val {
 				secret := x.secret || y.secret // sensitive on either side: an attribute that became sensitive hides its old value too
-				c.Attrs = append(c.Attrs, attrChange{Path: p, Old: show(x, okA, secret), New: show(y, okB, secret)})
+				c.Attrs = append(c.Attrs, AttrChange{Path: p, Old: show(x, okA, secret), New: show(y, okB, secret)})
 			}
 		}
 		if c.Action != "update" || len(c.Attrs) > 0 {
@@ -196,19 +193,4 @@ func mergeKeys[V any](a, b map[string]V) map[string]bool {
 		m[k] = true
 	}
 	return m
-}
-
-// diffVersions diffs two of a workspace's state versions; a nil version is no state.
-func (s *Server) diffVersions(ctx context.Context, a, b *storage.StateVersion) ([]stateChange, error) {
-	var files [2][]byte
-	for i, v := range []*storage.StateVersion{a, b} {
-		if v == nil {
-			continue
-		}
-		var err error
-		if files[i], err = s.App.ReadBlob(ctx, v.BlobKey); err != nil {
-			return nil, err
-		}
-	}
-	return diffStates(files[0], files[1])
 }

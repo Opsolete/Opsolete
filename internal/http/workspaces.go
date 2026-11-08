@@ -2,9 +2,6 @@ package httpserver
 
 import (
 	"cmp"
-	"context"
-	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -16,7 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -69,11 +65,6 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /workspaces/{name}/runs/{run}/cancel", s.cancelRun)
 	mux.HandleFunc("GET /workspaces/{name}/runs/{run}/logs", s.logText)
 	mux.HandleFunc("GET /workspaces/{name}/runs/{run}/logs/stream", s.logStream)
-}
-
-func viewer(r *http.Request) storage.Viewer {
-	a := actor(r)
-	return storage.Viewer{UserID: a.UserID, Admin: a.Admin}
 }
 
 type formPage struct {
@@ -169,9 +160,9 @@ func (s *Server) workspaces(w http.ResponseWriter, r *http.Request) {
 		s.uiError(w, r, err)
 		return
 	}
-	projects, err := s.App.Store.Projects(r.Context(), viewer(r))
+	projects, err := s.App.Projects(r.Context(), actor(r))
 	if err != nil {
-		s.internalError(w, "list projects", err)
+		s.uiError(w, r, err)
 		return
 	}
 	s.render(w, r, http.StatusOK, "workspaces.html", map[string]any{"Workspaces": list, "Projects": projects, "Project": project})
@@ -207,11 +198,13 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	ws, level, ok := s.loadWorkspace(w, r, app.LevelRead)
-	if !ok {
+	ctx := r.Context()
+	st, err := s.App.State(ctx, actor(r), r.PathValue("name"), app.LevelRead) // the header shows the state on every page
+	if err != nil {
+		s.uiError(w, r, err)
 		return
 	}
-	ctx := r.Context()
+	ws, level := st.Workspace, st.Level
 	// the side-menu page: each loads only what it shows (the header's data on every one)
 	tab, _, _ := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/workspaces/"+r.PathValue("name")), "/"), "/")
 	if tab == "" {
@@ -222,17 +215,17 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "list runs", err)
 		return
 	}
-	res, err := s.App.Store.Resources(ctx, ws.ID)
+	res, err := st.Resources(ctx)
 	if err != nil {
 		s.internalError(w, "workspace resources", err)
 		return
 	}
-	versions, err := s.App.Store.StateVersions(ctx, ws.ID, 10)
+	versions, err := st.Versions(ctx, 10)
 	if err != nil {
 		s.internalError(w, "state versions", err)
 		return
 	}
-	outputs, destroyed, err := s.App.Store.CurrentOutputs(ctx, ws.ID)
+	outputs, destroyed, err := st.Outputs(ctx)
 	if err != nil {
 		s.internalError(w, "outputs", err)
 		return
@@ -254,7 +247,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 	if len(runs) > 0 {
 		current = &runItem{runs[0], true}
 	}
-	lock, err := s.App.Store.GetStateLock(ctx, ws.ID)
+	lock, err := st.CurrentLock(ctx)
 	if err != nil {
 		s.internalError(w, "state lock", err)
 		return
@@ -327,58 +320,27 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		id, err := strconv.ParseInt(r.PathValue("version"), 10, 64)
-		// The diff shows attribute values, and the redaction misses unmarked secrets: like the cloud API's state, operators only.
-		if err != nil || level != app.LevelOperate {
+		if err != nil {
 			http.NotFound(w, r)
 			return
 		}
-		pair, err := s.App.Store.StateVersionsUpTo(ctx, ws.ID, id, 2) // the version and the one before it
+		d, err := st.Diff(ctx, id) // operators only
 		if err != nil {
-			s.internalError(w, "state versions", err)
+			s.uiError(w, r, err)
 			return
 		}
-		if len(pair) == 0 || pair[0].ID != id {
-			http.NotFound(w, r)
-			return
-		}
-		var prev *storage.StateVersion
-		if len(pair) > 1 {
-			prev = &pair[1]
-		}
-		changes, err := s.diffVersions(ctx, prev, &pair[0])
-		if err != nil {
-			s.internalError(w, "state diff", err)
-			return
-		}
-		current := versions[0].ID == id
-		var rollback []stateChange
-		if !current {
-			if rollback, err = s.diffVersions(ctx, &versions[0], &pair[0]); err != nil {
-				s.internalError(w, "state diff", err)
-				return
-			}
-		}
-		maps.Copy(data, map[string]any{"State": pair[0], "Prev": prev, "Changes": changes, "IsCurrent": current, "RollbackChanges": rollback})
+		maps.Copy(data, map[string]any{"State": d.Version, "Prev": d.Prev, "Changes": d.Changes, "IsCurrent": d.IsCurrent, "RollbackChanges": d.Rollback})
 
 	case "variables": // each applied set with its variables, read-only (sets are edited by admins on their page)
-		vars, err := s.varsBlock(ctx, storage.VarOwner{WorkspaceID: ws.ID}, "/workspaces/"+ws.Name, level == app.LevelOperate)
+		wv, err := s.App.WorkspaceVariables(ctx, actor(r), ws.Name)
 		if err != nil {
-			s.internalError(w, "workspace variables", err)
+			s.uiError(w, r, err)
 			return
 		}
-		sets, err := s.App.Store.WorkspaceVariableSets(ctx, ws.ID)
-		if err != nil {
-			s.internalError(w, "workspace variable sets", err)
-			return
-		}
+		vars := varsBlock{Base: "/workspaces/" + ws.Name, Vars: wv.Own, CanEdit: level == app.LevelOperate}
 		var setVars []setView
-		for _, set := range sets {
-			b, err := s.varsBlock(ctx, storage.VarOwner{SetID: set.ID}, "", false)
-			if err != nil {
-				s.internalError(w, "variable set variables", err)
-				return
-			}
-			setVars = append(setVars, setView{set, b})
+		for _, set := range wv.Sets {
+			setVars = append(setVars, setView{set.VariableSet, varsBlock{Vars: set.Vars}})
 		}
 		maps.Copy(data, map[string]any{"Variables": vars, "Sets": setVars})
 
@@ -421,8 +383,8 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		var projects []storage.Project // General: where an admin can move it
 		if page == "" && auth.FromContext(ctx).Admin() {
 			var err error
-			if projects, err = s.App.Store.Projects(ctx, viewer(r)); err != nil {
-				s.internalError(w, "list projects", err)
+			if projects, err = s.App.Projects(ctx, actor(r)); err != nil {
+				s.uiError(w, r, err)
 				return
 			}
 		}
@@ -546,62 +508,24 @@ func (s *Server) workspaceSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 // lockWorkspace locks (action=lock, with an optional reason), unlocks or force-unlocks a workspace,
-// from its Locking page. The lock is a state lock as the cloud block's CLI takes it, so
-// the CLI, `terraform force-unlock` and the cloud API see it too; runs wait until it is released.
-// Unlock releases only the user's own lock, force-unlock anyone's; locks of runs and rollbacks end with them.
+// from its Locking page (app.State.Lock, Unlock).
 func (s *Server) lockWorkspace(w http.ResponseWriter, r *http.Request) {
-	ws, _, ok := s.loadWorkspace(w, r, app.LevelOperate)
-	if !ok {
-		return
-	}
-	ctx, u, action := r.Context(), auth.FromContext(r.Context()), r.PostFormValue("action")
-	switch action {
-	case "lock":
-		reason := strings.TrimSpace(r.PostFormValue("reason"))
-		if utf8.RuneCountInString(reason) > 300 {
-			http.Error(w, "the reason is at most 300 characters", http.StatusBadRequest)
-			return
-		}
-		if ok, err := s.userLock(ctx, ws.ID, u, "locked in Opsolete", reason); err != nil {
-			s.internalError(w, "lock state", err)
-			return
-		} else if !ok {
-			http.Error(w, "the workspace is already locked", http.StatusConflict)
-			return
-		}
-	case "unlock", "force-unlock":
-		if err := s.userUnlock(ctx, ws.ID, u, action == "force-unlock"); err != nil {
-			s.internalError(w, "unlock state", err)
-			return
-		}
-	default:
+	ctx, action := r.Context(), r.PostFormValue("action")
+	if action != "lock" && action != "unlock" && action != "force-unlock" {
 		http.Error(w, "action is lock, unlock or force-unlock", http.StatusBadRequest)
 		return
 	}
-	s.App.Log.Info("workspace lock", "workspace", ws.Name, "action", action, "user", u.Email)
-	http.Redirect(w, r, "/workspaces/"+ws.Name+"/settings/lock", http.StatusSeeOther)
-}
-
-// userLock takes the state lock of a workspace for u, as the cloud block's CLI does; false if it's
-// already locked. Shared by the Locking page and the cloud API.
-func (s *Server) userLock(ctx context.Context, wsID uuid.UUID, u auth.User, operation, reason string) (bool, error) {
-	lockID := storage.CloudLockPrefix + rand.Text()
-	info := map[string]string{"ID": lockID, "Operation": operation, "Who": u.Email, "UserID": u.ID.String(), "Created": time.Now().UTC().Format(time.RFC3339)}
-	if reason != "" {
-		info["Info"] = reason
+	st, err := s.App.State(ctx, actor(r), r.PathValue("name"), app.LevelOperate)
+	if err == nil && action == "lock" {
+		err = st.Lock(ctx, strings.TrimSpace(r.PostFormValue("reason")))
+	} else if err == nil {
+		err = st.Unlock(ctx, action == "force-unlock")
 	}
-	b, _ := json.Marshal(info)
-	_, ok, err := s.App.Store.LockState(ctx, wsID, lockID, uuid.Nil, b)
-	return ok, err
-}
-
-// userUnlock releases u's own user lock, or anyone's (force); run and rollback locks end with them.
-func (s *Server) userUnlock(ctx context.Context, wsID uuid.UUID, u auth.User, force bool) error {
-	holder := u.ID.String()
-	if force {
-		holder = ""
+	if err != nil {
+		s.uiError(w, r, err)
+		return
 	}
-	return s.App.Store.UnlockCloudState(ctx, wsID, holder)
+	http.Redirect(w, r, "/workspaces/"+st.Workspace.Name+"/settings/lock", http.StatusSeeOther)
 }
 
 // deleteWorkspace deletes a workspace that manages no resources, with its state files; force=1
@@ -621,16 +545,6 @@ func (s *Server) workspaceAccess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/workspaces/"+r.PathValue("name")+"/settings/access", http.StatusSeeOther)
-}
-
-// grantFromForm reads a grant's group and level ("" revokes); it writes a 400 and returns false if invalid.
-func grantFromForm(w http.ResponseWriter, r *http.Request) (group, level string, ok bool) {
-	group, l, err := app.ParseGrant(r.PostFormValue("group"), r.PostFormValue("level"))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return "", "", false
-	}
-	return group, l.String(), true
 }
 
 func (s *Server) run(w http.ResponseWriter, r *http.Request) {
