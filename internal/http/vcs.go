@@ -34,7 +34,9 @@ func (s *Server) vcsRoutes(mux routes) {
 	mux.HandleFunc("POST /registry/{ns}/{name}/{system}/unlink", s.admin(s.unlinkModule))
 }
 
+// vcsPage lists the VCS connections (vcs.html).
 type vcsPage struct {
+	Page
 	Connections []storage.VCSConnection
 	Error       string
 }
@@ -49,13 +51,14 @@ func (s *Server) renderVCS(w http.ResponseWriter, r *http.Request, status int, e
 		s.uiError(w, r, err)
 		return
 	}
-	s.render(w, r, status, "vcs.html", vcsPage{Connections: conns, Error: errMsg})
+	s.render(w, r, status, "vcs.html", &vcsPage{Page: Page{Section: "vcs"}, Connections: conns, Error: errMsg})
 }
 
 // newConnection is the add-VCS-provider wizard: 1 choose a provider,
 // 2 set it up (name, URL, token), 3 advanced settings (which workspaces may link it) of the created connection.
 // Return is the page that sent the user here; finishing continues it with the new connection.
 type newConnection struct {
+	Page
 	Step      int
 	Edit      bool   // step 3 alone, as the connection's settings page
 	Token     bool   // on the settings page: the token was just replaced
@@ -117,7 +120,8 @@ func (s *Server) renderNewConnection(w http.ResponseWriter, r *http.Request, sta
 			p.Projects = append(p.Projects, pickerItem{pr.Name, projectLabel(pr), slices.Contains(picked, pr.Name)})
 		}
 	}
-	s.render(w, r, status, "vcsnew.html", p)
+	p.Page = Page{Section: "vcs"}
+	s.render(w, r, status, "vcsnew.html", &p)
 }
 
 // finishConnection continues the wizard that started the add-VCS-provider wizard, with the new connection.
@@ -258,7 +262,9 @@ func (s *Server) deleteConnection(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/vcs", http.StatusSeeOther)
 }
 
+// publishPage is the add-module wizard (publish.html).
 type publishPage struct {
+	Page
 	Type      string // "" choose a workflow, "vcs" or "upload"
 	VCS       bool   // workflows on offer
 	Upload    bool
@@ -286,7 +292,7 @@ func (s *Server) publishPage(w http.ResponseWriter, r *http.Request) {
 	case t == "upload" && s.canUpload(r):
 		s.renderUpload(w, r, http.StatusOK, nil, map[string]string{})
 	case t == "" && (s.Features.VCS || s.canUpload(r)):
-		s.render(w, r, http.StatusOK, "publish.html", publishPage{VCS: s.Features.VCS, Upload: s.canUpload(r), Host: s.App.Registry.PublicURL.Host})
+		s.render(w, r, http.StatusOK, "publish.html", &publishPage{Page: Page{Section: "registry"}, VCS: s.Features.VCS, Upload: s.canUpload(r), Host: s.App.Registry.PublicURL.Host})
 	default:
 		http.NotFound(w, r)
 	}
@@ -295,7 +301,7 @@ func (s *Server) publishPage(w http.ResponseWriter, r *http.Request) {
 // renderPublish shows the publish wizard: the step follows from what is chosen so far
 // (no connection: pick one; no repo: pick one; else confirm the module address).
 func (s *Server) renderPublish(w http.ResponseWriter, r *http.Request, status int, connID string, f *formState, form map[string]string) {
-	p := publishPage{Type: "vcs", Step: 1, Providers: vcs.Providers, Host: s.App.Registry.PublicURL.Host, F: f, Form: form}
+	p := &publishPage{Page: Page{Section: "registry"}, Type: "vcs", Step: 1, Providers: vcs.Providers, Host: s.App.Registry.PublicURL.Host, F: f, Form: form}
 	if connID == "" {
 		conns, err := s.App.VCSConnections(r.Context(), actor(r))
 		if err != nil {

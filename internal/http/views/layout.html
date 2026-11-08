@@ -476,7 +476,7 @@
 <body>
 <header class="topbar">
   <a class="brand" href="/"><span class="logo" aria-hidden="true">OPS</span>Opsolete</a>
-  {{with user}}{{if .Email}}
+  {{with .User}}{{if .Email}}
   <form class="who" method="post" action="/auth/logout">
     <a href="/account/profile" title="Account settings">{{.Email}}</a>{{if .Admin}}<span class="tag">admin</span>{{end}}
     <button type="submit" class="secondary small">Log out</button>
@@ -484,9 +484,9 @@
   {{end}}{{end}}
 </header>
 <aside class="sidenav">
-  {{with workspace}}{{$t := tab}}
-  {{if and (or (eq $t "settings") (eq $t "vcs")) $}}{{$p := $.Page}}
-  <!-- the side nav becomes the settings menu; only pages that pass their data to "top" get it -->
+  {{with .InWorkspace}}{{$t := $.Tab}}
+  {{if or (eq $t "settings") (eq $t "vcs")}}{{$p := $.Sub}}
+  <!-- the side nav becomes the settings menu -->
   <nav aria-label="Workspace settings">
     <a href="/workspaces/{{.}}">‹ {{.}}</a>
     <span class="nav-label">Workspace settings</span>
@@ -494,7 +494,7 @@
     <a href="/workspaces/{{.}}/settings/health"{{if eq $p "health"}} aria-current="page"{{end}}>Health</a>
     <a href="/workspaces/{{.}}/settings/lock"{{if eq $p "lock"}} aria-current="page"{{end}}>Locking</a>
     <a href="/workspaces/{{.}}/settings/access"{{if eq $p "access"}} aria-current="page"{{end}}>Team access</a>
-    {{if and $.CanOperate (features).VCS}}<a href="/workspaces/{{.}}/vcs"{{if eq $t "vcs"}} aria-current="page"{{end}}>Version control</a>{{end}}
+    {{if and $.CanOperate $.Features.VCS}}<a href="/workspaces/{{.}}/vcs"{{if eq $t "vcs"}} aria-current="page"{{end}}>Version control</a>{{end}}
     {{if $.CanOperate}}<a href="/workspaces/{{.}}/settings/deletion"{{if eq $p "deletion"}} aria-current="page"{{end}}>Destruction and deletion</a>{{end}}
   </nav>
   {{else}}
@@ -506,11 +506,11 @@
     <a href="/workspaces/{{.}}/runs"{{if eq $t "runs"}} aria-current="page"{{end}}>Runs</a>
     <a href="/workspaces/{{.}}/states"{{if eq $t "states"}} aria-current="page"{{end}}>States</a>
     <a href="/workspaces/{{.}}/variables"{{if eq $t "variables"}} aria-current="page"{{end}}>Variables</a>
-    {{if or (not $) $.CanOperate}}<a href="/workspaces/{{.}}/settings"{{if eq $t "settings"}} aria-current="page"{{end}}>Settings ›</a>{{end}}
+    {{if $.CanOperate}}<a href="/workspaces/{{.}}/settings"{{if eq $t "settings"}} aria-current="page"{{end}}>Settings ›</a>{{end}}
   </nav>
   {{end}}
-  {{else}}{{with project}}{{$t := tab}}
-  {{if and (eq $t "settings") $}}{{$p := $.Page}}
+  {{else}}{{with .InProject}}{{$t := $.Tab}}
+  {{if eq $t "settings"}}{{$p := $.Sub}}
   <!-- the side nav becomes the project's settings menu, like a workspace's -->
   <nav aria-label="Project settings">
     <a href="/projects/{{.}}">‹ {{.}}</a>
@@ -524,13 +524,13 @@
     <a href="/projects">‹ Projects</a>
     <span class="nav-head">{{.}}</span>
     <a href="/projects/{{.}}"{{if eq $t "overview"}} aria-current="page"{{end}}>Overview</a>
-    <a href="/projects/{{.}}/workspaces"{{if eq $t "workspaces"}} aria-current="page"{{end}}>Workspaces{{with $}}{{with .P}} <span class="tag">{{.Workspaces}}</span>{{end}}{{end}}</a>
-    {{if (user).Admin}}<a href="/projects/{{.}}/settings"{{if eq $t "settings"}} aria-current="page"{{end}}>Settings ›</a>{{end}}
+    <a href="/projects/{{.}}/workspaces"{{if eq $t "workspaces"}} aria-current="page"{{end}}>Workspaces <span class="tag">{{$.WorkspaceCount}}</span></a>
+    {{if $.User.Admin}}<a href="/projects/{{.}}/settings"{{if eq $t "settings"}} aria-current="page"{{end}}>Settings ›</a>{{end}}
   </nav>
   {{end}}
   {{else}}
-  {{$s := section}}{{with features}}
-  {{if eq $s "account"}}{{$p := ""}}{{with $}}{{$p = .Page}}{{end}}
+  {{$s := .Section}}{{with .Features}}
+  {{if eq $s "account"}}{{$p := $.Sub}}
   <!-- the side nav becomes the account settings menu -->
   <nav aria-label="Account settings">
     {{if .Deployments}}<a href="/projects">‹ Projects</a>{{else}}<a href="/registry">‹ Registry</a>{{end}}
@@ -538,7 +538,7 @@
     <a href="/account/profile"{{if eq $p "profile"}} aria-current="page"{{end}}>Profile</a>
     <a href="/account/tokens"{{if eq $p "tokens"}} aria-current="page"{{end}}>Tokens</a>
   </nav>
-  {{else if and (or (eq $s "organization") (eq $s "variable-sets") (eq $s "vcs") (eq $s "catalog") (eq $s "audit")) (user).Admin}}
+  {{else if and (or (eq $s "organization") (eq $s "variable-sets") (eq $s "vcs") (eq $s "catalog") (eq $s "audit")) $.User.Admin}}
   <!-- the side nav becomes the organization settings menu, in groups -->
   <nav aria-label="Organization settings">
     {{if .Deployments}}<a href="/projects">‹ Projects</a>{{else}}<a href="/registry">‹ Registry</a>{{end}}
@@ -560,7 +560,7 @@
     <a href="/"{{if or (eq $s "") (eq $s "templates")}} aria-current="page"{{end}}>Templates</a>
     {{end}}
     {{if .Registry}}<a href="/registry"{{if eq $s "registry"}} aria-current="page"{{end}}>Registry</a>{{end}}
-    {{if (user).Admin}}<a href="/organization">Settings ›</a>{{end}}
+    {{if $.User.Admin}}<a href="/organization">Settings ›</a>{{end}}
   </nav>
   {{end}}
   {{end}}

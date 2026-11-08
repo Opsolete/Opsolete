@@ -12,6 +12,7 @@ import (
 // the templates come from TEMPLATES_DIR.
 
 type catalogPage struct {
+	Page
 	Catalog *storage.TemplateCatalog // nil: TEMPLATES_DIR
 	Conns   []storage.VCSConnection
 	Repos   []string // of the selected connection, for the dropdown
@@ -62,7 +63,8 @@ func (s *Server) renderCatalog(w http.ResponseWriter, r *http.Request, status in
 			p.Repos = append([]string{repo}, p.Repos...)
 		}
 	}
-	s.render(w, r, status, "catalog.html", p)
+	p.Page = Page{Section: "catalog"}
+	s.render(w, r, status, "catalog.html", &p)
 }
 
 func (s *Server) saveCatalog(w http.ResponseWriter, r *http.Request) {

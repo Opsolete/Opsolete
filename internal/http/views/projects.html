@@ -1,10 +1,10 @@
-{{template "top"}}
+{{template "top" .Page}}
 <div class="page-head">
   <div>
     <h1>Projects</h1>
     <p class="muted">Projects in the {{.Org}} organization. Create or select a project to get started.</p>
   </div>
-  {{if (user).Admin}}<button type="button" onclick="document.getElementById('new-project').showModal()">+ New project</button>{{end}}
+  {{if $.User.Admin}}<button type="button" onclick="document.getElementById('new-project').showModal()">+ New project</button>{{end}}
 </div>
 
 {{template "formerror" .F}}
@@ -15,14 +15,14 @@
 </div>
 <div class="card flush">
 <table>
-<tr><th>Project name</th><th>Description</th><th>Teams</th><th>Workspaces</th>{{if (user).Admin}}<th><span class="sr-hint">Actions</span></th>{{end}}</tr>
+<tr><th>Project name</th><th>Description</th><th>Teams</th><th>Workspaces</th>{{if $.User.Admin}}<th><span class="sr-hint">Actions</span></th>{{end}}</tr>
 {{range .Projects}}
 <tr data-name="{{.Name}}">
   <td><a href="/projects/{{.Name}}"><strong>{{.Name}}</strong></a>{{if .Default}} <span class="tag" title="new workspaces go here unless another project is picked">default</span>{{end}}</td>
   <td>{{with .Description}}{{.}}{{else}}<span class="muted">No description</span>{{end}}</td>
-  <td>{{if (user).Admin}}<a href="/projects/{{.Name}}/settings/access">{{.Grants}}</a>{{else}}{{.Grants}}{{end}}</td>
+  <td>{{if $.User.Admin}}<a href="/projects/{{.Name}}/settings/access">{{.Grants}}</a>{{else}}{{.Grants}}{{end}}</td>
   <td><a href="/projects/{{.Name}}/workspaces">{{.Workspaces}}</a></td>
-  {{if (user).Admin}}<td class="nowrap"><details class="menu kebab">
+  {{if $.User.Admin}}<td class="nowrap"><details class="menu kebab">
     <summary aria-label="Actions for {{.Name}}">…</summary>
     <div role="menu"><a role="menuitem" href="/projects/{{.Name}}/settings">Edit project</a></div>
   </details></td>{{end}}
@@ -32,7 +32,7 @@
 </table>
 </div>
 
-{{if (user).Admin}}
+{{if $.User.Admin}}
 {{$f := .F}}
 <dialog id="new-project" aria-labelledby="new-project-title"{{if $f}} open{{end}}>
   <form method="post" action="/projects">

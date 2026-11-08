@@ -155,7 +155,15 @@ func (s *Server) auditPage(w http.ResponseWriter, r *http.Request) {
 	for i, e := range entries {
 		rows[i] = newAuditRow(e)
 	}
-	s.render(w, r, http.StatusOK, "audit.html", map[string]any{"Entries": rows, "Broken": broken, "Access": access})
+	s.render(w, r, http.StatusOK, "audit.html", &auditPage{Page{Section: "audit"}, rows, broken, access})
+}
+
+// auditPage is the audit log (audit.html).
+type auditPage struct {
+	Page
+	Entries []auditRow
+	Broken  int64 // the first entry whose hash doesn't match; 0 intact
+	Access  bool  // sign-ins and refused requests, not changes
 }
 
 // auditRow is an entry as the audit page lists it: a one-line summary, the full detail behind a click.

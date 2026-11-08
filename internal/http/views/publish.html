@@ -1,4 +1,4 @@
-{{template "top"}}
+{{template "top" .Page}}
 {{$conn := .Conn}}{{$repo := index .Form "repo"}}
 <nav class="back" aria-label="breadcrumb"><a href="/registry">Registry</a> / Publish module</nav>
 <div class="page-head">

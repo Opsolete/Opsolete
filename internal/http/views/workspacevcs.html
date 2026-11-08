@@ -45,7 +45,7 @@
   <p class="hint">Checked every minute: a new matching tag starts a run of its commit, and manual runs plan the newest matching tag, by the version number in its name. Pull requests get no speculative plans. Anyone who can push a tag runs code with the workspace's credentials: protect tags (GitHub tag rulesets, Azure DevOps tag permissions).</p>
 </div>
 {{end}}
-{{template "top" .}}
+{{template "top" .Page}}
 {{$w := .W}}{{$f := .VCS.Form}}{{$t := index $f "type"}}{{$conn := .Conn}}
 {{$base := printf "/workspaces/%s/vcs" $w.Name}}{{$cancel := $base}}{{if not $w.VCSLinked}}{{$cancel = printf "/workspaces/%s/settings" $w.Name}}{{end}}
 <nav class="back" aria-label="breadcrumb">{{template "wscrumb" $w}} / <a href="/workspaces/{{$w.Name}}/settings">Settings</a> / {{if and .Edit $w.VCSLinked}}<a href="{{$base}}">Version control</a> / Edit{{else}}Version control{{end}}</nav>

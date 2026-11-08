@@ -440,8 +440,15 @@ func (s *Server) authorizePage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.render(w, r, http.StatusOK, "authorize.html", map[string]any{"Email": auth.FromContext(r.Context()).Email,
-		"Days": int(app.UserTokenTTL.Hours() / 24)})
+	s.render(w, r, http.StatusOK, "authorize.html", &authorizePage{Page{Section: "oauth"}, auth.FromContext(r.Context()).Email,
+		int(app.UserTokenTTL.Hours() / 24)})
+}
+
+// authorizePage asks the user to confirm `terraform login` (authorize.html).
+type authorizePage struct {
+	Page
+	Email string
+	Days  int // the token's lifetime
 }
 
 // authorize: the user confirmed (a same-origin POST, so another site can't do it for them); send

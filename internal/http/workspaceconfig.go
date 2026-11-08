@@ -13,6 +13,7 @@ import (
 
 	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/storage"
+	"github.com/opsolete/opsolete/internal/templates"
 	"github.com/opsolete/opsolete/internal/vcs"
 )
 
@@ -89,6 +90,28 @@ func (s *Server) newWorkspacePage(w http.ResponseWriter, r *http.Request) {
 	s.renderNewWorkspace(w, r, http.StatusOK, form, nil)
 }
 
+// newWorkspacePage is the new-workspace wizard (newworkspace.html).
+type newWorkspacePage struct {
+	Page
+	Templates []templates.Template // "from a template"
+	VCS       vcsForm
+	Providers any                    // vcs.Providers, to add a connection
+	Conn      *storage.VCSConnection // the one picked, nil none
+	Projects  []storage.Project      // to pick from; none: the user can't create workspaces
+	Project   string                 // the picked one, a name; "" the default
+	F         *formState             // a refused submit
+}
+
+// pickedConn is the connection of conns with id, nil if none.
+func pickedConn(conns []storage.VCSConnection, id string) *storage.VCSConnection {
+	for i := range conns {
+		if conns[i].ID.String() == id {
+			return &conns[i]
+		}
+	}
+	return nil
+}
+
 func (s *Server) renderNewWorkspace(w http.ResponseWriter, r *http.Request, status int, form map[string]string, fs *formState) {
 	reposOf := "" // only the repository step lists repositories, of its connection
 	if form["type"] == "vcs" && form["vcs_repo"] == "" {
@@ -100,7 +123,7 @@ func (s *Server) renderNewWorkspace(w http.ResponseWriter, r *http.Request, stat
 		return
 	}
 	if len(projects) == 0 { // the page says whom to ask
-		s.render(w, r, status, "newworkspace.html", map[string]any{"VCS": vcsForm{Form: form, F: fs}, "F": fs})
+		s.render(w, r, status, "newworkspace.html", &newWorkspacePage{Page: Page{Section: "workspaces"}, VCS: vcsForm{Form: form, F: fs}, F: fs})
 		return
 	}
 	// ?project= is a URL parameter: one the user can't create in falls back to the one the picker
@@ -117,12 +140,8 @@ func (s *Server) renderNewWorkspace(w http.ResponseWriter, r *http.Request, stat
 		s.uiError(w, r, err)
 		return
 	}
-	data := map[string]any{"Templates": s.App.Templates.List(), "VCS": f, "Providers": vcs.Providers, "Projects": projects, "Project": form["project"], "F": fs}
-	for _, c := range f.Conns {
-		if c.ID.String() == form["vcs_connection"] {
-			data["Conn"] = c
-		}
-	}
+	data := &newWorkspacePage{Page: Page{Section: "workspaces"}, Templates: s.App.Templates.List(), VCS: f, Providers: vcs.Providers, Projects: projects, Project: form["project"], F: fs,
+		Conn: pickedConn(f.Conns, form["vcs_connection"])}
 	s.render(w, r, status, "newworkspace.html", data)
 }
 
@@ -177,6 +196,17 @@ func (s *Server) workspaceVCSPage(w http.ResponseWriter, r *http.Request) {
 	s.renderWorkspaceVCS(w, r, http.StatusOK, ws, form, nil)
 }
 
+// workspaceVCSPage is a workspace's version control settings (workspacevcs.html).
+type workspaceVCSPage struct {
+	Page
+	W         storage.Workspace
+	VCS       vcsForm
+	Providers any                    // vcs.Providers
+	Edit      bool                   // the wizard, not the linked repository's settings
+	Conn      *storage.VCSConnection // the linked or picked one, nil none
+	Health    string                 // not editing: what is wrong with the link, "" nothing
+}
+
 func (s *Server) renderWorkspaceVCS(w http.ResponseWriter, r *http.Request, status int, ws storage.Workspace, form map[string]string, fs *formState) {
 	edit := form["edit"] != "" || form["type"] != ""
 	reposOf := "" // only the wizard's repository step lists repositories, of its connection
@@ -188,15 +218,11 @@ func (s *Server) renderWorkspaceVCS(w http.ResponseWriter, r *http.Request, stat
 		s.uiError(w, r, err)
 		return
 	}
-	data := map[string]any{"W": ws, "VCS": f, "Edit": edit, "Providers": vcs.Providers,
-		"CanOperate": true, "Page": "vcs"} // CanOperate, Page: the settings menu
+	// loadWorkspace and LinkVCS need operate: the menu offers the settings
+	data := &workspaceVCSPage{Page: workspaceNav(r.PathValue("name"), "vcs", "vcs", true), W: ws, VCS: f, Providers: vcs.Providers, Edit: edit}
 	if edit {
-		for _, c := range f.Conns {
-			if c.ID.String() == form["vcs_connection"] {
-				data["Conn"] = c
-			}
-		}
-	} else if data["Conn"], data["Health"], err = s.App.VCSHealth(r.Context(), actor(r), ws.Name); err != nil {
+		data.Conn = pickedConn(f.Conns, form["vcs_connection"])
+	} else if data.Conn, data.Health, err = s.App.VCSHealth(r.Context(), actor(r), ws.Name); err != nil {
 		s.uiError(w, r, err)
 		return
 	}

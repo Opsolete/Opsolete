@@ -1,4 +1,4 @@
-{{template "top"}}
+{{template "top" .Page}}
 {{$f := .VCS.Form}}{{$pq := index $f "project"}}{{$t := index $f "type"}}{{$conn := .Conn}}
 {{/* step of the vcs workflow: 2 connect, 3 repository, 4 settings */}}
 {{$step := 1}}{{if eq $t "vcs"}}{{$step = 2}}{{if $conn}}{{$step = 3}}{{if index $f "vcs_repo"}}{{$step = 4}}{{end}}{{end}}{{end}}
@@ -34,7 +34,7 @@
 {{if not $t}}
 <h2>Choose your workflow</h2>
 <div class="grid">
-  {{if (features).VCS}}
+  {{if $.Features.VCS}}
   <a class="card tile workflow" href="?type=vcs{{with $pq}}&project={{.}}{{end}}">
     <h3>Version control workflow</h3>
     <p>Trigger runs based on changes to configuration in repositories.</p>
@@ -62,7 +62,7 @@
 {{if and .VCS.Conns (not (index $f "other"))}}
 {{template "vcsconns" dict "Conns" .VCS.Conns "Providers" .Providers "Project" $pq}}
 <p><a href="?type=vcs&other=1{{with $pq}}&project={{.}}{{end}}">Connect to a different VCS</a></p>
-{{else if (user).Admin}}
+{{else if $.User.Admin}}
 <div class="inline">
   {{range .Providers}}<a class="btn secondary" href="/vcs/new?provider={{.ID}}&return=workspace">{{.Label}}</a>{{end}}
 </div>

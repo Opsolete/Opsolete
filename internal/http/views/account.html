@@ -1,5 +1,5 @@
-{{template "top" .}}
-{{if eq .Page "profile"}}{{with user}}
+{{template "top" .Page}}
+{{if eq .Sub "profile"}}{{with .User}}
 <nav class="back" aria-label="breadcrumb">Account settings: Profile</nav>
 <h1>Profile</h1>
 <p class="muted">Your account comes from the identity provider: change it there. It's updated at every login.</p>

@@ -50,7 +50,7 @@ func (s *Server) setWorkspaceVariable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := s.App.SetWorkspaceVariable(r.Context(), actor(r), r.PathValue("name"), variableInput(f))
-	if s.failed(w, r, err, "variable", f, s.onWorkspacePage(w, r, "/variables", "")) {
+	if s.failed(w, r, err, "variable", f, s.onWorkspacePage(w, r, "variables", "")) {
 		return
 	}
 	http.Redirect(w, r, "/workspaces/"+r.PathValue("name")+"/variables", http.StatusSeeOther)
@@ -76,7 +76,14 @@ func (s *Server) variableSetsPage(w http.ResponseWriter, r *http.Request, status
 		s.uiError(w, r, err)
 		return
 	}
-	s.render(w, r, status, "variablesets.html", map[string]any{"Sets": sets, "F": f})
+	s.render(w, r, status, "variablesets.html", &variableSetsPage{Page{Section: "variable-sets"}, sets, f})
+}
+
+// variableSetsPage lists the variable sets (variablesets.html).
+type variableSetsPage struct {
+	Page
+	Sets []storage.VariableSet
+	F    *formState // a refused new set
 }
 
 // createVariableSet creates a set; from a project's or workspace's page (project, workspace) it's
@@ -136,7 +143,17 @@ func (s *Server) variableSetPage(w http.ResponseWriter, r *http.Request, status 
 		items = append(items, pickerItem{pr.Name, projectLabel(pr), slices.Contains(picked, pr.Name)})
 	}
 	vars := varsBlock{Base: "/variable-sets/" + set.Name, Vars: set.Vars, CanEdit: true, F: formOf(f, "variable")}
-	s.render(w, r, status, "variableset.html", map[string]any{"Set": set.VariableSet, "Variables": vars, "Picker": p, "Projects": items, "F": f})
+	s.render(w, r, status, "variableset.html", &variableSetPage{Page{Section: "variable-sets"}, set.VariableSet, vars, p, items, f})
+}
+
+// variableSetPage is a variable set's page (variableset.html).
+type variableSetPage struct {
+	Page
+	Set       storage.VariableSet
+	Variables varsBlock
+	Picker    picker       // the workspaces it applies to
+	Projects  []pickerItem // the projects, the ones it applies to checked
+	F         *formState   // a refused form on the page
 }
 
 func (s *Server) updateVariableSet(w http.ResponseWriter, r *http.Request) {

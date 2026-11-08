@@ -21,7 +21,7 @@ func TestRenderRollout(t *testing.T) {
 	w := httptest.NewRecorder()
 	r1 := uuid.New()
 	ro := &storage.Rollout{ModuleRef: "v3", ProjectName: "team-a", BatchSize: 2, Status: "paused", Message: "the run in a: errored"}
-	s.render(w, httptest.NewRequest("GET", "/", nil), 200, "rollout.html", rolloutPage{T: templates.Template{ID: "sa", Name: "SA"},
+	s.render(w, httptest.NewRequest("GET", "/", nil), 200, "rollout.html", &rolloutPage{T: templates.Template{ID: "sa", Name: "SA"},
 		Pending: 1, Rollout: ro, OpenRuns: 1, Rows: []app.RolloutRow{
 			{TemplateUse: storage.TemplateUse{Workspace: "a", Module: "m", RunID: r1, RunStatus: "needs_confirmation"}, State: app.RolloutCurrent},
 			{TemplateUse: storage.TemplateUse{Workspace: "b", Module: "n"}, State: app.RolloutNeedsInput, Missing: []string{"x", "y"}},

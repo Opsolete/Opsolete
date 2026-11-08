@@ -1,6 +1,10 @@
 package httpserver
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/opsolete/opsolete/internal/storage"
+)
 
 // Account settings: the signed-in user's profile and `terraform login`
 // tokens. Login is OIDC, so there are no passwords or second factors here; sessions are signed
@@ -12,15 +16,23 @@ func (s *Server) accountRoutes(mux routes) {
 	mux.HandleFunc("POST /account/tokens/revoke", s.revokeTokens)
 }
 
+// accountPage is account.html: Page.Sub is "profile" or "tokens".
+type accountPage struct {
+	Page
+	Groups []string // profile: recorded at the last login, they decide team access
+	Tokens []storage.UserToken
+	Host   string // tokens: for `terraform login`
+}
+
 func (s *Server) accountPage(w http.ResponseWriter, r *http.Request) {
-	data := map[string]any{"Page": r.PathValue("page")}
+	p := &accountPage{Page: Page{Section: "account", Sub: r.PathValue("page")}}
 	var err error
-	switch r.PathValue("page") {
-	case "profile": // the groups recorded at the last login decide team access
-		data["Groups"], err = s.App.UserGroups(r.Context(), actor(r))
+	switch p.Sub {
+	case "profile":
+		p.Groups, err = s.App.UserGroups(r.Context(), actor(r))
 	case "tokens":
-		data["Tokens"], err = s.App.UserTokens(r.Context(), actor(r))
-		data["Host"] = s.App.Registry.PublicURL.Host
+		p.Tokens, err = s.App.UserTokens(r.Context(), actor(r))
+		p.Host = s.App.Registry.PublicURL.Host
 	default:
 		http.NotFound(w, r)
 		return
@@ -29,7 +41,7 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request) {
 		s.uiError(w, r, err)
 		return
 	}
-	s.render(w, r, http.StatusOK, "account.html", data)
+	s.render(w, r, http.StatusOK, "account.html", p)
 }
 
 // revokeToken revokes one of the user's own tokens; at once, since every request checks it.

@@ -14,11 +14,11 @@ import (
 func (s *Server) projectRoutes(mux routes) {
 	mux.HandleFunc("GET /projects", s.projects)
 	mux.HandleFunc("POST /projects", s.createProject)
-	// the project's menu pages: one handler, project.html shows the part of the current tab
-	mux.HandleFunc("GET /projects/{project}", s.project)
-	mux.HandleFunc("GET /projects/{project}/workspaces", s.project)
-	mux.HandleFunc("GET /projects/{project}/settings", s.project)
-	mux.HandleFunc("GET /projects/{project}/settings/{page}", s.project)
+	// the project's menu pages: project.html shows the part of the tab
+	mux.HandleFunc("GET /projects/{project}", s.projectTab("overview"))
+	mux.HandleFunc("GET /projects/{project}/workspaces", s.projectTab("workspaces"))
+	mux.HandleFunc("GET /projects/{project}/settings", s.projectTab("settings"))
+	mux.HandleFunc("GET /projects/{project}/settings/{page}", s.projectTab("settings"))
 	mux.HandleFunc("POST /projects/{project}/settings", s.projectSettings)
 	mux.HandleFunc("POST /projects/{project}/delete", s.deleteProject)
 	mux.HandleFunc("POST /projects/{project}/access", s.projectAccess)
@@ -36,7 +36,15 @@ func (s *Server) projectsPage(w http.ResponseWriter, r *http.Request, status int
 		s.uiError(w, r, err)
 		return
 	}
-	s.render(w, r, status, "projects.html", map[string]any{"Projects": list, "Org": s.Organization, "F": f})
+	s.render(w, r, status, "projects.html", &projectsPage{Page{Section: "projects"}, list, s.Organization, f})
+}
+
+// projectsPage is the project list (projects.html).
+type projectsPage struct {
+	Page
+	Projects []storage.Project
+	Org      string
+	F        *formState // a refused new project
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
@@ -51,28 +59,38 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/projects/"+p.Name, http.StatusSeeOther)
 }
 
-// project serves a project's menu: Overview, Workspaces and Settings (General,
+// projectPage is a project's menu page (project.html): Overview, Workspaces and Settings (General,
 // Team access, Variable sets). Everyone who sees the project sees the first two; only admins the settings.
-func (s *Server) project(w http.ResponseWriter, r *http.Request) {
-	s.projectPage(w, r, http.StatusOK, nil)
+type projectPage struct {
+	Page
+	P          storage.Project
+	F          *formState          // a refused form on the page
+	Workspaces []storage.Workspace // overview (the most recently active ones), workspaces
+	CanCreate  bool                // overview, workspaces: the user may create workspaces in it
+	Grants     []storage.Grant     // settings: team access
+	Groups     []string            // settings: team access, known groups to grant
+	Sets       []storage.VariableSet
 }
 
-// onProjectPage re-renders a refused form on the {project}'s settings sub-page page ("" General).
-func (s *Server) onProjectPage(w http.ResponseWriter, r *http.Request, page string) func(int, *formState) {
-	return func(status int, f *formState) {
-		s.projectPage(w, at(r, strings.TrimSuffix("/projects/"+r.PathValue("project")+"/settings/"+page, "/"), "page", page), status, f)
+// projectTab serves the {project}'s menu page tab; "settings" also its sub-pages ({page}).
+func (s *Server) projectTab(tab string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.renderProject(w, r, tab, r.PathValue("page"), http.StatusOK, nil)
 	}
 }
 
-// projectPage renders the project's menu page of the request's path; f: a refused form on it.
-func (s *Server) projectPage(w http.ResponseWriter, r *http.Request, status int, f *formState) {
-	page := r.PathValue("page") // settings sub-pages; "" is General
-	if !slices.Contains([]string{"", "access", "variable-sets"}, page) {
+// onProjectPage re-renders a refused form on the {project}'s settings sub-page sub ("" General).
+func (s *Server) onProjectPage(w http.ResponseWriter, r *http.Request, sub string) func(int, *formState) {
+	return func(status int, f *formState) { s.renderProject(w, r, "settings", sub, status, f) }
+}
+
+// renderProject renders the {project}'s menu page tab (sub: the settings sub-page, "" General); f: a refused form on it.
+func (s *Server) renderProject(w http.ResponseWriter, r *http.Request, tab, sub string, status int, f *formState) {
+	if !slices.Contains([]string{"", "access", "variable-sets"}, sub) {
 		http.NotFound(w, r)
 		return
 	}
 	ctx, a := r.Context(), actor(r)
-	tab, _, _ := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/projects/"+r.PathValue("project")), "/"), "/")
 	load := s.App.Project
 	if tab == "settings" {
 		load = s.App.ProjectForSettings
@@ -82,9 +100,9 @@ func (s *Server) projectPage(w http.ResponseWriter, r *http.Request, status int,
 		s.uiError(w, r, err)
 		return
 	}
-	data := map[string]any{"P": p, "Page": page, "F": f}
+	data := &projectPage{Page: Page{Section: "projects", InProject: r.PathValue("project"), Tab: tab, Sub: sub, WorkspaceCount: p.Workspaces}, P: p, F: f}
 	switch {
-	case tab == "" || tab == "workspaces":
+	case tab == "overview" || tab == "workspaces":
 		list, err := s.App.ListWorkspaces(ctx, a, p.Name)
 		if err != nil {
 			s.uiError(w, r, err)
@@ -95,20 +113,20 @@ func (s *Server) projectPage(w http.ResponseWriter, r *http.Request, status int,
 			s.uiError(w, r, err)
 			return
 		}
-		data["CanCreate"] = slices.ContainsFunc(creatable, func(c storage.Project) bool { return c.ID == p.ID })
-		if tab == "" { // the overview shows the most recently active ones
+		data.CanCreate = slices.ContainsFunc(creatable, func(c storage.Project) bool { return c.ID == p.ID })
+		if tab == "overview" { // the overview shows the most recently active ones
 			list = list[:min(len(list), 5)]
 		}
-		data["Workspaces"] = list
-	case page == "access":
+		data.Workspaces = list
+	case sub == "access":
 		acc, err := s.App.ProjectAccess(ctx, a, p.Name)
 		if err != nil {
 			s.uiError(w, r, err)
 			return
 		}
-		data["Grants"], data["Groups"] = acc.ProjectGrants, acc.Groups
-	case page == "variable-sets":
-		if data["Sets"], err = s.App.ProjectVariableSets(ctx, a, p.Name); err != nil {
+		data.Grants, data.Groups = acc.ProjectGrants, acc.Groups
+	case sub == "variable-sets":
+		if data.Sets, err = s.App.ProjectVariableSets(ctx, a, p.Name); err != nil {
 			s.uiError(w, r, err)
 			return
 		}
@@ -160,7 +178,7 @@ func (s *Server) moveWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err := s.App.MoveWorkspace(r.Context(), actor(r), r.PathValue("name"), f.Get("project"))
-	if s.failed(w, r, err, "project", f, s.onWorkspacePage(w, r, "/settings", "")) {
+	if s.failed(w, r, err, "project", f, s.onWorkspacePage(w, r, "settings", "")) {
 		return
 	}
 	http.Redirect(w, r, "/workspaces/"+r.PathValue("name")+"/settings", http.StatusSeeOther)

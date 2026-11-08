@@ -14,6 +14,7 @@ import (
 // Template rollouts (app.StartRollout): the page of a template's uses and its rollout, and its actions.
 
 type rolloutPage struct {
+	Page
 	T        templates.Template
 	Rows     []app.RolloutRow
 	Pending  int
@@ -41,7 +42,7 @@ func (s *Server) renderRollout(w http.ResponseWriter, r *http.Request, status in
 		s.uiError(w, r, err)
 		return
 	}
-	s.render(w, r, status, "rollout.html", rolloutPage{T: v.Template, Rows: v.Rows, Pending: v.Pending, Projects: projects,
+	s.render(w, r, status, "rollout.html", &rolloutPage{Page: Page{Section: "templates"}, T: v.Template, Rows: v.Rows, Pending: v.Pending, Projects: projects,
 		Project: project, Rollout: v.Rollout, OpenRuns: v.OpenRuns, F: f})
 }
 

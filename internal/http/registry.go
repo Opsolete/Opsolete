@@ -95,7 +95,9 @@ func (s *Server) moduleArchive(w http.ResponseWriter, r *http.Request) {
 	w.Write(b)
 }
 
+// registryPage lists the registry's modules (registry.html).
 type registryPage struct {
+	Page
 	Modules   []latestModule
 	Templates bool // the template builder is on: offer "Create template"
 	Upload    bool
@@ -136,7 +138,7 @@ func (s *Server) registryPage(w http.ResponseWriter, r *http.Request) {
 		s.uiError(w, r, err)
 		return
 	}
-	p := registryPage{Modules: latestVersions(mods), Templates: s.canEditTemplates(r), Upload: s.canUpload(r), Host: s.App.Registry.PublicURL.Host,
+	p := &registryPage{Page: Page{Section: "registry"}, Modules: latestVersions(mods), Templates: s.canEditTemplates(r), Upload: s.canUpload(r), Host: s.App.Registry.PublicURL.Host,
 		VCS: s.Features.VCS && auth.FromContext(r.Context()).Admin(), Admin: auth.FromContext(r.Context()).Admin()}
 	if p.VCS {
 		if p.Linked, err = s.App.VCSModules(r.Context(), actor(r)); err != nil {
@@ -149,7 +151,7 @@ func (s *Server) registryPage(w http.ResponseWriter, r *http.Request) {
 
 // renderUpload is the upload step of the add-module wizard.
 func (s *Server) renderUpload(w http.ResponseWriter, r *http.Request, status int, f *formState, form map[string]string) {
-	s.render(w, r, status, "publish.html", publishPage{Type: "upload", Host: s.App.Registry.PublicURL.Host, F: f, Form: form})
+	s.render(w, r, status, "publish.html", &publishPage{Page: Page{Section: "registry"}, Type: "upload", Host: s.App.Registry.PublicURL.Host, F: f, Form: form})
 }
 
 func (s *Server) uploadModule(w http.ResponseWriter, r *http.Request) {
@@ -211,11 +213,16 @@ func (s *Server) moduleDocs(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "list projects", err)
 		return
 	}
-	s.render(w, r, http.StatusOK, "module.html", map[string]any{"CanCreate": can,
-		"Namespace": ns, "Name": name, "System": sys, "Version": ver, "Versions": d.Versions,
-		"Source": d.Source, "Docs": d.Docs, "Editor": s.canEditTemplates(r), "Linked": d.Linked, "Templates": d.Templates,
-		"Admin": auth.FromContext(r.Context()).Admin(),
-	})
+	s.render(w, r, http.StatusOK, "module.html", &modulePage{Page{Section: "registry"}, ns, name, sys, ver, d, s.canEditTemplates(r), can})
+}
+
+// modulePage is a module version's documentation (module.html).
+type modulePage struct {
+	Page
+	Namespace, Name, System, Version string
+	app.ModuleDocs
+	Editor    bool // the template builder is on: offer "Create template"
+	CanCreate bool // the user may create workspaces somewhere
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

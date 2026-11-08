@@ -1,6 +1,6 @@
 {{define "runtitle"}}{{if eq . "destroy"}}Destroy{{else if eq . "refresh"}}Refresh state{{else if eq . "assess"}}Drift check{{else if eq . "plan"}}Speculative plan{{else}}Plan and apply{{end}}{{end}}
 {{define "pclass"}}{{if eq . "finished"}}succeeded{{else if eq . "running"}}running{{else if eq . "pending"}}needs_confirmation{{else}}{{.}}{{end}}{{end}}
-{{template "top" .}}
+{{template "top" .Page}}
 {{$w := .W}}{{$r := .R}}{{$logInApply := or (not .Apply.Start.IsZero) (eq .Apply.State "queued")}}
 <nav class="back" aria-label="breadcrumb">{{template "wscrumb" $w}} / <a href="/workspaces/{{$w.Name}}/runs">Runs</a> / <code>{{$r.ID}}</code></nav>
 <div class="page-head">

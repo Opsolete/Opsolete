@@ -122,17 +122,6 @@ func (s *Server) failed(w http.ResponseWriter, r *http.Request, err error, name 
 	return true
 }
 
-// at is r as the page at path (with these path values, name and value pairs) sees it: a refused
-// form re-renders the page it was posted from, which takes its tab and sub-page from the request.
-func at(r *http.Request, path string, values ...string) *http.Request {
-	r = r.Clone(r.Context())
-	r.URL.Path = path
-	for i := 0; i+1 < len(values); i += 2 {
-		r.SetPathValue(values[i], values[i+1])
-	}
-	return r
-}
-
 // Template funcs of forms; f is the page's formState, nil if it isn't a re-render.
 
 // formOf is f if it is the named form's, else nil: what a form of a page with several reads.

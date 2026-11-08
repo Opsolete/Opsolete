@@ -60,8 +60,8 @@ func newApp(t *testing.T, dir string, store *storage.Store, a *auth.Auth, f Feat
 	return srv
 }
 
-// testLog discards the log, but fails the test on errNotShown: a form that doesn't re-render its
-// ValidationError.
+// testLog discards the log, but fails the test on errNotShown (a form that doesn't re-render its
+// ValidationError) and errRender (a page template that doesn't fit its model).
 func testLog(t *testing.T) *slog.Logger {
 	return slog.New(notShown{slog.DiscardHandler, t})
 }
@@ -74,6 +74,14 @@ type notShown struct {
 func (h notShown) Enabled(context.Context, slog.Level) bool { return true }
 
 func (h notShown) Handle(_ context.Context, r slog.Record) error {
+	if r.Message == errRender {
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == "err" {
+				h.t.Errorf("%s: %s", errRender, a.Value)
+			}
+			return true
+		})
+	}
 	if r.Message == errNotShown {
 		var path string
 		r.Attrs(func(a slog.Attr) bool {

@@ -19,7 +19,8 @@ func (s *Server) loadTemplateForm(w http.ResponseWriter, r *http.Request) (formP
 		s.uiError(w, r, err)
 		return formPage{}, false
 	}
-	page := formPage{T: f.Template, Configure: &f.Workspace, Module: r.PathValue("module"), Adding: f.Current == nil}
+	// TemplateForm needs operate: the menu offers the settings
+	page := formPage{Page: workspaceNav(r.PathValue("name"), "templates", "", true), T: f.Template, Configure: &f.Workspace, Module: r.PathValue("module"), Adding: f.Current == nil}
 	var inputs map[string]any
 	if f.Current != nil {
 		inputs, page.Cur = f.Current.Inputs, templates.Module{Source: f.Current.ModuleSource, Ref: f.Current.ModuleRef}
@@ -30,7 +31,7 @@ func (s *Server) loadTemplateForm(w http.ResponseWriter, r *http.Request) (formP
 
 func (s *Server) workspaceTemplateForm(w http.ResponseWriter, r *http.Request) {
 	if page, ok := s.loadTemplateForm(w, r); ok {
-		s.render(w, r, http.StatusOK, "form.html", page)
+		s.render(w, r, http.StatusOK, "form.html", &page)
 	}
 }
 
@@ -49,7 +50,7 @@ func (s *Server) saveWorkspaceTemplate(w http.ResponseWriter, r *http.Request) {
 	_, run, err := s.App.SaveTemplate(r.Context(), actor(r), r.PathValue("name"), r.PathValue("module"), page.T.ID, page.Values)
 	if s.failed(w, r, err, "template", f, func(status int, fs *formState) {
 		fs.Labels, page.F = inputLabels(page.T), fs
-		s.render(w, r, status, "form.html", page)
+		s.render(w, r, status, "form.html", &page)
 	}) {
 		return
 	}

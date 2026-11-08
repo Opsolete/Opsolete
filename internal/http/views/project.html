@@ -1,5 +1,5 @@
-{{template "top" .}}
-{{$p := .P}}{{$tab := tab}}{{$pg := .Page}}
+{{template "top" .Page}}
+{{$p := .P}}{{$tab := .Tab}}{{$pg := .Sub}}
 <nav class="back" aria-label="breadcrumb"><a href="/projects">Projects</a> / <a href="/projects/{{$p.Name}}">{{$p.Name}}</a> / {{if eq $tab "workspaces"}}Workspaces{{else if eq $tab "settings"}}<a href="/projects/{{$p.Name}}/settings">Settings</a> / {{if eq $pg "access"}}Team access{{else if eq $pg "variable-sets"}}Variable sets{{else}}General{{end}}{{else}}Overview{{end}}</nav>
 
 {{template "formerror" .F}}
@@ -9,8 +9,8 @@
     <h1>{{$p.Name}}{{if $p.Default}} <span class="tag" title="new workspaces go here unless another project is picked">default</span>{{end}}</h1>
     <p class="id">ID <code>{{$p.ID}}</code>
       <button type="button" class="copy" aria-label="Copy ID" title="Copy ID" onclick="navigator.clipboard.writeText('{{$p.ID}}')">⧉</button></p>
-    {{with $p.Description}}<p class="muted">{{.}}</p>{{else}}{{if (user).Admin}}<p><a href="/projects/{{$p.Name}}/settings">Add project description</a></p>{{end}}{{end}}
-    <p class="meta"><span>{{if (user).Admin}}<a href="/projects/{{$p.Name}}/settings/access">Teams {{$p.Grants}}</a>{{else}}Teams {{$p.Grants}}{{end}}</span><span><a href="/projects/{{$p.Name}}/workspaces">Workspaces {{$p.Workspaces}}</a></span></p>
+    {{with $p.Description}}<p class="muted">{{.}}</p>{{else}}{{if $.User.Admin}}<p><a href="/projects/{{$p.Name}}/settings">Add project description</a></p>{{end}}{{end}}
+    <p class="meta"><span>{{if $.User.Admin}}<a href="/projects/{{$p.Name}}/settings/access">Teams {{$p.Grants}}</a>{{else}}Teams {{$p.Grants}}{{end}}</span><span><a href="/projects/{{$p.Name}}/workspaces">Workspaces {{$p.Workspaces}}</a></span></p>
   </div>
   {{if .CanCreate}}<a class="btn" href="/workspaces/new?project={{$p.Name}}">+ New workspace</a>{{end}}
 </div>

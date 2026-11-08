@@ -1,4 +1,4 @@
-{{template "top"}}
+{{template "top" .Page}}
 {{$p := index .Form "provider"}}{{$ret := .Return}}
 {{$back := "/vcs"}}{{if eq $ret "workspace"}}{{$back = "/workspaces/new?type=vcs"}}{{else if eq $ret "module"}}{{$back = "/registry/publish?type=vcs"}}{{else if eq $ret "catalog"}}{{$back = "/catalog"}}{{end}}
 <nav class="back" aria-label="breadcrumb"><a href="/vcs">VCS providers</a> / {{if .Edit}}{{.Conn.Name}}{{else}}Add VCS provider{{end}}</nav>

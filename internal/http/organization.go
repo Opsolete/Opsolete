@@ -13,14 +13,19 @@ func (s *Server) renderOrganization(w http.ResponseWriter, r *http.Request, stat
 		s.uiError(w, r, err)
 		return
 	}
-	data := map[string]any{"Name": s.Organization, "Saved": r.URL.Query().Has("saved"), "DevUploads": s.Features.Editor, "F": f}
-	if s.Features.Deployments {
-		data["Currency"] = o.Currency
-	}
-	if s.Features.Registry {
-		data["Uploads"] = o.ModuleUploads
-	}
-	s.render(w, r, status, "organization.html", data)
+	s.render(w, r, status, "organization.html", &organizationPage{Page: Page{Section: "organization"}, Name: s.Organization,
+		Currency: o.Currency, Uploads: o.ModuleUploads, DevUploads: s.Features.Editor, Saved: r.URL.Query().Has("saved"), F: f})
+}
+
+// organizationPage is the organization's settings (organization.html); it shows the settings of the components that are on.
+type organizationPage struct {
+	Page
+	Name       string
+	Currency   string // deployments: of cost estimates
+	Uploads    bool   // registry: module uploads
+	DevUploads bool   // uploads are on regardless (TEMPLATE_EDITOR)
+	Saved      bool
+	F          *formState // a refused save
 }
 
 // saveOrganization saves the settings of the components that are on.

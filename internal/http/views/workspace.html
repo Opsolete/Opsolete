@@ -1,5 +1,5 @@
-{{template "top" .}}
-{{$w := .W}}{{$tab := tab}}{{$p := .Page}}
+{{template "top" .Page}}
+{{$w := .W}}{{$tab := .Tab}}{{$p := .Sub}}
 <nav class="back" aria-label="breadcrumb">{{template "wscrumb" $w}} / {{if eq $tab "runs"}}Runs{{else if eq $tab "states"}}{{if .State}}<a href="/workspaces/{{$w.Name}}/states">States</a> / v{{.State.Serial}}{{else}}States{{end}}{{else if eq $tab "variables"}}Variables{{else if eq $tab "deploy"}}Deploy{{else if eq $tab "settings"}}<a href="/workspaces/{{$w.Name}}/settings">Settings</a> / {{if eq $p "health"}}Health{{else if eq $p "lock"}}Locking{{else if eq $p "access"}}Team access{{else if eq $p "deletion"}}Destruction and deletion{{else}}General{{end}}{{else}}Overview{{end}}</nav>
 {{template "formerror" .F}}
 {{if ne $tab "settings"}}
@@ -80,7 +80,7 @@
   <nav class="chips" aria-label="workspace contents">
     <a href="?show=resources"{{if eq $show "resources"}} aria-current="true"{{end}}>Resources {{len .Resources}}</a>
     <a href="?show=outputs"{{if eq $show "outputs"}} aria-current="true"{{end}}>Outputs {{len .Outputs}}</a>
-    <a href="?show=templates"{{if eq $show "templates"}} aria-current="true"{{end}}>Templates {{.TemplateCount}}</a>
+    <a href="?show=templates"{{if eq $show "templates"}} aria-current="true"{{end}}>Templates {{len .Added}}</a>
   </nav>
   {{with .Versions}}{{with index . 0}}<small>Current as of state version v{{.Serial}}: {{.CreatedAt.Format "2006-01-02 15:04"}}</small>{{end}}{{end}}
 </div>
@@ -143,7 +143,7 @@
   <ul class="facts">
     <li>Project: <a href="/projects/{{$w.ProjectName}}">{{$w.ProjectName}}</a></li>
     <li>Repository: {{if $w.VCSLinked}}<code>{{$w.VCSRepo}}</code> <span class="tag">{{$w.VCSBranch}}</span>{{else}}<span class="muted">none{{with $w.VCSRepo}} (was {{.}}; its VCS connection was deleted){{end}}</span>{{end}}
-      {{if and .CanOperate (features).VCS}} · <a href="/workspaces/{{$w.Name}}/vcs">{{if $w.VCSLinked}}Change{{else}}Link{{end}}…</a>{{end}}</li>
+      {{if and .CanOperate $.Features.VCS}} · <a href="/workspaces/{{$w.Name}}/vcs">{{if $w.VCSLinked}}Change{{else}}Link{{end}}…</a>{{end}}</li>
     {{if $w.VCSLinked}}<li>Runs on: {{if not $w.VCSTrigger}}manual runs only{{else if $w.VCSTagsRegex}}new tags matching <code>{{$w.VCSTagsRegex}}</code>{{else}}pushes to the branch{{end}}{{if $w.VCSPullRequests}}; plans for pull requests{{end}}</li>{{end}}
     {{$mode := "Remote"}}{{if eq $w.ExecutionMode "local"}}{{$mode = "Local"}}{{end}}
     {{if .CanOperate}}<!-- readers can't open the settings: plain text for them -->
@@ -225,8 +225,8 @@
 <p class="muted">Variable sets let admins reuse variables across workspaces. Between sets, those attached to this workspace win over those of its project, those over global ones, then the first by name.</p>
 {{range .Sets}}
 <div class="card">
-  <div class="section-head"><h3 style="margin:0">{{if $.Admin}}<a href="/variable-sets/{{.Name}}">{{.Name}}</a>{{else}}{{.Name}}{{end}}</h3>
-    {{if $.Admin}}<a class="btn secondary small" href="/variable-sets/{{.Name}}">Edit…</a>{{end}}</div>
+  <div class="section-head"><h3 style="margin:0">{{if $.User.Admin}}<a href="/variable-sets/{{.Name}}">{{.Name}}</a>{{else}}{{.Name}}{{end}}</h3>
+    {{if $.User.Admin}}<a class="btn secondary small" href="/variable-sets/{{.Name}}">Edit…</a>{{end}}</div>
   {{with .Description}}<p class="muted">{{.}}</p>{{end}}
   <p class="meta">{{if .Global}}<span>Global: applies to all workspaces</span>{{else}}{{with .Projects}}<span>Projects: {{join . ", "}}</span>{{end}}<span>{{len .Workspaces}} workspace{{if ne (len .Workspaces) 1}}s{{end}}</span>{{end}}
     <span>{{len .Vars.Vars}} variable{{if ne (len .Vars.Vars) 1}}s{{end}}</span><span>Created {{.CreatedAt.Format "2006-01-02 15:04"}}</span></p>
@@ -235,7 +235,7 @@
 {{else}}
 <p class="muted">No variable sets apply to this workspace.</p>
 {{end}}
-{{if $.Admin}}
+{{if $.User.Admin}}
 <form method="post" action="/variable-sets" class="card">
   <h3 style="margin-top:0">Create a variable set for this workspace</h3>
   <input type="hidden" name="workspace" value="{{$.W.Name}}">
@@ -332,8 +332,8 @@
   Runs wait until it is unlocked, and nobody else can take the state lock.</p>
 {{with .Info}}<div class="field">Reason</div><p>{{.}}</p>{{end}}
 {{if .Cloud}}
-<form method="post" action="/workspaces/{{$w.Name}}/lock" onsubmit="return opsConfirm(event, '{{if eq .UserID $.Me}}Unlock{{else}}Force unlock{{end}} {{$w.Name}}? Runs can proceed again.')">
-  {{if eq .UserID $.Me}}<input type="hidden" name="action" value="unlock"><button type="submit">Unlock workspace</button>
+<form method="post" action="/workspaces/{{$w.Name}}/lock" onsubmit="return opsConfirm(event, '{{if eq .UserID $.User.ID.String}}Unlock{{else}}Force unlock{{end}} {{$w.Name}}? Runs can proceed again.')">
+  {{if eq .UserID $.User.ID.String}}<input type="hidden" name="action" value="unlock"><button type="submit">Unlock workspace</button>
   {{else}}<input type="hidden" name="action" value="force-unlock"><button type="submit" class="danger">Force unlock workspace</button>
   <p class="hint">Someone else holds this lock: force unlocking may disturb what they are doing.</p>{{end}}
 </form>
@@ -366,16 +366,16 @@
 <div class="card">
   {{with .Grants}}
   <table>
-  <tr><th>Group</th><th>Access</th>{{if $.Admin}}<th></th>{{end}}</tr>
+  <tr><th>Group</th><th>Access</th>{{if $.User.Admin}}<th></th>{{end}}</tr>
   {{range .}}<tr><td><code>{{.Group}}</code></td><td>{{.Level}}</td>
-    {{if $.Admin}}<td><form method="post" action="/workspaces/{{$w.Name}}/access"><input type="hidden" name="group" value="{{.Group}}">
+    {{if $.User.Admin}}<td><form method="post" action="/workspaces/{{$w.Name}}/access"><input type="hidden" name="group" value="{{.Group}}">
       <button type="submit" class="secondary small">Revoke</button></form></td>{{end}}</tr>{{end}}
   </table>
   {{else}}<p class="muted" style="margin:0">No groups have access to this workspace itself.</p>
   {{end}}
-  {{with .ProjectGrants}}<p class="hint">Through the project {{if $.Admin}}<a href="/projects/{{$w.ProjectName}}/settings/access">{{$w.ProjectName}}</a>{{else}}<a href="/projects/{{$w.ProjectName}}">{{$w.ProjectName}}</a>{{end}}:
+  {{with .ProjectGrants}}<p class="hint">Through the project {{if $.User.Admin}}<a href="/projects/{{$w.ProjectName}}/settings/access">{{$w.ProjectName}}</a>{{else}}<a href="/projects/{{$w.ProjectName}}">{{$w.ProjectName}}</a>{{end}}:
     {{range $i, $g := .}}{{if $i}}, {{end}}<code>{{$g.Group}}</code> {{$g.Level}}{{end}}</p>{{end}}
-  {{if .Admin}}{{template "grantform" dict "Action" (print "/workspaces/" $w.Name "/access") "Groups" .Groups "F" (formOf .F "access")}}{{end}}
+  {{if $.User.Admin}}{{template "grantform" dict "Action" (print "/workspaces/" $w.Name "/access") "Groups" .Groups "F" (formOf .F "access")}}{{end}}
 </div>
 
 {{else}}
@@ -444,7 +444,7 @@
 {{if and $.CanOperate (not $.IsCurrent)}}
 <h3>Rolling back to v{{.Serial}} changes</h3>
 {{template "statediff" $.RollbackChanges}}
-{{if $.Active}}<p class="muted">A run is active: roll back once it has finished.</p>{{else}}<p>{{template "rollback" .}}</p>{{end}}
+{{if $.Active}}<p class="muted">A run is active: roll back once it has finished.</p>{{else}}<p>{{template "rollback" (dict "W" $w.Name "V" .)}}</p>{{end}}
 {{end}}
 <h3>Changes in this version{{with $.Prev}} <span class="muted">(from v{{.Serial}})</span>{{end}}</h3>
 {{template "statediff" $.Changes}}
@@ -456,7 +456,7 @@
 <tr><th>Version</th><th>Saved</th><th>Size</th><th>Resources</th>{{if $.CanOperate}}<th></th>{{end}}</tr>
 {{range $i, $v := .}}<tr><td><a href="/workspaces/{{$w.Name}}/states/{{.ID}}"><span class="tag">v{{.Serial}}</span></a>{{if not $i}} <span class="muted">current</span>{{end}}{{with .CopyOf}} <span class="muted">rollback to v{{.}}</span>{{end}}</td><td class="nowrap">{{.CreatedAt.Format "2006-01-02 15:04:05"}}</td>
   <td>{{.Size}} B</td><td>{{if .Indexed}}{{.Resources}}{{else}}<span class="muted">not indexed</span>{{end}}</td>
-  {{if $.CanOperate}}<td class="nowrap"><a class="btn secondary small" href="/workspaces/{{$w.Name}}/states/{{.ID}}">{{if $i}}Compare{{else}}Changes{{end}}</a>{{if and $i (not $.Active)}} {{template "rollback" .}}{{end}}</td>{{end}}</tr>{{end}}
+  {{if $.CanOperate}}<td class="nowrap"><a class="btn secondary small" href="/workspaces/{{$w.Name}}/states/{{.ID}}">{{if $i}}Compare{{else}}Changes{{end}}</a>{{if and $i (not $.Active)}} {{template "rollback" (dict "W" $w.Name "V" .)}}{{end}}</td>{{end}}</tr>{{end}}
 </table>
 </div>
 {{else}}<p class="muted">No state saved yet.</p>
@@ -465,8 +465,8 @@
 {{end}}
 {{template "bottom"}}
 
-{{define "rollback"}}<form method="post" action="/workspaces/{{workspace}}/state-versions/{{.ID}}/rollback" style="display:inline"
-    onsubmit="return opsConfirm(event, 'Roll back to state v{{.Serial}}?\n\nA copy of v{{.Serial}} becomes the current state. Newer versions are kept, so you can roll forward again. Your infrastructure is not changed.\n\nThe state will no longer match what is deployed if anything changed since v{{.Serial}}: resources created since then are no longer tracked (the next run may try to create them again), and resources deleted since then are tracked again (the next run will recreate them). Start a Plan only run to review the result. To revert infrastructure, revert the configuration.', 'rollback')">
+{{define "rollback"}}<!-- .W the workspace name, .V the state version --><form method="post" action="/workspaces/{{.W}}/state-versions/{{.V.ID}}/rollback" style="display:inline"
+    onsubmit="return opsConfirm(event, 'Roll back to state v{{.V.Serial}}?\n\nA copy of v{{.V.Serial}} becomes the current state. Newer versions are kept, so you can roll forward again. Your infrastructure is not changed.\n\nThe state will no longer match what is deployed if anything changed since v{{.V.Serial}}: resources created since then are no longer tracked (the next run may try to create them again), and resources deleted since then are tracked again (the next run will recreate them). Start a Plan only run to review the result. To revert infrastructure, revert the configuration.', 'rollback')">
     <button type="submit" class="secondary small">Roll back</button></form>{{end}}
 
 {{define "statediff"}}{{range .}}
