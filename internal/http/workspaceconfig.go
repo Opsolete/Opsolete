@@ -3,7 +3,6 @@ package httpserver
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/opsolete/opsolete/internal/auth"
 	"github.com/opsolete/opsolete/internal/storage"
@@ -50,7 +51,7 @@ func (s *Server) loadVCSForm(ctx context.Context, form map[string]string, errMsg
 			continue
 		}
 		f.Conns = append(f.Conns, sc)
-		if reposOf != sc.ID {
+		if reposOf != sc.ID.String() {
 			continue
 		}
 		c, err := vcs.ConnFor(s.SecretKey, sc)
@@ -96,46 +97,47 @@ func fillTagForm(form map[string]string, tagsRegex string) {
 // vcsLink validates the form's repository link for the workspace (by name, "" = a new one) in project
 // (by name) and checks the branch exists, or for tag-based triggers (tags: their pattern) that the tags
 // can be read; no connection = no link.
-func (s *Server) vcsLink(ctx context.Context, workspace, project string, form map[string]string) (connID, repo, branch, tags string, err error) {
-	connID, repo, branch = form["vcs_connection"], form["vcs_repo"], form["vcs_branch"]
-	if connID == "" {
-		return "", "", "", "", nil
+func (s *Server) vcsLink(ctx context.Context, workspace, project string, form map[string]string) (connID uuid.UUID, repo, branch, tags string, err error) {
+	repo, branch = form["vcs_repo"], form["vcs_branch"]
+	if form["vcs_connection"] == "" {
+		return uuid.Nil, "", "", "", nil
 	}
 	if !s.Features.VCS {
-		return "", "", "", "", errors.New("VCS connections are disabled")
+		return uuid.Nil, "", "", "", errors.New("VCS connections are disabled")
 	}
+	connID, _ = parseID(form["vcs_connection"]) // not an id: vcsConn finds no such connection
 	if branch == "" {
 		branch = "main"
 	}
 	if !branchRe.MatchString(branch) || strings.Contains(branch, "..") {
-		return "", "", "", "", fmt.Errorf("%q is not a branch name", branch)
+		return uuid.Nil, "", "", "", fmt.Errorf("%q is not a branch name", branch)
 	}
 	if form["vcs_trigger_type"] == "tag" {
 		if tags = tagFormats[form["vcs_tag_format"]]; tags == "" {
 			tags = strings.TrimSpace(form["vcs_tags_regex"])
 			if _, err := regexp.Compile(tags); err != nil || tags == "" || len(tags) > 255 {
-				return "", "", "", "", fmt.Errorf("%q is not a tag pattern: use a regular expression such as ^v\\d+\\.\\d+\\.\\d+$", tags)
+				return uuid.Nil, "", "", "", fmt.Errorf("%q is not a tag pattern: use a regular expression such as ^v\\d+\\.\\d+\\.\\d+$", tags)
 			}
 		}
 	}
 	c, err := s.vcsConn(ctx, connID, workspace, project)
 	if err != nil {
-		return "", "", "", "", err
+		return uuid.Nil, "", "", "", err
 	}
 	if tags != "" {
 		if _, err := c.Tags(ctx, repo); err != nil {
-			return "", "", "", "", fmt.Errorf("can't read the tags of %q: %w", repo, err)
+			return uuid.Nil, "", "", "", fmt.Errorf("can't read the tags of %q: %w", repo, err)
 		}
 	} else if _, err := c.Head(ctx, repo, branch); err != nil {
-		return "", "", "", "", fmt.Errorf("can't read branch %s of %q: %w", branch, repo, err)
+		return uuid.Nil, "", "", "", fmt.Errorf("can't read branch %s of %q: %w", branch, repo, err)
 	}
 	return connID, repo, branch, tags, nil
 }
 
 // vcsConn opens a connection the workspace (by name, "" = a new one) in project (by name) may link.
-func (s *Server) vcsConn(ctx context.Context, connID, workspace, project string) (vcs.Conn, error) {
+func (s *Server) vcsConn(ctx context.Context, connID uuid.UUID, workspace, project string) (vcs.Conn, error) {
 	sc, err := s.Store.GetVCSConnection(ctx, connID)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, storage.ErrNotFound) {
 		return vcs.Conn{}, errors.New("the VCS connection no longer exists")
 	}
 	if err != nil {
@@ -198,7 +200,7 @@ func (s *Server) renderNewWorkspace(w http.ResponseWriter, r *http.Request, stat
 	}
 	data := map[string]any{"Templates": s.Templates.List(), "VCS": f, "Providers": vcs.Providers, "Projects": projects, "Project": form["project"]}
 	for _, c := range f.Conns {
-		if c.ID == form["vcs_connection"] {
+		if c.ID.String() == form["vcs_connection"] {
 			data["Conn"] = c
 		}
 	}
@@ -244,7 +246,7 @@ func (s *Server) createEmptyWorkspace(w http.ResponseWriter, r *http.Request) {
 		fail(err.Error())
 		return
 	}
-	if err == nil && connID != "" {
+	if err == nil && connID != uuid.Nil {
 		err = s.Store.SetWorkspaceVCS(r.Context(), ws.ID, connID, repo, branch, tags, baseline, form["vcs_trigger"] != "" || tags != "", form["vcs_pull_requests"] != "" && tags == "")
 		if err != nil { // don't leave a half-made workspace whose name blocks the retry
 			if _, derr := s.Store.DeleteWorkspace(context.WithoutCancel(r.Context()), ws.ID, true); derr != nil {
@@ -272,15 +274,15 @@ func (s *Server) workspaceVCSPage(w http.ResponseWriter, r *http.Request) {
 	if branch == "" {
 		branch = "main"
 	}
-	form := map[string]string{"vcs_connection": ws.VCSConnectionID, "vcs_repo": ws.VCSRepo, "vcs_branch": branch}
-	if ws.VCSTrigger || ws.VCSConnectionID == "" { // on by default for a new link
+	form := map[string]string{"vcs_connection": formID(ws.VCSConnectionID), "vcs_repo": ws.VCSRepo, "vcs_branch": branch}
+	if ws.VCSTrigger || ws.VCSConnectionID == uuid.Nil { // on by default for a new link
 		form["vcs_trigger"] = "1"
 	}
 	if ws.VCSPullRequests {
 		form["vcs_pull_requests"] = "1"
 	}
 	fillTagForm(form, ws.VCSTagsRegex)
-	if q := r.URL.Query(); strings.HasSuffix(r.URL.Path, "/edit") || ws.VCSConnectionID == "" {
+	if q := r.URL.Query(); strings.HasSuffix(r.URL.Path, "/edit") || ws.VCSConnectionID == uuid.Nil {
 		form["type"], form["vcs_connection"], form["vcs_repo"] = q.Get("type"), q.Get("conn"), q.Get("repo")
 		form["edit"] = "1"
 	}
@@ -302,7 +304,7 @@ func (s *Server) renderWorkspaceVCS(w http.ResponseWriter, r *http.Request, stat
 		"CanOperate": true, "Page": "vcs"} // CanOperate, Page: the settings menu
 	if edit {
 		for _, c := range f.Conns {
-			if c.ID == form["vcs_connection"] {
+			if c.ID.String() == form["vcs_connection"] {
 				data["Conn"] = c
 			}
 		}
@@ -345,7 +347,7 @@ func (s *Server) linkWorkspaceVCS(w http.ResponseWriter, r *http.Request) {
 
 // tagBaseline is the commit of the repository's newest tag matching tags ("" for branch-based):
 // tag triggers start with the tags pushed after it, so switching to them doesn't apply an old release.
-func (s *Server) tagBaseline(ctx context.Context, connID, repo, tags string) (string, error) {
+func (s *Server) tagBaseline(ctx context.Context, connID uuid.UUID, repo, tags string) (string, error) {
 	if tags == "" {
 		return "", nil
 	}
@@ -370,7 +372,7 @@ func (s *Server) tagBaseline(ctx context.Context, connID, repo, tags string) (st
 // It returns the connection, if it still exists, and the problem ("" if none).
 func (s *Server) vcsHealth(ctx context.Context, ws storage.Workspace) (*storage.VCSConnection, string) {
 	sc, err := s.Store.GetVCSConnection(ctx, ws.VCSConnectionID)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, storage.ErrNotFound) {
 		return nil, "its VCS connection was deleted"
 	}
 	if err != nil {
@@ -427,7 +429,7 @@ func (s *Server) pinCommit(ctx context.Context, j storage.Job) error {
 
 // vcsArchivePath ends in .tar.gz so Terraform's getter unpacks it; under /v1/, it's public and
 // authorised by its signature.
-func vcsArchivePath(runID string) string { return "/v1/vcs-archives/" + runID + ".tar.gz" }
+func vcsArchivePath(runID uuid.UUID) string { return "/v1/vcs-archives/" + runID.String() + ".tar.gz" }
 
 // vcsArchive serves a run's pinned commit of its workspace's repository to the runner.
 func (s *Server) vcsArchive(w http.ResponseWriter, r *http.Request) {
@@ -438,8 +440,9 @@ func (s *Server) vcsArchive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	run, _, err := s.Store.GetRun(ctx, runID)
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && run.VCSCommit == "") {
+	id, _ := parseID(runID) // not an id: not found
+	run, _, err := s.Store.GetRun(ctx, id)
+	if errors.Is(err, storage.ErrNotFound) || (err == nil && run.VCSCommit == "") {
 		http.NotFound(w, r)
 		return
 	}
@@ -482,7 +485,7 @@ func (s *Server) rollbackState(w http.ResponseWriter, r *http.Request) {
 	u := auth.FromContext(ctx)
 	lockID := rand.Text()
 	info, _ := json.Marshal(map[string]string{"ID": lockID, "Operation": "OperationTypeRollback", "Who": u.Email})
-	if _, ok, err := s.Store.LockState(ctx, ws.ID, lockID, "", info); err != nil {
+	if _, ok, err := s.Store.LockState(ctx, ws.ID, lockID, uuid.Nil, info); err != nil {
 		s.internalError(w, "lock state", err)
 		return
 	} else if !ok {
@@ -490,7 +493,7 @@ func (s *Server) rollbackState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() {
-		if err := s.Store.UnlockState(context.WithoutCancel(ctx), ws.ID, lockID, ""); err != nil {
+		if err := s.Store.UnlockState(context.WithoutCancel(ctx), ws.ID, lockID, uuid.Nil); err != nil {
 			s.Log.Error("unlock state", "workspace", ws.Name, "err", err)
 		}
 	}()
@@ -506,7 +509,7 @@ func (s *Server) rollbackState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key, err := s.Store.StateVersionBlob(ctx, ws.ID, from)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, storage.ErrNotFound) {
 		http.NotFound(w, r)
 		return
 	}
@@ -539,7 +542,7 @@ func (s *Server) rollbackState(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "encode state", err)
 		return
 	}
-	if code, msg := s.saveState(ctx, ws.ID, "", "", body); code != http.StatusOK {
+	if code, msg := s.saveState(ctx, ws.ID, uuid.Nil, "", body); code != http.StatusOK {
 		http.Error(w, msg, code) // e.g. a version of another lineage
 		return
 	}

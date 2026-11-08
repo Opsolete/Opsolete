@@ -29,7 +29,7 @@
   <label for="connection">VCS connection</label>
   <select id="connection" name="connection" onchange="location='/catalog?connection='+encodeURIComponent(this.value)">
     <option value="">Choose…</option>
-    {{range .Conns}}<option value="{{.ID}}"{{if eq .ID (index $f "connection")}} selected{{end}}>{{.Name}} ({{.Provider}})</option>{{end}}
+    {{range .Conns}}<option value="{{.ID}}"{{if eq .ID.String (index $f "connection")}} selected{{end}}>{{.Name}} ({{.Provider}})</option>{{end}}
   </select>
   <p class="hint"><a href="/vcs/new?return=catalog">Connect a different VCS</a>, for example with its own token for the catalog.</p>
   <label for="repo">Repository</label>
@@ -58,7 +58,7 @@
     <span>Commit to the branch<small>Saving commits straight to the branch, live right away. Fails if the branch is protected. Needs GitHub <em>Contents: read and write</em> or Azure DevOps <em>Code: read &amp; write</em>.</small></span></label>
   <label class="check"><input type="radio" name="mode" value="off"{{if eq $m "off"}} checked{{end}}>
     <span>Off<small>Templates are only edited in the repository. A read-only token is enough.</small></span></label>
-  {{range .Conns}}{{if and (eq .ID (index $f "connection")) .WorkspaceScope (ne $m "off")}}
+  {{range .Conns}}{{if and (eq .ID.String (index $f "connection")) .WorkspaceScope (ne $m "off")}}
   <p class="alert" role="note"><strong>{{.Name}}</strong> is also open to workspaces. Saving templates to Git needs a token with write access; consider a separate connection for the catalog so workspaces' repositories aren't reachable with a write token.</p>
   {{end}}{{end}}
   <p class="hint">A token without write access shows its error at the first save. A save never overwrites a change made in Git since the catalog was loaded: the provider refuses it, and you review and save again.</p>

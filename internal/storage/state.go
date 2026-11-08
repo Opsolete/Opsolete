@@ -2,14 +2,17 @@ package storage
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"math"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+
 	"github.com/opsolete/opsolete/internal/runnerapi"
+	"github.com/opsolete/opsolete/internal/storage/db"
 )
 
 // StateVersion is one saved Terraform state of a workspace; the file itself is in blob storage.
@@ -28,49 +31,38 @@ type StateVersion struct {
 }
 
 // WorkingRun returns the id and status (planning or applying) of the run a runner is working on
-// in a workspace, and whether it's a pull request's speculative plan; sql.ErrNoRows if none is.
-func (s *Store) WorkingRun(ctx context.Context, workspaceID string) (run, status string, pullRequest bool, err error) {
-	err = s.DB.QueryRowContext(ctx, `SELECT id, status, vcs_pull_request IS NOT NULL FROM runs
-		WHERE workspace_id = ops_uuid($1) AND `+working+` AND lease_id IS NOT NULL`, workspaceID).Scan(&run, &status, &pullRequest)
-	return run, status, pullRequest, err
+// in a workspace, and whether it's a pull request's speculative plan; ErrNotFound if none is.
+func (s *Store) WorkingRun(ctx context.Context, workspaceID uuid.UUID) (run uuid.UUID, status string, pullRequest bool, err error) {
+	r, err := s.q.WorkingRun(ctx, workspaceID)
+	return r.ID, r.Status, r.PullRequest, notFound(err)
 }
 
 // StateVersions lists a workspace's state versions, newest first.
-func (s *Store) StateVersions(ctx context.Context, workspaceID string, limit int) ([]StateVersion, error) {
+func (s *Store) StateVersions(ctx context.Context, workspaceID uuid.UUID, limit int) ([]StateVersion, error) {
 	return s.StateVersionsUpTo(ctx, workspaceID, math.MaxInt64, limit)
 }
 
 // StateVersionsUpTo lists a workspace's state versions with id up to and including upTo, newest first.
-func (s *Store) StateVersionsUpTo(ctx context.Context, workspaceID string, upTo int64, limit int) ([]StateVersion, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT v.id, v.serial, v.lineage, v.blob_key, v.md5, v.size, v.indexed,
-			(SELECT count(*) FROM state_version_resources r WHERE r.state_version_id = v.id),
-			COALESCE((SELECT o.serial FROM state_versions o WHERE o.id = v.rollback_of), 0), v.created_at
-		FROM state_versions v WHERE v.workspace_id = ops_uuid($1) AND v.id <= $3 ORDER BY v.id DESC LIMIT $2`, workspaceID, limit, upTo)
-	if err != nil {
-		return nil, err
+func (s *Store) StateVersionsUpTo(ctx context.Context, workspaceID uuid.UUID, upTo int64, limit int) ([]StateVersion, error) {
+	rows, err := s.q.StateVersions(ctx, db.StateVersionsParams{WorkspaceID: workspaceID, UpTo: upTo, Lim: int32(limit)})
+	out := make([]StateVersion, 0, len(rows))
+	for _, v := range rows {
+		out = append(out, StateVersion{ID: v.ID, Serial: v.Serial, Lineage: v.Lineage, BlobKey: v.BlobKey, MD5: v.Md5, Size: v.Size,
+			Indexed: v.Indexed, Resources: int(v.Resources), CopyOf: v.CopyOf, CreatedAt: v.CreatedAt})
 	}
-	defer rows.Close()
-	var out []StateVersion
-	for rows.Next() {
-		var v StateVersion
-		if err := rows.Scan(&v.ID, &v.Serial, &v.Lineage, &v.BlobKey, &v.MD5, &v.Size, &v.Indexed, &v.Resources, &v.CopyOf, &v.CreatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, v)
-	}
-	return out, rows.Err()
+	return out, err
 }
 
 // ErrNotCloudLocked: a cloud API state upload whose user no longer holds the state lock.
 var ErrNotCloudLocked = errors.New("the workspace must be locked by you to save state")
 
 // AddStateVersion records a state file written to blob storage as the workspace's current state.
-// runID is the run whose Terraform wrote it ("" for the CLI and rollbacks): if that run no longer
+// runID is the run whose Terraform wrote it (uuid.Nil for the CLI and rollbacks): if that run no longer
 // applies with a lease (force-canceled, reaped), nothing is recorded and ErrLeaseLost returned.
 // cloudUser is the user uploading through the cloud API (else ""): if they no longer hold the state
 // lock, nothing is recorded and ErrNotCloudLocked returned. FOR SHARE makes both checks hold until
 // commit: a force-cancel or force-unlock waits for the insert, or the insert sees its result.
-func (s *Store) AddStateVersion(ctx context.Context, id, runID, cloudUser string, v StateVersion) error {
+func (s *Store) AddStateVersion(ctx context.Context, id, runID uuid.UUID, cloudUser string, v StateVersion) error {
 	var out []byte
 	if v.Outputs != nil {
 		var err error
@@ -78,20 +70,14 @@ func (s *Store) AddStateVersion(ctx context.Context, id, runID, cloudUser string
 			return err
 		}
 	}
-	res, err := s.DB.ExecContext(ctx, `INSERT INTO state_versions (workspace_id, serial, lineage, blob_key, md5, size, outputs, run_id)
-		SELECT $1::uuid, $2, $3, $4, $5, $6, $7::jsonb, ops_uuid(NULLIF($8, ''))
-		WHERE ($8 = '' OR EXISTS (SELECT 1 FROM runs WHERE id = ops_uuid($8) AND status = 'applying' AND lease_id IS NOT NULL FOR SHARE))
-			AND ($9 = '' OR EXISTS (SELECT 1 FROM workspaces WHERE id = $1::uuid
-				AND starts_with(state_lock->>'ID', $10) AND state_lock->>'UserID' = $9 FOR SHARE))`,
-		id, v.Serial, v.Lineage, v.BlobKey, v.MD5, v.Size, nullJSON(out), runID, cloudUser, CloudLockPrefix)
-	if err != nil {
+	n, err := s.q.AddStateVersion(ctx, db.AddStateVersionParams{WorkspaceID: id, Serial: v.Serial, Lineage: v.Lineage, BlobKey: v.BlobKey,
+		Md5: v.MD5, Size: v.Size, Outputs: out, RunID: optID(runID), CloudUser: cloudUser, CloudPrefix: CloudLockPrefix})
+	switch {
+	case err != nil:
 		return err
-	}
-	if n, err := res.RowsAffected(); err != nil {
-		return err
-	} else if n == 0 && cloudUser != "" {
+	case n == 0 && cloudUser != "":
 		return ErrNotCloudLocked
-	} else if n == 0 {
+	case n == 0:
 		return ErrLeaseLost
 	}
 	return nil
@@ -100,63 +86,39 @@ func (s *Store) AddStateVersion(ctx context.Context, id, runID, cloudUser string
 // DropIntermediateStates deletes the state versions a run saved before its last one: Terraform's
 // intermediate snapshots, superseded once the run ended (as HCP Terraform does). It returns their
 // blob keys, for the caller to delete.
-func (s *Store) DropIntermediateStates(ctx context.Context, runID string) ([]string, error) {
-	rows, err := s.DB.QueryContext(ctx, `DELETE FROM state_versions WHERE run_id = ops_uuid($1)
-		AND id < (SELECT max(id) FROM state_versions WHERE run_id = ops_uuid($1)) RETURNING blob_key`, runID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var keys []string
-	for rows.Next() {
-		var k string
-		if err := rows.Scan(&k); err != nil {
-			return nil, err
-		}
-		keys = append(keys, k)
-	}
-	return keys, rows.Err()
+func (s *Store) DropIntermediateStates(ctx context.Context, runID uuid.UUID) ([]string, error) {
+	return s.q.DropIntermediateStates(ctx, runID)
 }
 
-// StateVersionBlob returns the blob key of one of a workspace's state versions; sql.ErrNoRows if unknown.
-func (s *Store) StateVersionBlob(ctx context.Context, workspaceID string, id int64) (string, error) {
-	var key string
-	err := s.DB.QueryRowContext(ctx, `SELECT blob_key FROM state_versions WHERE workspace_id = ops_uuid($1) AND id = $2`,
-		workspaceID, id).Scan(&key)
-	return key, err
+// StateVersionBlob returns the blob key of one of a workspace's state versions; ErrNotFound if unknown.
+func (s *Store) StateVersionBlob(ctx context.Context, workspaceID uuid.UUID, id int64) (string, error) {
+	key, err := s.q.StateVersionBlob(ctx, db.StateVersionBlobParams{WorkspaceID: workspaceID, ID: id})
+	return key, notFound(err)
 }
 
 // CopyStateIndex gives the workspace's current state version the resource index of version from,
 // and records it as a copy of from: a rollback.
-func (s *Store) CopyStateIndex(ctx context.Context, workspaceID string, from int64) error {
-	_, err := s.DB.ExecContext(ctx, `
-		WITH cur AS (SELECT id FROM state_versions WHERE workspace_id = ops_uuid($1) ORDER BY id DESC LIMIT 1),
-		ins AS (INSERT INTO state_version_resources (state_version_id, address, type, name, provider, module)
-			SELECT cur.id, r.address, r.type, r.name, r.provider, r.module FROM cur, state_version_resources r
-			WHERE r.state_version_id = $2 ON CONFLICT DO NOTHING)
-		UPDATE state_versions SET indexed = (SELECT indexed FROM state_versions WHERE id = $2), rollback_of = $2
-		WHERE id = (SELECT id FROM cur)`, workspaceID, from)
-	return err
+func (s *Store) CopyStateIndex(ctx context.Context, workspaceID uuid.UUID, from int64) error {
+	return s.q.CopyStateIndex(ctx, db.CopyStateIndexParams{WorkspaceID: workspaceID, FromID: from})
 }
 
 // LockState takes the workspace's state lock for the Terraform LockInfo in info. If another lock
 // is held, it returns that lock's info and ok=false. Taking a lock you already hold succeeds.
-// runID is the run whose Terraform takes it ("" for rollbacks and the cloud API): when the run
+// runID is the run whose Terraform takes it (uuid.Nil for rollbacks and the cloud API): when the run
 // ends, only a lock recorded with its id is released. A held lock's ID is no credential (a 423
 // shows it to the run that tried): re-taking it also needs the same run (or none).
-func (s *Store) LockState(ctx context.Context, id, lockID, runID string, info []byte) (held []byte, ok bool, err error) {
-	err = s.DB.QueryRowContext(ctx, `
-		WITH taken AS (
-			UPDATE workspaces SET state_lock = ($2::jsonb - 'OpsoleteRun') || jsonb_strip_nulls(jsonb_build_object('OpsoleteRun', NULLIF($4, ''))),
-				state_locked_at = CASE WHEN state_lock IS NULL THEN now() ELSE state_locked_at END
-			WHERE id = ops_uuid($1) AND (state_lock IS NULL OR state_lock->>'ID' = $3 AND `+lockOwner("$4")+`) RETURNING 1
-		)
-		SELECT EXISTS (SELECT 1 FROM taken), COALESCE((SELECT state_lock::text FROM workspaces WHERE id = ops_uuid($1)), '')`,
-		id, string(info), lockID, runID).Scan(&ok, &held)
-	if err == nil && !ok && len(held) == 0 { // lost a race: the statement's snapshot predates the winner's commit
-		err = s.DB.QueryRowContext(ctx, `SELECT COALESCE((SELECT state_lock::text FROM workspaces WHERE id = ops_uuid($1)), '')`, id).Scan(&held)
+func (s *Store) LockState(ctx context.Context, id uuid.UUID, lockID string, runID uuid.UUID, info []byte) (held []byte, ok bool, err error) {
+	r, err := s.q.LockState(ctx, db.LockStateParams{ID: id, Info: info, RunID: optID(runID), LockID: lockID})
+	if err != nil {
+		return nil, false, err
 	}
-	return held, ok, err
+	if !r.Taken && r.Held == "" { // lost a race: the statement's snapshot predates the winner's commit
+		r.Held, err = s.q.CurrentStateLock(ctx, id)
+	}
+	if r.Held == "" {
+		return nil, r.Taken, err
+	}
+	return []byte(r.Held), r.Taken, err
 }
 
 // ReleaseOrphanedLocks drops state locks nobody can release anymore and returns the workspace ids
@@ -167,59 +129,33 @@ func (s *Store) LockState(ctx context.Context, id, lockID, runID string, info []
 //
 // Cloud API and UI locks (CloudLockPrefix) are never touched: they are deliberate, and
 // force-unlock releases them.
-func (s *Store) ReleaseOrphanedLocks(ctx context.Context, timeout time.Duration) (map[string]string, error) {
-	rows, err := s.DB.QueryContext(ctx, `
-		WITH stale AS (
-			SELECT w.id, w.state_lock FROM workspaces w WHERE w.state_lock IS NOT NULL AND CASE
-				WHEN w.state_lock->>'OpsoleteRun' IS NOT NULL THEN NOT EXISTS (SELECT 1 FROM runs r
-					WHERE r.id::text = w.state_lock->>'OpsoleteRun' AND r.`+working+` AND r.lease_id IS NOT NULL)
-				ELSE NOT starts_with(w.state_lock->>'ID', $2)
-					AND w.state_locked_at < now() - make_interval(secs => $1)
-			END FOR UPDATE
-		)
-		UPDATE workspaces w SET state_lock = NULL, state_locked_at = NULL FROM stale WHERE w.id = stale.id RETURNING w.id, stale.state_lock::text`,
-		timeout.Seconds(), CloudLockPrefix)
+func (s *Store) ReleaseOrphanedLocks(ctx context.Context, timeout time.Duration) (map[uuid.UUID]string, error) {
+	rows, err := s.q.ReleaseOrphanedLocks(ctx, db.ReleaseOrphanedLocksParams{CloudPrefix: CloudLockPrefix, TimeoutSecs: timeout.Seconds()})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := map[string]string{}
-	for rows.Next() {
-		var id, info string
-		if err := rows.Scan(&id, &info); err != nil {
-			return nil, err
-		}
-		out[id] = info
+	out := make(map[uuid.UUID]string, len(rows))
+	for _, r := range rows {
+		out[r.ID] = r.Info
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
-// lockOwner: the lock was taken by the run in parameter p ("" none), so a run can't take over or
-// release a lock of another run, a rollback, the UI or the CLI, whose ID it saw in a 423.
-func lockOwner(p string) string {
-	return `state_lock->>'OpsoleteRun' IS NOT DISTINCT FROM NULLIF(` + p + `, '')`
+// UnlockState releases the lock if lockID holds it and runID (uuid.Nil none) took it.
+func (s *Store) UnlockState(ctx context.Context, id uuid.UUID, lockID string, runID uuid.UUID) error {
+	return s.q.UnlockState(ctx, db.UnlockStateParams{ID: id, LockID: lockID, RunID: optID(runID)})
 }
 
-// UnlockState releases the lock if lockID holds it and runID ("" none) took it.
-func (s *Store) UnlockState(ctx context.Context, id, lockID, runID string) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET state_lock = NULL, state_locked_at = NULL
-		WHERE id = ops_uuid($1) AND state_lock->>'ID' = $2 AND `+lockOwner("$3"), id, lockID, runID)
-	return err
+// StateLockedBy reports whether lockID holds the workspace's state lock, taken by runID (uuid.Nil none).
+func (s *Store) StateLockedBy(ctx context.Context, id uuid.UUID, lockID string, runID uuid.UUID) (bool, error) {
+	return s.q.StateLockedBy(ctx, db.StateLockedByParams{ID: id, LockID: lockID, RunID: optID(runID)})
 }
 
-// StateLockedBy reports whether lockID holds the workspace's state lock, taken by runID ("" none).
-func (s *Store) StateLockedBy(ctx context.Context, id, lockID, runID string) (bool, error) {
-	var ok bool
-	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM workspaces WHERE id = ops_uuid($1)
-		AND state_lock->>'ID' = $2 AND `+lockOwner("$3")+`)`, id, lockID, runID).Scan(&ok)
-	return ok, err
-}
-
-// StateLockID returns the ID of the workspace's current state lock, or "" if unlocked.
-func (s *Store) StateLockID(ctx context.Context, id string) (string, error) {
-	var lock sql.NullString
-	err := s.DB.QueryRowContext(ctx, `SELECT state_lock->>'ID' FROM workspaces WHERE id = ops_uuid($1)`, id).Scan(&lock)
-	return lock.String, err
+// StateLockID returns the ID of the workspace's current state lock, or "" if unlocked; ErrNotFound
+// for an unknown workspace.
+func (s *Store) StateLockID(ctx context.Context, id uuid.UUID) (string, error) {
+	lock, err := s.q.StateLockID(ctx, id)
+	return lock, notFound(err)
 }
 
 // StateLock is the Terraform LockInfo of a workspace's state lock, plus Opsolete's own fields.
@@ -233,11 +169,12 @@ type StateLock struct {
 // Cloud: taken through the cloud API or the UI, so unlock and force-unlock release it.
 func (l StateLock) Cloud() bool { return strings.HasPrefix(l.ID, CloudLockPrefix) }
 
-// GetStateLock returns the workspace's state lock, or nil if it is unlocked.
-func (s *Store) GetStateLock(ctx context.Context, id string) (*StateLock, error) {
-	var raw []byte
-	if err := s.DB.QueryRowContext(ctx, `SELECT state_lock FROM workspaces WHERE id = ops_uuid($1)`, id).Scan(&raw); err != nil || raw == nil {
-		return nil, err
+// GetStateLock returns the workspace's state lock, or nil if it is unlocked; ErrNotFound for an
+// unknown workspace.
+func (s *Store) GetStateLock(ctx context.Context, id uuid.UUID) (*StateLock, error) {
+	raw, err := s.q.GetStateLock(ctx, id)
+	if err != nil || raw == nil {
+		return nil, notFound(err)
 	}
 	var l StateLock
 	return &l, json.Unmarshal(raw, &l)
@@ -249,61 +186,42 @@ const CloudLockPrefix = "cloud-"
 
 // UnlockCloudState releases a lock taken through the cloud API by userID, or by anyone if userID
 // is "" (force unlock). Locks of runs and rollbacks are never released here.
-func (s *Store) UnlockCloudState(ctx context.Context, id, userID string) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET state_lock = NULL, state_locked_at = NULL WHERE id = ops_uuid($1)
-		AND starts_with(state_lock->>'ID', $3) AND ($2 = '' OR state_lock->>'UserID' = $2)
-		AND state_lock->>'OpsoleteRun' IS NULL`, id, userID, CloudLockPrefix) // a run's Terraform picks its own lock ID: it can't make it a cloud one
-	return err
+func (s *Store) UnlockCloudState(ctx context.Context, id uuid.UUID, userID string) error {
+	return s.q.UnlockCloudState(ctx, db.UnlockCloudStateParams{ID: id, UserID: userID, CloudPrefix: CloudLockPrefix})
 }
 
 // CloudLocked reports whether userID holds the workspace's state lock through the cloud API.
-func (s *Store) CloudLocked(ctx context.Context, id, userID string) (bool, error) {
-	var ok bool
-	err := s.DB.QueryRowContext(ctx, `SELECT COALESCE(starts_with(state_lock->>'ID', $3) AND state_lock->>'UserID' = $2, false)
-		FROM workspaces WHERE id = ops_uuid($1)`, id, userID, CloudLockPrefix).Scan(&ok)
-	return ok, err
+func (s *Store) CloudLocked(ctx context.Context, id uuid.UUID, userID string) (bool, error) {
+	ok, err := s.q.CloudLocked(ctx, db.CloudLockedParams{ID: id, UserID: userID, CloudPrefix: CloudLockPrefix})
+	return ok, notFound(err)
 }
 
 // IndexState stores resources as the index of the workspace's current state version.
-func (s *Store) IndexState(ctx context.Context, id string, resources []runnerapi.Resource) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if err := indexState(ctx, tx, id, resources); err != nil {
-		return err
-	}
-	return tx.Commit()
+func (s *Store) IndexState(ctx context.Context, id uuid.UUID, resources []runnerapi.Resource) error {
+	return s.tx(ctx, func(q *db.Queries) error { return indexState(ctx, q, id, resources) })
 }
 
 // indexState stores resources as the index of the workspace's current state version, which is
 // what the runner read them from at the end of its run.
-func indexState(ctx context.Context, tx *sql.Tx, id string, resources []runnerapi.Resource) error {
-	var version int64
-	err := tx.QueryRowContext(ctx, `SELECT id FROM state_versions WHERE workspace_id = ops_uuid($1) ORDER BY id DESC LIMIT 1`, id).Scan(&version)
-	if errors.Is(err, sql.ErrNoRows) {
+func indexState(ctx context.Context, q *db.Queries, id uuid.UUID, resources []runnerapi.Resource) error {
+	version, err := q.CurrentStateVersion(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil // nothing was ever saved, so there is nothing to index
 	}
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM state_version_resources WHERE state_version_id = $1`, version); err != nil {
+	if err := q.ClearStateIndex(ctx, version); err != nil {
 		return err
 	}
 	raw, err := json.Marshal(resources)
 	if err != nil {
 		return err
 	}
-	// ON CONFLICT: a duplicate address must not lose the whole index.
-	if _, err := tx.ExecContext(ctx, `INSERT INTO state_version_resources (state_version_id, address, type, name, provider, module)
-		SELECT $1, address, type, name, provider, module FROM jsonb_to_recordset($2::jsonb)
-			AS r(address text, type text, name text, provider text, module text)
-		ON CONFLICT DO NOTHING`, version, string(raw)); err != nil {
+	if err := q.InsertStateIndex(ctx, db.InsertStateIndexParams{ID: version, Resources: raw}); err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE state_versions SET indexed = true WHERE id = $1`, version)
-	return err
+	return q.MarkIndexed(ctx, version)
 }
 
 // Resource is one resource in a workspace's current state, with the workspace it belongs to.
@@ -313,41 +231,23 @@ type Resource struct {
 	Serial    int64  // state version the index comes from
 }
 
-// Resources lists the resources in a workspace's current state version.
-// shortcut: no paging, capped at 2000 rows; add paging when inventories get that large.
 // UnknownResource returns an address that isn't in the workspace's current state, and false if all
 // are. Unlike Resources it isn't capped.
-func (s *Store) UnknownResource(ctx context.Context, workspaceID string, addresses []string) (string, bool, error) {
-	var a string
-	err := s.DB.QueryRowContext(ctx, `
-		WITH cur AS (SELECT id FROM state_versions WHERE workspace_id = ops_uuid($1) ORDER BY id DESC LIMIT 1)
-		SELECT a FROM unnest($2::text[]) a
-		WHERE NOT EXISTS (SELECT 1 FROM cur JOIN state_version_resources r ON r.state_version_id = cur.id AND r.address = a)
-		LIMIT 1`, workspaceID, addresses).Scan(&a)
-	if errors.Is(err, sql.ErrNoRows) {
+func (s *Store) UnknownResource(ctx context.Context, workspaceID uuid.UUID, addresses []string) (string, bool, error) {
+	a, err := s.q.UnknownResource(ctx, db.UnknownResourceParams{WorkspaceID: workspaceID, Addresses: addresses})
+	if errors.Is(err, pgx.ErrNoRows) {
 		return "", false, nil
 	}
 	return a, err == nil, err
 }
 
-func (s *Store) Resources(ctx context.Context, workspaceID string) ([]Resource, error) {
-	rows, err := s.DB.QueryContext(ctx, `
-		WITH cur AS (SELECT id, workspace_id, serial FROM state_versions
-			WHERE workspace_id = ops_uuid($1) ORDER BY id DESC LIMIT 1)
-		SELECT r.address, r.type, r.name, r.provider, r.module, w.name, cur.serial
-		FROM cur JOIN state_version_resources r ON r.state_version_id = cur.id JOIN workspaces w ON w.id = cur.workspace_id
-		ORDER BY r.type, r.address LIMIT 2000`, workspaceID)
-	if err != nil {
-		return nil, err
+// Resources lists the resources in a workspace's current state version (at most 2000).
+func (s *Store) Resources(ctx context.Context, workspaceID uuid.UUID) ([]Resource, error) {
+	rows, err := s.q.Resources(ctx, workspaceID)
+	out := make([]Resource, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, Resource{Resource: runnerapi.Resource{Address: r.Address, Type: r.Type, Name: r.Name, Provider: r.Provider,
+			Module: r.Module}, Workspace: r.Workspace, Serial: r.Serial})
 	}
-	defer rows.Close()
-	var out []Resource
-	for rows.Next() {
-		var r Resource
-		if err := rows.Scan(&r.Address, &r.Type, &r.Name, &r.Provider, &r.Module, &r.Workspace, &r.Serial); err != nil {
-			return nil, err
-		}
-		out = append(out, r)
-	}
-	return out, rows.Err()
+	return out, err
 }

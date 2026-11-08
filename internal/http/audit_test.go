@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"strings"
@@ -13,7 +14,7 @@ func TestAuditLogRecordsChanges(t *testing.T) {
 	store := testStore(t)
 	h := newServer(t, "../../catalog", false, store)
 	name := "audit-" + strings.ToLower(newID()[:8])
-	t.Cleanup(func() { store.DB.Exec(`DELETE FROM workspaces WHERE name = $1`, name) })
+	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE name = $1`, name) })
 	if rec := post(h, "/workspaces/new", url.Values{"name": {name}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
 	}
@@ -23,7 +24,7 @@ func TestAuditLogRecordsChanges(t *testing.T) {
 	}
 	last := func(action string) (actor, detail string) {
 		t.Helper()
-		if err := store.DB.QueryRow(`SELECT actor, detail::text FROM audit_log WHERE action = $1 ORDER BY id DESC LIMIT 1`,
+		if err := store.Pool.QueryRow(context.Background(), `SELECT actor, detail::text FROM audit_log WHERE action = $1 ORDER BY id DESC LIMIT 1`,
 			action).Scan(&actor, &detail); err != nil {
 			t.Fatalf("%s: %v", action, err)
 		}
@@ -67,7 +68,7 @@ func TestAuditCapsForms(t *testing.T) {
 	path := "/audit-cap-" + strings.ToLower(newID()[:8])
 	post(h, path, url.Values{"x": {strings.Repeat("a", 2*maxAuditValue)}})
 	var detail string
-	if err := store.DB.QueryRow(`SELECT detail::text FROM audit_log WHERE action = $1`, "POST "+path).Scan(&detail); err != nil {
+	if err := store.Pool.QueryRow(context.Background(), `SELECT detail::text FROM audit_log WHERE action = $1`, "POST "+path).Scan(&detail); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(detail, "(truncated)") || strings.Contains(detail, strings.Repeat("a", maxAuditValue+1)) {

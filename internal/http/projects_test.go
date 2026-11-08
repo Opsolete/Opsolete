@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,8 +16,8 @@ func TestProjectPages(t *testing.T) {
 	sfx := strings.ToLower(newID()[:8])
 	proj, ws := "prj-"+sfx, "prj-ws-"+sfx
 	t.Cleanup(func() {
-		store.DB.Exec(`DELETE FROM workspaces WHERE name = $1`, ws)
-		store.DB.Exec(`DELETE FROM projects WHERE name LIKE $1`, proj+"%")
+		store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE name = $1`, ws)
+		store.Pool.Exec(context.Background(), `DELETE FROM projects WHERE name LIKE $1`, proj+"%")
 	})
 	want := func(rec *httptest.ResponseRecorder, code int, what string) {
 		t.Helper()
@@ -80,7 +81,7 @@ func TestProjectPages(t *testing.T) {
 	want(post(member, "/workspaces/"+ws+"/settings", url.Values{"auto_apply": {"on"}}), http.StatusForbidden, "read can't operate")
 	// creating a workspace in a project hands it the project's variable sets: read isn't enough
 	ws2 := "prj-ws2-" + sfx
-	t.Cleanup(func() { store.DB.Exec(`DELETE FROM workspaces WHERE name = $1`, ws2) })
+	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE name = $1`, ws2) })
 	want(post(member, "/workspaces/new", url.Values{"name": {ws2}, "ops-project": {proj}}), http.StatusBadRequest, "create with read")
 	if strings.Contains(get(member, "/projects/"+proj).Body.String(), "+ New workspace") {
 		t.Fatal("read access offers creating a workspace in the project")
@@ -97,7 +98,7 @@ func TestProjectPages(t *testing.T) {
 
 	// a variable set attached to the project applies to its workspaces
 	set := "prj-set-" + sfx
-	t.Cleanup(func() { store.DB.Exec(`DELETE FROM variable_sets WHERE name = $1`, set) })
+	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM variable_sets WHERE name = $1`, set) })
 	want(post(h, "/variable-sets", url.Values{"name": {set}}), http.StatusSeeOther, "create set")
 	want(post(user, "/variable-sets/"+set+"/projects", url.Values{"project": {proj}}), http.StatusForbidden, "a user attaches a set")
 	want(post(h, "/variable-sets/"+set+"/projects", url.Values{"project": {proj, "nope-" + sfx}}), http.StatusBadRequest, "unknown project")
@@ -115,7 +116,9 @@ func TestProjectPages(t *testing.T) {
 
 	// created from the project's or workspace's page, a set is attached there
 	pset, wset := "prj-new-"+sfx, "ws-new-"+sfx
-	t.Cleanup(func() { store.DB.Exec(`DELETE FROM variable_sets WHERE name IN ($1, $2)`, pset, wset) })
+	t.Cleanup(func() {
+		store.Pool.Exec(context.Background(), `DELETE FROM variable_sets WHERE name IN ($1, $2)`, pset, wset)
+	})
 	want(post(user, "/variable-sets", url.Values{"name": {pset}, "project": {proj}}), http.StatusForbidden, "a user creates a set")
 	want(post(h, "/variable-sets", url.Values{"name": {pset}, "project": {"nope-" + sfx}}), http.StatusBadRequest, "unknown project")
 	want(post(h, "/variable-sets", url.Values{"name": {pset}, "project": {proj}}), http.StatusSeeOther, "create for project")

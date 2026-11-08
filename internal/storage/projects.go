@@ -2,11 +2,12 @@ package storage
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/google/uuid"
+
+	"github.com/opsolete/opsolete/internal/storage/db"
 )
 
 var (
@@ -17,7 +18,7 @@ var (
 
 // Project is a folder of workspaces; its grants and variable sets reach all of them.
 type Project struct {
-	ID          string
+	ID          uuid.UUID
 	Name        string
 	Description string
 	Default     bool // new workspaces land here unless another project is picked
@@ -26,129 +27,111 @@ type Project struct {
 	CreatedAt   time.Time
 }
 
-const projectCols = `p.id, p.name, p.description, p.id = (SELECT default_project_id FROM organization),
-	(SELECT count(*) FROM workspaces w WHERE w.project_id = p.id),
-	(SELECT count(*) FROM project_access a WHERE a.project_id = p.id), p.created_at`
-
-func scanProject(row interface{ Scan(...any) error }) (Project, error) {
-	var p Project
-	err := row.Scan(&p.ID, &p.Name, &p.Description, &p.Default, &p.Workspaces, &p.Grants, &p.CreatedAt)
-	return p, err
+// toProject maps a project_list row (001_schema.sql).
+func toProject(p db.ProjectList) Project {
+	return Project{ID: p.ID, Name: p.Name, Description: p.Description, Default: p.IsDefault, Workspaces: int(p.Workspaces),
+		Grants: int(p.Grants), CreatedAt: p.CreatedAt}
 }
 
-// Projects lists, by name, the projects v may see: the default project (anyone may create workspaces
-// there), those with a workspace v sees, and those granted to one of v's groups.
+func toProjects(rows []db.ProjectList, err error) ([]Project, error) {
+	out := make([]Project, 0, len(rows))
+	for _, p := range rows {
+		out = append(out, toProject(p))
+	}
+	return out, err
+}
+
+// Projects lists, by name, the projects v may see: all for admins, else the default project (anyone
+// may create workspaces there), those with a workspace v sees, and those granted to one of v's groups.
 func (s *Store) Projects(ctx context.Context, v Viewer) ([]Project, error) {
-	return s.projects(ctx, `EXISTS (SELECT 1 FROM workspaces w WHERE w.project_id = p.id AND `+visible+`)
-		OR EXISTS (SELECT 1 FROM project_access a JOIN users u ON u.id = NULLIF($1, '')::uuid
-			WHERE a.project_id = p.id AND a.group_name = ANY(u.groups))`, v)
+	return toProjects(s.q.ListProjects(ctx, db.ListProjectsParams{Admin: v.Admin, Viewer: optID(v.UserID)}))
 }
 
-// CreatableProjects lists, by name, the projects v may create workspaces in: the default project,
-// and those granted operate to one of v's groups. A workspace gets its project's variable sets, so
-// a read grant mustn't be enough.
+// CreatableProjects lists, by name, the projects v may create workspaces in: all for admins, else the
+// default project and those granted operate to one of v's groups. A workspace gets its project's
+// variable sets, so a read grant mustn't be enough.
 func (s *Store) CreatableProjects(ctx context.Context, v Viewer) ([]Project, error) {
-	return s.projects(ctx, `EXISTS (SELECT 1 FROM project_access a JOIN users u ON u.id = NULLIF($1, '')::uuid
-		WHERE a.project_id = p.id AND a.level = 'operate' AND a.group_name = ANY(u.groups))`, v)
+	return toProjects(s.q.CreatableProjects(ctx, db.CreatableProjectsParams{Admin: v.Admin, Viewer: optID(v.UserID)}))
 }
 
-// projects lists all projects for admins, else the default one and those matching cond
-// ($1 = user id, $2 = admin, p = the project).
-func (s *Store) projects(ctx context.Context, cond string, v Viewer) ([]Project, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT `+projectCols+` FROM projects p
-		WHERE $2 OR p.id = (SELECT default_project_id FROM organization) OR `+cond+`
-		ORDER BY p.name`, v.UserID, v.Admin)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Project
-	for rows.Next() {
-		p, err := scanProject(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, p)
-	}
-	return out, rows.Err()
-}
-
-// Project returns sql.ErrNoRows for an unknown name. Callers check visibility.
+// Project returns ErrNotFound for an unknown name. Callers check visibility.
 func (s *Store) Project(ctx context.Context, name string) (Project, error) {
-	return scanProject(s.DB.QueryRowContext(ctx, `SELECT `+projectCols+` FROM projects p WHERE p.name = $1`, name))
+	p, err := s.q.GetProjectByName(ctx, name)
+	return toProject(p), notFound(err)
 }
 
 // ProjectsExist reports whether there is a project for each name.
 func (s *Store) ProjectsExist(ctx context.Context, names []string) (bool, error) {
-	var ok bool
-	err := s.DB.QueryRowContext(ctx, `SELECT NOT EXISTS (SELECT 1 FROM unnest($1::text[]) n
-		WHERE NOT EXISTS (SELECT 1 FROM projects WHERE name = n))`, names).Scan(&ok)
-	return ok, err
+	return s.q.ProjectsExist(ctx, names)
 }
 
 // DefaultProject is the project new workspaces go into unless another is picked.
 func (s *Store) DefaultProject(ctx context.Context) (Project, error) {
-	return scanProject(s.DB.QueryRowContext(ctx, `SELECT `+projectCols+` FROM projects p
-		WHERE p.id = (SELECT default_project_id FROM organization)`))
+	p, err := s.q.DefaultProject(ctx)
+	return toProject(p), err
 }
 
+// CreateProject returns ErrProjectNameTaken if the name is taken.
 func (s *Store) CreateProject(ctx context.Context, name, description string) (Project, error) {
-	var id string
-	err := s.DB.QueryRowContext(ctx, `INSERT INTO projects (name, description) VALUES ($1, $2) RETURNING id`, name, description).Scan(&id)
-	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
+	id, err := s.q.CreateProject(ctx, db.CreateProjectParams{Name: name, Description: description})
+	if isUnique(err) {
 		return Project{}, ErrProjectNameTaken
 	}
 	if err != nil {
 		return Project{}, err
 	}
-	return scanProject(s.DB.QueryRowContext(ctx, `SELECT `+projectCols+` FROM projects p WHERE p.id = $1`, id))
+	p, err := s.q.GetProjectByID(ctx, id)
+	return toProject(p), err
 }
 
-// UpdateProject renames a project and sets its description; sql.ErrNoRows for an unknown id.
-func (s *Store) UpdateProject(ctx context.Context, id, name, description string) error {
-	res, err := s.DB.ExecContext(ctx, `UPDATE projects SET name = $2, description = $3 WHERE id = ops_uuid($1)`, id, name, description)
-	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
+// UpdateProject renames a project and sets its description; ErrNotFound for an unknown id.
+func (s *Store) UpdateProject(ctx context.Context, id uuid.UUID, name, description string) error {
+	err := affected(s.q.UpdateProject(ctx, db.UpdateProjectParams{ID: id, Name: name, Description: description}))
+	if isUnique(err) {
 		return ErrProjectNameTaken
 	}
-	return affected(res, err)
+	return err
 }
 
-// SetDefaultProject makes a project the one new workspaces land in; sql.ErrNoRows for an unknown id.
-func (s *Store) SetDefaultProject(ctx context.Context, id string) error {
-	res, err := s.DB.ExecContext(ctx, `UPDATE organization SET default_project_id = p.id FROM projects p WHERE p.id = ops_uuid($1)`, id)
-	return affected(res, err)
+// SetDefaultProject makes a project the one new workspaces land in; ErrNotFound for an unknown id.
+func (s *Store) SetDefaultProject(ctx context.Context, id uuid.UUID) error {
+	return affected(s.q.SetDefaultProject(ctx, id))
 }
 
 // DeleteProject deletes an empty project with its grants and set attachments. It refuses one that
-// holds workspaces (ErrProjectNotEmpty) and the default project (ErrDefaultProject): the foreign keys decide.
-func (s *Store) DeleteProject(ctx context.Context, id string) error {
-	res, err := s.DB.ExecContext(ctx, `DELETE FROM projects WHERE id = ops_uuid($1)`, id)
-	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23503" {
-		if pgErr.ConstraintName == "organization_default_project_id_fkey" {
+// holds workspaces (ErrProjectNotEmpty) and the default project (ErrDefaultProject): the foreign keys
+// decide. ErrNotFound for an unknown id.
+func (s *Store) DeleteProject(ctx context.Context, id uuid.UUID) error {
+	err := affected(s.q.DeleteProject(ctx, id))
+	if constraint, ok := fkViolation(err); ok {
+		if constraint == "organization_default_project_id_fkey" {
 			return ErrDefaultProject
 		}
 		return ErrProjectNotEmpty
 	}
-	return affected(res, err)
+	return err
 }
 
-// MoveWorkspace puts a workspace into another project; sql.ErrNoRows if either is unknown.
+// MoveWorkspace puts a workspace into another project; ErrNotFound if either is unknown.
 // Allowed during a run: project variable sets are resolved when a job is claimed.
-func (s *Store) MoveWorkspace(ctx context.Context, workspaceID, projectID string) error {
-	res, err := s.DB.ExecContext(ctx, `UPDATE workspaces w SET project_id = p.id, updated_at = now()
-		FROM projects p WHERE w.id = ops_uuid($1) AND p.id = ops_uuid($2)`, workspaceID, projectID)
-	return affected(res, err)
+func (s *Store) MoveWorkspace(ctx context.Context, workspaceID, projectID uuid.UUID) error {
+	return affected(s.q.MoveWorkspace(ctx, db.MoveWorkspaceParams{WorkspaceID: workspaceID, ProjectID: projectID}))
 }
 
-// affected turns "no row matched" into sql.ErrNoRows.
-func affected(res sql.Result, err error) error {
-	if err != nil {
-		return err
+// ProjectGrants lists a project's group grants; they reach all of its workspaces.
+func (s *Store) ProjectGrants(ctx context.Context, projectID uuid.UUID) ([]Grant, error) {
+	rows, err := s.q.ProjectGrants(ctx, projectID)
+	out := make([]Grant, 0, len(rows))
+	for _, g := range rows {
+		out = append(out, Grant{Group: g.GroupName, Level: g.Level})
 	}
-	if n, err := res.RowsAffected(); err != nil {
-		return err
-	} else if n == 0 {
-		return sql.ErrNoRows
+	return out, err
+}
+
+// SetProjectGrant gives a group read or operate access to all of a project's workspaces; level "" removes it.
+func (s *Store) SetProjectGrant(ctx context.Context, projectID uuid.UUID, group, level string) error {
+	if level == "" {
+		return s.q.DeleteProjectGrant(ctx, db.DeleteProjectGrantParams{ProjectID: projectID, GroupName: group})
 	}
-	return nil
+	return s.q.SetProjectGrant(ctx, db.SetProjectGrantParams{ProjectID: projectID, GroupName: group, Level: level})
 }

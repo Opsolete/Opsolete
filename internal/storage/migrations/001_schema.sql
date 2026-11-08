@@ -216,6 +216,22 @@ CREATE TABLE variables (
     UNIQUE (set_id, category, key)
 );
 
+-- variable_set_rank is how a variable set applies to a workspace's runs: 1 attached to it, 2
+-- attached to its project, 3 global, NULL not at all; a workspace's own variables come before all
+-- (rank 0). Project and global sets don't reach a workspace linked to a repository: that code is
+-- whatever a user chose to link, so only an admin attaching a set may give it credentials (anyone
+-- who operates the workspace may relink it, and a project set, unlike an attached one, isn't
+-- detached when the link changes). The one definition: RunVariables and WorkspaceVariableSets use it.
+CREATE FUNCTION variable_set_rank(ws uuid, vs uuid) RETURNS integer LANGUAGE sql STABLE AS $$
+    SELECT CASE
+        WHEN EXISTS (SELECT 1 FROM variable_set_workspaces a WHERE a.set_id = vs AND a.workspace_id = ws) THEN 1
+        WHEN EXISTS (SELECT 1 FROM workspace_vcs v WHERE v.workspace_id = ws) THEN NULL
+        WHEN EXISTS (SELECT 1 FROM variable_set_projects a JOIN workspaces w ON w.project_id = a.project_id
+            WHERE a.set_id = vs AND w.id = ws) THEN 2
+        WHEN (SELECT s.global FROM variable_sets s WHERE s.id = vs) THEN 3
+    END
+$$;
+
 -- Templates ------------------------------------------------------------------------------------
 
 -- template_catalog: the one Git repository templates come from instead of TEMPLATES_DIR. files is
@@ -255,14 +271,23 @@ CREATE UNIQUE INDEX template_rollouts_open_idx ON template_rollouts (template_id
 -- Runs -----------------------------------------------------------------------------------------
 
 -- A run is one plan, then (confirmed or auto-applied) one apply, of a workspace. The statuses and
--- every allowed transition are in storage/runs.go; a run is active from plan_queued to applying,
--- and runs_one_active_idx keeps it to one per workspace.
+-- every allowed transition are in storage/runs.go; a run is active from plan_queued to applying
+-- (run_active), and runs_one_active_idx keeps it to one per workspace.
 --   action: apply | destroy | refresh (refresh-only) | assess (drift check, never applied)
 --           | plan (speculative plan of a pull request, never applied)
 --   lease_id/lease_until: the claiming runner's fencing token, while planning or applying
 --   remove_template: a destroy run that removes that added template (-target module.<name>)
 --   config_changes: [{module, before, after}] the run changed (configuring templates, rollouts);
 --           put back if it ends before its apply started
+-- run_active: the run holds its workspace (storage.Ended is its negation; a test keeps them equal).
+-- run_working: a runner holds its lease. Every query and index that asks either uses these.
+CREATE FUNCTION run_active(status text) RETURNS boolean LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')
+$$;
+CREATE FUNCTION run_working(status text) RETURNS boolean LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT status IN ('planning', 'applying')
+$$;
+
 CREATE TABLE runs (
     id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id     uuid NOT NULL REFERENCES workspaces ON DELETE CASCADE,
@@ -287,12 +312,11 @@ CREATE TABLE runs (
     created_at       timestamptz NOT NULL DEFAULT now(),
     updated_at       timestamptz NOT NULL DEFAULT now(),
     CHECK ((lease_id IS NULL) = (lease_until IS NULL)),
-    CHECK (lease_id IS NULL OR status IN ('planning', 'applying')),
+    CHECK (lease_id IS NULL OR run_working(status)),
     CHECK (remove_template IS NULL OR action = 'destroy'),
     CHECK (vcs_pull_request IS NULL OR action = 'plan')
 );
-CREATE UNIQUE INDEX runs_one_active_idx ON runs (workspace_id)
-    WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying');
+CREATE UNIQUE INDEX runs_one_active_idx ON runs (workspace_id) WHERE run_active(status);
 CREATE INDEX runs_queue_idx ON runs (updated_at) WHERE status IN ('plan_queued', 'apply_queued');
 CREATE INDEX runs_leases_idx ON runs (lease_until) WHERE lease_id IS NOT NULL;
 CREATE INDEX runs_workspace_idx ON runs (workspace_id, created_at DESC);
@@ -406,10 +430,75 @@ CREATE TRIGGER audit_log_no_update BEFORE UPDATE OR DELETE ON audit_log
 CREATE TRIGGER audit_log_no_truncate BEFORE TRUNCATE ON audit_log
     FOR EACH STATEMENT EXECUTE FUNCTION audit_log_immutable();
 
--- ops_uuid: parses an id, NULL if invalid. Removed in phase 1b (ids parsed in Go).
-CREATE FUNCTION ops_uuid(t text) RETURNS uuid LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE AS $$
-BEGIN
-    RETURN t::uuid;
-EXCEPTION WHEN invalid_text_representation THEN
-    RETURN NULL;
-END $$;
+-- Views ----------------------------------------------------------------------------------------
+
+-- The one definition of the computed columns lists and pages show; storage/queries select from these.
+
+-- workspace_list: a workspace with its project, creator, VCS link (vcs_* empty if none), number of
+-- added templates, and drifted: the latest assessment found drift and nothing was applied since.
+CREATE VIEW workspace_list AS
+SELECT w.id, w.name, w.project_id, p.name AS project_name, w.created_by, COALESCE(u.email, '') AS created_by_email,
+    w.auto_apply, w.drift_detection, w.global_remote_state, w.execution_mode, w.created_at,
+    vcs.connection_id AS vcs_connection_id, COALESCE(vcs.repo, '') AS vcs_repo, COALESCE(vcs.branch, '') AS vcs_branch,
+    COALESCE(vcs.trigger, false) AS vcs_trigger, COALESCE(vcs.pull_requests, false) AS vcs_pull_requests,
+    COALESCE(vcs.tags_regex, '') AS vcs_tags_regex, COALESCE(vcs.tag_baseline, '') AS vcs_tag_baseline,
+    (SELECT count(*) FROM workspace_templates t WHERE t.workspace_id = w.id)::bigint AS templates,
+    COALESCE((SELECT a.status = 'drifted' AND NOT EXISTS (SELECT 1 FROM runs x WHERE x.workspace_id = w.id
+            AND x.status = 'applied' AND x.updated_at > a.updated_at) FROM runs a
+        WHERE a.workspace_id = w.id AND a.action = 'assess' AND a.status IN ('no_changes', 'drifted')
+        ORDER BY a.created_at DESC LIMIT 1), false)::boolean AS drifted
+FROM workspaces w
+JOIN projects p ON p.id = w.project_id
+LEFT JOIN users u ON u.id = w.created_by
+LEFT JOIN workspace_vcs vcs ON vcs.workspace_id = w.id;
+
+-- run_list: a run with the emails of who queued and who confirmed it ('' for none).
+CREATE VIEW run_list AS
+SELECT r.id, r.workspace_id, r.action, r.status, r.replace, r.plan, r.outputs, r.runner, r.cancel_requested,
+    COALESCE(r.vcs_commit, '') AS vcs_commit, COALESCE(r.vcs_pull_request, 0)::integer AS vcs_pull_request,
+    COALESCE(cu.email, '') AS created_by_email, COALESCE(fu.email, '') AS confirmed_by_email, r.created_at, r.updated_at
+FROM runs r
+LEFT JOIN users cu ON cu.id = r.created_by
+LEFT JOIN users fu ON fu.id = r.confirmed_by;
+
+-- project_list: a project with whether it is the default, and its workspace and grant counts.
+CREATE VIEW project_list AS
+SELECT p.id, p.name, p.description, (p.id = o.default_project_id)::boolean AS is_default,
+    (SELECT count(*) FROM workspaces w WHERE w.project_id = p.id)::bigint AS workspaces,
+    (SELECT count(*) FROM project_access a WHERE a.project_id = p.id)::bigint AS grants, p.created_at
+FROM projects p, organization o;
+
+-- variable_set_list: a variable set with the names of the workspaces and projects it's attached to.
+CREATE VIEW variable_set_list AS
+SELECT vs.id, vs.name, vs.description, vs.global, vs.created_at,
+    ARRAY(SELECT w.name FROM variable_set_workspaces a JOIN workspaces w ON w.id = a.workspace_id
+        WHERE a.set_id = vs.id ORDER BY w.name)::text[] AS workspaces,
+    ARRAY(SELECT p.name FROM variable_set_projects a JOIN projects p ON p.id = a.project_id
+        WHERE a.set_id = vs.id ORDER BY p.name)::text[] AS projects
+FROM variable_sets vs;
+
+-- vcs_connection_list: a connection with its selected workspaces and projects (names) and what uses it.
+CREATE VIEW vcs_connection_list AS
+SELECT c.id, c.name, c.provider, c.base_url, c.token, c.workspace_scope, c.created_at,
+    ARRAY(SELECT w.name FROM vcs_connection_workspaces a JOIN workspaces w ON w.id = a.workspace_id
+        WHERE a.connection_id = c.id ORDER BY w.name)::text[] AS workspaces,
+    ARRAY(SELECT p.name FROM vcs_connection_projects a JOIN projects p ON p.id = a.project_id
+        WHERE a.connection_id = c.id ORDER BY p.name)::text[] AS projects,
+    (SELECT count(*) FROM workspace_vcs w WHERE w.connection_id = c.id)::bigint AS linked_workspaces,
+    (SELECT count(*) FROM vcs_modules m WHERE m.connection_id = c.id)::bigint AS linked_modules,
+    EXISTS (SELECT 1 FROM template_catalog t WHERE t.connection_id = c.id)::boolean AS catalog
+FROM vcs_connections c;
+
+-- rollout_list: a rollout with its project's name and its creator's email ('' for none).
+CREATE VIEW rollout_list AS
+SELECT o.id, o.template_id, o.module_source, o.module_ref, o.project_id, COALESCE(p.name, '') AS project_name,
+    o.batch_size, o.status, o.message, o.created_by, COALESCE(u.email, '') AS created_by_email, o.created_at, o.resumed_at
+FROM template_rollouts o
+LEFT JOIN projects p ON p.id = o.project_id
+LEFT JOIN users u ON u.id = o.created_by;
+
+-- template_config is an added template's configuration as runs.config_changes records it (storage/runs.go).
+CREATE FUNCTION template_config(template_id text, module_source text, module_ref text, inputs jsonb) RETURNS jsonb
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT jsonb_build_object('template_id', template_id, 'module_source', module_source, 'module_ref', module_ref, 'inputs', inputs)
+$$;

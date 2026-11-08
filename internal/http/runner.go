@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"crypto/subtle"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"gocloud.dev/gcerrors"
 
 	"github.com/opsolete/opsolete/internal/runnerapi"
@@ -95,7 +95,7 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 			var body []byte
 			if err == nil {
 				body, err = json.Marshal(runnerapi.Job{
-					RunID: j.RunID, WorkspaceID: j.WorkspaceID, Phase: j.Phase, Action: j.Action, Replace: j.Replace, Target: j.Target, LeaseID: j.LeaseID,
+					RunID: j.RunID.String(), WorkspaceID: j.WorkspaceID.String(), Phase: j.Phase, Action: j.Action, Replace: j.Replace, Target: j.Target, LeaseID: j.LeaseID,
 					LeaseSeconds: int(leaseTTL.Seconds()), StateToken: s.stateToken(j.WorkspaceID, j.RunID), Vars: vars, Env: env, Secrets: secrets,
 					ModuleSource: src, Modules: mods, Currency: currency,
 				})
@@ -147,7 +147,7 @@ func (s *Server) withWorkspaceVars(ctx context.Context, templateID, source, ref 
 		return in, nil
 	}
 	m, err := s.Store.GetModule(ctx, ns, name, sys, ref)
-	if errors.Is(err, sql.ErrNoRows) { // the run fails at terraform init anyway
+	if errors.Is(err, storage.ErrNotFound) { // the run fails at terraform init anyway
 		return in, nil
 	}
 	if err != nil {
@@ -196,12 +196,14 @@ func (s *Server) jobLogs(w http.ResponseWriter, r *http.Request) {
 		writeErrors(w, http.StatusBadRequest, "reading the log chunk failed")
 		return
 	}
-	cancel, err := s.Store.AppendLog(r.Context(), r.PathValue("id"), r.Header.Get(runnerapi.LeaseHeader), strings.ReplaceAll(strings.ToValidUTF8(string(b), "\uFFFD"), "\x00", "\uFFFD"), leaseTTL, maxLogBytes)
+	id, _ := pathID(r, "id") // not an id: no such lease, as for an unknown run
+	cancel, err := s.Store.AppendLog(r.Context(), id, r.Header.Get(runnerapi.LeaseHeader), strings.ReplaceAll(strings.ToValidUTF8(string(b), "\uFFFD"), "\x00", "\uFFFD"), leaseTTL, maxLogBytes)
 	s.liveResult(w, cancel, err)
 }
 
 func (s *Server) jobHeartbeat(w http.ResponseWriter, r *http.Request) {
-	cancel, err := s.Store.Heartbeat(r.Context(), r.PathValue("id"), r.Header.Get(runnerapi.LeaseHeader), leaseTTL)
+	id, _ := pathID(r, "id") // not an id: no such lease, as for an unknown run
+	cancel, err := s.Store.Heartbeat(r.Context(), id, r.Header.Get(runnerapi.LeaseHeader), leaseTTL)
 	s.liveResult(w, cancel, err)
 }
 
@@ -226,7 +228,7 @@ func (s *Server) jobFinish(w http.ResponseWriter, r *http.Request) {
 		writeErrors(w, http.StatusBadRequest, "status must be succeeded, failed or canceled")
 		return
 	}
-	id := r.PathValue("id")
+	id, _ := pathID(r, "id") // not an id: no such lease, as for an unknown run
 	// not canceled on SIGTERM: a job's result must survive a server restart
 	status, err := s.Store.FinishJob(context.WithoutCancel(r.Context()), id, r.Header.Get(runnerapi.LeaseHeader), req.Status, req.Message,
 		req.Outputs, req.Plan, req.Resources)
@@ -242,11 +244,12 @@ func (s *Server) jobFinish(w http.ResponseWriter, r *http.Request) {
 
 // Saved plans and lock files live in the state store: a plan holds variable values and is as
 // sensitive as state. They exist from the plan phase until the run ends.
-func artifactKey(runID, name string) string { return "runs/" + runID + "/" + name }
+func artifactKey(runID uuid.UUID, name string) string { return "runs/" + runID.String() + "/" + name }
 
 // putArtifact stores a plan phase's output; only the planning run may write its own artifacts.
 func (s *Server) putArtifact(w http.ResponseWriter, r *http.Request) {
-	id, name := r.PathValue("id"), r.PathValue("name")
+	id, _ := pathID(r, "id") // artifactAccess checked it
+	name := r.PathValue("name")
 	if !s.artifactAccess(w, r, storage.Planning) {
 		return
 	}
@@ -271,7 +274,8 @@ func (s *Server) getArtifact(w http.ResponseWriter, r *http.Request) {
 	if !s.artifactAccess(w, r, storage.Applying) {
 		return
 	}
-	b, err := s.readBlob(r.Context(), artifactKey(r.PathValue("id"), r.PathValue("name")))
+	id, _ := pathID(r, "id") // artifactAccess checked it
+	b, err := s.readBlob(r.Context(), artifactKey(id, r.PathValue("name")))
 	if gcerrors.Code(err) == gcerrors.NotFound {
 		writeErrors(w, http.StatusNotFound, "no such artifact")
 		return
@@ -290,7 +294,8 @@ func (s *Server) artifactAccess(w http.ResponseWriter, r *http.Request, phase st
 		writeErrors(w, http.StatusNotFound, "no such artifact")
 		return false
 	}
-	ok, err := s.Store.HoldsLease(r.Context(), r.PathValue("id"), r.Header.Get(runnerapi.LeaseHeader), phase)
+	id, _ := pathID(r, "id") // not an id: no such lease, as for an unknown run
+	ok, err := s.Store.HoldsLease(r.Context(), id, r.Header.Get(runnerapi.LeaseHeader), phase)
 	if err != nil {
 		s.Log.Error("check lease", "err", err)
 		writeErrors(w, http.StatusInternalServerError, "internal error")
@@ -305,7 +310,7 @@ func (s *Server) artifactAccess(w http.ResponseWriter, r *http.Request, phase st
 // DeleteArtifacts deletes a run's saved plan and lock file; failures only leave a stale file behind.
 // Every path that ends a run calls it once the run ended (storage.Ended): finish, claim failure,
 // cancel, discard and the lease reaper.
-func (s *Server) DeleteArtifacts(ctx context.Context, runID string) {
+func (s *Server) DeleteArtifacts(ctx context.Context, runID uuid.UUID) {
 	for _, name := range []string{runnerapi.ArtifactPlan, runnerapi.ArtifactLockfile} {
 		if err := s.StateStore.Delete(ctx, artifactKey(runID, name)); err != nil && gcerrors.Code(err) != gcerrors.NotFound {
 			s.Log.Warn("delete artifact", "run", runID, "name", name, "err", err)
@@ -315,7 +320,7 @@ func (s *Server) DeleteArtifacts(ctx context.Context, runID string) {
 
 // dropIntermediateStates deletes the intermediate state snapshots of a finished run; failures only
 // leave them listed (or a stale file behind).
-func (s *Server) dropIntermediateStates(ctx context.Context, runID string) {
+func (s *Server) dropIntermediateStates(ctx context.Context, runID uuid.UUID) {
 	keys, err := s.Store.DropIntermediateStates(ctx, runID)
 	if err != nil {
 		s.Log.Warn("drop intermediate states", "run", runID, "err", err)

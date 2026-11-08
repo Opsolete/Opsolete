@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/google/uuid"
 	"gocloud.dev/blob/memblob"
 
 	"github.com/opsolete/opsolete/internal/storage"
@@ -18,7 +19,7 @@ import (
 func TestRotateKey(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-	store.DB.Exec(`UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
+	store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE run_active(status)`)
 	oldKey, newKey := vcs.Key("rotate-old-"+newID()), vcs.Key("rotate-new-"+newID())
 	seal := func(plain, ad string) []byte {
 		b, err := vcs.Seal(oldKey, plain, ad)
@@ -45,17 +46,17 @@ func TestRotateKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wsID := newID()
+	wsID := uuid.New()
 	input := map[string]any{"sealed": base64.StdEncoding.EncodeToString(seal(`"pw"`, inputAD(wsID, "main", "password")))}
 	ws, run, err := store.CreateWorkspace(ctx, wsID, name, "", storage.WorkspaceTemplate{Name: "main", TemplateID: "t",
-		ModuleSource: "git::https://x//m", ModuleRef: "v1", Inputs: map[string]any{"password": input, "plain": "x"}}, false, "")
+		ModuleSource: "git::https://x//m", ModuleRef: "v1", Inputs: map[string]any{"password": input, "plain": "x"}}, false, uuid.Nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
 		store.DeleteVariableSet(ctx, set.ID)
 		store.DeleteVCSConnection(ctx, connID)
-		store.DB.Exec(`DELETE FROM workspaces WHERE id = $1::uuid`, ws.ID)
+		store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE id = $1::uuid`, ws.ID)
 	})
 
 	bucket := memblob.OpenBucket(nil)
@@ -68,7 +69,7 @@ func TestRotateKey(t *testing.T) {
 	if _, err := RotateKey(ctx, store, bucket, oldKey, newKey, log); err == nil {
 		t.Fatal("rotation while a run is active")
 	}
-	store.DB.Exec(`UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE id = $1::uuid`, run.ID)
+	store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE id = $1::uuid`, run.ID)
 	if n, err := RotateKey(ctx, store, bucket, oldKey, newKey, log); err != nil || n != 5 {
 		t.Fatalf("rotate: %d %v", n, err)
 	}

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
 	"github.com/opsolete/opsolete/internal/vcs"
@@ -23,15 +25,16 @@ func TestRolloutPlan(t *testing.T) {
 		{Name: "key", Type: "string", Sensitive: true, Required: true},
 	}}
 	sealed := map[string]any{"sealed": "c3RvcmVk"}
+	w1, w2 := uuid.New(), uuid.New()
 	old := func(in map[string]any) storage.TemplateUse {
-		return storage.TemplateUse{WorkspaceID: "w1", ExecutionMode: "remote", ModuleSource: "git::x", ModuleRef: "v2", Inputs: in}
+		return storage.TemplateUse{WorkspaceID: w1, ExecutionMode: "remote", ModuleSource: "git::x", ModuleRef: "v2", Inputs: in}
 	}
 	ok := map[string]any{"name": "a", "gone": "dropped in v3", "key": sealed}
 	cur, local, busy, missing, ready := old(ok), old(ok), old(ok), old(map[string]any{"key": sealed}), old(ok)
 	cur.ModuleRef = "v3"
 	local.ExecutionMode = "local"
-	busy.RunID = "r1"
-	ready.WorkspaceID, ready.Module = "w2", "sa_c8ad"
+	busy.RunID = uuid.New()
+	ready.WorkspaceID, ready.Module = w2, "sa_c8ad"
 
 	rows, ups, err := s.rolloutPlan(tpl, []storage.TemplateUse{cur, local, busy, missing, ready})
 	if err != nil {
@@ -46,10 +49,10 @@ func TestRolloutPlan(t *testing.T) {
 	if m := rows[3].Missing; len(m) != 1 || m[0] != "name" {
 		t.Errorf("missing: %q", m)
 	}
-	if len(ups) != 1 || len(ups["w2"]) != 1 {
+	if len(ups) != 1 || len(ups[w2]) != 1 {
 		t.Fatalf("upgrades: %+v", ups)
 	}
-	u := ups["w2"][0]
+	u := ups[w2][0]
 	if u.ModuleRef != "v3" || u.Module != "sa_c8ad" || u.From.ModuleRef != "v2" {
 		t.Errorf("upgrade: %+v", u)
 	}
@@ -61,14 +64,15 @@ func TestRolloutPlan(t *testing.T) {
 func TestRenderRollout(t *testing.T) {
 	s := New(nil, nil, nil, nil, nil, Features{}, nil)
 	w := httptest.NewRecorder()
+	r1 := uuid.New()
 	ro := &storage.Rollout{ModuleRef: "v3", ProjectName: "team-a", BatchSize: 2, Status: "paused", Message: "the run in a: errored"}
 	s.render(w, httptest.NewRequest("GET", "/", nil), 200, "rollout.html", rolloutPage{T: templates.Template{ID: "sa", Name: "SA"},
 		Pending: 1, Rollout: ro, OpenRuns: 1, Rows: []rolloutRow{
-			{TemplateUse: storage.TemplateUse{Workspace: "a", Module: "m", RunID: "r1", RunStatus: "needs_confirmation"}, State: rolloutCurrent},
+			{TemplateUse: storage.TemplateUse{Workspace: "a", Module: "m", RunID: r1, RunStatus: "needs_confirmation"}, State: rolloutCurrent},
 			{TemplateUse: storage.TemplateUse{Workspace: "b", Module: "n"}, State: rolloutNeedsInput, Missing: []string{"x", "y"}},
 		}})
 	body := w.Body.String()
-	for _, want := range []string{"/workspaces/a/runs/r1", "/workspaces/b/templates/n", "<code>y</code>", "/rollout/resume", "2 workspace(s) at a time",
+	for _, want := range []string{"/workspaces/a/runs/" + r1.String(), "/workspaces/b/templates/n", "<code>y</code>", "/rollout/resume", "2 workspace(s) at a time",
 		"the run in a: errored"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q in:\n%s", want, body)
@@ -86,34 +90,34 @@ func TestTickRollout(t *testing.T) {
 	ctx := context.Background()
 	s := newApp(t, "../../catalog", store, nil, Features{Deployments: true})
 	tpl, _ := s.Templates.Get("greeting")
-	store.DB.Exec(`UPDATE template_rollouts SET status = 'stopped' WHERE template_id = 'greeting'`) // from earlier runs
+	store.Pool.Exec(context.Background(), `UPDATE template_rollouts SET status = 'stopped' WHERE template_id = 'greeting'`) // from earlier runs
 	sfx := strings.ToLower(rand.Text()[:8])
 	p, err := store.CreateProject(ctx, "ro-"+sfx, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	ws := map[string]string{} // name -> id
+	ws := map[string]uuid.UUID{} // name -> id
 	for _, n := range []string{"a", "b", "c", "other"} {
 		project := p.Name
 		if n == "other" {
 			project = "" // the default project: outside the rollout
 		}
-		w, _, err := store.CreateWorkspace(ctx, "", "ro-"+sfx+"-"+n, project, storage.WorkspaceTemplate{Name: "hello", TemplateID: "greeting",
-			ModuleSource: tpl.Module.Source, ModuleRef: "1.0.0", Inputs: map[string]any{"greeting": "hi", "name": "x"}}, true, "")
+		w, _, err := store.CreateWorkspace(ctx, uuid.Nil, "ro-"+sfx+"-"+n, project, storage.WorkspaceTemplate{Name: "hello", TemplateID: "greeting",
+			ModuleSource: tpl.Module.Source, ModuleRef: "1.0.0", Inputs: map[string]any{"greeting": "hi", "name": "x"}}, true, uuid.Nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		ws[n] = w.ID
-		t.Cleanup(func() { store.DB.Exec(`DELETE FROM workspaces WHERE id = $1`, w.ID) })
+		t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE id = $1`, w.ID) })
 	}
 	t.Cleanup(func() {
-		store.DB.Exec(`DELETE FROM template_rollouts WHERE project_id = $1`, p.ID)
-		store.DB.Exec(`DELETE FROM projects WHERE id = $1`, p.ID)
+		store.Pool.Exec(context.Background(), `DELETE FROM template_rollouts WHERE project_id = $1`, p.ID)
+		store.Pool.Exec(context.Background(), `DELETE FROM projects WHERE id = $1`, p.ID)
 	})
 	end := func(n, status string) { // ends the workspace's active run
 		t.Helper()
-		if _, err := store.DB.Exec(`UPDATE runs SET status = $2, lease_id = NULL, lease_until = NULL, updated_at = now() WHERE workspace_id = $1
-			AND status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`, ws[n], status); err != nil {
+		if _, err := store.Pool.Exec(context.Background(), `UPDATE runs SET status = $2, lease_id = NULL, lease_until = NULL, updated_at = now() WHERE workspace_id = $1
+			AND run_active(status)`, ws[n], status); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -142,13 +146,13 @@ func TestTickRollout(t *testing.T) {
 			}
 		}
 	}
-	var runID string
+	var runID uuid.UUID
 	tick("active", "1.1.0", "1.0.0", "1.0.0", "1.0.0") // batch of one: a
 	tick("active", "1.1.0", "1.0.0", "1.0.0", "1.0.0") // a's plan is still open
 	end("a", storage.Applied)
 	tick("active", "1.1.0", "1.0.0", "1.1.0", "1.0.0") // b is busy: c is next
 	// discarded through the store: setStatus puts c's configuration back
-	if err := store.DB.QueryRow(`UPDATE runs SET status = 'needs_confirmation' WHERE workspace_id = $1 AND status = 'plan_queued'
+	if err := store.Pool.QueryRow(context.Background(), `UPDATE runs SET status = 'needs_confirmation' WHERE workspace_id = $1 AND status = 'plan_queued'
 		RETURNING id`, ws["c"]).Scan(&runID); err != nil {
 		t.Fatal(err)
 	}
@@ -180,14 +184,14 @@ func TestStartRollout(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 	h := newServer(t, "../../catalog", false, store)
-	store.DB.Exec(`UPDATE template_rollouts SET status = 'stopped' WHERE template_id = 'greeting'`) // from earlier runs
+	store.Pool.Exec(context.Background(), `UPDATE template_rollouts SET status = 'stopped' WHERE template_id = 'greeting'`) // from earlier runs
 	p, err := store.CreateProject(ctx, "ro-"+strings.ToLower(rand.Text()[:8]), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		store.DB.Exec(`DELETE FROM template_rollouts WHERE project_id = $1`, p.ID)
-		store.DB.Exec(`DELETE FROM projects WHERE id = $1`, p.ID)
+		store.Pool.Exec(context.Background(), `DELETE FROM template_rollouts WHERE project_id = $1`, p.ID)
+		store.Pool.Exec(context.Background(), `DELETE FROM projects WHERE id = $1`, p.ID)
 	})
 	form := url.Values{"source": {"opsolete.localhost:8080/examples/greeting/terraform"}, "ref": {"1.0.0"}, "project": {p.Name}, "batch": {"2"}}
 	if rec := post(h, "/templates/greeting/rollout", form); rec.Code != http.StatusConflict {

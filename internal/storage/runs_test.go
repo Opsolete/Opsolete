@@ -39,3 +39,27 @@ func TestTransitions(t *testing.T) {
 		}
 	}
 }
+
+// run_active and run_working (001_schema.sql) agree with the Go state machine for every status.
+func TestRunActiveSQL(t *testing.T) {
+	s := testStore(t)
+	statuses := map[string]bool{}
+	for from, tos := range transitions {
+		statuses[from] = true
+		for _, to := range tos {
+			statuses[to] = true
+		}
+	}
+	if len(statuses) != 12 {
+		t.Fatalf("statuses: %v", statuses)
+	}
+	for st := range statuses {
+		var active, working bool
+		if err := s.Pool.QueryRow(t.Context(), `SELECT run_active($1), run_working($1)`, st).Scan(&active, &working); err != nil {
+			t.Fatal(err)
+		}
+		if active != !Ended(st) || working != (st == Planning || st == Applying) {
+			t.Errorf("%s: run_active %v, run_working %v", st, active, working)
+		}
+	}
+}

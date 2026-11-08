@@ -28,9 +28,9 @@ func TestWorkspaceTemplates(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 	claimWait = 100 * time.Millisecond
-	store.DB.Exec(`UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
+	store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE run_active(status)`)
 	ws := "wt-" + strings.ToLower(newID()[:8])
-	t.Cleanup(func() { store.DB.Exec(`DELETE FROM workspaces WHERE name = $1`, ws) })
+	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE name = $1`, ws) })
 	h := newServer(t, "../../catalog", false, store)
 	runnerTok := testRunnerToken
 	claim := func() runnerapi.Job {
@@ -42,7 +42,7 @@ func TestWorkspaceTemplates(t *testing.T) {
 		if json.Unmarshal(rec.Body.Bytes(), &j); rec.Code != 200 {
 			t.Fatalf("claim: %d %s", rec.Code, rec.Body.String())
 		}
-		store.DB.Exec(`UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL WHERE id = $1`, j.RunID) // free the workspace
+		store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL WHERE id = $1`, j.RunID) // free the workspace
 		return j
 	}
 	base := "/workspaces/" + ws + "/templates/"
@@ -99,11 +99,11 @@ func TestWorkspaceTemplates(t *testing.T) {
 	// Deployed: a destroy run limited to its module, which keeps it (and its providers) in the
 	// configuration until the destroy is applied.
 	var vid int64
-	if err := store.DB.QueryRow(`INSERT INTO state_versions (workspace_id, serial, lineage, blob_key, md5, size, indexed)
+	if err := store.Pool.QueryRow(context.Background(), `INSERT INTO state_versions (workspace_id, serial, lineage, blob_key, md5, size, indexed)
 		SELECT id, 1, 'l', 'wt/' || id || '.tfstate', 'm', 2, true FROM workspaces WHERE name = $1 RETURNING id`, ws).Scan(&vid); err != nil {
 		t.Fatal(err)
 	}
-	store.DB.Exec(`INSERT INTO state_version_resources (state_version_id, address, type, name, provider, module) VALUES ($1, $2, 'a', 'b', 'p', $3)`, vid, "module."+one+".a.b", "module."+one)
+	store.Pool.Exec(context.Background(), `INSERT INTO state_version_resources (state_version_id, address, type, name, provider, module) VALUES ($1, $2, 'a', 'b', 'p', $3)`, vid, "module."+one+".a.b", "module."+one)
 	// each template shows whether it has resources in the state, e.g. after a failed apply
 	if page := get(h, "/workspaces/"+ws+"?show=templates").Body.String(); !strings.Contains(page, "<code>"+one+"</code><br><small class=\"muted\" title=\"resources of this template in the current state\">1 resource</small>") ||
 		!strings.Contains(page, "<code>"+two+"</code><br><small class=\"muted\" title=\"resources of this template in the current state\">⚠ no resources in state</small>") {
@@ -136,7 +136,7 @@ func TestWorkspaceTemplates(t *testing.T) {
 	destroy(one, 0) // the last one too
 
 	// Nothing deployed: it goes right away, without a run.
-	store.DB.Exec(`DELETE FROM state_version_resources WHERE state_version_id = $1`, vid)
+	store.Pool.Exec(context.Background(), `DELETE FROM state_version_resources WHERE state_version_id = $1`, vid)
 	add.Set("name", "three")
 	if rec := post(h, base+"new?template=greeting", add); rec.Code != http.StatusSeeOther {
 		t.Fatalf("add three: %d %s", rec.Code, rec.Body.String())
@@ -171,7 +171,7 @@ func TestDeleteWorkspace(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 	ws := "del-" + strings.ToLower(newID()[:8])
-	t.Cleanup(func() { store.DB.Exec(`DELETE FROM workspaces WHERE name = $1`, ws) })
+	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE name = $1`, ws) })
 	app := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true})
 	h, url0 := app.Handler(), "/workspaces/"+ws
 	if rec := post(h, "/workspaces/new", url.Values{"name": {ws}}); rec.Code != http.StatusSeeOther {
@@ -181,16 +181,16 @@ func TestDeleteWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	key := "test/" + w.ID + ".tfstate"
+	key := "test/" + w.ID.String() + ".tfstate"
 	if err := app.StateStore.WriteAll(ctx, key, []byte("{}"), nil); err != nil {
 		t.Fatal(err)
 	}
 	var vid int64
-	if err := store.DB.QueryRow(`INSERT INTO state_versions (workspace_id, serial, lineage, blob_key, md5, size, indexed)
+	if err := store.Pool.QueryRow(context.Background(), `INSERT INTO state_versions (workspace_id, serial, lineage, blob_key, md5, size, indexed)
 		VALUES ($1, 1, 'l', $2, 'm', 2, true) RETURNING id`, w.ID, key).Scan(&vid); err != nil {
 		t.Fatal(err)
 	}
-	store.DB.Exec(`INSERT INTO state_version_resources (state_version_id, address, type, name, provider) VALUES ($1, 'a.b', 'a', 'b', 'p')`, vid)
+	store.Pool.Exec(context.Background(), `INSERT INTO state_version_resources (state_version_id, address, type, name, provider) VALUES ($1, 'a.b', 'a', 'b', 'p')`, vid)
 	if rec := post(h, url0+"/delete", nil); rec.Code != http.StatusConflict {
 		t.Fatalf("delete with resources: %d", rec.Code)
 	}
@@ -260,10 +260,12 @@ func TestSensitiveInputs(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 	claimWait = 100 * time.Millisecond
-	store.DB.Exec(`UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
+	store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE run_active(status)`)
 	id := strings.ToLower(newID()[:8])
 	ws, root := "sens-"+id, "sensroot-"+id
-	t.Cleanup(func() { store.DB.Exec(`DELETE FROM workspaces WHERE name IN ($1, $2)`, ws, root) })
+	t.Cleanup(func() {
+		store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE name IN ($1, $2)`, ws, root)
+	})
 	dir := t.TempDir()
 	tpl, _ := os.ReadFile("../../catalog/greeting.json")
 	tpl = []byte(strings.Replace(string(tpl), `"required": true, "pattern": "^[A-Za-z0-9 ]{1,40}$", "default": "world", "key": true`, `"required": true, "sensitive": true`, 1))
@@ -278,7 +280,7 @@ func TestSensitiveInputs(t *testing.T) {
 		if json.Unmarshal(rec.Body.Bytes(), &j); rec.Code != 200 {
 			t.Fatalf("claim: %d %s", rec.Code, rec.Body.String())
 		}
-		store.DB.Exec(`UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL WHERE id = $1`, j.RunID)
+		store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL WHERE id = $1`, j.RunID)
 		return j
 	}
 	leaks := func(what, s string) {
@@ -301,8 +303,8 @@ func TestSensitiveInputs(t *testing.T) {
 		t.Fatalf("runner gets the value: %+v", j.Modules)
 	}
 	var stored, audit string
-	store.DB.QueryRow(`SELECT t.inputs::text FROM workspace_templates t JOIN workspaces w ON w.id = t.workspace_id WHERE w.name = $1`, ws).Scan(&stored)
-	store.DB.QueryRow(`SELECT detail::text FROM audit_log WHERE action = $1 ORDER BY id DESC LIMIT 1`, "POST "+base+"new").Scan(&audit)
+	store.Pool.QueryRow(context.Background(), `SELECT t.inputs::text FROM workspace_templates t JOIN workspaces w ON w.id = t.workspace_id WHERE w.name = $1`, ws).Scan(&stored)
+	store.Pool.QueryRow(context.Background(), `SELECT detail::text FROM audit_log WHERE action = $1 ORDER BY id DESC LIMIT 1`, "POST "+base+"new").Scan(&audit)
 	if leaks("database", stored); !strings.Contains(stored, `"sealed"`) {
 		t.Fatalf("stored: %s", stored)
 	}
@@ -315,7 +317,7 @@ func TestSensitiveInputs(t *testing.T) {
 	}
 	// Reconfigure: the form is empty, and leaving it empty keeps the value even though it's required.
 	var mod string // no key input: the template's name, with a hex suffix
-	store.DB.QueryRow(`SELECT t.name FROM workspace_templates t JOIN workspaces w ON w.id = t.workspace_id WHERE w.name = $1`, ws).Scan(&mod)
+	store.Pool.QueryRow(context.Background(), `SELECT t.name FROM workspace_templates t JOIN workspaces w ON w.id = t.workspace_id WHERE w.name = $1`, ws).Scan(&mod)
 	if !regexp.MustCompile(`^greeting_example_[0-9a-f]{4}$`).MatchString(mod) {
 		t.Fatalf("module name: %q", mod)
 	}
@@ -330,15 +332,15 @@ func TestSensitiveInputs(t *testing.T) {
 		t.Fatalf("after keeping: %+v", j.Modules)
 	}
 	// A sealed value moved to another module doesn't open: it's bound to its workspace and module.
-	store.DB.Exec(`UPDATE workspace_templates SET name = 'two' WHERE name = $2 AND workspace_id = (SELECT id FROM workspaces WHERE name = $1)`, ws, mod)
-	store.DB.Exec(`UPDATE runs SET status = 'plan_queued' WHERE id = (SELECT r.id FROM runs r JOIN workspaces w ON w.id = r.workspace_id WHERE w.name = $1 ORDER BY r.created_at DESC LIMIT 1)`, ws)
+	store.Pool.Exec(context.Background(), `UPDATE workspace_templates SET name = 'two' WHERE name = $2 AND workspace_id = (SELECT id FROM workspaces WHERE name = $1)`, ws, mod)
+	store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'plan_queued' WHERE id = (SELECT r.id FROM runs r JOIN workspaces w ON w.id = r.workspace_id WHERE w.name = $1 ORDER BY r.created_at DESC LIMIT 1)`, ws)
 	req := httptest.NewRequest("POST", runnerapi.Prefix+"/jobs/claim", strings.NewReader(`{"runner":"r1"}`))
 	req.Header.Set("Authorization", "Bearer "+testRunnerToken)
 	if rec := do(h, req); rec.Code != http.StatusNoContent {
 		t.Fatalf("a job with a moved sealed value was handed out: %d %s", rec.Code, rec.Body.String())
 	}
 	var status string
-	store.DB.QueryRow(`SELECT r.status FROM runs r JOIN workspaces w ON w.id = r.workspace_id WHERE w.name = $1 ORDER BY r.created_at DESC LIMIT 1`, ws).Scan(&status)
+	store.Pool.QueryRow(context.Background(), `SELECT r.status FROM runs r JOIN workspaces w ON w.id = r.workspace_id WHERE w.name = $1 ORDER BY r.created_at DESC LIMIT 1`, ws).Scan(&status)
 	if status != "errored" {
 		t.Fatalf("moved sealed value: run %s", status)
 	}
@@ -363,7 +365,7 @@ func TestWithWorkspaceVars(t *testing.T) {
 	ctx := context.Background()
 	s := newApp(t, "../../catalog", store, nil, Features{Registry: true})
 	ns := "wv" + strings.ToLower(newID()[:8])
-	t.Cleanup(func() { store.DB.Exec(`DELETE FROM modules WHERE namespace = $1`, ns) })
+	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM modules WHERE namespace = $1`, ns) })
 	decl := []registry.Variable{{Variable: tfconfig.Variable{Name: "greeting"}}, {Variable: tfconfig.Variable{Name: "name"}}}
 	if err := store.CreateModule(ctx, storage.Module{Namespace: ns, Name: "m", System: "null", Version: "1.0.0", Variables: decl},
 		storage.ModuleDocs{}, []byte("x")); err != nil {

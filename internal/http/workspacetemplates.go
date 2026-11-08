@@ -1,12 +1,13 @@
 package httpserver
 
 import (
-	"database/sql"
 	"errors"
 	"net/http"
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/opsolete/opsolete/internal/auth"
 	"github.com/opsolete/opsolete/internal/storage"
@@ -135,7 +136,7 @@ func (s *Server) saveWorkspaceTemplate(w http.ResponseWriter, r *http.Request) {
 		page.Error = err.Error()
 		s.render(w, r, http.StatusConflict, "form.html", page)
 		return
-	case errors.Is(err, sql.ErrNoRows): // removed meanwhile
+	case errors.Is(err, storage.ErrNotFound): // removed meanwhile
 		http.NotFound(w, r)
 		return
 	case err != nil:
@@ -144,7 +145,7 @@ func (s *Server) saveWorkspaceTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Log.Info("workspace template saved", "workspace", ws.Name, "module", page.Module, "template", t.ID, "added", page.Adding,
 		"ref", t.Module.Ref, "run", run.ID, "user", u.Email)
-	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID, http.StatusSeeOther)
+	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID.String(), http.StatusSeeOther)
 }
 
 // removeWorkspaceTemplate removes an added template, and starts the plan that destroys its resources.
@@ -157,7 +158,7 @@ func (s *Server) removeWorkspaceTemplate(w http.ResponseWriter, r *http.Request)
 	mod := r.PathValue("module")
 	run, err := s.Store.RemoveWorkspaceTemplate(r.Context(), ws.ID, mod, u.ID)
 	switch {
-	case errors.Is(err, sql.ErrNoRows):
+	case errors.Is(err, storage.ErrNotFound):
 		http.NotFound(w, r)
 		return
 	case errors.Is(err, storage.ErrRunActive), errors.Is(err, storage.ErrLocalExecution):
@@ -168,9 +169,9 @@ func (s *Server) removeWorkspaceTemplate(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	s.Log.Info("workspace template removed", "workspace", ws.Name, "module", mod, "run", run.ID, "user", u.Email)
-	if run.ID == "" { // nothing was deployed, so nothing to plan
+	if run.ID == uuid.Nil { // nothing was deployed, so nothing to plan
 		http.Redirect(w, r, "/workspaces/"+ws.Name, http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID, http.StatusSeeOther)
+	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID.String(), http.StatusSeeOther)
 }

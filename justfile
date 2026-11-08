@@ -111,8 +111,13 @@ image target:
     nix build -L .#packages.x86_64-linux.image-{{target}} -o result-{{target}}
     docker load < result-{{target}}
 
-# fmt, vet and all tests including the DB tests
+# regenerate internal/storage/db from internal/storage/queries (commit the result)
+sqlc:
+    sqlc generate
+
+# generated code current, fmt, vet and all tests including the DB tests
 test: db-start
+    sqlc diff || { echo "run: just sqlc" >&2; exit 1; }
     gofmt -l . | (! grep .) || { echo "run: gofmt -w ." >&2; exit 1; }
     go vet ./...
     go test -count=1 -p 1 ./...  # -p 1: DB tests share one database and its job queue

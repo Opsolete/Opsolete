@@ -5,7 +5,6 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -21,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"gocloud.dev/blob"
 
 	"github.com/opsolete/opsolete/internal/auth"
@@ -113,7 +113,7 @@ func (s *Server) resolve(ctx context.Context, t templates.Template) (templates.T
 		return t, nil
 	}
 	m, err := s.Store.GetModule(ctx, ns, name, sys, t.Module.Ref)
-	if errors.Is(err, sql.ErrNoRows) { // saveTemplate refuses this; a hand-written JSON fails at terraform init
+	if errors.Is(err, storage.ErrNotFound) { // saveTemplate refuses this; a hand-written JSON fails at terraform init
 		return t, nil
 	}
 	if err != nil {
@@ -259,8 +259,29 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 	})
 }
 
+// parseID parses an id from a request (path, form or JSON body). An input that isn't an id is
+// treated as an unknown one: ok is false and the id uuid.Nil, which no row has.
+func parseID(s string) (id uuid.UUID, ok bool) {
+	id, err := uuid.Parse(s)
+	if err != nil {
+		return uuid.Nil, false // Parse may return a partly filled id
+	}
+	return id, true
+}
+
+// formID is an id as a form value: "" for none (uuid.Nil).
+func formID(id uuid.UUID) string {
+	if id == uuid.Nil {
+		return ""
+	}
+	return id.String()
+}
+
+// pathID parses the id in path segment name, as parseID.
+func pathID(r *http.Request, name string) (uuid.UUID, bool) { return parseID(r.PathValue(name)) }
+
 func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
-	if err := s.Store.DB.PingContext(r.Context()); err != nil {
+	if err := s.Store.Pool.Ping(r.Context()); err != nil {
 		s.Log.Error("readiness check failed", "err", err)
 		http.Error(w, "database unavailable", http.StatusServiceUnavailable)
 		return
@@ -343,7 +364,7 @@ func (s *Server) builder(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		m, err := s.Store.GetModule(r.Context(), parts[0], parts[1], parts[2], parts[3])
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, storage.ErrNotFound) {
 			http.NotFound(w, r)
 			return
 		}
@@ -398,7 +419,7 @@ func (s *Server) saveTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 	// A template pointing at this registry must reference a version that exists, or the deploy fails later.
 	if ns, name, sys, ok := s.Registry.ParseSource(t.Module.Source); ok {
-		if _, err := s.Store.GetModule(r.Context(), ns, name, sys, t.Module.Ref); errors.Is(err, sql.ErrNoRows) {
+		if _, err := s.Store.GetModule(r.Context(), ns, name, sys, t.Module.Ref); errors.Is(err, storage.ErrNotFound) {
 			fail(fmt.Sprintf("registry module %s has no version %q", t.Module.Source, t.Module.Ref))
 			return
 		} else if err != nil {

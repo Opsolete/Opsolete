@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/opsolete/opsolete/internal/registry"
 	"github.com/opsolete/opsolete/internal/registry/registrytest"
 	"github.com/opsolete/opsolete/internal/storage"
@@ -203,7 +205,7 @@ func TestSealAndValidation(t *testing.T) {
 		t.Fatal("a sealed value must not open without its associated data")
 	}
 	// A sensitive value copied into a non-sensitive row doesn't open there.
-	v := storage.Variable{Category: "env", Key: "K", Sensitive: true, Owner: storage.VarOwner{SetID: "s"}}
+	v := storage.Variable{Category: "env", Key: "K", Sensitive: true, Owner: storage.VarOwner{SetID: uuid.New()}}
 	sv, _ := Seal(Key("s1"), "secret", VariableAD(v))
 	v.Sensitive = false
 	if _, err := Open(Key("s1"), sv, VariableAD(v)); err == nil {

@@ -26,9 +26,9 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 	id := strings.ToLower(newID()[:8]) // the test DB is reused
 	ns, connName, wsName, tplID := "v"+id, "gh-"+id, "nc-"+id, "nc-"+id
 	t.Cleanup(func() {
-		store.DB.Exec(`DELETE FROM workspaces WHERE name = $1`, wsName)
-		store.DB.Exec(`DELETE FROM vcs_connections WHERE name = $1`, connName)
-		store.DB.Exec(`DELETE FROM modules WHERE namespace = $1`, ns)
+		store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE name = $1`, wsName)
+		store.Pool.Exec(context.Background(), `DELETE FROM vcs_connections WHERE name = $1`, connName)
+		store.Pool.Exec(context.Background(), `DELETE FROM modules WHERE namespace = $1`, ns)
 	})
 
 	// Fake GitHub: tags are added during the test.
@@ -89,7 +89,7 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 	}
 	var connID, scope string
 	var sealed []byte
-	store.DB.QueryRow(`SELECT id, token, workspace_scope FROM vcs_connections WHERE name = $1`, connName).Scan(&connID, &sealed, &scope)
+	store.Pool.QueryRow(context.Background(), `SELECT id, token, workspace_scope FROM vcs_connections WHERE name = $1`, connName).Scan(&connID, &sealed, &scope)
 	if scope != "" {
 		t.Fatalf("a new connection must not be open to workspaces: %q", scope)
 	}
@@ -124,7 +124,7 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 		t.Fatalf("registry page: %s", page)
 	}
 	// A module in a folder, with the namespace left to default to the repository name; then unlinked.
-	t.Cleanup(func() { store.DB.Exec(`DELETE FROM vcs_modules WHERE name = $1`, "f"+id) })
+	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM vcs_modules WHERE name = $1`, "f"+id) })
 	folder := url.Values{"connection": {connID}, "repo": {"acme/terraform-aws-rds"}, "name": {"f" + id}, "dir": {"../x"}}
 	if rec := post(h, "/registry/publish", folder); rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("a folder outside the repository: %d", rec.Code)
@@ -171,7 +171,7 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("provision: %d %s", rec.Code, rec.Body.String())
 	}
-	store.DB.Exec(`UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL FROM workspaces w WHERE w.id = runs.workspace_id AND w.name = $1`, wsName)
+	store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL FROM workspaces w WHERE w.id = runs.workspace_id AND w.name = $1`, wsName)
 
 	// New tag with a new required input; sync publishes it, the template moves to it.
 	mu.Lock()
@@ -224,7 +224,7 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 	mu.Lock()
 	tags["v1.1.0"] = tags["v1.0.1"]
 	mu.Unlock()
-	t.Cleanup(func() { store.DB.Exec(`DELETE FROM modules WHERE name = $1`, "vm"+id) })
+	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM modules WHERE name = $1`, "vm"+id) })
 	vm := url.Values{"connection": {connID}, "repo": {"acme/terraform-aws-rds"}, "name": {"vm" + id}, "dir": {"vm"}}
 	if rec := post(h, "/registry/publish", vm); rec.Header().Get("Location") != "/registry/terraform-aws-rds/vm"+id+"/aws/1.1.0" {
 		t.Fatalf("publish a folder added later: %d %q", rec.Code, rec.Header().Get("Location"))

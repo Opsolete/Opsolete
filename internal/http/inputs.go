@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/opsolete/opsolete/internal/templates"
 	"github.com/opsolete/opsolete/internal/vcs"
 )
@@ -19,8 +21,8 @@ import (
 const secretPrefix = "secret."
 
 // inputAD binds a sealed input to its workspace, its module and its name.
-func inputAD(workspaceID, module, name string) string {
-	return "template input\x00" + workspaceID + "\x00" + module + "\x00" + name
+func inputAD(workspaceID uuid.UUID, module, name string) string {
+	return "template input\x00" + workspaceID.String() + "\x00" + module + "\x00" + name
 }
 
 func isSealed(v any) bool { _, ok := v.(map[string]any); return ok }
@@ -41,7 +43,7 @@ func formValues(r *http.Request, t templates.Template) map[string]string {
 // sealInputs seals t's sensitive inputs in vals, validated from the form values raw, for workspace
 // wsID's module. One left empty keeps its stored value in old (sealing it if it was stored before it
 // became sensitive); one the form hides is dropped.
-func (s *Server) sealInputs(t templates.Template, raw map[string]string, vals, old map[string]any, errs map[string]string, wsID, module string) error {
+func (s *Server) sealInputs(t templates.Template, raw map[string]string, vals, old map[string]any, errs map[string]string, wsID uuid.UUID, module string) error {
 	for _, in := range t.Inputs {
 		if !in.Sensitive || !t.Match(in.ShowIf, raw) {
 			continue
@@ -74,7 +76,7 @@ func (s *Server) sealInputs(t templates.Template, raw map[string]string, vals, o
 }
 
 // openInputs returns inputs with their sealed values decrypted, for the runner.
-func (s *Server) openInputs(inputs map[string]any, wsID, module string) (map[string]any, []string, error) {
+func (s *Server) openInputs(inputs map[string]any, wsID uuid.UUID, module string) (map[string]any, []string, error) {
 	var secrets []string // the opened values, for the runner to mask in the log
 	out := maps.Clone(inputs)
 	for k, v := range inputs {

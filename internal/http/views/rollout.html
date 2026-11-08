@@ -61,7 +61,7 @@
       <a href="/workspaces/{{.Workspace}}/templates/{{.Module}}">Update by hand →</a>
     {{else if eq .State "busy"}}Busy: retried once its active run ends
     {{else}}Local execution: runs can't start here; switch it to remote execution first{{end}}
-    {{if .RunID}} · <a href="/workspaces/{{.Workspace}}/runs/{{.RunID}}"><span class="status {{.RunStatus}}">{{status .RunStatus}}</span></a>{{end}}
+    {{if .RunStatus}} · <a href="/workspaces/{{.Workspace}}/runs/{{.RunID}}"><span class="status {{.RunStatus}}">{{status .RunStatus}}</span></a>{{end}}
   </td>
 </tr>
 {{else}}

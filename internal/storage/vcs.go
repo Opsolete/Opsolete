@@ -2,23 +2,23 @@ package storage
 
 import (
 	"context"
-	"database/sql"
-	"errors"
 	"slices"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/google/uuid"
+
+	"github.com/opsolete/opsolete/internal/storage/db"
 )
 
 // VCSConnection is a VCS provider account; Token is sealed (see internal/vcs).
 type VCSConnection struct {
-	ID, Name, Provider, BaseURL string
-	Token                       []byte
-	WorkspaceScope              string   // workspaces that may link its repositories: "" none, "all" or "selected"
-	Workspaces                  []string // names of the selected workspaces
-	Projects                    []string // names of the selected projects: all their workspaces may link
-	CreatedAt                   time.Time
+	ID                      uuid.UUID
+	Name, Provider, BaseURL string
+	Token                   []byte
+	WorkspaceScope          string   // workspaces that may link its repositories: "" none, "all" or "selected"
+	Workspaces              []string // names of the selected workspaces
+	Projects                []string // names of the selected projects: all their workspaces may link
+	CreatedAt               time.Time
 	// what uses it, for the VCS providers page
 	LinkedWorkspaces, LinkedModules int
 	Catalog                         bool // the template catalog's repository
@@ -32,76 +32,52 @@ func (c VCSConnection) Allows(workspace, project string) bool {
 }
 
 // ResealVCSToken replaces a connection's sealed token, unless it changed since it was read
-// (sql.ErrNoRows, also for a deleted connection).
-func (s *Store) ResealVCSToken(ctx context.Context, id string, old, sealed []byte) error {
-	return affected(s.DB.ExecContext(ctx, `UPDATE vcs_connections SET token = $3 WHERE id = $1::uuid AND token = $2`, id, old, sealed))
+// (ErrNotFound, also for a deleted connection).
+func (s *Store) ResealVCSToken(ctx context.Context, id uuid.UUID, old, sealed []byte) error {
+	return affected(s.q.ResealVCSToken(ctx, db.ResealVCSTokenParams{ID: id, Old: old, Sealed: sealed}))
 }
 
-// CreateVCSConnection returns the new connection's id.
-func (s *Store) CreateVCSConnection(ctx context.Context, c VCSConnection) (string, error) {
-	var id string
-	err := s.DB.QueryRowContext(ctx, `INSERT INTO vcs_connections (name, provider, base_url, token)
-		VALUES ($1, $2, $3, $4) RETURNING id`, c.Name, c.Provider, c.BaseURL, c.Token).Scan(&id)
-	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
-		return "", ErrExists
+// CreateVCSConnection returns the new connection's id; ErrExists if the name is taken.
+func (s *Store) CreateVCSConnection(ctx context.Context, c VCSConnection) (uuid.UUID, error) {
+	id, err := s.q.CreateVCSConnection(ctx, db.CreateVCSConnectionParams{Name: c.Name, Provider: c.Provider, BaseUrl: c.BaseURL, Token: c.Token})
+	if isUnique(err) {
+		return uuid.Nil, ErrExists
 	}
 	return id, err
 }
 
-const connCols = `c.id, c.name, c.provider, c.base_url, c.token, c.workspace_scope, c.created_at,
-	ARRAY(SELECT w.name FROM vcs_connection_workspaces a JOIN workspaces w ON w.id = a.workspace_id
-		WHERE a.connection_id = c.id ORDER BY w.name),
-	ARRAY(SELECT p.name FROM vcs_connection_projects a JOIN projects p ON p.id = a.project_id
-		WHERE a.connection_id = c.id ORDER BY p.name),
-	(SELECT count(*) FROM workspace_vcs w WHERE w.connection_id = c.id),
-	(SELECT count(*) FROM vcs_modules m WHERE m.connection_id = c.id),
-	EXISTS (SELECT 1 FROM template_catalog t WHERE t.connection_id = c.id)`
-
-func scanConns(rows *sql.Rows, err error) ([]VCSConnection, error) {
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []VCSConnection
-	types := pgtype.NewMap()
-	for rows.Next() {
-		var c VCSConnection
-		if err := rows.Scan(&c.ID, &c.Name, &c.Provider, &c.BaseURL, &c.Token, &c.WorkspaceScope, &c.CreatedAt,
-			types.SQLScanner(&c.Workspaces), types.SQLScanner(&c.Projects), &c.LinkedWorkspaces, &c.LinkedModules, &c.Catalog); err != nil {
-			return nil, err
-		}
-		out = append(out, c)
-	}
-	return out, rows.Err()
+// toConnection maps a vcs_connection_list row (001_schema.sql).
+func toConnection(c db.VcsConnectionList) VCSConnection {
+	return VCSConnection{ID: c.ID, Name: c.Name, Provider: c.Provider, BaseURL: c.BaseUrl, Token: c.Token, WorkspaceScope: c.WorkspaceScope,
+		Workspaces: c.Workspaces, Projects: c.Projects, CreatedAt: c.CreatedAt, LinkedWorkspaces: int(c.LinkedWorkspaces),
+		LinkedModules: int(c.LinkedModules), Catalog: c.Catalog}
 }
 
 func (s *Store) VCSConnections(ctx context.Context) ([]VCSConnection, error) {
-	return scanConns(s.DB.QueryContext(ctx, `SELECT `+connCols+` FROM vcs_connections c ORDER BY c.name`))
+	rows, err := s.q.VCSConnections(ctx)
+	out := make([]VCSConnection, 0, len(rows))
+	for _, c := range rows {
+		out = append(out, toConnection(c))
+	}
+	return out, err
 }
 
-// GetVCSConnection returns sql.ErrNoRows if the id is unknown or not a uuid.
-func (s *Store) GetVCSConnection(ctx context.Context, id string) (VCSConnection, error) {
-	conns, err := scanConns(s.DB.QueryContext(ctx, `SELECT `+connCols+` FROM vcs_connections c WHERE c.id = ops_uuid($1)`, id))
-	if err == nil && len(conns) == 0 {
-		err = sql.ErrNoRows
-	}
-	if err != nil {
-		return VCSConnection{}, err
-	}
-	return conns[0], nil
+// GetVCSConnection returns ErrNotFound if the id is unknown.
+func (s *Store) GetVCSConnection(ctx context.Context, id uuid.UUID) (VCSConnection, error) {
+	c, err := s.q.GetVCSConnection(ctx, id)
+	return toConnection(c), notFound(err)
 }
 
 // SetVCSScope sets the workspaces that may link a connection's repositories: "", "all" or "selected".
-func (s *Store) SetVCSScope(ctx context.Context, id, workspaceScope string) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE vcs_connections SET workspace_scope = $2 WHERE id = ops_uuid($1)`, id, workspaceScope)
-	return err
+func (s *Store) SetVCSScope(ctx context.Context, id uuid.UUID, workspaceScope string) error {
+	return s.q.SetVCSScope(ctx, db.SetVCSScopeParams{ID: id, WorkspaceScope: workspaceScope})
 }
 
 // DeleteVCSConnection also unlinks its modules (their published versions stay). It returns
 // ErrInUse while the template catalog uses the connection.
-func (s *Store) DeleteVCSConnection(ctx context.Context, id string) error {
-	_, err := s.DB.ExecContext(ctx, `DELETE FROM vcs_connections WHERE id = ops_uuid($1)`, id)
-	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23503" {
+func (s *Store) DeleteVCSConnection(ctx context.Context, id uuid.UUID) error {
+	err := s.q.DeleteVCSConnection(ctx, id)
+	if _, ok := fkViolation(err); ok {
 		return ErrInUse
 	}
 	return err
@@ -110,7 +86,7 @@ func (s *Store) DeleteVCSConnection(ctx context.Context, id string) error {
 // VCSModule links a registry module to a repository whose semver tags become its versions.
 type VCSModule struct {
 	Namespace, Name, System string
-	ConnectionID            string
+	ConnectionID            uuid.UUID
 	Connection, Provider    string // name and provider of the connection, for display
 	Repo                    string
 	Dir                     string // folder of the module in the repository; "" = the root
@@ -120,64 +96,41 @@ type VCSModule struct {
 
 // LinkVCSModule returns ErrExists if the module is already linked to a repo.
 func (s *Store) LinkVCSModule(ctx context.Context, m VCSModule) error {
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO vcs_modules (namespace, name, system, connection_id, repo, dir) VALUES ($1, $2, $3, $4::uuid, $5, $6)`,
-		m.Namespace, m.Name, m.System, m.ConnectionID, m.Repo, m.Dir)
-	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
+	err := s.q.LinkVCSModule(ctx, db.LinkVCSModuleParams{Namespace: m.Namespace, Name: m.Name, System: m.System,
+		ConnectionID: m.ConnectionID, Repo: m.Repo, Dir: m.Dir})
+	if isUnique(err) {
 		return ErrExists
 	}
 	return err
 }
 
-const vcsModuleQuery = `SELECT m.namespace, m.name, m.system, m.connection_id, c.name, c.provider, m.repo, m.dir, m.synced_at, m.sync_error
-	FROM vcs_modules m JOIN vcs_connections c ON c.id = m.connection_id`
-
-func scanVCSModule(row interface{ Scan(...any) error }) (VCSModule, error) {
-	var m VCSModule
-	err := row.Scan(&m.Namespace, &m.Name, &m.System, &m.ConnectionID, &m.Connection, &m.Provider, &m.Repo, &m.Dir, &m.SyncedAt, &m.SyncError)
-	return m, err
+func toVCSModule(m db.VCSModulesRow) VCSModule {
+	return VCSModule{Namespace: m.Namespace, Name: m.Name, System: m.System, ConnectionID: m.ConnectionID, Connection: m.Connection,
+		Provider: m.Provider, Repo: m.Repo, Dir: m.Dir, SyncedAt: m.SyncedAt, SyncError: m.SyncError}
 }
 
 func (s *Store) VCSModules(ctx context.Context) ([]VCSModule, error) {
-	rows, err := s.DB.QueryContext(ctx, vcsModuleQuery+` ORDER BY m.namespace, m.name, m.system`)
-	if err != nil {
-		return nil, err
+	rows, err := s.q.VCSModules(ctx)
+	out := make([]VCSModule, 0, len(rows))
+	for _, m := range rows {
+		out = append(out, toVCSModule(m))
 	}
-	defer rows.Close()
-	var out []VCSModule
-	for rows.Next() {
-		m, err := scanVCSModule(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, m)
-	}
-	return out, rows.Err()
+	return out, err
 }
 
-// GetVCSModule returns sql.ErrNoRows if the module isn't linked to a repo.
+// GetVCSModule returns ErrNotFound if the module isn't linked to a repo.
 func (s *Store) GetVCSModule(ctx context.Context, namespace, name, system string) (VCSModule, error) {
-	return scanVCSModule(s.DB.QueryRowContext(ctx, vcsModuleQuery+` WHERE m.namespace=$1 AND m.name=$2 AND m.system=$3`,
-		namespace, name, system))
+	m, err := s.q.GetVCSModule(ctx, db.GetVCSModuleParams{Namespace: namespace, Name: name, System: system})
+	return toVCSModule(db.VCSModulesRow(m)), notFound(err)
 }
 
 // UnlinkVCSModule stops publishing a module from its repository; published versions stay.
-// It returns sql.ErrNoRows if the module isn't linked.
+// It returns ErrNotFound if the module isn't linked.
 func (s *Store) UnlinkVCSModule(ctx context.Context, namespace, name, system string) error {
-	res, err := s.DB.ExecContext(ctx, `DELETE FROM vcs_modules WHERE namespace=$1 AND name=$2 AND system=$3`, namespace, name, system)
-	if err != nil {
-		return err
-	}
-	if n, err := res.RowsAffected(); err != nil {
-		return err
-	} else if n == 0 {
-		return sql.ErrNoRows
-	}
-	return nil
+	return affected(s.q.UnlinkVCSModule(ctx, db.UnlinkVCSModuleParams{Namespace: namespace, Name: name, System: system}))
 }
 
 // SetVCSSync records the outcome of a sync; syncErr "" means it succeeded.
 func (s *Store) SetVCSSync(ctx context.Context, namespace, name, system, syncErr string) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE vcs_modules SET synced_at = now(), sync_error = $4
-		WHERE namespace=$1 AND name=$2 AND system=$3`, namespace, name, system, syncErr)
-	return err
+	return s.q.SetVCSSync(ctx, db.SetVCSSyncParams{Namespace: namespace, Name: name, System: system, SyncError: syncErr})
 }

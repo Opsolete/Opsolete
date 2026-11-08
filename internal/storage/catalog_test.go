@@ -14,8 +14,8 @@ func TestStaleCatalogSync(t *testing.T) {
 	ctx := context.Background()
 	name := "cat-stale-" + strings.ToLower(rand.Text()[:8])
 	t.Cleanup(func() {
-		s.DB.Exec(`DELETE FROM template_catalog`)
-		s.DB.Exec(`DELETE FROM vcs_connections WHERE name = $1`, name)
+		s.Pool.Exec(context.Background(), `DELETE FROM template_catalog`)
+		s.Pool.Exec(context.Background(), `DELETE FROM vcs_connections WHERE name = $1`, name)
 	})
 	conn, err := s.CreateVCSConnection(ctx, VCSConnection{Name: name, Provider: "github", Token: []byte("x")})
 	if err != nil {
@@ -68,8 +68,8 @@ func TestFailedCatalogSyncKeepsSyncedAt(t *testing.T) {
 	ctx := context.Background()
 	name := "cat-time-" + strings.ToLower(rand.Text()[:8])
 	t.Cleanup(func() {
-		s.DB.Exec(`DELETE FROM template_catalog`)
-		s.DB.Exec(`DELETE FROM vcs_connections WHERE name = $1`, name)
+		s.Pool.Exec(context.Background(), `DELETE FROM template_catalog`)
+		s.Pool.Exec(context.Background(), `DELETE FROM vcs_connections WHERE name = $1`, name)
 	})
 	conn, err := s.CreateVCSConnection(ctx, VCSConnection{Name: name, Provider: "github", Token: []byte("x")})
 	if err != nil {
@@ -82,7 +82,7 @@ func TestFailedCatalogSyncKeepsSyncedAt(t *testing.T) {
 	if ok, err := s.SyncedTemplateCatalog(ctx, tc, "c1", map[string]string{}, ""); !ok || err != nil {
 		t.Fatal(ok, err)
 	}
-	s.DB.Exec(`UPDATE template_catalog SET synced_at = now() - interval '1 hour'`)
+	s.Pool.Exec(context.Background(), `UPDATE template_catalog SET synced_at = now() - interval '1 hour'`)
 	tc, _ = s.GetTemplateCatalog(ctx)
 	if ok, err := s.SyncedTemplateCatalog(ctx, tc, "", nil, "provider unavailable"); !ok || err != nil {
 		t.Fatal(ok, err)

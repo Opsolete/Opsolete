@@ -12,6 +12,8 @@ import (
 	"time"
 
 	tfe "github.com/hashicorp/go-tfe"
+
+	"github.com/google/uuid"
 )
 
 // TestCloudGoTFE drives the cloud API with go-tfe, the client inside the Terraform CLI, at the
@@ -55,7 +57,7 @@ func TestCloudGoTFE(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
-	t.Cleanup(func() { store.DB.Exec(`DELETE FROM workspaces WHERE id::text = $1`, ws.ID) })
+	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE id::text = $1`, ws.ID) })
 	if _, err := alice.Workspaces.UpdateByID(ctx, ws.ID, tfe.WorkspaceUpdateOptions{TerraformVersion: tfe.String("1.14.0")}); err != nil {
 		t.Fatalf("update workspace: %v", err)
 	}
@@ -114,8 +116,8 @@ func TestCloudGoTFE(t *testing.T) {
 		t.Fatalf("an admin creates the project: %+v %v", prj, err)
 	}
 	t.Cleanup(func() {
-		store.DB.Exec(`DELETE FROM workspaces WHERE project_id::text = $1`, prj.ID)
-		store.DB.Exec(`DELETE FROM projects WHERE id::text = $1`, prj.ID)
+		store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE project_id::text = $1`, prj.ID)
+		store.Pool.Exec(context.Background(), `DELETE FROM projects WHERE id::text = $1`, prj.ID)
 	})
 	if _, err := alice.Workspaces.Create(ctx, "acme", tfe.WorkspaceCreateOptions{Name: tfe.String(name + "-p"), Project: prj}); err == nil || !strings.Contains(err.Error(), "operate") {
 		t.Fatalf("a user without operate on the project creates a workspace in it: %v", err)
@@ -129,7 +131,7 @@ func TestCloudGoTFE(t *testing.T) {
 	}
 
 	// A run's lock (here a rollback's) is reported as a run's.
-	if _, ok, err := store.LockState(ctx, ws.ID, "run-lock", "", []byte(`{"ID":"run-lock"}`)); !ok || err != nil {
+	if _, ok, err := store.LockState(ctx, uuid.MustParse(ws.ID), "run-lock", uuid.Nil, []byte(`{"ID":"run-lock"}`)); !ok || err != nil {
 		t.Fatalf("take a non-CLI lock: %v %v", ok, err)
 	}
 	if _, err := alice.Workspaces.Unlock(ctx, ws.ID); !errors.Is(err, tfe.ErrWorkspaceLockedByRun) {

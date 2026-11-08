@@ -14,7 +14,6 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/hashicorp/go-version"
 	"github.com/opsolete/opsolete/internal/registry"
 	"github.com/opsolete/opsolete/internal/storage"
@@ -695,7 +695,15 @@ func TokenAD(c storage.VCSConnection) string {
 // VariableAD binds a variable's value to its owner, name and sensitivity: a sensitive value copied
 // into a non-sensitive row (which the UI shows) or into another workspace doesn't open.
 func VariableAD(v storage.Variable) string {
-	return fmt.Sprintf("variable\x00%s\x00%s\x00%s\x00%s\x00%t", v.Owner.WorkspaceID, v.Owner.SetID, v.Category, v.Key, v.Sensitive)
+	return fmt.Sprintf("variable\x00%s\x00%s\x00%s\x00%s\x00%t", adID(v.Owner.WorkspaceID), adID(v.Owner.SetID), v.Category, v.Key, v.Sensitive)
+}
+
+// adID is an owner id in associated data: "" for none, as when ids were strings.
+func adID(id uuid.UUID) string {
+	if id == uuid.Nil {
+		return ""
+	}
+	return id.String()
 }
 
 // Reseal moves variables and VCS tokens sealed without associated data to Seal's format, once
@@ -739,7 +747,7 @@ func Reseal(ctx context.Context, st *storage.Store, key []byte) (int, error) {
 		if err != nil {
 			return n, err
 		}
-		if err := st.ResealVCSToken(ctx, c.ID, c.Token, sealed); errors.Is(err, sql.ErrNoRows) {
+		if err := st.ResealVCSToken(ctx, c.ID, c.Token, sealed); errors.Is(err, storage.ErrNotFound) {
 			continue // another replica was faster, or the token was replaced
 		} else if err != nil {
 			return n, err
@@ -812,7 +820,7 @@ func syncModule(ctx context.Context, st *storage.Store, key []byte, m storage.VC
 		}
 		have[ver] = true
 		// a commit's tree never changes: once without the folder, always without it
-		seen := m.ConnectionID + "\x00" + m.Repo + "\x00" + m.Dir + "\x00" + t.Commit
+		seen := m.ConnectionID.String() + "\x00" + m.Repo + "\x00" + m.Dir + "\x00" + t.Commit
 		cacheMu.Lock()
 		known := noFolderSeen[seen]
 		cacheMu.Unlock()
@@ -899,7 +907,7 @@ func PollRuns(ctx context.Context, st *storage.Store, key []byte, interval time.
 		}
 		groups := map[string][]storage.Workspace{}
 		for _, ws := range wss {
-			k := ws.VCSConnectionID + "\n" + strings.ToLower(ws.VCSRepo) + "\n" + ws.VCSBranch
+			k := ws.VCSConnectionID.String() + "\n" + strings.ToLower(ws.VCSRepo) + "\n" + ws.VCSBranch
 			groups[k] = append(groups[k], ws)
 		}
 		for _, g := range groups {

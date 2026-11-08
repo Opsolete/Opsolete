@@ -3,6 +3,8 @@ package httpserver
 import (
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/opsolete/opsolete/internal/templates"
 	"github.com/opsolete/opsolete/internal/vcs"
 )
@@ -16,7 +18,7 @@ func TestSealInputsKeepsRejectedError(t *testing.T) {
 	for raw, wantErr := range map[string]bool{"": false, "not-a-number": true} {
 		form := map[string]string{"pin": raw}
 		vals, errs := tpl.Validate(form)
-		if err := s.sealInputs(tpl, form, vals, old, errs, "ws", ""); err != nil {
+		if err := s.sealInputs(tpl, form, vals, old, errs, uuid.New(), ""); err != nil {
 			t.Fatal(err)
 		}
 		if _, got := errs["pin"]; got != wantErr {

@@ -45,8 +45,8 @@
 {{end}}
 {{template "top" .}}
 {{$w := .W}}{{$f := .VCS.Form}}{{$t := index $f "type"}}{{$conn := .Conn}}
-{{$base := printf "/workspaces/%s/vcs" $w.Name}}{{$cancel := $base}}{{if not $w.VCSConnectionID}}{{$cancel = printf "/workspaces/%s/settings" $w.Name}}{{end}}
-<nav class="back" aria-label="breadcrumb">{{template "wscrumb" $w}} / <a href="/workspaces/{{$w.Name}}/settings">Settings</a> / {{if and .Edit $w.VCSConnectionID}}<a href="{{$base}}">Version control</a> / Edit{{else}}Version control{{end}}</nav>
+{{$base := printf "/workspaces/%s/vcs" $w.Name}}{{$cancel := $base}}{{if not $w.VCSLinked}}{{$cancel = printf "/workspaces/%s/settings" $w.Name}}{{end}}
+<nav class="back" aria-label="breadcrumb">{{template "wscrumb" $w}} / <a href="/workspaces/{{$w.Name}}/settings">Settings</a> / {{if and .Edit $w.VCSLinked}}<a href="{{$base}}">Version control</a> / Edit{{else}}Version control{{end}}</nav>
 <div class="page-head">
   <div>
     <h1>{{if .Edit}}Edit version control{{else}}Version control{{end}}</h1>
@@ -92,7 +92,7 @@
 
 {{else if eq $t "cli"}}
 <h2>CLI-driven workflow</h2>
-{{if $w.VCSConnectionID}}
+{{if $w.VCSLinked}}
 <form method="post" action="{{$base}}" class="settings">
   <input type="hidden" name="type" value="cli">
   <p>Disconnects <code>{{$w.VCSRepo}}</code>: runs no longer start on new commits, and come from the Terraform CLI instead.</p>

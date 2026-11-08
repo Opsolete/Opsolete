@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/opsolete/opsolete/internal/registry/registrytest"
 	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage"
@@ -25,12 +27,12 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 	claimWait = 100 * time.Millisecond
-	store.DB.Exec(`UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
+	store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE run_active(status)`)
 	id := strings.ToLower(newID()[:8])
 	blank, linked, connName := "bl-"+id, "vc-"+id, "gh-"+id
 	t.Cleanup(func() {
-		store.DB.Exec(`DELETE FROM workspaces WHERE name IN ($1, $2)`, blank, linked)
-		store.DB.Exec(`DELETE FROM vcs_connections WHERE name = $1`, connName)
+		store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE name IN ($1, $2)`, blank, linked)
+		store.Pool.Exec(context.Background(), `DELETE FROM vcs_connections WHERE name = $1`, connName)
 	})
 
 	var mu sync.Mutex
@@ -171,7 +173,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	if rec := post(h, "/workspaces/"+linked+"/vcs", url.Values{}); rec.Code != http.StatusConflict {
 		t.Fatalf("relinking during a run: %d", rec.Code)
 	}
-	store.DB.Exec(`UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE id = $1`, job.RunID)
+	store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE id = $1`, job.RunID)
 
 	// VCS events: a new commit queues an apply run of it, an open pull request a speculative plan.
 	if rec := post(h, "/workspaces/"+linked+"/vcs", url.Values{"vcs_connection": {connID}, "vcs_repo": {"acme/infra"}, "vcs_branch": {"main"},
@@ -196,7 +198,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 		if tar := fetch(job.ModuleSource); !strings.Contains(tar, wantTar) {
 			t.Fatalf("%s run archive: %q, want %s", wantAction, tar, wantTar)
 		}
-		store.DB.Exec(`UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE id = $1`, job.RunID)
+		store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE id = $1`, job.RunID)
 	}
 	claimVCS("apply", "# at sha2")
 	claimVCS("apply", "# at sha3")
@@ -246,7 +248,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	if code := selected(linked, "no-such-ws"); code != http.StatusBadRequest {
 		t.Fatalf("select an unknown workspace: %d", code)
 	}
-	if c, _ := store.GetVCSConnection(ctx, connID); len(c.Workspaces) != 0 {
+	if c, _ := store.GetVCSConnection(ctx, uuid.MustParse(connID)); len(c.Workspaces) != 0 {
 		t.Fatalf("a rejected selection must change nothing: %v", c.Workspaces)
 	}
 	if code := selected(linked); code != http.StatusSeeOther {
@@ -306,9 +308,9 @@ func TestVCSProjectScope(t *testing.T) {
 	prj, other, connName, group := "vp-"+id, "vq-"+id, "gh-p-"+id, "grp-vp-"+id
 	inPrj, outside := "vp-ws-"+id, "vd-ws-"+id
 	t.Cleanup(func() {
-		store.DB.Exec(`DELETE FROM workspaces WHERE name IN ($1, $2)`, inPrj, outside)
-		store.DB.Exec(`DELETE FROM projects WHERE name IN ($1, $2)`, prj, other)
-		store.DB.Exec(`DELETE FROM vcs_connections WHERE name = $1`, connName)
+		store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE name IN ($1, $2)`, inPrj, outside)
+		store.Pool.Exec(context.Background(), `DELETE FROM projects WHERE name IN ($1, $2)`, prj, other)
+		store.Pool.Exec(context.Background(), `DELETE FROM vcs_connections WHERE name = $1`, connName)
 	})
 	gh := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -341,7 +343,7 @@ func TestVCSProjectScope(t *testing.T) {
 	if rec := post(h, "/vcs/"+connID+"/settings", scope); rec.Code != http.StatusBadRequest {
 		t.Fatalf("an unknown project: %d", rec.Code)
 	}
-	if c, _ := store.GetVCSConnection(t.Context(), connID); c.WorkspaceScope != "" || len(c.Projects) != 0 {
+	if c, _ := store.GetVCSConnection(t.Context(), uuid.MustParse(connID)); c.WorkspaceScope != "" || len(c.Projects) != 0 {
 		t.Fatalf("a rejected form must change nothing: %+v", c)
 	}
 	scope["project"] = []string{prj}

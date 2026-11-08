@@ -1,9 +1,15 @@
 // Package storage provides PostgreSQL access, migrations and repositories.
+//
+// Queries live in queries/*.sql; sqlc generates package db from them (just sqlc). Store methods map
+// db's row types to the domain types here, the package's API.
+//
+// Ids are uuid.UUID. An optional id (a reference that may be absent, or an argument that may be
+// left out) is uuid.Nil for none; uuid.NullUUID stays inside this package. Callers parse ids from
+// input themselves: an invalid id is a missing row. A lookup of a missing row returns ErrNotFound.
 package storage
 
 import (
 	"context"
-	"database/sql"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -11,33 +17,89 @@ import (
 	"io/fs"
 	"sort"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/opsolete/opsolete/internal/auth"
+	"github.com/opsolete/opsolete/internal/storage/db"
 )
 
 //go:embed migrations/*.sql
 var migrations embed.FS
 
+// ErrNotFound: the row asked for doesn't exist.
+var ErrNotFound = errors.New("not found")
+
 type Store struct {
-	DB       *sql.DB
+	Pool     *pgxpool.Pool
+	q        *db.Queries
 	AuditKey []byte // signs the audit log (SECRET_KEY); entries can't be written without it
 	// AuditPreviousKey (SECRET_KEY_PREVIOUS) verifies the entries signed before a key rotation.
 	AuditPreviousKey []byte
 }
 
 func Open(ctx context.Context, url string) (*Store, error) {
-	db, err := sql.Open("pgx", url)
+	pool, err := pgxpool.New(ctx, url)
 	if err != nil {
 		return nil, err
 	}
-	if err := db.PingContext(ctx); err != nil {
-		db.Close()
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
-	return &Store{DB: db}, nil
+	return &Store{Pool: pool, q: db.New(pool)}, nil
 }
+
+func (s *Store) Close() { s.Pool.Close() }
+
+// tx runs fn in a transaction, committed if fn returns nil.
+func (s *Store) tx(ctx context.Context, fn func(q *db.Queries) error) error {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // a no-op after Commit
+	if err := fn(s.q.WithTx(tx)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// notFound turns pgx.ErrNoRows into ErrNotFound.
+func notFound(err error) error {
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	return err
+}
+
+// affected turns "no row matched" into ErrNotFound.
+func affected(n int64, err error) error {
+	if err == nil && n == 0 {
+		return ErrNotFound
+	}
+	return err
+}
+
+// isUnique reports a unique violation.
+func isUnique(err error) bool {
+	pg, ok := errors.AsType[*pgconn.PgError](err)
+	return ok && pg.Code == "23505"
+}
+
+// fkViolation returns the constraint of a foreign key violation.
+func fkViolation(err error) (constraint string, ok bool) {
+	pg, ok := errors.AsType[*pgconn.PgError](err)
+	if !ok || pg.Code != "23503" {
+		return "", false
+	}
+	return pg.ConstraintName, true
+}
+
+// optID is an optional id as SQL sees it: uuid.Nil is NULL.
+func optID(id uuid.UUID) uuid.NullUUID { return uuid.NullUUID{UUID: id, Valid: id != uuid.Nil} }
 
 // Migrate applies pending embedded SQL migrations in filename order. Everything runs in one
 // transaction under an advisory lock, so concurrent app instances (or test packages) can't race.
@@ -47,21 +109,21 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	sort.Strings(files)
-	tx, err := s.DB.BeginTx(ctx, nil)
+	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(4242424242)`); err != nil {
+	defer tx.Rollback(ctx) //nolint:errcheck // a no-op after Commit
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(4242424242)`); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
+	if _, err := tx.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`); err != nil {
 		return err
 	}
 	// A 0.x database recorded migrations 1.0 doesn't have (001_init.sql …): it isn't upgraded.
 	var foreign string
-	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(min(version), '') FROM schema_migrations WHERE version <> ALL($1)`,
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(min(version), '') FROM schema_migrations WHERE version <> ALL($1)`,
 		files).Scan(&foreign); err != nil {
 		return err
 	}
@@ -70,7 +132,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}
 	for _, f := range files {
 		var done bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=$1)`, f).Scan(&done); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=$1)`, f).Scan(&done); err != nil {
 			return err
 		}
 		if done {
@@ -80,47 +142,45 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, string(body)); err != nil {
+		// no arguments: the simple protocol runs the file's many statements
+		if _, err := tx.Exec(ctx, string(body)); err != nil {
 			return fmt.Errorf("migration %s: %w", f, err)
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO schema_migrations(version) VALUES ($1)`, f); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations(version) VALUES ($1)`, f); err != nil {
 			return err
 		}
 	}
-	return tx.Commit()
+	return tx.Commit(ctx)
 }
 
 // UpsertUser records a login; the email, the role (from ADMIN_EMAILS) and the IdP groups are refreshed on every login.
 // A user is keyed by subject (OIDC issuer + sub) when there is one: a user without a subject yet is bound
 // to the first subject that logs in with its email, and a different subject with that email is refused.
 // subject "" (the dev user) keys by email.
-func (s *Store) UpsertUser(ctx context.Context, subject, email, role string, groups []string) (string, error) {
+func (s *Store) UpsertUser(ctx context.Context, subject, email, role string, groups []string) (uuid.UUID, error) {
 	if groups == nil {
 		groups = []string{}
 	}
-	var id string
 	if subject == "" {
-		err := s.DB.QueryRowContext(ctx, `INSERT INTO users (email, role, groups) VALUES ($1, $2, $3)
-			ON CONFLICT (email) DO UPDATE SET role = EXCLUDED.role, groups = EXCLUDED.groups RETURNING id`, email, role, groups).Scan(&id)
-		return id, err
+		return s.q.UpsertUserByEmail(ctx, db.UpsertUserByEmailParams{Email: email, Role: role, Groups: groups})
 	}
-	err := s.DB.QueryRowContext(ctx, `UPDATE users SET subject = $1, email = $2, role = $3, groups = $4
-		WHERE subject = $1 OR (subject IS NULL AND email = $2 AND NOT EXISTS (SELECT 1 FROM users WHERE subject = $1))
-		RETURNING id`, subject, email, role, groups).Scan(&id)
-	if errors.Is(err, sql.ErrNoRows) {
-		err = s.DB.QueryRowContext(ctx, `INSERT INTO users (subject, email, role, groups) VALUES ($1, $2, $3, $4)
-			ON CONFLICT (subject) DO UPDATE SET email = EXCLUDED.email, role = EXCLUDED.role, groups = EXCLUDED.groups
-			RETURNING id`, subject, email, role, groups).Scan(&id) // a concurrent first login of the same subject wins the insert
+	id, err := s.q.UpdateUserBySubject(ctx, db.UpdateUserBySubjectParams{Subject: subject, Email: email, Role: role, Groups: groups})
+	if errors.Is(err, pgx.ErrNoRows) {
+		id, err = s.q.UpsertUserBySubject(ctx, db.UpsertUserBySubjectParams{Subject: subject, Email: email, Role: role, Groups: groups})
 	}
-	if pg, ok := errors.AsType[*pgconn.PgError](err); ok && pg.Code == "23505" { // the subject's new email is another user's
+	if isUnique(err) { // the subject's new email is another user's
 		err = auth.ErrEmailTaken
 	}
 	return id, err
 }
 
 // UserGroups returns the IdP groups recorded at the user's last login, as a JSON array.
-func (s *Store) UserGroups(ctx context.Context, id string) (json.RawMessage, error) {
-	var groups []byte
-	err := s.DB.QueryRowContext(ctx, `SELECT array_to_json(groups) FROM users WHERE id = ops_uuid($1)`, id).Scan(&groups)
-	return groups, err
+func (s *Store) UserGroups(ctx context.Context, id uuid.UUID) (json.RawMessage, error) {
+	groups, err := s.q.UserGroups(ctx, id)
+	return groups, notFound(err)
+}
+
+// KnownGroups lists the IdP groups of everyone who has logged in, for picking a grant.
+func (s *Store) KnownGroups(ctx context.Context) ([]string, error) {
+	return s.q.KnownGroups(ctx)
 }

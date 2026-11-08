@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/opsolete/opsolete/internal/auth/authtest"
 )
 
@@ -23,12 +25,12 @@ func newOIDC(t *testing.T, is *authtest.Issuer) *Auth {
 	pub, _ := url.Parse("https://ops.example.com")
 	a, err := New(context.Background(), Config{Issuer: is.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret,
 		Admins: []string{" Boss@Example.com"}, AdminGroups: []string{"grp-admins"}, PublicURL: pub}, []byte("k"),
-		func(_ context.Context, subject, email, role string, groups []string) (string, error) {
+		func(_ context.Context, subject, email, role string, groups []string) (uuid.UUID, error) {
 			savedGroups, savedSubject = groups, subject
 			if emailTaken {
-				return "", ErrEmailTaken
+				return uuid.Nil, ErrEmailTaken
 			}
-			return "id-" + email, nil
+			return uuid.NewSHA1(uuid.Nil, []byte(email)), nil
 		})
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +88,7 @@ func TestOIDCLogin(t *testing.T) {
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/workspaces?x=1" {
 		t.Fatalf("callback: %d %s", rec.Code, rec.Body.String())
 	}
-	if u, ok := sessionUser(a, rec); !ok || u != (User{ID: "id-dev@example.com", Email: "dev@example.com", Role: "user"}) {
+	if u, ok := sessionUser(a, rec); !ok || u != (User{ID: uuid.NewSHA1(uuid.Nil, []byte("dev@example.com")), Email: "dev@example.com", Role: "user"}) {
 		t.Fatalf("session: %+v %v", u, ok)
 	}
 	if lastPrincipal.Email != "dev@example.com" || lastPrincipal.Type != "user" {

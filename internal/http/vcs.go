@@ -2,7 +2,6 @@ package httpserver
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -12,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/opsolete/opsolete/internal/auth"
 	"github.com/opsolete/opsolete/internal/registry"
@@ -121,7 +122,8 @@ func (s *Server) renderNewConnection(w http.ResponseWriter, r *http.Request, sta
 }
 
 // finishConnection continues the wizard that started the add-VCS-provider wizard, with the new connection.
-func finishConnection(ret, connID string) string {
+func finishConnection(ret string, id uuid.UUID) string {
+	connID := id.String()
 	switch ret {
 	case "workspace":
 		return "/workspaces/new?type=vcs&conn=" + url.QueryEscape(connID)
@@ -173,7 +175,7 @@ func (s *Server) addConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Log.Info("vcs connection added", "name", form["name"], "provider", form["provider"], "url", baseURL, "user", auth.FromContext(r.Context()).Email)
-	http.Redirect(w, r, "/vcs/new?connection="+id+"&return="+url.QueryEscape(r.PostFormValue("return")), http.StatusSeeOther)
+	http.Redirect(w, r, "/vcs/new?connection="+id.String()+"&return="+url.QueryEscape(r.PostFormValue("return")), http.StatusSeeOther)
 }
 
 // connectionSettings shows a connection's scope (advanced settings): outside the wizard, as its settings page.
@@ -218,7 +220,7 @@ func (s *Server) saveConnectionSettings(w http.ResponseWriter, r *http.Request) 
 		err = s.Store.Select(r.Context(), sc.ID, storage.Pick{Selection: storage.ConnWorkspaces, Names: r.PostForm["workspace"]},
 			storage.Pick{Selection: storage.ConnProjects, Names: r.PostForm["project"]})
 	}
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, storage.ErrNotFound) {
 		http.Error(w, "choose existing workspaces and projects", http.StatusBadRequest)
 		return
 	}
@@ -263,7 +265,7 @@ func (s *Server) replaceToken(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		err = s.Store.ResealVCSToken(r.Context(), sc.ID, sc.Token, sealed)
 	}
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, storage.ErrNotFound) {
 		fail("the token was replaced or the connection deleted meanwhile: reload and try again")
 		return
 	}
@@ -277,7 +279,7 @@ func (s *Server) replaceToken(w http.ResponseWriter, r *http.Request) {
 			s.Log.Warn("template catalog sync", "err", err) // shown on the Templates page as the sync error
 		}
 	}
-	http.Redirect(w, r, "/vcs/"+sc.ID+"/settings?token", http.StatusSeeOther)
+	http.Redirect(w, r, "/vcs/"+sc.ID.String()+"/settings?token", http.StatusSeeOther)
 }
 
 // scopeFormOf fills the advanced settings form from a connection.
@@ -291,8 +293,9 @@ func scopeFormOf(c storage.VCSConnection) map[string]string {
 
 // getConnection writes a 404 or 500 when it returns false.
 func (s *Server) getConnection(w http.ResponseWriter, r *http.Request, id string) (storage.VCSConnection, bool) {
-	sc, err := s.Store.GetVCSConnection(r.Context(), id)
-	if errors.Is(err, sql.ErrNoRows) {
+	cid, _ := parseID(id) // not an id: not found
+	sc, err := s.Store.GetVCSConnection(r.Context(), cid)
+	if errors.Is(err, storage.ErrNotFound) {
 		http.NotFound(w, r)
 		return sc, false
 	}
@@ -304,14 +307,15 @@ func (s *Server) getConnection(w http.ResponseWriter, r *http.Request, id string
 }
 
 func (s *Server) deleteConnection(w http.ResponseWriter, r *http.Request) {
-	if err := s.Store.DeleteVCSConnection(r.Context(), r.PathValue("id")); errors.Is(err, storage.ErrInUse) {
+	id, _ := pathID(r, "id") // not an id: deletes nothing, as for an unknown one
+	if err := s.Store.DeleteVCSConnection(r.Context(), id); errors.Is(err, storage.ErrInUse) {
 		s.renderVCS(w, r, http.StatusConflict, "The template catalog uses this connection: disconnect it in Settings → Templates first.")
 		return
 	} else if err != nil {
 		s.internalError(w, "delete vcs connection", err)
 		return
 	}
-	s.Log.Info("vcs connection deleted", "id", r.PathValue("id"), "user", auth.FromContext(r.Context()).Email)
+	s.Log.Info("vcs connection deleted", "id", id, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/vcs", http.StatusSeeOther)
 }
 
@@ -408,7 +412,8 @@ func (s *Server) publishModule(w http.ResponseWriter, r *http.Request) {
 		form[k] = strings.TrimSpace(r.PostFormValue(k))
 	}
 	connID := r.PostFormValue("connection")
-	if _, ok := s.getConnection(w, r, connID); !ok {
+	sc, ok := s.getConnection(w, r, connID)
+	if !ok {
 		return
 	}
 	fail := func(msg string) { s.renderPublish(w, r, http.StatusUnprocessableEntity, connID, msg, form) }
@@ -427,7 +432,7 @@ func (s *Server) publishModule(w http.ResponseWriter, r *http.Request) {
 		fail(fmt.Sprintf("%q is not a folder of the repository", form["dir"]))
 		return
 	}
-	m := storage.VCSModule{Namespace: ns, Name: name, System: sys, ConnectionID: connID, Repo: form["repo"], Dir: dir}
+	m := storage.VCSModule{Namespace: ns, Name: name, System: sys, ConnectionID: sc.ID, Repo: form["repo"], Dir: dir}
 	if err := s.Store.LinkVCSModule(r.Context(), m); errors.Is(err, storage.ErrExists) {
 		fail(fmt.Sprintf("%s/%s/%s is already published from a repository", ns, name, sys))
 		return
@@ -441,7 +446,7 @@ func (s *Server) publishModule(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) syncModule(w http.ResponseWriter, r *http.Request) {
 	m, err := s.Store.GetVCSModule(r.Context(), r.PathValue("ns"), r.PathValue("name"), r.PathValue("system"))
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, storage.ErrNotFound) {
 		http.NotFound(w, r)
 		return
 	}
@@ -456,7 +461,7 @@ func (s *Server) syncModule(w http.ResponseWriter, r *http.Request) {
 // Changing the repository or folder is unlinking and publishing again.
 func (s *Server) unlinkModule(w http.ResponseWriter, r *http.Request) {
 	ns, name, sys := r.PathValue("ns"), r.PathValue("name"), r.PathValue("system")
-	if err := s.Store.UnlinkVCSModule(r.Context(), ns, name, sys); errors.Is(err, sql.ErrNoRows) {
+	if err := s.Store.UnlinkVCSModule(r.Context(), ns, name, sys); errors.Is(err, storage.ErrNotFound) {
 		http.NotFound(w, r)
 		return
 	} else if err != nil {

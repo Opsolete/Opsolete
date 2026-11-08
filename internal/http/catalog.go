@@ -1,7 +1,6 @@
 package httpserver
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -46,7 +45,7 @@ func (s *Server) catalogPage(w http.ResponseWriter, r *http.Request) {
 	tc, err := s.Store.GetTemplateCatalog(r.Context())
 	if err == nil {
 		form = catalogForm(tc)
-	} else if !errors.Is(err, sql.ErrNoRows) {
+	} else if !errors.Is(err, storage.ErrNotFound) {
 		s.internalError(w, "template catalog", err)
 		return
 	}
@@ -62,7 +61,7 @@ func (s *Server) renderCatalog(w http.ResponseWriter, r *http.Request, status in
 	tc, err := s.Store.GetTemplateCatalog(r.Context())
 	if err == nil {
 		p.Catalog = &tc
-	} else if !errors.Is(err, sql.ErrNoRows) {
+	} else if !errors.Is(err, storage.ErrNotFound) {
 		s.internalError(w, "template catalog", err)
 		return
 	}
@@ -71,7 +70,7 @@ func (s *Server) renderCatalog(w http.ResponseWriter, r *http.Request, status in
 		return
 	}
 	for _, sc := range p.Conns {
-		if sc.ID != form["connection"] {
+		if sc.ID.String() != form["connection"] {
 			continue
 		}
 		c, err := vcs.ConnFor(s.SecretKey, sc)
@@ -96,7 +95,8 @@ func (s *Server) saveCatalog(w http.ResponseWriter, r *http.Request) {
 		form[k] = strings.TrimSpace(r.PostFormValue(k))
 	}
 	dir, dirOK := repoDir(form["dir"])
-	tc := storage.TemplateCatalog{ConnectionID: form["connection"], Repo: form["repo"], Branch: form["branch"], Dir: dir, Mode: form["mode"]}
+	connID, _ := parseID(form["connection"]) // not an id: no connection, as for an unknown one
+	tc := storage.TemplateCatalog{ConnectionID: connID, Repo: form["repo"], Branch: form["branch"], Dir: dir, Mode: form["mode"]}
 	if tc.Branch == "" {
 		tc.Branch = "main"
 	}
@@ -113,7 +113,7 @@ func (s *Server) saveCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sc, err := s.Store.GetVCSConnection(r.Context(), tc.ConnectionID)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, storage.ErrNotFound) {
 		fail("choose a VCS connection")
 		return
 	} else if err != nil {
@@ -140,7 +140,7 @@ func (s *Server) saveCatalog(w http.ResponseWriter, r *http.Request) {
 }
 
 func catalogForm(tc storage.TemplateCatalog) map[string]string {
-	return map[string]string{"connection": tc.ConnectionID, "repo": tc.Repo, "branch": tc.Branch, "dir": tc.Dir, "mode": tc.Mode}
+	return map[string]string{"connection": tc.ConnectionID.String(), "repo": tc.Repo, "branch": tc.Branch, "dir": tc.Dir, "mode": tc.Mode}
 }
 
 func (s *Server) syncCatalog(w http.ResponseWriter, r *http.Request) {

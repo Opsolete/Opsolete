@@ -139,8 +139,8 @@
 
 <aside class="side">
   <ul class="facts">
-    <li>Repository: {{if $w.VCSConnectionID}}<code>{{$w.VCSRepo}}</code> <span class="tag">{{$w.VCSBranch}}</span>{{else}}<span class="muted">none{{with $w.VCSRepo}} (was {{.}}; its VCS connection was deleted){{end}}</span>{{end}}
-      {{if and .CanOperate (features).VCS}} · <a href="/workspaces/{{$w.Name}}/vcs">{{if $w.VCSConnectionID}}Change{{else}}Link{{end}}…</a>{{end}}</li>
+    <li>Repository: {{if $w.VCSLinked}}<code>{{$w.VCSRepo}}</code> <span class="tag">{{$w.VCSBranch}}</span>{{else}}<span class="muted">none{{with $w.VCSRepo}} (was {{.}}; its VCS connection was deleted){{end}}</span>{{end}}
+      {{if and .CanOperate (features).VCS}} · <a href="/workspaces/{{$w.Name}}/vcs">{{if $w.VCSLinked}}Change{{else}}Link{{end}}…</a>{{end}}</li>
     <li>Execution mode: <a href="/workspaces/{{$w.Name}}/settings">{{if eq $w.ExecutionMode "local"}}Local{{else}}Remote{{end}}</a></li>
     <li>Auto-apply: <a href="/workspaces/{{$w.Name}}/settings">{{if $w.AutoApply}}On{{else}}Off{{end}}</a></li>
     <li>Drift detection: <a href="/workspaces/{{$w.Name}}/settings/health">{{if $w.DriftDetection}}On{{else}}Off{{end}}</a></li>

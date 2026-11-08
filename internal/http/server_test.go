@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"gocloud.dev/blob/memblob"
 
 	"github.com/opsolete/opsolete/internal/auth"
@@ -60,7 +61,7 @@ func newApp(t *testing.T, dir string, store *storage.Store, a *auth.Auth, f Feat
 }
 
 func devAuth(t *testing.T, store *storage.Store, email string, admin bool, groups ...string) *auth.Auth {
-	save := func(context.Context, string, string, string, []string) (string, error) { return "", nil }
+	save := func(context.Context, string, string, string, []string) (uuid.UUID, error) { return uuid.Nil, nil }
 	if store != nil {
 		save = store.UpsertUser
 	}
@@ -85,7 +86,7 @@ func testStore(t *testing.T) *storage.Store {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.DB.Close() })
+	t.Cleanup(func() { s.Close() })
 	s.AuditKey = []byte("test-audit-key") // the same in every test package: they share the log
 	if err := s.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
@@ -339,7 +340,7 @@ func TestRegistry(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 	ns := "t" + strings.ToLower(newID()[:8]) // unique per run; the test DB is reused
-	t.Cleanup(func() { store.DB.Exec(`DELETE FROM modules WHERE namespace=$1`, ns) })
+	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM modules WHERE namespace=$1`, ns) })
 	h := newServer(t, t.TempDir(), true, store)
 
 	archive := registrytest.TarGz(t, map[string]string{"README.md": "# Storage <b>module</b>", "main.tf": `
@@ -491,14 +492,14 @@ func TestWorkspaceFlow(t *testing.T) {
 	ctx := context.Background()
 	claimWait = 100 * time.Millisecond
 	// Leftover runs from earlier tests would be claimed first.
-	store.DB.Exec(`UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
+	store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE run_active(status)`)
 	app := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true, Registry: true})
 	h := app.Handler()
 	other := newServerAs(t, "../../catalog", false, store, devAuth(t, store, "other@example.com", false))
 
 	// Create the workspace from a template.
 	name := "wf-" + strings.ToLower(newID()[:8])
-	t.Cleanup(func() { store.DB.Exec(`DELETE FROM workspaces WHERE name = $1`, name) })
+	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE name = $1`, name) })
 	form := url.Values{"name": {"acct01"}, "location": {"westeurope"}, "retention_days": {"7"}, "ops-workspace": {"Bad Name"}}
 	if rec := post(h, "/templates/storage-account", form); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "lowercase letters") {
 		t.Fatalf("invalid workspace name: %d", rec.Code)
@@ -530,7 +531,7 @@ func TestWorkspaceFlow(t *testing.T) {
 	claimJob := func(phase string) {
 		t.Helper()
 		rec := call("POST", runnerTok, "/jobs/claim", "", `{"runner":"r1"}`)
-		if json.Unmarshal(rec.Body.Bytes(), &job); rec.Code != 200 || job.RunID != runID || job.WorkspaceID != ws.ID || job.Phase != phase {
+		if json.Unmarshal(rec.Body.Bytes(), &job); rec.Code != 200 || job.RunID != runID || job.WorkspaceID != ws.ID.String() || job.Phase != phase {
 			t.Fatalf("claim %s: %d %s", phase, rec.Code, rec.Body.String())
 		}
 	}
@@ -541,9 +542,9 @@ func TestWorkspaceFlow(t *testing.T) {
 		}
 	}
 	stateCall := func(method, query, token, body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(method, runnerapi.StatePrefix+"/"+ws.ID+query, strings.NewReader(body))
+		req := httptest.NewRequest(method, runnerapi.StatePrefix+"/"+ws.ID.String()+query, strings.NewReader(body))
 		if token != "" {
-			req.SetBasicAuth(ws.ID, token)
+			req.SetBasicAuth(ws.ID.String(), token)
 		}
 		return do(h, req)
 	}
@@ -634,8 +635,8 @@ func TestWorkspaceFlow(t *testing.T) {
 			t.Fatalf("%s not sealed: %q %v", key, raw, err)
 		}
 	}
-	assertSealed(artifactKey(runID, runnerapi.ArtifactPlan), "PLANBYTES")
-	assertSealed(artifactKey(runID, runnerapi.ArtifactLockfile), "LOCKBYTES")
+	assertSealed(artifactKey(uuid.MustParse(runID), runnerapi.ArtifactPlan), "PLANBYTES")
+	assertSealed(artifactKey(uuid.MustParse(runID), runnerapi.ArtifactLockfile), "LOCKBYTES")
 	for _, chunk := range []string{"line one\n", "line \x1b[1mtwo\x1b[0m\n\nend\n"} {
 		if rec := call("POST", runnerTok, "/jobs/"+runID+"/logs", job.LeaseID, chunk); rec.Code != http.StatusNoContent {
 			t.Fatalf("logs: %d %s", rec.Code, rec.Body.String())
@@ -643,6 +644,9 @@ func TestWorkspaceFlow(t *testing.T) {
 	}
 	if rec := call("POST", runnerTok, "/jobs/"+runID+"/heartbeat", job.LeaseID, ""); rec.Code != http.StatusNoContent {
 		t.Fatalf("heartbeat: %d", rec.Code)
+	}
+	if rec := call("POST", runnerTok, "/jobs/not-an-id/heartbeat", job.LeaseID, ""); rec.Code != http.StatusConflict {
+		t.Fatalf("heartbeat of an id that isn't one: %d, want the lease lost as for an unknown run", rec.Code)
 	}
 	if rec := call("POST", runnerTok, "/jobs/"+runID+"/finish", job.LeaseID, `{"status":"bogus"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid status accepted: %d", rec.Code)
@@ -714,7 +718,7 @@ func TestWorkspaceFlow(t *testing.T) {
 	finish(`{"status":"succeeded","outputs":{"id":"abc"},
 		"resources":[{"address":"azurerm_storage_account.this","type":"azurerm_storage_account","name":"this","provider":"registry.terraform.io/hashicorp/azurerm"}]}`)
 	for _, name := range []string{runnerapi.ArtifactPlan, runnerapi.ArtifactLockfile} {
-		if ok, _ := app.StateStore.Exists(ctx, artifactKey(runID, name)); ok {
+		if ok, _ := app.StateStore.Exists(ctx, artifactKey(uuid.MustParse(runID), name)); ok {
 			t.Fatalf("%s must be deleted once applied", name)
 		}
 	}
@@ -796,7 +800,7 @@ func TestWorkspaceFlow(t *testing.T) {
 	runID = strings.TrimPrefix(rec.Header().Get("Location"), "/workspaces/"+name+"/runs/")
 	claimJob("plan")
 	finish(`{"status":"succeeded","plan":{"add":1,"change":0,"destroy":0,"changes":[{"address":"x.y","action":"create"}]}}`)
-	if p, _, _ := store.GetRun(ctx, runID); p.Action != "plan" || p.Status != storage.Planned {
+	if p, _, _ := store.GetRun(ctx, uuid.MustParse(runID)); p.Action != "plan" || p.Status != storage.Planned {
 		t.Fatalf("plan only: %+v", p)
 	}
 
@@ -811,10 +815,10 @@ func TestWorkspaceFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runID = a.ID
+	runID = a.ID.String()
 	claimJob("plan")
 	finish(`{"status":"succeeded","plan":{"add":0,"change":1,"destroy":0,"changes":[{"address":"azurerm_storage_account.this","action":"update"}]}}`)
-	if a, _, _ = store.GetRun(ctx, runID); a.Status != storage.Drifted {
+	if a, _, _ = store.GetRun(ctx, uuid.MustParse(runID)); a.Status != storage.Drifted {
 		t.Fatalf("assessment with drift: %+v", a)
 	}
 	if n, _ := store.QueueAssessments(ctx, time.Hour); n != 0 {
@@ -877,7 +881,7 @@ func TestWorkspaceFlow(t *testing.T) {
 	if rec := post(h, runURL+"/discard", nil); rec.Code != http.StatusSeeOther {
 		t.Fatalf("discard: %d", rec.Code)
 	}
-	if ok, _ := app.StateStore.Exists(ctx, artifactKey(runID, runnerapi.ArtifactPlan)); ok {
+	if ok, _ := app.StateStore.Exists(ctx, artifactKey(uuid.MustParse(runID), runnerapi.ArtifactPlan)); ok {
 		t.Fatal("a discarded plan must be deleted")
 	}
 	destroyRun()
@@ -953,7 +957,7 @@ func TestWorkspaceFlow(t *testing.T) {
 func TestTeamsVariablesRenameCancel(t *testing.T) {
 	store := testStore(t)
 	claimWait = 100 * time.Millisecond
-	store.DB.Exec(`UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
+	store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE run_active(status)`)
 	dir := t.TempDir()
 	os.WriteFile(dir+"/vars.json", []byte(`{"id":"vars","name":"Vars","module":{"source":"git::https://x//m","ref":"v1"},
 		"inputs":[{"name":"location","type":"string","default":"westeurope"}]}`), 0o600)
@@ -964,7 +968,9 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 	outsider := newServerAs(t, dir, false, store, devAuth(t, store, "out@example.com", false, "grp-other"))
 
 	name := "tp-" + strings.ToLower(newID()[:8])
-	t.Cleanup(func() { store.DB.Exec(`DELETE FROM workspaces WHERE name IN ($1, $2)`, name, name+"-renamed") })
+	t.Cleanup(func() {
+		store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE name IN ($1, $2)`, name, name+"-renamed")
+	})
 	rec := post(owner, "/templates/vars", url.Values{"ops-workspace": {name}, "location": {"westeurope"}})
 	runURL := rec.Header().Get("Location")
 	if rec.Code != http.StatusSeeOther {
@@ -1008,7 +1014,7 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 
 	// Variables: workspace ones by operators, sets by admins; sensitive values never shown again.
 	setName := name + "-set"
-	t.Cleanup(func() { store.DB.Exec(`DELETE FROM variable_sets WHERE name = $1`, setName) })
+	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM variable_sets WHERE name = $1`, setName) })
 	for _, v := range []url.Values{
 		{"category": {"env"}, "key": {"ARM_CLIENT_SECRET"}, "value": {"s3cret-ws"}, "sensitive": {"on"}},
 		{"category": {"env"}, "key": {"ARM_CLIENT_ID"}, "value": {"client-ws"}},
@@ -1166,26 +1172,28 @@ func TestRemoteStateSharing(t *testing.T) {
 	app := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true})
 	h := app.Handler()
 	suffix := strings.ToLower(newID()[:8])
-	src, err := store.CreateEmptyWorkspace(ctx, "rs-src-"+suffix, "", false, "")
+	src, err := store.CreateEmptyWorkspace(ctx, "rs-src-"+suffix, "", false, uuid.Nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cons, err := store.CreateEmptyWorkspace(ctx, "rs-cons-"+suffix, "", false, "")
+	cons, err := store.CreateEmptyWorkspace(ctx, "rs-cons-"+suffix, "", false, uuid.Nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { store.DB.Exec(`DELETE FROM workspaces WHERE id::text IN ($1, $2)`, src.ID, cons.ID) })
-	run, err := store.CreateRun(ctx, cons.ID, "apply", "", nil)
+	t.Cleanup(func() {
+		store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE id IN ($1, $2)`, src.ID, cons.ID)
+	})
+	run, err := store.CreateRun(ctx, cons.ID, "apply", uuid.Nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// as if a runner claimed it: the consumer's run is working, so its state credentials are valid
-	if _, err := store.DB.Exec(`UPDATE runs SET status = 'planning', lease_id = 'l', lease_until = now() + interval '1 hour' WHERE id::text = $1`, run.ID); err != nil {
+	if _, err := store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'planning', lease_id = 'l', lease_until = now() + interval '1 hour' WHERE id = $1`, run.ID); err != nil {
 		t.Fatal(err)
 	}
 	state := func(method, token string) int {
-		req := httptest.NewRequest(method, runnerapi.StatePrefix+"/"+src.ID, strings.NewReader(`{"ID":"x"}`))
-		req.SetBasicAuth(cons.ID, token)
+		req := httptest.NewRequest(method, runnerapi.StatePrefix+"/"+src.ID.String(), strings.NewReader(`{"ID":"x"}`))
+		req.SetBasicAuth(cons.ID.String(), token)
 		return do(h, req).Code
 	}
 	share := func(mode string, consumers ...string) {
@@ -1198,7 +1206,7 @@ func TestRemoteStateSharing(t *testing.T) {
 	if c := state("GET", token); c != http.StatusForbidden {
 		t.Fatalf("not shared by default: %d", c)
 	}
-	share("specific", cons.ID, "not-a-uuid", src.ID) // unknown ids and itself are ignored
+	share("specific", cons.ID.String(), "not-a-uuid", src.ID.String()) // unknown ids and itself are ignored
 	if c := state("GET", token); c != http.StatusNoContent {
 		t.Fatalf("shared with the consumer: %d", c)
 	}
@@ -1208,7 +1216,7 @@ func TestRemoteStateSharing(t *testing.T) {
 	if c := state("LOCK", token); c != http.StatusForbidden {
 		t.Fatalf("a consumer must not lock: %d", c)
 	}
-	if body := get(h, "/workspaces/"+src.Name+"/settings").Body.String(); !strings.Contains(body, `value="`+cons.ID+`" checked>`) {
+	if body := get(h, "/workspaces/"+src.Name+"/settings").Body.String(); !strings.Contains(body, `value="`+cons.ID.String()+`" checked>`) {
 		t.Fatal("General settings must show the consumer selected")
 	}
 	share("all")
@@ -1226,7 +1234,7 @@ func TestRemoteStateSharing(t *testing.T) {
 		t.Fatalf("Health save changed sharing: %d", c)
 	}
 	// a pull request's speculative plan runs unreviewed code: no shared state, even when shared with all
-	if _, err := store.DB.Exec(`UPDATE runs SET action = 'plan', vcs_pull_request = 7 WHERE id::text = $1`, run.ID); err != nil {
+	if _, err := store.Pool.Exec(context.Background(), `UPDATE runs SET action = 'plan', vcs_pull_request = 7 WHERE id = $1`, run.ID); err != nil {
 		t.Fatal(err)
 	}
 	if c := state("GET", token); c != http.StatusForbidden {
@@ -1240,14 +1248,14 @@ func TestRemoteStateSharing(t *testing.T) {
 func TestWorkspaceLock(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-	store.DB.Exec(`UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
+	store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE run_active(status)`)
 	alice := newServerAs(t, "../../catalog", false, store, devAuth(t, store, "alice@example.com", true))
 	bob := newServerAs(t, "../../catalog", false, store, devAuth(t, store, "bob@example.com", true))
-	ws, err := store.CreateEmptyWorkspace(ctx, "lk-"+strings.ToLower(newID()[:8]), "", false, "")
+	ws, err := store.CreateEmptyWorkspace(ctx, "lk-"+strings.ToLower(newID()[:8]), "", false, uuid.Nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { store.DB.Exec(`DELETE FROM workspaces WHERE id::text = $1`, ws.ID) })
+	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE id = $1`, ws.ID) })
 	u := "/workspaces/" + ws.Name
 
 	if rec := post(alice, u+"/lock", url.Values{"action": {"lock"}, "reason": {strings.Repeat("x", 301)}}); rec.Code != http.StatusBadRequest {
@@ -1267,7 +1275,7 @@ func TestWorkspaceLock(t *testing.T) {
 	}
 
 	// plans that are never applied run anyway; the runner plans them without the lock
-	assess, err := store.CreateRun(ctx, ws.ID, "assess", "", nil)
+	assess, err := store.CreateRun(ctx, ws.ID, "assess", uuid.Nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1280,7 +1288,7 @@ func TestWorkspaceLock(t *testing.T) {
 	if l, _ := store.GetStateLock(ctx, ws.ID); l == nil {
 		t.Fatal("a drift check's end released the workspace lock")
 	}
-	run, err := store.CreateRun(ctx, ws.ID, "apply", "", nil)
+	run, err := store.CreateRun(ctx, ws.ID, "apply", uuid.Nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 )
 
@@ -32,9 +33,9 @@ const (
 )
 
 type User struct {
-	ID    string `json:"id"`
-	Email string `json:"email"`
-	Role  string `json:"role"` // user | admin
+	ID    uuid.UUID `json:"id"`
+	Email string    `json:"email"`
+	Role  string    `json:"role"` // user | admin
 }
 
 func (u User) Admin() bool { return u.Role == "admin" }
@@ -51,7 +52,7 @@ type Config struct {
 
 // SaveUser records a login (with the IdP's groups, for team access) and returns the user's id.
 // subject is the OIDC issuer and sub, the stable identity ("" for the dev user); email is an attribute.
-type SaveUser func(ctx context.Context, subject, email, role string, groups []string) (string, error)
+type SaveUser func(ctx context.Context, subject, email, role string, groups []string) (uuid.UUID, error)
 
 // ErrEmailTaken is SaveUser's answer when the email belongs to a user bound to another subject (a reassigned address).
 var ErrEmailTaken = errors.New("this email belongs to another identity provider account")

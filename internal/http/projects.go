@@ -2,7 +2,6 @@ package httpserver
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"net/http"
 	"slices"
@@ -192,7 +191,7 @@ func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
 	if err := s.Store.DeleteProject(r.Context(), p.ID); errors.Is(err, storage.ErrProjectNotEmpty) || errors.Is(err, storage.ErrDefaultProject) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
-	} else if err != nil && !errors.Is(err, sql.ErrNoRows) { // gone meanwhile: deleted all the same
+	} else if err != nil && !errors.Is(err, storage.ErrNotFound) { // gone meanwhile: deleted all the same
 		s.internalError(w, "delete project", err)
 		return
 	}
@@ -207,7 +206,7 @@ func (s *Server) moveWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p, err := s.Store.Project(r.Context(), r.PostFormValue("project"))
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, storage.ErrNotFound) {
 		http.Error(w, "no such project", http.StatusBadRequest)
 		return
 	}
@@ -215,7 +214,7 @@ func (s *Server) moveWorkspace(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "get project", err)
 		return
 	}
-	if err := s.Store.MoveWorkspace(r.Context(), ws.ID, p.ID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+	if err := s.Store.MoveWorkspace(r.Context(), ws.ID, p.ID); err != nil && !errors.Is(err, storage.ErrNotFound) {
 		s.internalError(w, "move workspace", err)
 		return
 	}

@@ -3,7 +3,6 @@ package vcs
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -41,7 +40,7 @@ func catalogFiles(files []file, dir string) map[string][]byte {
 // with no repository configured it leaves cat as it is (TEMPLATES_DIR).
 func LoadCatalog(ctx context.Context, st *storage.Store, cat *templates.Catalog) error {
 	tc, err := st.GetTemplateCatalog(ctx)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, storage.ErrNotFound) {
 		return nil
 	}
 	if err != nil {
@@ -67,7 +66,7 @@ func loadSnapshot(cat *templates.Catalog, tc storage.TemplateCatalog) error {
 // recorded as the sync error and not loaded: the catalog keeps the last good commit.
 func SyncCatalog(ctx context.Context, st *storage.Store, key []byte, cat *templates.Catalog) error {
 	tc, err := st.GetTemplateCatalog(ctx)
-	if errors.Is(err, sql.ErrNoRows) { // disconnected, maybe by another instance
+	if errors.Is(err, storage.ErrNotFound) { // disconnected, maybe by another instance
 		if mode, _ := cat.Source(); mode != "" {
 			return cat.Reopen()
 		}
@@ -194,7 +193,7 @@ func DeleteTemplate(ctx context.Context, st *storage.Store, key []byte, cat *tem
 // writeTemplate commits body as template id's file; a nil body deletes it.
 func writeTemplate(ctx context.Context, st *storage.Store, key []byte, cat *templates.Catalog, id, name string, body []byte, by string) (string, error) {
 	tc, err := st.GetTemplateCatalog(ctx)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, storage.ErrNotFound) {
 		return "", errors.New("the template catalog is not a Git repository")
 	}
 	if err != nil {

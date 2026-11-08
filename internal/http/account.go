@@ -49,7 +49,8 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request) {
 // revokeToken revokes one of the user's own tokens; at once, since every request checks it.
 func (s *Server) revokeToken(w http.ResponseWriter, r *http.Request) {
 	u := auth.FromContext(r.Context())
-	if err := s.Store.RevokeUserToken(r.Context(), u.ID, r.PathValue("id")); err != nil {
+	id, _ := pathID(r, "id") // not an id: revokes nothing, as for an unknown one
+	if err := s.Store.RevokeUserToken(r.Context(), u.ID, id); err != nil {
 		s.internalError(w, "revoke token", err)
 		return
 	}

@@ -7,7 +7,6 @@ import (
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +15,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/google/uuid"
 	"gocloud.dev/blob"
 
 	"github.com/opsolete/opsolete/internal/runnerapi"
@@ -41,27 +41,28 @@ func (s *Server) stateRoutes(mux *http.ServeMux) {
 
 // stateToken is a run's state password. It is per run, not per phase: Terraform embeds the backend
 // config in the saved plan, so the apply phase authenticates with what the plan phase used.
-func (s *Server) stateToken(workspaceID, runID string) string {
+func (s *Server) stateToken(workspaceID, runID uuid.UUID) string {
 	m := hmac.New(sha256.New, s.Registry.Key)
-	m.Write([]byte("opsolete state\x00" + workspaceID + "\x00" + runID))
+	m.Write([]byte("opsolete state\x00" + workspaceID.String() + "\x00" + runID.String()))
 	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
 
 func (s *Server) stateAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		user, pass, ok := r.BasicAuth()
+		id, _ := pathID(r, "id")
+		username, pass, ok := r.BasicAuth()
 		if !ok {
 			http.Error(w, "state credentials required", http.StatusUnauthorized)
 			return
 		}
+		user, _ := parseID(username) // not an id: no run works on it, as for an unknown one
 		// terraform_remote_state: another workspace's run reads this state, never writes or locks it
 		if user != id && r.Method != http.MethodGet {
 			http.Error(w, "only this workspace's runs may change its state", http.StatusForbidden)
 			return
 		}
 		run, status, pullRequest, err := s.Store.WorkingRun(r.Context(), user)
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, storage.ErrNotFound) {
 			http.Error(w, "no run is working on this workspace", http.StatusForbidden)
 			return
 		}
@@ -95,13 +96,14 @@ func (s *Server) stateAuth(next http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 		}
-		r.SetPathValue("run", run) // the authenticated run, for lockState and putState
+		r.SetPathValue("run", run.String()) // the authenticated run, for lockState and putState
 		next(w, r)
 	}
 }
 
 func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
-	vs, err := s.Store.StateVersions(r.Context(), r.PathValue("id"), 1)
+	id, _ := pathID(r, "id") // stateAuth checked it
+	vs, err := s.Store.StateVersions(r.Context(), id, 1)
 	if err != nil {
 		s.internalError(w, "list state versions", err)
 		return
@@ -121,9 +123,11 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
 	// not canceled on SIGTERM: a lost state write orphans the resources the apply just created
-	ctx, id := context.WithoutCancel(r.Context()), r.PathValue("id")
+	ctx := context.WithoutCancel(r.Context())
+	id, _ := pathID(r, "id") // stateAuth checked both
+	run, _ := pathID(r, "run")
 	// the lock this run took, not just its ID: a 423 shows other locks' IDs to any run
-	if locked, err := s.Store.StateLockedBy(ctx, id, r.URL.Query().Get("ID"), r.PathValue("run")); err != nil {
+	if locked, err := s.Store.StateLockedBy(ctx, id, r.URL.Query().Get("ID"), run); err != nil {
 		s.internalError(w, "state lock", err)
 		return
 	} else if !locked {
@@ -143,7 +147,7 @@ func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Content-MD5 mismatch", http.StatusBadRequest)
 		return
 	}
-	if code, msg := s.saveState(ctx, id, r.PathValue("run"), "", body); code != http.StatusOK {
+	if code, msg := s.saveState(ctx, id, run, "", body); code != http.StatusOK {
 		http.Error(w, msg, code)
 		return
 	}
@@ -152,8 +156,8 @@ func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
 
 // saveState stores body as the workspace's new current state version, unless it's the same as the
 // current one. The caller holds the state lock; runID is the run writing it, cloudUser the cloud API
-// user (see AddStateVersion; both "" for rollbacks). It returns 200, or an error status and message.
-func (s *Server) saveState(ctx context.Context, id, runID, cloudUser string, body []byte) (int, string) {
+// user (see AddStateVersion; uuid.Nil and "" for rollbacks). It returns 200, or an error status and message.
+func (s *Server) saveState(ctx context.Context, id, runID uuid.UUID, cloudUser string, body []byte) (int, string) {
 	sum := md5.Sum(body)
 	// Only the fields needed to version the file and show its outputs; the rest is Terraform's business.
 	var head struct {
@@ -260,7 +264,9 @@ func (s *Server) lockState(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	held, ok, err := s.Store.LockState(r.Context(), r.PathValue("id"), lockID, r.PathValue("run"), info)
+	id, _ := pathID(r, "id") // stateAuth checked both
+	run, _ := pathID(r, "run")
+	held, ok, err := s.Store.LockState(r.Context(), id, lockID, run, info)
 	if err != nil {
 		s.internalError(w, "lock state", err)
 		return
@@ -279,7 +285,9 @@ func (s *Server) unlockState(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.Store.UnlockState(r.Context(), r.PathValue("id"), lockID, r.PathValue("run")); err != nil {
+	id, _ := pathID(r, "id") // stateAuth checked both
+	run, _ := pathID(r, "run")
+	if err := s.Store.UnlockState(r.Context(), id, lockID, run); err != nil {
 		s.internalError(w, "unlock state", err)
 		return
 	}

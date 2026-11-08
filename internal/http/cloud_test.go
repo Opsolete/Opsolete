@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/opsolete/opsolete/internal/storage"
 )
 
@@ -114,10 +116,10 @@ func TestCloudLoginAndState(t *testing.T) {
 	}
 
 	// Local execution starts no runs; remote execution gives the CLI no lock.
-	if _, err := store.CreateRun(t.Context(), id, "apply", "", nil); !errors.Is(err, storage.ErrLocalExecution) {
+	if _, err := store.CreateRun(t.Context(), uuid.MustParse(id), "apply", uuid.Nil, nil); !errors.Is(err, storage.ErrLocalExecution) {
 		t.Fatalf("run on a local workspace: %v", err)
 	}
-	if err := store.SetExecutionMode(t.Context(), id, "remote"); err != nil {
+	if err := store.SetExecutionMode(t.Context(), uuid.MustParse(id), "remote"); err != nil {
 		t.Fatal(err)
 	}
 	if rec := api("POST", "/workspaces/"+id+"/actions/lock", ""); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "remote execution") {
@@ -128,12 +130,15 @@ func TestCloudLoginAndState(t *testing.T) {
 	}
 
 	// Another (non-admin) user's workspace is invisible.
-	other, err := store.CreateEmptyWorkspace(t.Context(), "cli-other-"+newID()[:8], "", false, "")
+	other, err := store.CreateEmptyWorkspace(t.Context(), "cli-other-"+newID()[:8], "", false, uuid.Nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rec := api("POST", "/workspaces/"+other.ID+"/actions/lock", ""); rec.Code != 404 {
+	if rec := api("POST", "/workspaces/"+other.ID.String()+"/actions/lock", ""); rec.Code != 404 {
 		t.Fatalf("lock without access: %d", rec.Code)
+	}
+	if rec := api("POST", "/workspaces/not-an-id/actions/lock", ""); rec.Code != 404 {
+		t.Fatalf("lock of an id that isn't one: %d", rec.Code)
 	}
 	if rec := do(h, httptest.NewRequest("GET", cloudPrefix+"/organizations/acme/workspaces/"+name, nil)); rec.Code != 401 {
 		t.Fatalf("no token: %d", rec.Code)

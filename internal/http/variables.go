@@ -2,13 +2,14 @@ package httpserver
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/opsolete/opsolete/internal/auth"
 	"github.com/opsolete/opsolete/internal/storage"
@@ -104,7 +105,7 @@ func (s *Server) varsBlock(ctx context.Context, o storage.VarOwner, base string,
 	vars, err := s.Store.Variables(ctx, o)
 	b := varsBlock{Base: base, CanEdit: canEdit}
 	for _, v := range vars {
-		vv := varView{ID: v.ID, Category: v.Category, Key: v.Key, Sensitive: v.Sensitive}
+		vv := varView{ID: v.ID.String(), Category: v.Category, Key: v.Key, Sensitive: v.Sensitive}
 		if !v.Sensitive {
 			if vv.Value, err = vcs.Open(s.SecretKey, v.Value, vcs.VariableAD(v)); err != nil {
 				vv.Value, err = "(can't decrypt: SECRET_KEY changed? Set it again)", nil
@@ -117,7 +118,7 @@ func (s *Server) varsBlock(ctx context.Context, o storage.VarOwner, base string,
 
 // runVariables opens the variables of a workspace's run: environment variables for Terraform's
 // environment, and Terraform variables.
-func (s *Server) runVariables(ctx context.Context, workspaceID string) (env map[string]string, vars map[string]any, secrets []string, err error) {
+func (s *Server) runVariables(ctx context.Context, workspaceID uuid.UUID) (env map[string]string, vars map[string]any, secrets []string, err error) {
 	list, err := s.Store.RunVariables(ctx, workspaceID)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("load variables: %w", err)
@@ -163,11 +164,12 @@ func (s *Server) deleteWorkspaceVariable(w http.ResponseWriter, r *http.Request)
 	if !ok {
 		return
 	}
-	if err := s.Store.DeleteVariable(r.Context(), storage.VarOwner{WorkspaceID: ws.ID}, r.PathValue("id")); err != nil {
+	id, _ := pathID(r, "id") // not an id: deletes nothing, as for an unknown one
+	if err := s.Store.DeleteVariable(r.Context(), storage.VarOwner{WorkspaceID: ws.ID}, id); err != nil {
 		s.internalError(w, "delete variable", err)
 		return
 	}
-	s.Log.Info("variable deleted", "workspace", ws.Name, "id", r.PathValue("id"), "user", auth.FromContext(r.Context()).Email)
+	s.Log.Info("variable deleted", "workspace", ws.Name, "id", id, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/variables", http.StatusSeeOther)
 }
 
@@ -188,15 +190,15 @@ func (s *Server) createVariableSet(w http.ResponseWriter, r *http.Request) {
 	}
 	// created from a project's or workspace's page: attach it there too, checked first so a bad name leaves no set behind
 	ctx, project, ws := r.Context(), r.PostFormValue("project"), r.PostFormValue("workspace")
-	attach := func(string) error { return nil }
+	attach := func(uuid.UUID) error { return nil }
 	exists, err := true, error(nil)
 	switch {
 	case project != "":
 		exists, err = s.Store.ProjectsExist(ctx, []string{project})
-		attach = func(id string) error { return s.Store.AttachVariableSetProject(ctx, id, project, true) }
+		attach = func(id uuid.UUID) error { return s.Store.AttachVariableSetProject(ctx, id, project, true) }
 	case ws != "":
 		exists, err = s.Store.WorkspacesExist(ctx, []string{ws})
-		attach = func(id string) error { return s.Store.AttachVariableSet(ctx, id, ws, true) }
+		attach = func(id uuid.UUID) error { return s.Store.AttachVariableSet(ctx, id, ws, true) }
 	}
 	if err != nil {
 		s.internalError(w, "check attach target", err)
@@ -229,7 +231,7 @@ func (s *Server) createVariableSet(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) loadSet(w http.ResponseWriter, r *http.Request) (storage.VariableSet, bool) {
 	set, err := s.Store.GetVariableSet(r.Context(), r.PathValue("set"))
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, storage.ErrNotFound) {
 		http.NotFound(w, r)
 		return set, false
 	}
@@ -319,11 +321,12 @@ func (s *Server) deleteSetVariable(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.Store.DeleteVariable(r.Context(), storage.VarOwner{SetID: set.ID}, r.PathValue("id")); err != nil {
+	id, _ := pathID(r, "id") // not an id: deletes nothing, as for an unknown one
+	if err := s.Store.DeleteVariable(r.Context(), storage.VarOwner{SetID: set.ID}, id); err != nil {
 		s.internalError(w, "delete variable", err)
 		return
 	}
-	s.Log.Info("variable deleted", "set", set.Name, "id", r.PathValue("id"), "user", auth.FromContext(r.Context()).Email)
+	s.Log.Info("variable deleted", "set", set.Name, "id", id, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/variable-sets/"+set.Name, http.StatusSeeOther)
 }
 
@@ -336,7 +339,7 @@ func (s *Server) attachVariableSet(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 	want := r.PostForm["workspace"]
 	err := s.Store.Select(r.Context(), set.ID, storage.Pick{Selection: storage.SetWorkspaces, Names: want})
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, storage.ErrNotFound) {
 		http.Error(w, "choose existing workspaces", http.StatusBadRequest)
 		return
 	}
@@ -356,7 +359,7 @@ func (s *Server) attachVariableSetProjects(w http.ResponseWriter, r *http.Reques
 	}
 	want := r.PostForm["project"]
 	err := s.Store.Select(r.Context(), set.ID, storage.Pick{Selection: storage.SetProjects, Names: want})
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, storage.ErrNotFound) {
 		http.Error(w, "choose existing projects", http.StatusBadRequest)
 		return
 	}

@@ -3,13 +3,14 @@ package httpserver
 import (
 	"cmp"
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/opsolete/opsolete/internal/auth"
 	"github.com/opsolete/opsolete/internal/storage"
@@ -51,8 +52,8 @@ type rolloutPage struct {
 }
 
 // rolloutPlan sorts t's uses into rows, and the upgrades of the ready ones by workspace id.
-func (s *Server) rolloutPlan(t templates.Template, uses []storage.TemplateUse) ([]rolloutRow, map[string][]storage.TemplateUpgrade, error) {
-	rows, ups := make([]rolloutRow, len(uses)), map[string][]storage.TemplateUpgrade{}
+func (s *Server) rolloutPlan(t templates.Template, uses []storage.TemplateUse) ([]rolloutRow, map[uuid.UUID][]storage.TemplateUpgrade, error) {
+	rows, ups := make([]rolloutRow, len(uses)), map[uuid.UUID][]storage.TemplateUpgrade{}
 	for i, u := range uses {
 		rows[i] = rolloutRow{TemplateUse: u}
 		row := &rows[i]
@@ -77,7 +78,7 @@ func (s *Server) rolloutPlan(t templates.Template, uses []storage.TemplateUse) (
 		switch {
 		case len(row.Missing) > 0:
 			row.State = rolloutNeedsInput
-		case u.RunID != "":
+		case u.RunID != uuid.Nil:
 			row.State = rolloutBusy
 		default:
 			row.State = rolloutReady
@@ -165,7 +166,7 @@ func (s *Server) tickRollout(ctx context.Context, ro storage.Rollout) error {
 		switch {
 		case errors.Is(err, storage.ErrRolloutClosed):
 			return nil
-		case errors.Is(err, storage.ErrRunActive), errors.Is(err, storage.ErrLocalExecution), errors.Is(err, sql.ErrNoRows):
+		case errors.Is(err, storage.ErrRunActive), errors.Is(err, storage.ErrLocalExecution), errors.Is(err, storage.ErrNotFound):
 			continue // changed meanwhile: the next turn sees it as it is now
 		case err != nil: // the others may still go through
 			s.Log.Error("template rollout", "workspace", r.Workspace, "err", err)
@@ -207,10 +208,10 @@ func (s *Server) rolloutPage(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "projects", err)
 		return
 	}
-	projectID := ""
+	var projectID uuid.UUID
 	if page.Project != "" {
 		p, err := s.Store.Project(ctx, page.Project)
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, storage.ErrNotFound) {
 			http.Error(w, "no such project", http.StatusNotFound)
 			return
 		} else if err != nil {
@@ -228,7 +229,7 @@ func (s *Server) rolloutPage(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "rollout inputs", err)
 		return
 	}
-	seen := map[string]bool{}
+	seen := map[uuid.UUID]bool{}
 	for _, row := range page.Rows {
 		if (row.State == rolloutReady || row.State == rolloutBusy) && !seen[row.WorkspaceID] {
 			seen[row.WorkspaceID] = true
@@ -243,7 +244,7 @@ func (s *Server) rolloutPage(w http.ResponseWriter, r *http.Request) {
 			s.internalError(w, "rollout runs", err)
 			return
 		}
-	case !errors.Is(err, sql.ErrNoRows):
+	case !errors.Is(err, storage.ErrNotFound):
 		s.internalError(w, "rollout", err)
 		return
 	}
@@ -267,10 +268,10 @@ func (s *Server) startRollout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the batch size is a whole number, 0 for all at once", http.StatusBadRequest)
 		return
 	}
-	name, projectID := r.PostFormValue("project"), ""
+	name, projectID := r.PostFormValue("project"), uuid.Nil
 	if name != "" {
 		p, err := s.Store.Project(ctx, name)
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, storage.ErrNotFound) {
 			http.Error(w, "no such project", http.StatusBadRequest)
 			return
 		} else if err != nil {
@@ -309,7 +310,7 @@ func (s *Server) rolloutAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ro, err := s.Store.LatestRollout(ctx, t.ID)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, storage.ErrNotFound) {
 		http.NotFound(w, r)
 		return
 	} else if err != nil {

@@ -1,7 +1,6 @@
 package httpserver
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,7 +44,7 @@ func (s *Server) deleteModule(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := s.Store.DeleteModule(r.Context(), ns, name, sys); errors.Is(err, sql.ErrNoRows) {
+	if err := s.Store.DeleteModule(r.Context(), ns, name, sys); errors.Is(err, storage.ErrNotFound) {
 		http.NotFound(w, r)
 		return
 	} else if err != nil {
@@ -100,7 +99,7 @@ func (s *Server) moduleVersions(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) moduleDownload(w http.ResponseWriter, r *http.Request) {
 	ns, name, sys, ver := r.PathValue("ns"), r.PathValue("name"), r.PathValue("system"), r.PathValue("version")
-	if _, err := s.Store.GetModule(r.Context(), ns, name, sys, ver); errors.Is(err, sql.ErrNoRows) {
+	if _, err := s.Store.GetModule(r.Context(), ns, name, sys, ver); errors.Is(err, storage.ErrNotFound) {
 		writeErrors(w, http.StatusNotFound, "module version not found")
 		return
 	} else if err != nil {
@@ -121,7 +120,7 @@ func (s *Server) moduleArchive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b, err := s.Store.ModuleArchive(r.Context(), r.PathValue("ns"), r.PathValue("name"), r.PathValue("system"), ver)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, storage.ErrNotFound) {
 		http.NotFound(w, r)
 		return
 	}
@@ -258,7 +257,7 @@ func (s *Server) uploadModule(w http.ResponseWriter, r *http.Request) {
 func (s *Server) moduleDocs(w http.ResponseWriter, r *http.Request) {
 	ns, name, sys, ver := r.PathValue("ns"), r.PathValue("name"), r.PathValue("system"), r.PathValue("version")
 	docs, err := s.Store.GetModuleDocs(r.Context(), ns, name, sys, ver)
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, storage.ErrNotFound) {
 		http.NotFound(w, r)
 		return
 	}
@@ -295,7 +294,7 @@ func (s *Server) moduleDocs(w http.ResponseWriter, r *http.Request) {
 	if s.Features.VCS {
 		if m, err := s.Store.GetVCSModule(r.Context(), ns, name, sys); err == nil {
 			linked = &m
-		} else if !errors.Is(err, sql.ErrNoRows) {
+		} else if !errors.Is(err, storage.ErrNotFound) {
 			s.internalError(w, "get vcs module", err)
 			return
 		}

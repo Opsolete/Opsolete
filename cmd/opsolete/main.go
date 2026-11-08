@@ -68,7 +68,7 @@ func openStore(ctx context.Context, cfg config.Config) (*storage.Store, error) {
 		return nil, err
 	}
 	if err := store.Migrate(ctx); err != nil {
-		store.DB.Close()
+		store.Close()
 		return nil, err
 	}
 	store.AuditKey = []byte(cfg.SecretKey)
@@ -93,7 +93,7 @@ func rotateKey(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	defer store.DB.Close()
+	defer store.Close()
 	var state *blob.Bucket
 	if cfg.StateStore != "" {
 		if state, err = blob.OpenBucket(ctx, cfg.StateStore); err != nil {
@@ -123,7 +123,7 @@ func createToken() error {
 	if err != nil {
 		return err
 	}
-	defer store.DB.Close()
+	defer store.Close()
 	token, err := store.CreateToken(ctx, os.Args[2], scope)
 	if err != nil {
 		return err
@@ -170,7 +170,7 @@ func serve(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	defer store.DB.Close()
+	defer store.Close()
 
 	key, err := store.SigningKey(ctx)
 	if err != nil {

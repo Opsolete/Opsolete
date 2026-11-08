@@ -157,8 +157,8 @@ func TestTemplateCatalogInGit(t *testing.T) {
 	id := strings.ToLower(newID()[:8])
 	connName := "cat-" + id
 	t.Cleanup(func() {
-		store.DB.Exec(`DELETE FROM template_catalog`)
-		store.DB.Exec(`DELETE FROM vcs_connections WHERE name IN ($1, $2)`, connName, connName+"-b")
+		store.Pool.Exec(context.Background(), `DELETE FROM template_catalog`)
+		store.Pool.Exec(context.Background(), `DELETE FROM vcs_connections WHERE name IN ($1, $2)`, connName, connName+"-b")
 	})
 	g := &fakeGitRepo{branches: map[string]string{}, commits: map[string]map[string]string{}}
 	g.commit("main", map[string]string{"catalog/web.json": tplJSON("web-"+id, "Web"), "README.md": "not a template"})
@@ -174,7 +174,7 @@ func TestTemplateCatalogInGit(t *testing.T) {
 		t.Fatalf("connect: %d %s", rec.Code, rec.Body.String())
 	}
 	var connID string
-	store.DB.QueryRow(`SELECT id FROM vcs_connections WHERE name = $1`, connName).Scan(&connID)
+	store.Pool.QueryRow(context.Background(), `SELECT id FROM vcs_connections WHERE name = $1`, connName).Scan(&connID)
 	if rec := get(h, "/templates/new"); rec.Code != http.StatusNotFound {
 		t.Fatalf("no editor before a catalog is set up: %d", rec.Code)
 	}
@@ -201,7 +201,7 @@ func TestTemplateCatalogInGit(t *testing.T) {
 		t.Fatalf("connect another: %d %s", rec.Code, rec.Body.String())
 	}
 	var otherID string
-	store.DB.QueryRow(`SELECT id FROM vcs_connections WHERE name = $1`, connName+"-b").Scan(&otherID)
+	store.Pool.QueryRow(context.Background(), `SELECT id FROM vcs_connections WHERE name = $1`, connName+"-b").Scan(&otherID)
 	if page := get(h, "/catalog?connection="+otherID).Body.String(); strings.Contains(page, `<option value="acme/catalog" selected>`) ||
 		strings.Contains(page, `id="dir" name="dir" value="catalog"`) {
 		t.Fatalf("saved settings carried to another connection: %s", page)
@@ -212,14 +212,14 @@ func TestTemplateCatalogInGit(t *testing.T) {
 		t.Fatalf("used by: %s", page)
 	}
 	var before, after []byte
-	store.DB.QueryRow(`SELECT token FROM vcs_connections WHERE id = $1`, connID).Scan(&before)
+	store.Pool.QueryRow(context.Background(), `SELECT token FROM vcs_connections WHERE id = $1`, connID).Scan(&before)
 	if rec := post(h, "/vcs/"+connID+"/token", url.Values{"token": {"wrong"}}); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "connection check failed") {
 		t.Fatalf("bad token replaced: %d", rec.Code)
 	}
 	if rec := post(h, "/vcs/"+connID+"/token", url.Values{"token": {"pat"}}); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/vcs/"+connID+"/settings?token" {
 		t.Fatalf("replace token: %d %s", rec.Code, rec.Body.String())
 	}
-	store.DB.QueryRow(`SELECT token FROM vcs_connections WHERE id = $1`, connID).Scan(&after)
+	store.Pool.QueryRow(context.Background(), `SELECT token FROM vcs_connections WHERE id = $1`, connID).Scan(&after)
 	if bytes.Equal(before, after) || strings.Contains(string(after), "pat") {
 		t.Fatal("the new token must be stored sealed")
 	}
@@ -257,7 +257,7 @@ func TestTemplateCatalogInGit(t *testing.T) {
 		t.Fatalf("a refused save reloads the catalog: %+v", tpl)
 	}
 	// An earlier failure (say, the provider was down) clears once a sync finds the branch still at the loaded commit.
-	store.DB.Exec(`UPDATE template_catalog SET sync_error = 'provider unavailable'`)
+	store.Pool.Exec(context.Background(), `UPDATE template_catalog SET sync_error = 'provider unavailable'`)
 	if rec := post(h, "/catalog/sync", nil); rec.Code != http.StatusSeeOther {
 		t.Fatalf("sync: %d", rec.Code)
 	}

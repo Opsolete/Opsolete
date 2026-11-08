@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/google/uuid"
 	"gocloud.dev/gcerrors"
 
 	"github.com/opsolete/opsolete/internal/auth"
@@ -172,7 +172,7 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "list projects", err)
 		return
 	}
-	id := newID() // sensitive inputs are sealed to the workspace's id and module name
+	id := uuid.New() // sensitive inputs are sealed to the workspace's id and module name
 	module := defaultModule(t, raw, nil)
 	if err := s.sealInputs(t, raw, vals, nil, errs, id, module); err != nil {
 		page.Error = err.Error()
@@ -194,7 +194,7 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Log.Info("workspace created", "workspace", ws.Name, "template", t.ID, "run", run.ID, "user", u.Email)
-	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID, http.StatusSeeOther)
+	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID.String(), http.StatusSeeOther)
 }
 
 // workspaces lists the workspaces the user may see; ?project= (a name) filters by project.
@@ -217,7 +217,7 @@ func (s *Server) workspaces(w http.ResponseWriter, r *http.Request) {
 // writes a 404 (no access looks like no workspace), 403 or 500 and returns ok=false otherwise.
 func (s *Server) loadWorkspace(w http.ResponseWriter, r *http.Request, need string) (ws storage.Workspace, level string, ok bool) {
 	ws, err := s.Store.GetWorkspace(r.Context(), r.PathValue("name"))
-	if errors.Is(err, sql.ErrNoRows) {
+	if errors.Is(err, storage.ErrNotFound) {
 		http.NotFound(w, r)
 		return ws, "", false
 	}
@@ -254,8 +254,9 @@ func (s *Server) loadRun(w http.ResponseWriter, r *http.Request, need string) (s
 	if !ok {
 		return ws, storage.Run{}, nil, "", false
 	}
-	run, hist, err := s.Store.GetRun(r.Context(), r.PathValue("run"))
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && run.WorkspaceID != ws.ID) {
+	id, _ := pathID(r, "run") // not an id: not found
+	run, hist, err := s.Store.GetRun(r.Context(), id)
+	if errors.Is(err, storage.ErrNotFound) || (err == nil && run.WorkspaceID != ws.ID) {
 		http.NotFound(w, r)
 		return ws, run, nil, "", false
 	}
@@ -312,7 +313,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		if a.Active() { // a drift check holds the workspace like any run
 			active = assessment
 		}
-	} else if !errors.Is(err, sql.ErrNoRows) {
+	} else if !errors.Is(err, storage.ErrNotFound) {
 		s.internalError(w, "latest assessment", err)
 		return
 	}
@@ -325,7 +326,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "state lock", err)
 		return
 	}
-	data := map[string]any{"W": ws, "Lock": lock, "Me": auth.FromContext(ctx).ID, "Runs": runs, "Active": active, "Current": current, "Page": page,
+	data := map[string]any{"W": ws, "Lock": lock, "Me": auth.FromContext(ctx).ID.String(), "Runs": runs, "Active": active, "Current": current, "Page": page,
 		"Resources": res, "Versions": versions, "Outputs": outputs, "Destroyed": destroyed,
 		"Assessment": assessment, "CanOperate": level == levelOperate, "Admin": auth.FromContext(ctx).Admin()}
 
@@ -482,15 +483,15 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 				s.internalError(w, "list workspaces", err)
 				return
 			}
-			seen := map[string]bool{ws.ID: true}
+			seen := map[uuid.UUID]bool{ws.ID: true}
 			for _, c := range cur {
 				seen[c.ID] = true
-				stateConsumers.Items = append(stateConsumers.Items, pickerItem{c.ID, c.Name, true})
+				stateConsumers.Items = append(stateConsumers.Items, pickerItem{c.ID.String(), c.Name, true})
 				stateConsumers.Selected++
 			}
 			for _, o := range all {
 				if !seen[o.ID] {
-					stateConsumers.Items = append(stateConsumers.Items, pickerItem{o.ID, o.Name, false})
+					stateConsumers.Items = append(stateConsumers.Items, pickerItem{o.ID.String(), o.Name, false})
 				}
 			}
 		}
@@ -503,7 +504,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		maps.Copy(data, map[string]any{"Grants": grants, "Groups": groups, "StateConsumers": stateConsumers, "Projects": projects,
-			"StateAddress": s.Registry.PublicURL.JoinPath(runnerapi.StatePrefix, ws.ID).String()})
+			"StateAddress": s.Registry.PublicURL.JoinPath(runnerapi.StatePrefix, ws.ID.String()).String()})
 	}
 	s.render(w, r, http.StatusOK, "workspace.html", data)
 }
@@ -629,7 +630,7 @@ func (s *Server) newRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Log.Info("run queued", "workspace", ws.Name, "run", run.ID, "action", action, "user", u.Email)
-	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID, http.StatusSeeOther)
+	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID.String(), http.StatusSeeOther)
 }
 
 // workspaceSettings saves the General (name, execution mode, auto-apply, remote state sharing) and Health pages. A new name changes
@@ -645,7 +646,12 @@ func (s *Server) workspaceSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	set := storage.Settings{AutoApply: r.PostFormValue("auto_apply") != "", DriftDetection: r.PostFormValue("drift_detection") != "",
-		ExecutionMode: mode, Consumers: r.PostForm["remote_state_consumers"]}
+		ExecutionMode: mode}
+	for _, v := range r.PostForm["remote_state_consumers"] {
+		if id, ok := parseID(v); ok { // not an id: ignored, as unknown ids are
+			set.Consumers = append(set.Consumers, id)
+		}
+	}
 	if sharing := r.PostFormValue("remote_state"); sharing != "" { // General page only
 		set.Sharing, set.Global = true, sharing == "all"
 	}
@@ -713,20 +719,20 @@ func (s *Server) lockWorkspace(w http.ResponseWriter, r *http.Request) {
 
 // userLock takes the state lock of a workspace for u, as the cloud block's CLI does; false if it's
 // already locked. Shared by the Locking page and the cloud API.
-func (s *Server) userLock(ctx context.Context, wsID string, u auth.User, operation, reason string) (bool, error) {
+func (s *Server) userLock(ctx context.Context, wsID uuid.UUID, u auth.User, operation, reason string) (bool, error) {
 	lockID := storage.CloudLockPrefix + rand.Text()
-	info := map[string]string{"ID": lockID, "Operation": operation, "Who": u.Email, "UserID": u.ID, "Created": time.Now().UTC().Format(time.RFC3339)}
+	info := map[string]string{"ID": lockID, "Operation": operation, "Who": u.Email, "UserID": u.ID.String(), "Created": time.Now().UTC().Format(time.RFC3339)}
 	if reason != "" {
 		info["Info"] = reason
 	}
 	b, _ := json.Marshal(info)
-	_, ok, err := s.Store.LockState(ctx, wsID, lockID, "", b)
+	_, ok, err := s.Store.LockState(ctx, wsID, lockID, uuid.Nil, b)
 	return ok, err
 }
 
 // userUnlock releases u's own user lock, or anyone's (force); run and rollback locks end with them.
-func (s *Server) userUnlock(ctx context.Context, wsID string, u auth.User, force bool) error {
-	holder := u.ID
+func (s *Server) userUnlock(ctx context.Context, wsID uuid.UUID, u auth.User, force bool) error {
+	holder := u.ID.String()
 	if force {
 		holder = ""
 	}
@@ -743,7 +749,7 @@ func (s *Server) deleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	force := r.PostFormValue("force") != ""
 	keys, err := s.Store.DeleteWorkspace(r.Context(), ws.ID, force)
 	switch {
-	case errors.Is(err, sql.ErrNoRows): // deleted meanwhile
+	case errors.Is(err, storage.ErrNotFound): // deleted meanwhile
 		http.NotFound(w, r)
 		return
 	case errors.Is(err, storage.ErrRunActive), errors.Is(err, storage.ErrHasResources), errors.Is(err, storage.ErrStateLocked):
@@ -937,7 +943,7 @@ func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request) {
 		s.DeleteArtifacts(context.WithoutCancel(r.Context()), run.ID)
 	}
 	s.Log.Info("run cancel", "workspace", ws.Name, "run", run.ID, "status", status, "user", u.Email)
-	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID, http.StatusSeeOther)
+	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID.String(), http.StatusSeeOther)
 }
 
 func (s *Server) confirmRun(w http.ResponseWriter, r *http.Request) { s.decideRun(w, r, true) }
@@ -968,7 +974,7 @@ func (s *Server) decideRun(w http.ResponseWriter, r *http.Request, confirm bool)
 		s.DeleteArtifacts(context.WithoutCancel(r.Context()), run.ID)
 	}
 	s.Log.Info("run decided", "workspace", ws.Name, "run", run.ID, "confirmed", confirm, "user", u.Email)
-	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID, http.StatusSeeOther)
+	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID.String(), http.StatusSeeOther)
 }
 
 func (s *Server) logText(w http.ResponseWriter, r *http.Request) {
