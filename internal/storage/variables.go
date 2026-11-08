@@ -192,43 +192,28 @@ func (s *Store) DeleteVariableSet(ctx context.Context, id string) error {
 // AttachVariableSet applies a set to the named workspace, or stops applying it (attach=false).
 // It returns sql.ErrNoRows for an unknown workspace.
 func (s *Store) AttachVariableSet(ctx context.Context, setID, workspace string, attach bool) error {
-	q := `INSERT INTO variable_set_workspaces (set_id, workspace_id) SELECT $1::uuid, id FROM workspaces WHERE name = $2
-		ON CONFLICT DO NOTHING`
-	if !attach {
-		q = `DELETE FROM variable_set_workspaces WHERE set_id = $1::uuid AND workspace_id = (SELECT id FROM workspaces WHERE name = $2)`
-	}
-	if _, err := s.DB.ExecContext(ctx, q, setID, workspace); err != nil {
-		return err
-	}
-	var ok bool
-	if err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM workspaces WHERE name = $1)`, workspace).Scan(&ok); err != nil {
-		return err
-	}
-	if !ok {
-		return sql.ErrNoRows
-	}
-	return nil
+	return s.attachTo(ctx, "variable_set_workspaces", "set_id", setID, "workspace", workspace, attach)
 }
 
 // AttachVariableSetProject applies a set to the workspaces of the named project, or stops (attach=false).
 // It returns sql.ErrNoRows for an unknown project.
 func (s *Store) AttachVariableSetProject(ctx context.Context, setID, project string, attach bool) error {
-	return s.attachProject(ctx, "variable_set_projects", "set_id", setID, project, attach)
+	return s.attachTo(ctx, "variable_set_projects", "set_id", setID, "project", project, attach)
 }
 
-// attachProject adds or removes the (col = id, project) row of table, a project join table
-// (variable_set_projects or vcs_connection_projects; never input). sql.ErrNoRows: no such project.
-func (s *Store) attachProject(ctx context.Context, table, col, id, project string, attach bool) error {
-	q := `INSERT INTO ` + table + ` (` + col + `, project_id) SELECT $1::uuid, id FROM projects WHERE name = $2
+// attachTo adds or removes the (col = id, <kind>_id) row of table, a join table to workspaces or
+// projects (kind "workspace" or "project"; never input). sql.ErrNoRows: no such workspace or project.
+func (s *Store) attachTo(ctx context.Context, table, col, id, kind, name string, attach bool) error {
+	q := `INSERT INTO ` + table + ` (` + col + `, ` + kind + `_id) SELECT $1::uuid, id FROM ` + kind + `s WHERE name = $2
 		ON CONFLICT DO NOTHING`
 	if !attach {
-		q = `DELETE FROM ` + table + ` WHERE ` + col + ` = $1::uuid AND project_id = (SELECT id FROM projects WHERE name = $2)`
+		q = `DELETE FROM ` + table + ` WHERE ` + col + ` = $1::uuid AND ` + kind + `_id = (SELECT id FROM ` + kind + `s WHERE name = $2)`
 	}
-	if _, err := s.DB.ExecContext(ctx, q, id, project); err != nil {
+	if _, err := s.DB.ExecContext(ctx, q, id, name); err != nil {
 		return err
 	}
 	var ok bool
-	if err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM projects WHERE name = $1)`, project).Scan(&ok); err != nil {
+	if err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM `+kind+`s WHERE name = $1)`, name).Scan(&ok); err != nil {
 		return err
 	}
 	if !ok {

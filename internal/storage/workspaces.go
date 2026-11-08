@@ -409,7 +409,7 @@ func (s *Store) DeleteWorkspace(ctx context.Context, id string, force bool) ([]s
 func requireIdle(ctx context.Context, tx *sql.Tx, id string) error {
 	var active, deployed bool
 	if err := tx.QueryRowContext(ctx, `SELECT
-			EXISTS (SELECT 1 FROM runs WHERE workspace_id = w.id AND status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')),
+			EXISTS (SELECT 1 FROM runs WHERE workspace_id = w.id AND status IN `+activeRun+`),
 			EXISTS (SELECT 1 FROM (SELECT v.id, v.indexed FROM state_versions v WHERE v.workspace_id = w.id ORDER BY v.id DESC LIMIT 1) cur
 				WHERE NOT cur.indexed OR EXISTS (SELECT 1 FROM state_version_resources r WHERE r.state_version_id = cur.id))
 		FROM workspaces w WHERE w.id = ops_uuid($1) FOR UPDATE`, id).Scan(&active, &deployed); err != nil {
@@ -531,7 +531,7 @@ func (s *Store) SetWorkspaceVCS(ctx context.Context, workspaceID, connID, repo, 
 	// FOR UPDATE: the poller's run inserts (their foreign key check) wait until this commits
 	err = tx.QueryRowContext(ctx, `SELECT (vcs_connection_id, vcs_repo, vcs_branch, vcs_tags_regex) IS DISTINCT FROM
 		(NULLIF($2, '')::uuid, NULLIF($3, ''), NULLIF($4, ''), $6) OR (NOT vcs_pull_requests AND $5),
-		EXISTS (SELECT 1 FROM runs WHERE workspace_id = w.id AND status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying'))
+		EXISTS (SELECT 1 FROM runs WHERE workspace_id = w.id AND status IN `+activeRun+`)
 		FROM workspaces w WHERE id = ops_uuid($1) FOR UPDATE OF w`,
 		workspaceID, connID, repo, branch, pullRequests && connID != "", tagsRegex).Scan(&detach, &active)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -601,7 +601,7 @@ func (s *Store) QueueVCSRun(ctx context.Context, workspaceID, commit string, pul
 			WHERE w.id = ops_uuid($1) AND w.execution_mode = 'remote' AND NOT EXISTS (SELECT 1 FROM runs x
 				WHERE x.workspace_id = w.id AND x.vcs_commit = $3
 					AND CASE WHEN $4 > 0 THEN x.action = 'plan' AND x.vcs_pull_request = $4 ELSE x.action NOT IN ('assess', 'plan') END)
-			ON CONFLICT (workspace_id) WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')
+			ON CONFLICT (workspace_id) WHERE status IN `+activeRun+`
 			DO NOTHING RETURNING id
 		)
 		INSERT INTO run_status_history (run_id, status, message) SELECT id, 'plan_queued', $5 FROM r RETURNING run_id`,
@@ -712,7 +712,7 @@ func (s *Store) QueueAssessments(ctx context.Context, every time.Duration) (int,
 					AND a.created_at > now() - make_interval(secs => $1))
 		), r AS (
 			INSERT INTO runs (workspace_id, action, status) SELECT id, 'assess', 'plan_queued' FROM due
-			ON CONFLICT (workspace_id) WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')
+			ON CONFLICT (workspace_id) WHERE status IN `+activeRun+`
 			DO NOTHING RETURNING id
 		)
 		INSERT INTO run_status_history (run_id, status, message)

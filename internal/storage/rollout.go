@@ -26,7 +26,7 @@ func (s *Store) TemplateUses(ctx context.Context, templateID, projectID string) 
 			u.module, u.module_source, u.module_ref, u.inputs, COALESCE(r.id::text, ''), COALESCE(r.status, '')
 		FROM (SELECT workspace_id, name AS module, module_source, module_ref, inputs FROM workspace_templates WHERE template_id = $1) u
 		JOIN workspaces w ON w.id = u.workspace_id
-		LEFT JOIN runs r ON r.workspace_id = w.id AND r.status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')
+		LEFT JOIN runs r ON r.workspace_id = w.id AND r.status IN `+activeRun+`
 		WHERE $2 = '' OR w.project_id::text = $2
 		ORDER BY w.name, u.module`, templateID, projectID)
 	if err != nil {
@@ -208,7 +208,7 @@ func (s *Store) SetRolloutStatus(ctx context.Context, id, status, message string
 func (s *Store) RolloutRuns(ctx context.Context, id string, since time.Time) (open int, failed string, err error) {
 	err = s.DB.QueryRowContext(ctx, `SELECT
 			(SELECT count(*) FROM runs WHERE rollout_id = ops_uuid($1)
-				AND status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')),
+				AND status IN `+activeRun+`),
 			COALESCE((SELECT 'the run in ' || w.name || ': ' || replace(r.status, '_', ' ') FROM runs r
 				JOIN workspaces w ON w.id = r.workspace_id
 				WHERE r.rollout_id = ops_uuid($1) AND r.status IN ('errored', 'discarded', 'canceled') AND r.updated_at > $2

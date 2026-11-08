@@ -728,10 +728,7 @@ func (s *Server) lockWorkspace(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "the reason is at most 300 characters", http.StatusBadRequest)
 			return
 		}
-		lockID := storage.CloudLockPrefix + rand.Text()
-		info, _ := json.Marshal(map[string]string{"ID": lockID, "Operation": "locked in Opsolete", "Info": reason, "Who": u.Email,
-			"UserID": u.ID, "Created": time.Now().UTC().Format(time.RFC3339)})
-		if _, ok, err := s.Store.LockState(ctx, ws.ID, lockID, "", info); err != nil {
+		if ok, err := s.userLock(ctx, ws.ID, u, "locked in Opsolete", reason); err != nil {
 			s.internalError(w, "lock state", err)
 			return
 		} else if !ok {
@@ -739,11 +736,7 @@ func (s *Server) lockWorkspace(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "unlock", "force-unlock":
-		holder := u.ID
-		if action == "force-unlock" {
-			holder = ""
-		}
-		if err := s.Store.UnlockCloudState(ctx, ws.ID, holder); err != nil {
+		if err := s.userUnlock(ctx, ws.ID, u, action == "force-unlock"); err != nil {
 			s.internalError(w, "unlock state", err)
 			return
 		}
@@ -753,6 +746,28 @@ func (s *Server) lockWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Log.Info("workspace lock", "workspace", ws.Name, "action", action, "user", u.Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/settings/lock", http.StatusSeeOther)
+}
+
+// userLock takes the state lock of a workspace for u, as the cloud block's CLI does; false if it's
+// already locked. Shared by the Locking page and the cloud API.
+func (s *Server) userLock(ctx context.Context, wsID string, u auth.User, operation, reason string) (bool, error) {
+	lockID := storage.CloudLockPrefix + rand.Text()
+	info := map[string]string{"ID": lockID, "Operation": operation, "Who": u.Email, "UserID": u.ID, "Created": time.Now().UTC().Format(time.RFC3339)}
+	if reason != "" {
+		info["Info"] = reason
+	}
+	b, _ := json.Marshal(info)
+	_, ok, err := s.Store.LockState(ctx, wsID, lockID, "", b)
+	return ok, err
+}
+
+// userUnlock releases u's own user lock, or anyone's (force); run and rollback locks end with them.
+func (s *Server) userUnlock(ctx context.Context, wsID string, u auth.User, force bool) error {
+	holder := u.ID
+	if force {
+		holder = ""
+	}
+	return s.Store.UnlockCloudState(ctx, wsID, holder)
 }
 
 // deleteWorkspace deletes a workspace that manages no resources, with its state files; force=1

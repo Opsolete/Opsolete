@@ -100,28 +100,13 @@ func (s *Store) SetVCSScope(ctx context.Context, id, workspaceScope string) erro
 // AttachVCSWorkspace selects the named workspace for a connection, or deselects it (attach=false).
 // It returns sql.ErrNoRows for an unknown workspace.
 func (s *Store) AttachVCSWorkspace(ctx context.Context, connID, workspace string, attach bool) error {
-	q := `INSERT INTO vcs_connection_workspaces (connection_id, workspace_id) SELECT $1::uuid, id FROM workspaces WHERE name = $2
-		ON CONFLICT DO NOTHING`
-	if !attach {
-		q = `DELETE FROM vcs_connection_workspaces WHERE connection_id = $1::uuid AND workspace_id = (SELECT id FROM workspaces WHERE name = $2)`
-	}
-	if _, err := s.DB.ExecContext(ctx, q, connID, workspace); err != nil {
-		return err
-	}
-	var ok bool
-	if err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM workspaces WHERE name = $1)`, workspace).Scan(&ok); err != nil {
-		return err
-	}
-	if !ok {
-		return sql.ErrNoRows
-	}
-	return nil
+	return s.attachTo(ctx, "vcs_connection_workspaces", "connection_id", connID, "workspace", workspace, attach)
 }
 
 // AttachVCSProject selects the named project for a connection, or deselects it (attach=false).
 // It returns sql.ErrNoRows for an unknown project.
 func (s *Store) AttachVCSProject(ctx context.Context, connID, project string, attach bool) error {
-	return s.attachProject(ctx, "vcs_connection_projects", "connection_id", connID, project, attach)
+	return s.attachTo(ctx, "vcs_connection_projects", "connection_id", connID, "project", project, attach)
 }
 
 // DeleteVCSConnection also unlinks its modules (their published versions stay). It returns

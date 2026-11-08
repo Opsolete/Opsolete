@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/md5"
-	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
@@ -328,10 +327,7 @@ func (s *Server) cloudLock(w http.ResponseWriter, r *http.Request) {
 				"Set its execution mode to local in the workspace's settings to run Terraform on your machine")
 			return
 		}
-		lockID := storage.CloudLockPrefix + rand.Text()
-		info, _ := json.Marshal(map[string]string{"ID": lockID, "Operation": "terraform (cloud block)", "Who": u.Email,
-			"UserID": u.ID, "Created": time.Now().UTC().Format(time.RFC3339)})
-		_, ok, err := s.Store.LockState(ctx, ws.ID, lockID, "", info)
+		ok, err := s.userLock(ctx, ws.ID, u, "terraform (cloud block)", "")
 		if err != nil {
 			s.cloudError(w, "lock state", err)
 			return
@@ -341,11 +337,7 @@ func (s *Server) cloudLock(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "unlock", "force-unlock":
-		holder := u.ID
-		if r.PathValue("action") == "force-unlock" {
-			holder = ""
-		}
-		if err := s.Store.UnlockCloudState(ctx, ws.ID, holder); err != nil {
+		if err := s.userUnlock(ctx, ws.ID, u, r.PathValue("action") == "force-unlock"); err != nil {
 			s.cloudError(w, "unlock state", err)
 			return
 		}

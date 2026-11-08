@@ -263,7 +263,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	if page := get(h, "/workspaces/"+linked+"/vcs/edit").Body.String(); !strings.Contains(page, "Choose your workflow") {
 		t.Fatalf("change source: %s", page)
 	}
-	if page := get(h, "/workspaces/"+linked+"/vcs/edit?type=vcs").Body.String(); !strings.Contains(page, "conn="+connID) {
+	if page := get(h, "/workspaces/"+linked+"/vcs/edit?type=vcs").Body.String(); !strings.Contains(page, `href="/workspaces/`+linked+`/vcs/edit?type=vcs&conn=`+connID+`"`) {
 		t.Fatalf("an attached workspace must be offered the connection: %s", page)
 	}
 	if page := get(h, "/workspaces/"+linked+"/vcs/edit?type=vcs&conn="+connID).Body.String(); !strings.Contains(page, `<option value="acme/infra">`) {

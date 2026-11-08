@@ -85,6 +85,10 @@ func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration
 
 const working = `status IN ('planning', 'applying')`
 
+// activeRun is the status list of runs_one_active_idx (migration 009), at most one per workspace:
+// ON CONFLICT clauses on that index must match it exactly.
+const activeRun = `('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`
+
 // Heartbeat extends the lease of a running job. cancel reports that a user asked to cancel it.
 func (s *Store) Heartbeat(ctx context.Context, runID, lease string, ttl time.Duration) (cancel bool, err error) {
 	err = s.DB.QueryRowContext(ctx, `UPDATE runs SET lease_until = now() + make_interval(secs => $3)

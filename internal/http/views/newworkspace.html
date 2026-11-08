@@ -56,15 +56,7 @@
 <h2>Connect to a version control provider</h2>
 <p class="muted">Choose the version control provider that hosts the Terraform configuration for this workspace.</p>
 {{if and .VCS.Conns (not (index $f "other"))}}
-{{range $p := .Providers}}
-{{$has := false}}{{range $.VCS.Conns}}{{if eq .Provider $p.ID}}{{$has = true}}{{end}}{{end}}
-{{if $has}}
-<h3>{{$p.Label}}</h3>
-<div class="inline" style="margin-bottom:1.25rem">
-  {{range $.VCS.Conns}}{{if eq .Provider $p.ID}}<a class="btn secondary" href="?type=vcs&conn={{.ID}}{{with $pq}}&project={{.}}{{end}}">{{.Name}}</a>{{end}}{{end}}
-</div>
-{{end}}
-{{end}}
+{{template "vcsconns" dict "Conns" .VCS.Conns "Providers" .Providers "Project" $pq}}
 <p><a href="?type=vcs&other=1{{with $pq}}&project={{.}}{{end}}">Connect to a different VCS</a></p>
 {{else if (user).Admin}}
 <div class="inline">

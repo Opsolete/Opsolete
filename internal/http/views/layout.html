@@ -594,6 +594,16 @@
   </div>
 </details>
 {{end}}
+{{define "vcsconns"}}<!-- connections grouped by provider (.Conns, .Providers), each a link to .Path with its id: ?connection= if .Module, else ?type=vcs&conn= (and .Project) -->
+{{range $p := .Providers}}
+{{$has := false}}{{range $.Conns}}{{if eq .Provider $p.ID}}{{$has = true}}{{end}}{{end}}
+{{if $has}}
+<h3>{{$p.Label}}</h3>
+<div class="inline" style="margin-bottom:1.25rem">
+  {{range $.Conns}}{{if eq .Provider $p.ID}}<a class="btn secondary" href="{{$.Path}}?{{if $.Module}}connection={{.ID}}{{else}}type=vcs&conn={{.ID}}{{end}}{{with $.Project}}&project={{.}}{{end}}">{{.Name}}</a>{{end}}{{end}}
+</div>
+{{end}}
+{{end}}{{end}}
 {{define "bottom"}}</main>
 <dialog id="confirm-dialog" aria-labelledby="confirm-title">
   <form method="dialog">

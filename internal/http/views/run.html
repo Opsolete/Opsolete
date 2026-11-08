@@ -1,3 +1,4 @@
+{{define "runtitle"}}{{if eq . "destroy"}}Destroy{{else if eq . "refresh"}}Refresh state{{else if eq . "assess"}}Drift check{{else if eq . "plan"}}Speculative plan{{else}}Plan and apply{{end}}{{end}}
 {{define "pclass"}}{{if eq . "finished"}}succeeded{{else if eq . "running"}}running{{else if eq . "pending"}}needs_confirmation{{else}}{{.}}{{end}}{{end}}
 {{template "top"}}
 {{$w := .W}}{{$r := .R}}{{$logInApply := or (not .Apply.Start.IsZero) (eq .Apply.State "queued")}}
@@ -27,7 +28,7 @@
 </div>
 
 <div class="run-title">
-  <h2>{{if eq $r.Action "destroy"}}Destroy{{else if eq $r.Action "refresh"}}Refresh state{{else if eq $r.Action "assess"}}Drift check{{else if eq $r.Action "plan"}}Speculative plan{{with $r.VCSPullRequest}} · pull request #{{.}}{{end}}{{else}}Plan and apply{{end}}</h2>
+  <h2>{{template "runtitle" $r.Action}}{{with $r.VCSPullRequest}} · pull request #{{.}}{{end}}</h2>
   <span class="status {{$r.Status}}" id="status">{{status $r.Status}}</span>
 </div>
 
