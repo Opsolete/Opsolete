@@ -23,6 +23,8 @@ var migrations embed.FS
 type Store struct {
 	DB       *sql.DB
 	AuditKey []byte // signs the audit log (SECRET_KEY); entries can't be written without it
+	// AuditPreviousKey (SECRET_KEY_PREVIOUS) verifies the entries signed before a key rotation.
+	AuditPreviousKey []byte
 }
 
 func Open(ctx context.Context, url string) (*Store, error) {

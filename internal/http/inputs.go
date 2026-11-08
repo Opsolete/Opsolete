@@ -74,7 +74,8 @@ func (s *Server) sealInputs(t templates.Template, raw map[string]string, vals, o
 }
 
 // openInputs returns inputs with their sealed values decrypted, for the runner.
-func (s *Server) openInputs(inputs map[string]any, wsID, module string) (map[string]any, error) {
+func (s *Server) openInputs(inputs map[string]any, wsID, module string) (map[string]any, []string, error) {
+	var secrets []string // the opened values, for the runner to mask in the log
 	out := maps.Clone(inputs)
 	for k, v := range inputs {
 		m, ok := v.(map[string]any)
@@ -84,19 +85,22 @@ func (s *Server) openInputs(inputs map[string]any, wsID, module string) (map[str
 		str, _ := m["sealed"].(string)
 		sealed, err := base64.StdEncoding.DecodeString(str)
 		if err != nil {
-			return nil, fmt.Errorf("input %s: %w", k, err)
+			return nil, nil, fmt.Errorf("input %s: %w", k, err)
 		}
 		plain, err := vcs.Open(s.SecretKey, sealed, inputAD(wsID, module, k))
 		if err != nil {
-			return nil, fmt.Errorf("input %s: %w", k, err)
+			return nil, nil, fmt.Errorf("input %s: %w", k, err)
 		}
 		var val any
 		if err := json.Unmarshal([]byte(plain), &val); err != nil {
-			return nil, fmt.Errorf("input %s: %w", k, err)
+			return nil, nil, fmt.Errorf("input %s: %w", k, err)
+		}
+		if str, ok := val.(string); ok { // shortcut: only string values are masked; numbers and lists print in other forms
+			secrets = append(secrets, str)
 		}
 		out[k] = val
 	}
-	return out, nil
+	return out, secrets, nil
 }
 
 // formDefaults fills a form from stored inputs: sensitive ones stay empty, set lists those with a value.

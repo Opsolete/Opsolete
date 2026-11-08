@@ -60,16 +60,16 @@ func (s *Store) audit(ctx context.Context, tx *sql.Tx, actor, action string, det
 		return e, err
 	}
 	e.ID++
-	e.Hash = s.auditMAC(prev, e)
+	e.Hash = auditMAC(s.AuditKey, prev, e)
 	_, err = tx.ExecContext(ctx, `INSERT INTO audit_log (id, at, actor, action, detail, prev_hash, hash)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)`, e.ID, e.At, e.Actor, e.Action, string(e.Detail), prev, e.Hash)
 	return e, err
 }
 
 // auditMAC: HMAC-SHA256 under SECRET_KEY of the previous entry's hash and this entry's content.
-func (s *Store) auditMAC(prev []byte, e AuditEntry) []byte {
+func auditMAC(key, prev []byte, e AuditEntry) []byte {
 	b, _ := json.Marshal([]any{e.ID, e.At.UTC().Format(time.RFC3339Nano), e.Actor, e.Action, e.Detail})
-	m := hmac.New(sha256.New, s.AuditKey)
+	m := hmac.New(sha256.New, key)
 	m.Write([]byte("opsolete audit log\x00"))
 	m.Write(prev)
 	m.Write(b)
@@ -124,13 +124,23 @@ func (s *Store) verifyAudit(ctx context.Context, q interface {
 		id   int64
 		hash []byte
 	}{1, []byte{}}
+	// Entries before the first one signed with SECRET_KEY were signed with the key it replaced: one
+	// signed with SECRET_KEY_PREVIOUS after that is a forgery by whoever had the old key.
+	previous := len(s.AuditPreviousKey) > 0
 	for rows.Next() {
 		var e AuditEntry
 		var prev []byte
 		if err := rows.Scan(&e.ID, &e.At, &e.Actor, &e.Action, (*[]byte)(&e.Detail), &prev, &e.Hash); err != nil {
 			return 0, err
 		}
-		if e.ID != want.id || !bytes.Equal(prev, want.hash) || !hmac.Equal(e.Hash, s.auditMAC(prev, e)) {
+		if e.ID != want.id || !bytes.Equal(prev, want.hash) {
+			return e.ID, nil
+		}
+		switch {
+		case hmac.Equal(e.Hash, auditMAC(s.AuditKey, prev, e)):
+			previous = false
+		case previous && hmac.Equal(e.Hash, auditMAC(s.AuditPreviousKey, prev, e)):
+		default:
 			return e.ID, nil
 		}
 		want.id, want.hash = e.ID+1, e.Hash

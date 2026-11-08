@@ -215,11 +215,16 @@ func (s *Store) CreateUserToken(ctx context.Context, userID, name string, ttl ti
 
 // TokenUser returns the id and email of an unexpired user token's user; sql.ErrNoRows if
 // the token is unknown, expired or not a user token.
-func (s *Store) TokenUser(ctx context.Context, token string) (id, email string, err error) {
+// role and groups are what the user's last login recorded.
+func (s *Store) TokenUser(ctx context.Context, token string) (id, email, role string, groups []string, err error) {
 	h := sha256.Sum256([]byte(token))
-	err = s.DB.QueryRowContext(ctx, `SELECT u.id, u.email FROM api_tokens t JOIN users u ON u.id = t.user_id
-		WHERE t.token_hash = $1 AND t.scope = $2 AND t.expires_at > now()`, h[:], ScopeUser).Scan(&id, &email)
-	return id, email, err
+	var js []byte
+	err = s.DB.QueryRowContext(ctx, `SELECT u.id, u.email, u.role, array_to_json(u.groups) FROM api_tokens t JOIN users u ON u.id = t.user_id
+		WHERE t.token_hash = $1 AND t.scope = $2 AND t.expires_at > now()`, h[:], ScopeUser).Scan(&id, &email, &role, &js)
+	if err == nil {
+		err = json.Unmarshal(js, &groups)
+	}
+	return id, email, role, groups, err
 }
 
 // UserToken is one of a user's unexpired `terraform login` tokens; the token itself is only stored hashed.

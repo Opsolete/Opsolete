@@ -26,7 +26,7 @@ const (
 	sessionCookie = "ops_session"
 	loginCookie   = "ops_login"
 	// shortcut: identity lives in the cookie, so IdP removals apply at the next login (≤ sessionTTL);
-	// add a server-side session table if you need instant revocation. The role follows ADMIN_EMAILS.
+	// add a server-side session table if you need instant revocation. The role follows ADMIN_EMAILS and ADMIN_GROUPS.
 	sessionTTL = 12 * time.Hour
 	loginTTL   = 10 * time.Minute
 )
@@ -45,6 +45,7 @@ type Config struct {
 	DevUser                        string
 	DevGroups                      []string // the dev user's groups, as an IdP would send them
 	Admins                         []string // emails that get the admin role
+	AdminGroups                    []string // IdP groups that get the admin role
 	PublicURL                      *url.URL // the callback is PublicURL/auth/callback
 }
 
@@ -56,13 +57,14 @@ type SaveUser func(ctx context.Context, subject, email, role string, groups []st
 var ErrEmailTaken = errors.New("this email belongs to another identity provider account")
 
 type Auth struct {
-	key    []byte
-	secure bool
-	admins []string
-	save   SaveUser
-	dev    *User
-	oauth  oauth2.Config
-	verify *oidc.IDTokenVerifier
+	key         []byte
+	secure      bool
+	admins      []string
+	adminGroups []string
+	save        SaveUser
+	dev         *User
+	oauth       oauth2.Config
+	verify      *oidc.IDTokenVerifier
 }
 
 // New sets up login. key signs cookies; it must be secret and shared by all replicas.
@@ -73,11 +75,12 @@ func New(ctx context.Context, c Config, key []byte, save SaveUser) (*Auth, error
 			a.admins = append(a.admins, e)
 		}
 	}
+	a.adminGroups = slices.DeleteFunc(slices.Clone(c.AdminGroups), func(g string) bool { return g == "" })
 	switch {
 	case c.DevUser != "" && c.Issuer != "":
 		return nil, errors.New("set either OIDC_ISSUER or AUTH_DEV_USER, not both")
 	case c.DevUser != "":
-		u := User{Email: strings.ToLower(c.DevUser), Role: a.Role(c.DevUser)}
+		u := User{Email: strings.ToLower(c.DevUser), Role: a.Role(c.DevUser, c.DevGroups)}
 		id, err := save(ctx, "", u.Email, u.Role, c.DevGroups)
 		if err != nil {
 			return nil, err
@@ -100,12 +103,25 @@ func New(ctx context.Context, c Config, key []byte, save SaveUser) (*Auth, error
 
 func (a *Auth) Dev() bool { return a.dev != nil }
 
-// Role is the role ADMIN_EMAILS gives email; sessions and API tokens take it from here, not from what they recorded.
-func (a *Auth) Role(email string) string {
-	if slices.Contains(a.admins, strings.ToLower(email)) {
+// Role is the role ADMIN_EMAILS and ADMIN_GROUPS give a login; sessions and API tokens take it from
+// here, not from what they recorded. email must be the IdP's email claim, never preferred_username,
+// which some IdPs (e.g. Keycloak) let users edit.
+func (a *Auth) Role(email string, groups []string) string {
+	if slices.Contains(a.admins, strings.ToLower(email)) || slices.ContainsFunc(groups, a.adminGroup) {
 		return "admin"
 	}
 	return "user"
+}
+
+func (a *Auth) adminGroup(g string) bool { return slices.Contains(a.adminGroups, g) }
+
+// session is the session cookie. AdminEmail and AdminGroups are what can make it admin (the email
+// claim, the login's ADMIN_GROUPS groups), so the role follows the config on every request.
+type session struct {
+	User
+	Exp         int64    `json:"exp"`
+	AdminEmail  string   `json:"admin_email,omitempty"`
+	AdminGroups []string `json:"admin_groups,omitempty"`
 }
 
 // Routes: GET /auth/login, GET /auth/callback, POST /auth/logout.
@@ -123,14 +139,11 @@ func (a *Auth) User(r *http.Request) (User, bool) {
 	if a.dev != nil {
 		return *a.dev, true
 	}
-	var s struct {
-		User
-		Exp int64 `json:"exp"`
-	}
+	var s session
 	if !a.readCookie(r, sessionCookie, &s) || time.Now().Unix() > s.Exp {
 		return User{}, false
 	}
-	s.Role = a.Role(s.Email) // not the cookie's: an admin removed from ADMIN_EMAILS loses it at the restart
+	s.Role = a.Role(s.AdminEmail, s.AdminGroups) // not the cookie's: an admin removed from ADMIN_EMAILS/GROUPS loses it at the restart
 	return s.User, true
 }
 
@@ -228,7 +241,8 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "login failed: the identity provider sent no verified email", http.StatusForbidden)
 		return
 	}
-	u := User{Email: email, Role: a.Role(email)}
+	claimed := strings.ToLower(strings.TrimSpace(c.Email))
+	u := User{Email: email, Role: a.Role(claimed, c.Groups)}
 	if u.ID, err = a.save(r.Context(), idt.Issuer+" "+idt.Subject, u.Email, u.Role, c.Groups); err != nil {
 		if errors.Is(err, ErrEmailTaken) {
 			http.Error(w, "login failed: "+err.Error(), http.StatusForbidden)
@@ -238,10 +252,8 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	SetPrincipal(r.Context(), u, "user")
-	a.writeCookie(w, sessionCookie, struct {
-		User
-		Exp int64 `json:"exp"`
-	}{u, time.Now().Add(sessionTTL).Unix()}, "/", sessionTTL)
+	a.writeCookie(w, sessionCookie, session{u, time.Now().Add(sessionTTL).Unix(), claimed,
+		slices.DeleteFunc(slices.Clone(c.Groups), func(g string) bool { return !a.adminGroup(g) })}, "/", sessionTTL)
 	http.Redirect(w, r, st.Next, http.StatusSeeOther)
 }
 

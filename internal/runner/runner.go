@@ -778,6 +778,21 @@ func newShipper(r *Runner, job runnerapi.Job, cancel context.CancelFunc, signed 
 			pairs = append(pairs, u[i:], "?<signed>")
 		}
 	}
+	// A multi-line secret (a PEM key) is printed line by line too. Longest first: the replacer
+	// tries its pairs in order, so a secret containing another is masked whole.
+	var secrets []string
+	for _, v := range job.Secrets {
+		secrets = append(secrets, v)
+		if strings.Contains(v, "\n") {
+			secrets = append(secrets, strings.Split(v, "\n")...)
+		}
+	}
+	slices.SortFunc(secrets, func(a, b string) int { return len(b) - len(a) })
+	for _, v := range slices.Compact(secrets) {
+		if len(strings.TrimSpace(v)) >= 4 { // shortcut: shorter values (true, 1, eu) would mask ordinary output; they stay visible
+			pairs = append(pairs, v, "***")
+		}
+	}
 	s := &shipper{r: r, job: job, cancel: cancel, redact: strings.NewReplacer(pairs...),
 		stop: make(chan struct{}), stopped: make(chan struct{})}
 	go s.loop()

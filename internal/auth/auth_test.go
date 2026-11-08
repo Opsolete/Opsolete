@@ -22,7 +22,7 @@ var (
 func newOIDC(t *testing.T, is *authtest.Issuer) *Auth {
 	pub, _ := url.Parse("https://ops.example.com")
 	a, err := New(context.Background(), Config{Issuer: is.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret,
-		Admins: []string{" Boss@Example.com"}, PublicURL: pub}, []byte("k"),
+		Admins: []string{" Boss@Example.com"}, AdminGroups: []string{"grp-admins"}, PublicURL: pub}, []byte("k"),
 		func(_ context.Context, subject, email, role string, groups []string) (string, error) {
 			savedGroups, savedSubject = groups, subject
 			if emailTaken {
@@ -99,6 +99,20 @@ func TestOIDCLogin(t *testing.T) {
 	is.Claims["email"] = "boss@example.com"
 	if u, _ := sessionUser(a, login(t, a, is, "/", false)); !u.Admin() {
 		t.Fatalf("ADMIN_EMAILS must grant admin (case-insensitive): %+v", u)
+	}
+	delete(is.Claims, "email") // preferred_username may be user-editable: it never makes an admin
+	is.Claims["preferred_username"] = "boss@example.com"
+	if u, ok := sessionUser(a, login(t, a, is, "/", false)); !ok || u.Email != "boss@example.com" || u.Admin() {
+		t.Fatalf("preferred_username must not match ADMIN_EMAILS: %+v %v", u, ok)
+	}
+	is.Claims["groups"] = []string{"grp-a", "grp-admins"}
+	rec = login(t, a, is, "/", false)
+	if u, _ := sessionUser(a, rec); !u.Admin() {
+		t.Fatalf("ADMIN_GROUPS must grant admin: %+v", u)
+	}
+	a.adminGroups = nil // removed from ADMIN_GROUPS (a restart): the same session is no longer admin
+	if u, _ := sessionUser(a, rec); u.Admin() {
+		t.Fatalf("the session's role must follow ADMIN_GROUPS: %+v", u)
 	}
 	if rec := login(t, a, is, "//evil.example", false); rec.Header().Get("Location") != "/" {
 		t.Fatalf("open redirect: %s", rec.Header().Get("Location"))

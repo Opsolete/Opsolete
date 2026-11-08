@@ -120,7 +120,7 @@ func (s *Server) cloudError(w http.ResponseWriter, what string, err error) {
 func (s *Server) cloudUser(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		id, email, err := s.Store.TokenUser(r.Context(), token)
+		id, email, role, groups, err := s.Store.TokenUser(r.Context(), token)
 		if errors.Is(err, sql.ErrNoRows) {
 			writeAPIError(w, http.StatusUnauthorized, "missing, invalid or expired token: run terraform login "+s.Registry.PublicURL.Host)
 			return
@@ -133,7 +133,11 @@ func (s *Server) cloudUser(next http.HandlerFunc) http.HandlerFunc {
 			writeAPIError(w, http.StatusNotFound, "organization not found")
 			return
 		}
-		u := auth.User{ID: id, Email: email, Role: s.Auth.Role(email)}
+		// Admin only if the last login was (its email claim, which the stored email may not be) and the config still says so.
+		if role == "admin" {
+			role = s.Auth.Role(email, groups)
+		}
+		u := auth.User{ID: id, Email: email, Role: role}
 		auth.SetPrincipal(r.Context(), u, "token")
 		next(w, r.WithContext(auth.WithUser(r.Context(), u)))
 	}

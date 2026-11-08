@@ -74,6 +74,7 @@ self: {
       ORGANIZATION = cfg.organization;
       STALE_LOCK_TIMEOUT = cfg.staleLockTimeout;
       ADMIN_EMAILS = joinOrNull cfg.adminEmails;
+      ADMIN_GROUPS = joinOrNull cfg.adminGroups;
       OIDC_ISSUER = cfg.oidc.issuer;
       OIDC_CLIENT_ID = cfg.oidc.clientId;
       AUTH_DEV_USER = cfg.devUser;
@@ -225,7 +226,12 @@ in {
     adminEmails = mkOption {
       type = types.listOf types.str;
       default = [];
-      description = "ADMIN_EMAILS: emails that get the admin role at login.";
+      description = "ADMIN_EMAILS: emails (the IdP's email claim) that get the admin role.";
+    };
+    adminGroups = mkOption {
+      type = types.listOf types.str;
+      default = [];
+      description = "ADMIN_GROUPS: IdP groups (the groups claim) that get the admin role.";
     };
     oidc = {
       issuer = nullOr types.str null "OIDC_ISSUER.";

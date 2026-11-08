@@ -502,15 +502,20 @@ func TestShipperRedactsAndDrains(t *testing.T) {
 	u, _ := url.Parse(srv.URL)
 	r := New(config.Runner{ServerURL: u, Token: "tok"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	signed := "/v1/archives/m.tar.gz?expires=1&sig=secret-signature"
-	s := newShipper(r, runnerapi.Job{RunID: "run1", LeaseID: "lease"}, func() {}, []string{signed})
+	pem := "-----BEGIN KEY-----\nAAAAkeyline\n-----END KEY-----"
+	s := newShipper(r, runnerapi.Job{RunID: "run1", LeaseID: "lease", Secrets: []string{"hunter22", "hunter22-long", pem, "eu"}}, func() {}, []string{signed})
 	s.Write([]byte("init " + signed[:30]))
 	s.Write([]byte(signed[30:] + " failed\n"))
+	s.Write([]byte("local-exec: hunter22-long hunter22 eu AAAAkeyline\n"))
 	big := strings.Repeat("x", 300<<10) + "\nthe error at the end"
 	s.Write([]byte(big))
 	s.Close()
 	got := f.logs.String()
 	if strings.Contains(got, "secret-signature") || !strings.Contains(got, "?<signed>") {
 		t.Fatalf("signed URL not masked: %.200q", got)
+	}
+	if !strings.Contains(got, "local-exec: *** *** eu ***\n") {
+		t.Fatalf("sensitive values not masked (whole, per line, not too short): %.400q", got)
 	}
 	if !strings.HasSuffix(got, big) {
 		t.Fatalf("tail lost: got %d bytes, want suffix of %d", len(got), len(big))

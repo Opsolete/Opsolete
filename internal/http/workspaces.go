@@ -393,7 +393,8 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		id, err := strconv.ParseInt(r.PathValue("version"), 10, 64)
-		if err != nil {
+		// The diff shows attribute values, and the redaction misses unmarked secrets: like the cloud API's state, operators only.
+		if err != nil || level != levelOperate {
 			http.NotFound(w, r)
 			return
 		}
@@ -417,7 +418,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		}
 		current := versions[0].ID == id
 		var rollback []stateChange
-		if !current && level == levelOperate { // only operators see it, with the rollback button
+		if !current {
 			if rollback, err = s.diffVersions(ctx, &versions[0], &pair[0]); err != nil {
 				s.internalError(w, "state diff", err)
 				return

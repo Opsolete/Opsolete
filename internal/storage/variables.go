@@ -40,6 +40,13 @@ func (s *Store) AllVariables(ctx context.Context) ([]Variable, error) {
 	return scanVariables(s.DB.QueryContext(ctx, `SELECT `+varCols+` FROM variables v`))
 }
 
+// AnyActiveRun reports whether a run is active anywhere: a SECRET_KEY rotation waits for none.
+func (s *Store) AnyActiveRun(ctx context.Context) (bool, error) {
+	var active bool
+	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM runs WHERE status IN `+activeRun+`)`).Scan(&active)
+	return active, err
+}
+
 // ResealVariable replaces a variable's sealed value, unless it changed since it was read.
 func (s *Store) ResealVariable(ctx context.Context, id string, old, sealed []byte) error {
 	_, err := s.DB.ExecContext(ctx, `UPDATE variables SET value = $3 WHERE id = $1::uuid AND value = $2`, id, old, sealed)

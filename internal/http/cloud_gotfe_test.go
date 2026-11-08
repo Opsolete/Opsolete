@@ -26,9 +26,9 @@ func TestCloudGoTFE(t *testing.T) {
 	app.Organization = "acme"
 	srv := httptest.NewServer(app.Handler())
 	t.Cleanup(srv.Close)
-	client := func(email string) *tfe.Client {
+	client := func(email, role string) *tfe.Client { // role: as recorded at the user's last login
 		t.Helper()
-		id, err := store.UpsertUser(ctx, "", email, "user", nil)
+		id, err := store.UpsertUser(ctx, "", email, role, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -42,7 +42,7 @@ func TestCloudGoTFE(t *testing.T) {
 		}
 		return c
 	}
-	alice, other := client("tfe-alice-"+suffix+"@example.com"), client(admin)
+	alice, other := client("tfe-alice-"+suffix+"@example.com", "user"), client(admin, "admin")
 
 	if _, err := alice.Organizations.ReadEntitlements(ctx, "acme"); err != nil {
 		t.Fatalf("entitlements: %v", err)

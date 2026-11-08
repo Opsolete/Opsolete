@@ -3,6 +3,7 @@
 //	opsolete                          serve the web UI, registry and runner API
 //	opsolete runner                   execute deployments (no database needed)
 //	opsolete token <name>             create a registry API token
+//	opsolete rotate-key               re-seal everything from SECRET_KEY_PREVIOUS to SECRET_KEY (server stopped)
 package main
 
 import (
@@ -50,8 +51,10 @@ func main() {
 		err = runRunner(log)
 	case os.Args[1] == "token" && len(os.Args) == 3:
 		err = createToken()
+	case os.Args[1] == "rotate-key" && len(os.Args) == 2:
+		err = rotateKey(log)
 	default:
-		err = errors.New("usage: opsolete [runner | token <name>]")
+		err = errors.New("usage: opsolete [runner | token <name> | rotate-key]")
 	}
 	if err != nil {
 		log.Error("fatal", "err", err)
@@ -69,7 +72,44 @@ func openStore(ctx context.Context, cfg config.Config) (*storage.Store, error) {
 		return nil, err
 	}
 	store.AuditKey = []byte(cfg.SecretKey)
+	if cfg.SecretKeyPrevious != "" {
+		store.AuditPreviousKey = []byte(cfg.SecretKeyPrevious)
+	}
 	return store, nil
+}
+
+// rotateKey re-seals everything sealed with SECRET_KEY_PREVIOUS under SECRET_KEY. Sessions, state
+// credentials and signed URLs are derived from SECRET_KEY too: users sign in again afterwards.
+func rotateKey(log *slog.Logger) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	if cfg.SecretKeyPrevious == "" || cfg.SecretKeyPrevious == cfg.SecretKey {
+		return errors.New("set SECRET_KEY to the new key and SECRET_KEY_PREVIOUS to the current one")
+	}
+	ctx := context.Background()
+	store, err := openStore(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer store.DB.Close()
+	var state *blob.Bucket
+	if cfg.StateStore != "" {
+		if state, err = blob.OpenBucket(ctx, cfg.StateStore); err != nil {
+			return fmt.Errorf("STATE_STORE: %w", err)
+		}
+		defer state.Close()
+	}
+	n, err := httpserver.RotateKey(ctx, store, state, vcs.Key(cfg.SecretKeyPrevious), vcs.Key(cfg.SecretKey), log)
+	if err != nil {
+		return fmt.Errorf("re-sealed %d values, then: %w (fix it and run rotate-key again)", n, err)
+	}
+	if err := store.Audit(ctx, "cli", "rotate secret key", map[string]any{"principal": map[string]any{"type": "system"}, "resealed": n}); err != nil {
+		return fmt.Errorf("re-sealed %d values, but not audited: %w", n, err)
+	}
+	log.Info("SECRET_KEY rotated: start the server with the new SECRET_KEY; keep SECRET_KEY_PREVIOUS set only to verify older audit entries", "resealed", n)
+	return nil
 }
 
 func createToken() error {
@@ -144,7 +184,7 @@ func serve(log *slog.Logger) error {
 
 	// Same key as the registry: cookie MACs are domain-separated from signed archive URLs.
 	authn, err := auth.New(ctx, auth.Config{Issuer: cfg.OIDCIssuer, ClientID: cfg.OIDCClientID, ClientSecret: cfg.OIDCClientSecret,
-		DevUser: cfg.AuthDevUser, DevGroups: cfg.AuthDevGroups, Admins: cfg.AdminEmails, PublicURL: cfg.PublicURL}, key, store.UpsertUser)
+		DevUser: cfg.AuthDevUser, DevGroups: cfg.AuthDevGroups, Admins: cfg.AdminEmails, AdminGroups: cfg.AdminGroups, PublicURL: cfg.PublicURL}, key, store.UpsertUser)
 	if err != nil {
 		return err
 	}

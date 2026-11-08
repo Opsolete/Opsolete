@@ -28,6 +28,7 @@ type Config struct {
 	AuthDevUser                                string
 	AuthDevGroups                              []string
 	AdminEmails                                []string
+	AdminGroups                                []string
 	// StateStore is where workspace state files are kept: a gocloud.dev/blob URL such as
 	// azblob://tfstate, s3://tfstate?region=eu-west-1, gs://tfstate or file:///var/lib/opsolete/state.
 	// Required by the server when deployments are on (checked there, so `token` works without it).
@@ -38,6 +39,9 @@ type Config struct {
 	// SecretKey encrypts VCS access tokens and variables in Postgres, and state files and saved plans
 	// in STATE_STORE, and signs the audit log. Required.
 	SecretKey string
+	// SecretKeyPrevious is the SECRET_KEY being replaced: `opsolete rotate-key` re-seals from it, and
+	// the server verifies the audit entries signed before the rotation with it. Optional.
+	SecretKeyPrevious string
 	// RunnerToken authenticates runners (their OPS_RUNNER_TOKEN). The operator generates it, so it
 	// exists before the first deploy. Required by the server when deployments are on.
 	RunnerToken string
@@ -50,24 +54,29 @@ type Config struct {
 
 func Load() (Config, error) {
 	c := Config{
-		Addr:             getenv("ADDR", ":8080"),
-		MetricsAddr:      os.Getenv("METRICS_ADDR"),
-		DatabaseURL:      os.Getenv("DATABASE_URL"),
-		TemplatesDir:     getenv("TEMPLATES_DIR", "catalog"),
-		TemplateEditor:   os.Getenv("TEMPLATE_EDITOR") == "1",
-		OIDCIssuer:       os.Getenv("OIDC_ISSUER"),
-		OIDCClientID:     os.Getenv("OIDC_CLIENT_ID"),
-		OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"),
-		AuthDevUser:      os.Getenv("AUTH_DEV_USER"),
-		AuthDevGroups:    strings.FieldsFunc(os.Getenv("AUTH_DEV_GROUPS"), func(r rune) bool { return r == ',' }),
-		StateStore:       os.Getenv("STATE_STORE"),
-		AdminEmails:      strings.Split(os.Getenv("ADMIN_EMAILS"), ","),
-		SecretKey:        os.Getenv("SECRET_KEY"),
-		RunnerToken:      os.Getenv("RUNNER_TOKEN"),
-		Organization:     getenv("ORGANIZATION", "opsolete"),
+		Addr:              getenv("ADDR", ":8080"),
+		MetricsAddr:       os.Getenv("METRICS_ADDR"),
+		DatabaseURL:       os.Getenv("DATABASE_URL"),
+		TemplatesDir:      getenv("TEMPLATES_DIR", "catalog"),
+		TemplateEditor:    os.Getenv("TEMPLATE_EDITOR") == "1",
+		OIDCIssuer:        os.Getenv("OIDC_ISSUER"),
+		OIDCClientID:      os.Getenv("OIDC_CLIENT_ID"),
+		OIDCClientSecret:  os.Getenv("OIDC_CLIENT_SECRET"),
+		AuthDevUser:       os.Getenv("AUTH_DEV_USER"),
+		AuthDevGroups:     strings.FieldsFunc(os.Getenv("AUTH_DEV_GROUPS"), func(r rune) bool { return r == ',' }),
+		StateStore:        os.Getenv("STATE_STORE"),
+		AdminEmails:       strings.Split(os.Getenv("ADMIN_EMAILS"), ","),
+		AdminGroups:       strings.FieldsFunc(os.Getenv("ADMIN_GROUPS"), func(r rune) bool { return r == ',' }),
+		SecretKey:         os.Getenv("SECRET_KEY"),
+		SecretKeyPrevious: os.Getenv("SECRET_KEY_PREVIOUS"),
+		RunnerToken:       os.Getenv("RUNNER_TOKEN"),
+		Organization:      getenv("ORGANIZATION", "opsolete"),
 	}
 	for i, g := range c.AuthDevGroups { // "a, b": group names must match the IdP's exactly
 		c.AuthDevGroups[i] = strings.TrimSpace(g)
+	}
+	for i, g := range c.AdminGroups {
+		c.AdminGroups[i] = strings.TrimSpace(g)
 	}
 	if c.DatabaseURL == "" {
 		return c, errors.New("DATABASE_URL is required")

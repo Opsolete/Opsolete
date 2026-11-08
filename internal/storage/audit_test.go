@@ -65,3 +65,35 @@ func TestAuditLogAppendOnly(t *testing.T) {
 		verify(tx, last, "forged entry")
 	})
 }
+
+// After a SECRET_KEY rotation the entries before it verify with SECRET_KEY_PREVIOUS, but only up to
+// the first entry under the new key: the old key can't forge entries after it.
+func TestAuditLogKeyRotation(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	if err := s.Audit(ctx, "a@example.com", "POST /before", nil); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback() // the shared log keeps the test key
+	rotated := &Store{DB: s.DB, AuditKey: []byte("new-key"), AuditPreviousKey: s.AuditKey}
+	e, err := rotated.audit(ctx, tx, "cli", "rotate secret key", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if broken, err := rotated.verifyAudit(ctx, tx); err != nil || broken != 0 {
+		t.Fatalf("rotated chain: broken at %d, %v", broken, err)
+	}
+	if broken, _ := (&Store{AuditKey: rotated.AuditKey}).verifyAudit(ctx, tx); broken == 0 {
+		t.Fatal("entries before the rotation must not verify without SECRET_KEY_PREVIOUS")
+	}
+	if _, err := s.audit(ctx, tx, "mallory", "POST /forged", nil); err != nil { // signed with the old key
+		t.Fatal(err)
+	}
+	if broken, _ := rotated.verifyAudit(ctx, tx); broken != e.ID+1 {
+		t.Fatalf("an entry signed with the old key after the rotation must break the chain: %d", broken)
+	}
+}

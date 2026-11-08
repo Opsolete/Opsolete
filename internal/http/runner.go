@@ -74,7 +74,7 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if ok {
-			env, vars, err := s.runVariables(r.Context(), j.WorkspaceID)
+			env, vars, secrets, err := s.runVariables(r.Context(), j.WorkspaceID)
 			var src, currency string
 			if err == nil {
 				src, err = s.jobSource(r.Context(), j)
@@ -84,8 +84,8 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 			}
 			var mods []runnerapi.Module
 			for _, m := range j.Modules {
-				in, oerr := s.openInputs(m.Inputs, j.WorkspaceID, m.Name)
-				err = cmp.Or(err, oerr)
+				in, sec, oerr := s.openInputs(m.Inputs, j.WorkspaceID, m.Name)
+				err, secrets = cmp.Or(err, oerr), append(secrets, sec...)
 				if err == nil {
 					in, err = s.withWorkspaceVars(r.Context(), m.TemplateID, m.ModuleSource, m.ModuleRef, in, vars)
 				}
@@ -96,7 +96,7 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 			if err == nil {
 				body, err = json.Marshal(runnerapi.Job{
 					RunID: j.RunID, WorkspaceID: j.WorkspaceID, Phase: j.Phase, Action: j.Action, Replace: j.Replace, Target: j.Target, LeaseID: j.LeaseID,
-					LeaseSeconds: int(leaseTTL.Seconds()), StateToken: s.stateToken(j.WorkspaceID, j.RunID), Vars: vars, Env: env,
+					LeaseSeconds: int(leaseTTL.Seconds()), StateToken: s.stateToken(j.WorkspaceID, j.RunID), Vars: vars, Env: env, Secrets: secrets,
 					ModuleSource: src, Modules: mods, Currency: currency,
 				})
 			}

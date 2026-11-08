@@ -920,6 +920,13 @@ func TestWorkspaceFlow(t *testing.T) {
 	if code := get(other, fmt.Sprintf("/workspaces/%s/states/%d", name, vs[1].ID)).Code; code != http.StatusNotFound {
 		t.Fatalf("state version page for a user without access: %d", code)
 	}
+	reader := newServerAs(t, "../../catalog", false, store, devAuth(t, store, "flow-reader@example.com", false, "grp-flow-readers"))
+	if err := store.SetGrant(ctx, ws.ID, "grp-flow-readers", "read"); err != nil {
+		t.Fatal(err)
+	}
+	if code := get(reader, fmt.Sprintf("/workspaces/%s/states/%d", name, vs[1].ID)).Code; code != http.StatusNotFound {
+		t.Fatalf("state values shown to read access: %d", code)
+	}
 	if code := rollback(vs[1].ID); code != http.StatusSeeOther {
 		t.Fatalf("rollback: %d", code)
 	}

@@ -19,6 +19,36 @@ type WorkspaceTemplate struct {
 	Inputs       map[string]any
 }
 
+// TemplateInputs is one added template's inputs as stored, for re-sealing them under a new SECRET_KEY.
+type TemplateInputs struct {
+	WorkspaceID, Name string
+	Inputs            []byte
+}
+
+func (s *Store) AllTemplateInputs(ctx context.Context) ([]TemplateInputs, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT workspace_id, name, inputs FROM workspace_templates`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TemplateInputs
+	for rows.Next() {
+		var t TemplateInputs
+		if err := rows.Scan(&t.WorkspaceID, &t.Name, &t.Inputs); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// ResealInputs replaces an added template's inputs, unless they changed since they were read.
+func (s *Store) ResealInputs(ctx context.Context, workspaceID, name string, old, inputs []byte) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE workspace_templates SET inputs = $4::jsonb
+		WHERE workspace_id = $1::uuid AND name = $2 AND inputs = $3::jsonb`, workspaceID, name, string(old), string(inputs))
+	return err
+}
+
 // WorkspaceTemplates lists a workspace's added templates by name.
 func (s *Store) WorkspaceTemplates(ctx context.Context, workspaceID string) ([]WorkspaceTemplate, error) {
 	return workspaceTemplates(ctx, s.DB, workspaceID)

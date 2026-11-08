@@ -28,7 +28,7 @@ func TestAccountTokens(t *testing.T) {
 		}
 		return tok
 	}
-	valid := func(tok string) bool { _, _, err := store.TokenUser(ctx, tok); return err == nil }
+	valid := func(tok string) bool { _, _, _, _, err := store.TokenUser(ctx, tok); return err == nil }
 
 	if body := get(h, "/account/profile").Body.String(); !strings.Contains(body, email) || !strings.Contains(body, "<code>grp-acct-"+sfx+"</code>") ||
 		!strings.Contains(body, `<nav aria-label="Account settings">`) {

@@ -117,16 +117,19 @@ func (s *Server) varsBlock(ctx context.Context, o storage.VarOwner, base string,
 
 // runVariables opens the variables of a workspace's run: environment variables for Terraform's
 // environment, and Terraform variables.
-func (s *Server) runVariables(ctx context.Context, workspaceID string) (map[string]string, map[string]any, error) {
+func (s *Server) runVariables(ctx context.Context, workspaceID string) (env map[string]string, vars map[string]any, secrets []string, err error) {
 	list, err := s.Store.RunVariables(ctx, workspaceID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("load variables: %w", err)
+		return nil, nil, nil, fmt.Errorf("load variables: %w", err)
 	}
-	env, vars := map[string]string{}, map[string]any{}
+	env, vars = map[string]string{}, map[string]any{}
 	for _, v := range list {
 		val, err := vcs.Open(s.SecretKey, v.Value, vcs.VariableAD(v))
 		if err != nil {
-			return nil, nil, fmt.Errorf("can't decrypt variable %s: SECRET_KEY missing or changed? Set the variable again", v.Key)
+			return nil, nil, nil, fmt.Errorf("can't decrypt variable %s: SECRET_KEY missing or changed? Set the variable again", v.Key)
+		}
+		if v.Sensitive {
+			secrets = append(secrets, val)
 		}
 		if v.Category == "env" {
 			env[v.Key] = val
@@ -134,7 +137,7 @@ func (s *Server) runVariables(ctx context.Context, workspaceID string) (map[stri
 			vars[v.Key] = val
 		}
 	}
-	return env, vars, nil
+	return env, vars, secrets, nil
 }
 
 func (s *Server) setWorkspaceVariable(w http.ResponseWriter, r *http.Request) {
