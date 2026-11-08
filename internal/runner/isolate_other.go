@@ -8,3 +8,4 @@ import "os/exec"
 func hardenProcess() error         { return nil }
 func killJobProcesses()            {}
 func isolateCommand(cmd *exec.Cmd) {}
+func killCommand(cmd *exec.Cmd)    { cmd.Process.Kill() }

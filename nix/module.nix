@@ -97,6 +97,7 @@ self: {
       OPS_SERVER_URL = rcfg.serverUrl;
       OPS_RUNNER_NAME = rcfg.name;
       OPS_JOB_TIMEOUT = rcfg.jobTimeout;
+      OPS_JOB_GRACE = rcfg.jobGrace;
       OPS_TERRAFORM = lib.getExe rcfg.terraformPackage;
       OPS_INFRACOST =
         if rcfg.infracost.apiKeyFile != null
@@ -280,7 +281,12 @@ in {
       jobTimeout = mkOption {
         type = types.str;
         default = "1h";
-        description = "OPS_JOB_TIMEOUT (Go duration, also valid as a systemd time span: e.g. 1h, 90m): hard limit per run phase. A stop waits for the current job up to twice this plus 5 minutes.";
+        description = "OPS_JOB_TIMEOUT (Go duration, also valid as a systemd time span: e.g. 1h, 90m): limit per run phase, then Terraform is interrupted. A stop waits for the current job up to this plus jobGrace plus 5 minutes.";
+      };
+      jobGrace = mkOption {
+        type = types.str;
+        default = "10m";
+        description = "OPS_JOB_GRACE (Go duration, also valid as a systemd time span): after any interrupt (timeout, cancel, stop), how long Terraform may take to finish in-flight operations and save state before it is killed.";
       };
       terraformPackage = mkOption {
         type = types.package;
@@ -409,10 +415,10 @@ in {
             # for the launcher only (read secret files of any owner, drop to the user); gone after setpriv
             CapabilityBoundingSet = "CAP_SETUID CAP_SETGID CAP_DAC_READ_SEARCH";
             # Stop = SIGTERM to the runner only: it stops claiming and finishes the current job. A job that
-            # hits its own timeout is interrupted then, and Terraform gets up to another jobTimeout (the
-            # runner's wait delay) to save its state, plus 5 minutes to report.
+            # hits its own timeout is interrupted then, and Terraform gets up to jobGrace to save its state
+            # before it's killed, plus 5 minutes for a claim in flight and the report.
             KillMode = "mixed";
-            TimeoutStopSec = "${rcfg.jobTimeout} ${rcfg.jobTimeout} 5min";
+            TimeoutStopSec = "${rcfg.jobTimeout} ${rcfg.jobGrace} 5min";
           };
       };
     })

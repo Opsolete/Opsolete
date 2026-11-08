@@ -31,7 +31,7 @@ helm install opsolete opsolete/opsolete --set secrets.existingSecret=opsolete \
 - Scale runners with `replicas`, one job each at a time.
 - Point `OPS_SERVER_URL` at the app's Service, so registry downloads stay inside the cluster.
 - Optionally mount a volume at `TF_PLUGIN_CACHE_DIR` to keep providers between restarts.
-- Set the runner pods' `terminationGracePeriodSeconds` to cover a job (see [Shutdown]({{< relref "runners#how-it-works" >}})).
+- Set the runner pods' `terminationGracePeriodSeconds` to at least `OPS_JOB_TIMEOUT` + `OPS_JOB_GRACE` + 5 minutes (see [Shutdown]({{< relref "runners#how-it-works" >}})).
 - Scale the app with `replicas` too; background work runs on one of them (below).
 
 ## Background work

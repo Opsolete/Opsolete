@@ -136,8 +136,11 @@ func (r *Runner) ack(ctx context.Context, job runnerapi.Job) bool {
 func (r *Runner) Execute(hard context.Context, job runnerapi.Job) {
 	log := r.Log.With("run", job.RunID, "phase", job.Phase)
 	log.Info("job started")
-	ctx, cancel := context.WithTimeout(hard, r.JobTimeout)
+	// One deadline per phase; Terraform gets JobGrace after it (or any earlier interrupt), never more.
+	deadline := time.Now().Add(r.JobTimeout)
+	ctx, cancel := context.WithDeadline(hard, deadline)
 	defer cancel()
+	p := &tfProc{bin: r.Terraform, grace: r.JobGrace, end: deadline.Add(r.JobGrace)}
 
 	var signed []string // resolved signed URLs, kept out of the log
 	resolve := func(src string) (string, error) {
@@ -164,22 +167,29 @@ func (r *Runner) Execute(hard context.Context, job runnerapi.Job) {
 		r.finish(log, job, runnerapi.FinishRequest{Status: "failed", Message: "invalid module source from server"})
 		return
 	}
-	ship := newShipper(r, job, cancel, signed)
-	res := r.terraform(ctx, job, src, ship)
+	ship := newShipper(r, job, cancel, signed, p.end)
+	res := r.terraform(ctx, job, src, ship, p)
 	killJobProcesses()
 	ship.Close()
 	if ship.lost.Load() {
 		log.Warn("lease lost; result not reported")
 		return
 	}
+	stopped := "no Terraform command was running at the time" // e.g. during a plan download
+	if p.interrupted.Load() {
+		stopped = "Terraform was interrupted and saved its state"
+	}
+	if p.killed.Load() {
+		stopped = fmt.Sprintf("Terraform was interrupted but didn't stop within OPS_JOB_GRACE (%s) and was killed: the state may be missing resources it was changing", r.JobGrace)
+	}
 	switch {
 	case res.Status == "succeeded": // finished before the cancel or shutdown took effect: keep the result
 	case hard.Err() != nil:
-		res.Status, res.Message = "canceled", "runner was shut down during the run"
+		res.Status, res.Message = "canceled", "runner was shut down during the run; "+stopped
 	case ship.canceled.Load():
-		res.Status, res.Message = "canceled", "canceled by a user; Terraform was interrupted and saved its state"
+		res.Status, res.Message = "canceled", "canceled by a user; "+stopped
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
-		res.Status, res.Message = "failed", fmt.Sprintf("timed out after %s", r.JobTimeout)
+		res.Status, res.Message = "failed", fmt.Sprintf("timed out after %s; %s", r.JobTimeout, stopped)
 	}
 	res.Message = ship.redact.Replace(res.Message) // Terraform's stderr may quote a signed URL
 	if m := []rune(res.Message); len(m) > 2000 {   // after redacting: a cut must not split a signed URL
@@ -197,7 +207,7 @@ const (
 
 // terraform runs one phase in a throwaway directory. plan: save a plan, summarize it and upload
 // it with the provider lock file. apply: restore both, then apply exactly that plan.
-func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w io.Writer) (res runnerapi.FinishRequest) {
+func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w io.Writer, tf *tfProc) (res runnerapi.FinishRequest) {
 	fail := func(step string, err error) runnerapi.FinishRequest {
 		fmt.Fprintf(w, "\n==> %s failed\n", step)
 		return runnerapi.FinishRequest{Status: "failed", Message: step + ": " + err.Error()}
@@ -207,17 +217,7 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 		return fail("prepare workdir", err)
 	}
 	defer os.RemoveAll(dir)
-	tf, err := tfexec.NewTerraform(dir, r.Terraform)
-	if err != nil {
-		return fail("prepare terraform", err)
-	}
-	// After a cancel's SIGINT, Terraform finishes in-flight operations and saves state: that can take far
-	// longer than terraform-exec's 60s default before it kills the process (errors only on Windows).
-	_ = tf.SetWaitDelay(r.JobTimeout)
-	// terraform-exec only runs show and output (their output holds values); init, plan and apply
-	// run via tfRun, which keeps Terraform's colors.
-	tf.SetStdout(io.Discard)
-	tf.SetStderr(io.Discard)
+	tf.dir = dir
 	// A throwaway HOME (outside dir: init -from-module needs it empty): a job must not leave a
 	// .terraformrc, .gitconfig or provider mirror (~/.terraform.d/plugins) behind for the next job.
 	home, err := os.MkdirTemp("", "ops-home-*")
@@ -236,13 +236,10 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	env["TF_HTTP_USERNAME"], env["TF_HTTP_PASSWORD"] = job.WorkspaceID, job.StateToken
 	env["HOME"] = home
 	delete(env, "XDG_DATA_HOME") // Terraform's other implied provider mirror; defaults to under HOME
-	// CleanEnv drops the few variables terraform-exec sets itself (TF_LOG, TF_INPUT, ...).
-	if err := tf.SetEnv(tfexec.CleanEnv(env)); err != nil {
-		return fail("set environment", err)
-	}
-	cmdEnv := []string{"TF_IN_AUTOMATION=1"} // what terraform-exec adds; CleanEnv cleaned env in place
-	for k, v := range env {
-		cmdEnv = append(cmdEnv, k+"="+v)
+	// CleanEnv drops the variables terraform-exec manages (TF_LOG, TF_INPUT, TF_CLI_ARGS, ...).
+	tf.env = []string{"TF_IN_AUTOMATION=1"} // what terraform-exec adds
+	for k, v := range tfexec.CleanEnv(env) {
+		tf.env = append(tf.env, k+"="+v)
 	}
 	debug, _ := strconv.ParseBool(job.Env["OPS_DEBUG"]) // a workspace env variable: full warnings
 	run := func(args ...string) (bool, error) {
@@ -250,7 +247,7 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 			// one line per warning, e.g. the -target warning of every template removal
 			args = slices.Insert(args, 1, "-compact-warnings")
 		}
-		return r.tfRun(ctx, dir, cmdEnv, w, args...)
+		return tf.run(ctx, w, w, args...)
 	}
 
 	fmt.Fprintf(w, "==> runner %s: %s phase of %s run %s\n", r.Name, job.Phase, job.Action, job.RunID)
@@ -318,8 +315,11 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 		fmt.Fprintln(w, "\n==> done")
 		return runnerapi.FinishRequest{Status: "succeeded"}
 	}
-	outs, err := tf.Output(ctx) // prints sensitive values in clear text: tf's output is discarded
-	if err != nil {
+	var outs map[string]struct {
+		Sensitive bool
+		Value     json.RawMessage
+	}
+	if err := tf.json(ctx, &outs, "output", "-no-color", "-json"); err != nil { // sensitive values in clear text
 		return fail("read outputs", err)
 	}
 	outputs := map[string]any{}
@@ -341,7 +341,7 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 // Terraform keeps all outputs on a targeted destroy, so it plans the configuration without those
 // templates (their resources are gone, so their providers aren't needed anymore) and applies that
 // plan if it only changes outputs. -refresh=false: no API calls, and drift can't sneak in.
-func dropRemoved(ctx context.Context, tf *tfexec.Terraform, run func(...string) (bool, error), dir string, job runnerapi.Job, w io.Writer) error {
+func dropRemoved(ctx context.Context, tf *tfProc, run func(...string) (bool, error), dir string, job runnerapi.Job, w io.Writer) error {
 	left := slices.DeleteFunc(slices.Clone(job.Modules), func(m runnerapi.Module) bool { return slices.Contains(job.Target, "module."+m.Name) })
 	for _, f := range []string{modulesFile, outputsFile} {
 		if err := os.Remove(filepath.Join(dir, f)); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -362,8 +362,8 @@ func dropRemoved(ctx context.Context, tf *tfexec.Terraform, run func(...string) 
 	if err != nil || !changes {
 		return err
 	}
-	p, err := tf.ShowPlanFile(ctx, cleanupPlan) // includes values: tf's output is discarded
-	if err != nil {
+	var p tfjson.Plan
+	if err := tf.json(ctx, &p, "show", "-json", "-no-color", cleanupPlan); err != nil {
 		return err
 	}
 	for _, rc := range p.ResourceChanges {
@@ -456,7 +456,7 @@ func writeOutputs(dir string, mods []runnerapi.Module) error {
 
 // plan saves a plan; with changes it reports a summary and uploads the plan and the lock file
 // for the apply phase.
-func (r *Runner) plan(ctx context.Context, tf *tfexec.Terraform, run func(...string) (bool, error), dir string, job runnerapi.Job, w io.Writer,
+func (r *Runner) plan(ctx context.Context, tf *tfProc, run func(...string) (bool, error), dir string, job runnerapi.Job, w io.Writer,
 	fail func(string, error) runnerapi.FinishRequest) runnerapi.FinishRequest {
 	destroy := job.Action == "destroy"
 	refresh := job.Action == "refresh" || job.Action == "assess"
@@ -485,8 +485,8 @@ func (r *Runner) plan(ctx context.Context, tf *tfexec.Terraform, run func(...str
 		fmt.Fprintln(w, "\n==> no changes")
 		return runnerapi.FinishRequest{Status: "succeeded"}
 	}
-	p, err := tf.ShowPlanFile(ctx, planFile) // includes variable and attribute values: tf's output is discarded
-	if err != nil {
+	p := &tfjson.Plan{}
+	if err := tf.json(ctx, p, "show", "-json", "-no-color", planFile); err != nil {
 		return fail("read plan", err)
 	}
 	rcs := p.ResourceChanges
@@ -618,16 +618,17 @@ func summarize(rcs []*tfjson.ResourceChange) runnerapi.Plan {
 
 // inventory lists the managed resources in the workspace's state: names only, never attribute
 // values. nil means the state couldn't be read, so the current state version stays unindexed.
-func inventory(ctx context.Context, tf *tfexec.Terraform) []runnerapi.Resource {
+func inventory(ctx context.Context, tf *tfProc) []runnerapi.Resource {
 	// Own context: after a cancel the job's context is done, but while the run holds its lease
 	// the state is still readable, and a half-applied state is the one most worth indexing.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	// Still within the phase's hard end.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), min(30*time.Second, time.Until(tf.end)))
 	defer cancel()
-	st, err := tf.Show(ctx) // prints the whole state, secrets included: tf's output is discarded
-	if err != nil {
+	var st tfjson.State
+	if err := tf.json(ctx, &st, "show", "-json", "-no-color"); err != nil {
 		return nil
 	}
-	return runnerapi.Inventory(st)
+	return runnerapi.Inventory(&st)
 }
 
 // backendOptions points Terraform's http backend at the workspace's state on the server. Its
@@ -643,26 +644,65 @@ func (r *Runner) backendArgs(job runnerapi.Job) []string {
 // ansiCodes matches Terraform's color codes (SGR sequences).
 var ansiCodes = regexp.MustCompile("\x1b\\[[0-9;]*m")
 
-// tfRun runs a terraform command with its colors on, which terraform-exec can't do (it always adds
-// -no-color); the run page renders them. Otherwise like terraform-exec: SIGINT on cancel, stderr in
-// the error. With -detailed-exitcode, exit code 2 means "changes present", reported as true.
-func (r *Runner) tfRun(ctx context.Context, dir string, env []string, w io.Writer, args ...string) (bool, error) {
-	stderr := headBuffer{max: 64 << 10} // the job's message keeps only the start of it
-	cmd := exec.CommandContext(ctx, r.Terraform, args...)
-	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = dir, env, w, io.MultiWriter(w, &stderr)
-	// After SIGINT, Terraform finishes in-flight operations and saves state before it exits.
-	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
-	cmd.WaitDelay = r.JobTimeout
+// tfProc runs every terraform command of one phase under one rule for any interrupt (job timeout,
+// user cancel, lost lease, runner shutdown): when the command's context ends, Terraform gets SIGINT
+// (it starts nothing new, finishes in-flight operations and saves state), then at most grace to
+// exit, and never past end, before its process group is killed.
+type tfProc struct {
+	bin, dir    string
+	env         []string
+	grace       time.Duration
+	end         time.Time   // the phase's hard end: its deadline plus grace
+	interrupted atomic.Bool // a running command got SIGINT
+	killed      atomic.Bool // a command didn't stop in time and was killed
+}
+
+// run runs a terraform command with its colors on, which terraform-exec can't do (it always adds
+// -no-color); the run page renders them. Stderr goes in the error too. With -detailed-exitcode,
+// exit code 2 means "changes present", reported as true.
+func (p *tfProc) run(ctx context.Context, stdout, stderr io.Writer, args ...string) (bool, error) {
+	errs := headBuffer{max: 64 << 10} // the job's message keeps only the start of it
+	cmd := exec.CommandContext(ctx, p.bin, args...)
+	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = p.dir, p.env, stdout, io.MultiWriter(stderr, &errs)
+	var kill *time.Timer // set by Cancel, which returns before Wait does
+	cmd.Cancel = func() error {
+		kill = time.AfterFunc(min(p.grace, time.Until(p.end)), func() {
+			p.killed.Store(true)
+			killCommand(cmd)
+		})
+		err := cmd.Process.Signal(os.Interrupt)
+		if err == nil {
+			p.interrupted.Store(true)
+		}
+		return err
+	}
+	// Also bounds the wait for output pipes a process outside the group holds open. A second after
+	// kill's timer (both start at Cancel), so a kill is always ours and recorded.
+	// shortcut: such a process can hold the phase a second past its hard end; fine unless that matters.
+	cmd.WaitDelay = p.grace + time.Second
 	isolateCommand(cmd)
 	err := cmd.Run()
+	if kill != nil {
+		kill.Stop()
+	}
 	var exit *exec.ExitError
 	if errors.As(err, &exit) && exit.ExitCode() == 2 && slices.Contains(args, "-detailed-exitcode") {
 		return true, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("%w\n%s", err, ansiCodes.ReplaceAllString(stderr.String(), ""))
+		return false, fmt.Errorf("%w\n%s", err, ansiCodes.ReplaceAllString(errs.String(), ""))
 	}
 	return false, nil
+}
+
+// json decodes a terraform command's JSON output (show, output) into v. That output holds values,
+// secrets included: it never reaches the log.
+func (p *tfProc) json(ctx context.Context, v any, args ...string) error {
+	var out bytes.Buffer
+	if _, err := p.run(ctx, &out, io.Discard, args...); err != nil {
+		return err
+	}
+	return json.Unmarshal(out.Bytes(), v)
 }
 
 // headBuffer keeps the first max bytes written to it and drops the rest.
@@ -796,13 +836,14 @@ type shipper struct {
 	buf      bytes.Buffer
 	lost     atomic.Bool
 	canceled atomic.Bool // a user canceled the run: Terraform is interrupted, the lease kept
+	end      time.Time   // the phase's hard end: no heartbeats or log posts after it
 	stop     chan struct{}
 	stopped  chan struct{}
 }
 
 const maxBuffered = 8 << 20 // if the server is unreachable for long, drop output rather than memory
 
-func newShipper(r *Runner, job runnerapi.Job, cancel context.CancelFunc, signed []string) *shipper {
+func newShipper(r *Runner, job runnerapi.Job, cancel context.CancelFunc, signed []string, end time.Time) *shipper {
 	var pairs []string
 	for _, u := range signed {
 		if i := strings.Index(u, "?"); i >= 0 {
@@ -824,7 +865,7 @@ func newShipper(r *Runner, job runnerapi.Job, cancel context.CancelFunc, signed 
 			pairs = append(pairs, v, "***")
 		}
 	}
-	s := &shipper{r: r, job: job, cancel: cancel, redact: strings.NewReplacer(pairs...),
+	s := &shipper{r: r, job: job, cancel: cancel, redact: strings.NewReplacer(pairs...), end: end,
 		stop: make(chan struct{}), stopped: make(chan struct{})}
 	go s.loop()
 	return s
@@ -853,6 +894,11 @@ func (s *shipper) loop() {
 			}
 			return
 		case <-tick.C:
+			if time.Now().After(s.end) {
+				// Terraform is killed by now: if the runner can't finish the job, the lease runs out
+				// and the server's reaper does. Close still ships the tail once.
+				continue
+			}
 			if s.flush(false) {
 				last = time.Now()
 			} else if time.Since(last) > beat {

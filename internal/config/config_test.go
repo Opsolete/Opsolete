@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -88,6 +89,7 @@ func TestLoadRunner(t *testing.T) {
 	t.Setenv("OPS_SERVER_URL", "http://opsolete:8080")
 	t.Setenv("OPS_RUNNER_TOKEN", "")
 	t.Setenv("OPS_TERRAFORM", "/bin/terraform")
+	t.Setenv("OPS_JOB_GRACE", "")
 	if _, err := LoadRunner(); err == nil {
 		t.Fatal("expected error without token")
 	}
@@ -96,10 +98,19 @@ func TestLoadRunner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Token != "secret" || c.JobTimeout.String() != "1h0m0s" {
+	if c.Token != "secret" || c.JobTimeout.String() != "1h0m0s" || c.JobGrace.String() != "10m0s" {
 		t.Fatalf("runner config: %+v", c)
 	}
 	if _, set := os.LookupEnv("OPS_RUNNER_TOKEN"); set {
 		t.Fatal("token must be removed from the environment")
+	}
+	for _, v := range []string{"0", "-1m", "10"} {
+		for k, val := range map[string]string{"OPS_SERVER_URL": "http://opsolete:8080", "OPS_RUNNER_TOKEN": "secret", "OPS_TERRAFORM": "/bin/terraform"} {
+			t.Setenv(k, val) // LoadRunner unsets them
+		}
+		t.Setenv("OPS_JOB_GRACE", v)
+		if _, err := LoadRunner(); err == nil || !strings.Contains(err.Error(), "OPS_JOB_GRACE") {
+			t.Fatalf("OPS_JOB_GRACE=%s: err = %v", v, err)
+		}
 	}
 }

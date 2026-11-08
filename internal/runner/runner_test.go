@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -40,6 +41,7 @@ type fakeServer struct {
 	cancelAfter   string            // answer log posts with 202 (user canceled) once the log contains this
 	claim         http.HandlerFunc  // answers POST /jobs/claim
 	calls         []string          // job calls in order: ack, logs, heartbeat, finish
+	stall         bool              // artifact downloads hang until the runner gives up
 }
 
 // artifact stores and serves plan artifacts, like the server, only for the job's lease.
@@ -49,6 +51,10 @@ func (f *fakeServer) artifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	key := strings.TrimPrefix(r.URL.Path, runnerapi.Prefix+"/jobs/")
+	if f.stall && r.Method == http.MethodGet {
+		<-r.Context().Done()
+		return
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.artifacts == nil {
@@ -168,7 +174,7 @@ func testRunner(t *testing.T, srv *httptest.Server) *Runner {
 		}
 	}
 	u, _ := url.Parse(srv.URL)
-	r := New(config.Runner{ServerURL: u, Token: "tok", Name: "test", Terraform: tf, JobTimeout: time.Minute},
+	r := New(config.Runner{ServerURL: u, Token: "tok", Name: "test", Terraform: tf, JobTimeout: time.Minute, JobGrace: time.Minute},
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 	return r
 }
@@ -515,7 +521,7 @@ func TestShipperRedactsAndDrains(t *testing.T) {
 	r := New(config.Runner{ServerURL: u, Token: "tok"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	signed := "/v1/archives/m.tar.gz?expires=1&sig=secret-signature"
 	pem := "-----BEGIN KEY-----\nAAAAkeyline\n-----END KEY-----"
-	s := newShipper(r, runnerapi.Job{RunID: "run1", LeaseID: "lease", Secrets: []string{"hunter22", "hunter22-long", pem, "eu"}}, func() {}, []string{signed})
+	s := newShipper(r, runnerapi.Job{RunID: "run1", LeaseID: "lease", Secrets: []string{"hunter22", "hunter22-long", pem, "eu"}}, func() {}, []string{signed}, time.Now().Add(time.Hour))
 	s.Write([]byte("init " + signed[:30]))
 	s.Write([]byte(signed[30:] + " failed\n"))
 	s.Write([]byte("local-exec: hunter22-long hunter22 eu AAAAkeyline\n"))
@@ -531,6 +537,89 @@ func TestShipperRedactsAndDrains(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, big) {
 		t.Fatalf("tail lost: got %d bytes, want suffix of %d", len(got), len(big))
+	}
+}
+
+// Every interrupt (job timeout, user cancel, runner shutdown) follows one rule: SIGINT, then at most
+// OPS_JOB_GRACE before Terraform is killed. The fake terraform's plan either ignores SIGINT or stops
+// shortly after it.
+func TestInterrupt(t *testing.T) {
+	const timeout, grace = 300 * time.Millisecond, 400 * time.Millisecond
+	ignore := "trap '' INT; exec sleep 10"
+	stop := "trap 'sleep 0.1; kill $!; exit 1' INT; sleep 10 >/dev/null & wait"
+	for _, c := range []struct {
+		name, plan, cause, want string
+		killed                  bool
+	}{
+		{"timeout between commands", ignore, "stall", "timed out after 300ms; no Terraform command was running at the time", false},
+		{"timeout killed", ignore, "timeout", "timed out after 300ms; Terraform was interrupted but didn't stop within OPS_JOB_GRACE (400ms) and was killed", true},
+		{"timeout clean", stop, "timeout", "timed out after 300ms; Terraform was interrupted and saved its state", false},
+		{"cancel killed", ignore, "cancel", "canceled by a user; Terraform was interrupted but didn't stop", true},
+		{"cancel clean", stop, "cancel", "canceled by a user; Terraform was interrupted and saved its state", false},
+		{"shutdown killed", ignore, "shutdown", "runner was shut down during the run; Terraform was interrupted but didn't stop", true},
+		{"shutdown clean", stop, "shutdown", "runner was shut down during the run; Terraform was interrupted and saved its state", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			bin := filepath.Join(t.TempDir(), "terraform")
+			script := "#!/bin/sh\n[ \"$1\" = plan ] || exit 0\necho planning\n" + c.plan + "\n"
+			if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			f := &fakeServer{}
+			srv := httptest.NewServer(f)
+			defer srv.Close()
+			u, _ := url.Parse(srv.URL)
+			r := New(config.Runner{ServerURL: u, Token: "tok", Name: "test", Terraform: bin, JobTimeout: time.Minute, JobGrace: grace},
+				slog.New(slog.NewTextHandler(io.Discard, nil)))
+			hard, interrupt := context.WithCancel(context.Background())
+			defer interrupt()
+			phase := "plan"
+			switch c.cause {
+			case "timeout":
+				r.JobTimeout = timeout
+			case "stall": // the apply phase's plan download hangs past the deadline, before any terraform command
+				r.JobTimeout, f.stall, phase = timeout, true, "apply"
+			case "cancel":
+				f.cancelAfter = "planning" // the first log post, about a second in
+			case "shutdown":
+				time.AfterFunc(timeout, interrupt)
+			}
+			start := time.Now()
+			r.Execute(hard, job("i", phase, "plan", "", nil))
+			took := time.Since(start)
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if f.finish == nil || f.finish.Status == "succeeded" || !strings.HasPrefix(f.finish.Message, c.want) {
+				t.Fatalf("result %+v, want message %q\n%s", f.finish, c.want, f.logs.String())
+			}
+			// interrupted by about 1.2s at the latest (the cancel arrives with a log post)
+			if limit := 1500*time.Millisecond + grace; took > limit || c.killed && took < timeout+grace {
+				t.Fatalf("took %s: want at most %s, and killed only after the grace", took, limit)
+			}
+		})
+	}
+}
+
+// After the phase's hard end the shipper neither posts logs nor heartbeats, so the lease runs out
+// unless the runner finishes; Close still ships the tail once.
+func TestShipperStopsAtHardEnd(t *testing.T) {
+	f := &fakeServer{}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	r := New(config.Runner{ServerURL: u, Token: "tok"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	// a heartbeat every 2s otherwise
+	s := newShipper(r, runnerapi.Job{RunID: "run1", LeaseID: "lease", LeaseSeconds: 8}, func() {}, nil, time.Now())
+	s.Write([]byte("after the end\n"))
+	time.Sleep(3500 * time.Millisecond)
+	f.mu.Lock()
+	calls := slices.Clone(f.calls)
+	f.mu.Unlock()
+	s.Close()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(calls) != 0 || !slices.Equal(f.calls, []string{"logs"}) || f.logs.String() != "after the end\n" {
+		t.Fatalf("calls before Close %v, after %v, logs %q", calls, f.calls, f.logs.String())
 	}
 }
 

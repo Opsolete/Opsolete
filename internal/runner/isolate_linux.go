@@ -38,3 +38,7 @@ func killJobProcesses() {
 		}
 	}
 }
+
+// killCommand kills a terraform command's whole process group: Terraform, its providers and what
+// provisioners started.
+func killCommand(cmd *exec.Cmd) { syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }

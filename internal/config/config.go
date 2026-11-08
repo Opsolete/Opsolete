@@ -147,7 +147,8 @@ type Runner struct {
 	Token      string        // the server's RUNNER_TOKEN
 	Name       string        // shown on deployments; defaults to the hostname (pod name)
 	Terraform  string        // terraform binary
-	JobTimeout time.Duration // hard limit per deployment
+	JobTimeout time.Duration // limit per run phase; then Terraform is interrupted
+	JobGrace   time.Duration // after any interrupt, how long Terraform may take to stop before it's killed
 	// Cost estimation with Infracost; off without an API key.
 	Infracost       string // infracost binary
 	InfracostAPIKey string
@@ -177,6 +178,11 @@ func LoadRunner() (Runner, error) {
 	}
 	if c.JobTimeout, err = time.ParseDuration(getenv("OPS_JOB_TIMEOUT", "1h")); err != nil || c.JobTimeout <= 0 {
 		return c, errors.New("OPS_JOB_TIMEOUT must be a duration like 45m")
+	}
+	// 10m: in-flight resource operations (a database being created) can take minutes, and killing
+	// Terraform before they finish can leave real resources missing from state.
+	if c.JobGrace, err = time.ParseDuration(getenv("OPS_JOB_GRACE", "10m")); err != nil || c.JobGrace <= 0 {
+		return c, errors.New("OPS_JOB_GRACE must be a duration like 10m")
 	}
 	if c.InfracostAPIKey = os.Getenv("OPS_INFRACOST_API_KEY"); c.InfracostAPIKey != "" {
 		if c.Infracost = os.Getenv("OPS_INFRACOST"); c.Infracost == "" {

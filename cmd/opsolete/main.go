@@ -144,7 +144,8 @@ func createToken() error {
 }
 
 // runRunner: the first SIGTERM/SIGINT stops claiming and lets the current job finish
-// (give pods a terminationGracePeriodSeconds that covers a job); a second one interrupts it.
+// (give pods a terminationGracePeriodSeconds of at least OPS_JOB_TIMEOUT + OPS_JOB_GRACE + 5m); a
+// second one interrupts it (SIGINT, killed after OPS_JOB_GRACE).
 func runRunner(log *slog.Logger) error {
 	cfg, err := config.LoadRunner()
 	if err != nil {
