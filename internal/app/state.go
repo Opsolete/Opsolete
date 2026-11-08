@@ -268,6 +268,41 @@ func (s State) CurrentLock(ctx context.Context) (*storage.StateLock, error) {
 	return s.a.Store.GetStateLock(ctx, s.Workspace.ID)
 }
 
+// The workspace's pages read the rest of it through its State too: access is checked once.
+
+// Runs lists the workspace's newest runs, newest first.
+func (s State) Runs(ctx context.Context, limit int) ([]storage.Run, error) {
+	return s.a.Store.Runs(ctx, s.Workspace.ID, limit)
+}
+
+// LatestAssessment is the workspace's latest drift check; nil if none.
+func (s State) LatestAssessment(ctx context.Context) (*storage.Run, error) {
+	r, err := s.a.Store.LatestAssessment(ctx, s.Workspace.ID)
+	if errors.Is(err, storage.ErrNotFound) {
+		return nil, nil
+	}
+	return &r, err
+}
+
+// Templates lists the templates added to the workspace.
+func (s State) Templates(ctx context.Context) ([]storage.WorkspaceTemplate, error) {
+	return s.a.Store.WorkspaceTemplates(ctx, s.Workspace.ID)
+}
+
+// RunMetrics are the workspace's run statistics.
+func (s State) RunMetrics(ctx context.Context) (storage.RunMetrics, error) {
+	return s.a.Store.RunMetrics(ctx, s.Workspace.ID)
+}
+
+// RemoteStateConsumers lists the workspaces the workspace shares its state with, also those the
+// actor can't see. Needs operate.
+func (s State) RemoteStateConsumers(ctx context.Context) ([]storage.Workspace, error) {
+	if err := s.operate(); err != nil {
+		return nil, err
+	}
+	return s.a.Store.RemoteStateConsumers(ctx, s.Workspace.ID)
+}
+
 // File reads a state version's file. Needs operate; ErrNotFound for a version of another workspace.
 func (s State) File(ctx context.Context, version int64) ([]byte, error) {
 	if err := s.operate(); err != nil {

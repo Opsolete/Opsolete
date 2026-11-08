@@ -50,7 +50,7 @@ func (c dbStats) Describe(ch chan<- *prometheus.Desc) { ch <- runsDesc; ch <- qu
 func (c dbStats) Collect(ch chan<- prometheus.Metric) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	st, err := c.s.App.Store.Stats(ctx)
+	st, err := c.s.App.Stats(ctx)
 	if err != nil { // skip, don't fail the scrape: the runtime metrics still matter, and /readyz reports the database
 		c.s.App.Log.Error("metrics: read database stats", "err", err)
 		return

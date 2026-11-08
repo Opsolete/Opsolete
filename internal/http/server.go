@@ -3,7 +3,6 @@ package httpserver
 
 import (
 	"cmp"
-	"crypto/rand"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -11,7 +10,6 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -22,18 +20,16 @@ import (
 
 	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/auth"
-	"github.com/opsolete/opsolete/internal/registry"
 	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
-	"github.com/opsolete/opsolete/internal/vcs"
 )
 
 //go:embed views/*.html
 var views embed.FS
 
 type Server struct {
-	App      *app.App // the operations; s.App.Store marks where HTTP still bypasses them
+	App      *app.App // the operations
 	Auth     *auth.Auth
 	Features Features
 	// Organization is the one organization of the cloud API (Terraform's cloud block).
@@ -53,9 +49,9 @@ type Features struct {
 	VCS    bool // GitHub / Azure DevOps connections: publish registry modules (with Registry), link workspaces and the template catalog (with Deployments)
 }
 
-// New serves a's operations; a.RegistryEnabled follows f.Registry.
+// New serves a's operations; a.RegistryEnabled, a.VCSEnabled and a.TemplateEditor follow f.
 func New(a *app.App, au *auth.Auth, f Features) *Server {
-	a.RegistryEnabled = f.Registry
+	a.RegistryEnabled, a.VCSEnabled, a.TemplateEditor = f.Registry, f.VCS, f.Editor
 	pages := template.Must(template.New("").Funcs(template.FuncMap{"join": strings.Join, "json": toJSON, "dict": dict,
 		"user": func() auth.User { return auth.User{} }, "section": func() string { return "" },
 		"workspace": func() string { return "" }, "project": func() string { return "" }, "tab": func() string { return "" },
@@ -65,24 +61,6 @@ func New(a *app.App, au *auth.Auth, f Features) *Server {
 	s := &Server{App: a, Auth: au, Features: f, pages: pages}
 	s.clones.New = func() any { return template.Must(s.pages.Clone()) }
 	return s
-}
-
-// CheckTemplates fails if a template needs a disabled component: with the registry off,
-// a template pointing at it would only fail later, on the runner.
-func (s *Server) CheckTemplates() error {
-	for _, t := range s.App.Templates.List() {
-		if err := s.checkSource(t); err != nil {
-			return fmt.Errorf("template %s: %w", t.ID, err)
-		}
-	}
-	return nil
-}
-
-func (s *Server) checkSource(t templates.Template) error {
-	if _, _, _, ok := s.App.Registry.ParseSource(t.Module.Source); ok && !s.Features.Registry {
-		return fmt.Errorf("module %s is in this registry, which is disabled (REGISTRY_ENABLED=false)", t.Module.Source)
-	}
-	return nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -168,19 +146,9 @@ func (s *Server) admin(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// canEditTemplates: the user is an admin and the template builder is on (TEMPLATE_EDITOR for
-// TEMPLATES_DIR, or the Git catalog's editor mode).
+// canEditTemplates: deployments are on and app.CanEditTemplates.
 func (s *Server) canEditTemplates(r *http.Request) bool {
-	if !s.Features.Deployments || !auth.FromContext(r.Context()).Admin() {
-		return false
-	}
-	switch mode, _ := s.App.Templates.Source(); mode {
-	case "":
-		return s.Features.Editor
-	case "commit", "pr":
-		return true
-	}
-	return false
+	return s.Features.Deployments && s.App.CanEditTemplates(actor(r))
 }
 
 // editor answers 404 while the template builder is off.
@@ -194,15 +162,12 @@ func (s *Server) editor(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// canUpload: the user is an admin and module uploads are on (Organization settings, or TEMPLATE_EDITOR).
+// canUpload: the registry is on and app.CanUpload.
 func (s *Server) canUpload(r *http.Request) bool {
-	if !s.Features.Registry || !auth.FromContext(r.Context()).Admin() {
+	if !s.Features.Registry {
 		return false
 	}
-	if s.Features.Editor {
-		return true
-	}
-	on, err := s.App.Store.ModuleUploads(r.Context())
+	on, err := s.App.CanUpload(r.Context(), actor(r))
 	if err != nil {
 		s.App.Log.Error("module uploads setting", "err", err)
 	}
@@ -243,7 +208,7 @@ func formID(id uuid.UUID) string {
 func pathID(r *http.Request, name string) (uuid.UUID, bool) { return parseID(r.PathValue(name)) }
 
 func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
-	if err := s.App.Store.Pool.Ping(r.Context()); err != nil {
+	if err := s.App.Ready(r.Context()); err != nil {
 		s.App.Log.Error("readiness check failed", "err", err)
 		http.Error(w, "database unavailable", http.StatusServiceUnavailable)
 		return
@@ -284,7 +249,7 @@ func (p builderPage) ShowOptions(i int) []string {
 
 func (s *Server) renderBuilder(w http.ResponseWriter, r *http.Request, status int, p builderPage) {
 	if p.Registry = s.Features.Registry; p.Registry {
-		mods, err := s.App.Store.ListModules(r.Context())
+		mods, err := s.App.Modules(r.Context())
 		if err != nil {
 			s.App.Log.Error("list modules", "err", err)
 			http.Error(w, "could not load modules", http.StatusInternalServerError)
@@ -321,26 +286,14 @@ func (s *Server) builder(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "module must be namespace/name/system/version", http.StatusBadRequest)
 			return
 		}
-		m, err := s.App.Store.GetModule(r.Context(), parts[0], parts[1], parts[2], parts[3])
-		if errors.Is(err, storage.ErrNotFound) {
-			http.NotFound(w, r)
-			return
-		}
+		t, skipped, err := s.App.ModuleTemplate(r.Context(), parts[0], parts[1], parts[2], parts[3])
 		if err != nil {
-			s.App.Log.Error("get module", "err", err)
-			http.Error(w, "could not load module", http.StatusInternalServerError)
+			s.uiError(w, r, err)
 			return
 		}
-		_, _, _, source, err := s.App.Registry.Address(m.Namespace, m.Name, m.System)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		inputs, skipped := registry.Inputs(m.Variables)
-		p.T.Module = templates.Module{Source: source, Ref: m.Version}
-		p.T.Inputs = inputs
+		p.T.Module, p.T.Inputs = t.Module, t.Inputs
 		if p.T.Name == "" {
-			p.T.Name = m.Name
+			p.T.Name = t.Name
 		}
 		p.Selected = sel
 		if len(skipped) > 0 {
@@ -356,98 +309,64 @@ func (s *Server) saveTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t := templateFromForm(r)
+	t.ID = r.PostForm.Get("id") // posted by this page's earlier save
 	editing := r.PathValue("id") != ""
 	if editing {
-		if _, ok := s.App.Templates.Get(r.PathValue("id")); !ok {
-			http.NotFound(w, r)
-			return
-		}
-		t.ID = r.PathValue("id") // the id is the file name; it can't change on edit
-	} else if id := r.PostForm.Get("id"); uuidRe.MatchString(id) { // posted by this page's earlier save
-		t.ID = id
-	} else {
-		t.ID = newID()
+		t.ID = r.PathValue("id")
 	}
-	fail := func(msg string) {
-		s.renderBuilder(w, r, http.StatusUnprocessableEntity, builderPage{T: t, Editing: editing, Error: msg, Selected: r.PostForm.Get("selected")})
-	}
-	if err := s.checkSource(t); err != nil {
-		fail(err.Error())
-		return
-	}
-	// A template pointing at this registry must reference a version that exists, or the deploy fails later.
-	if ns, name, sys, ok := s.App.Registry.ParseSource(t.Module.Source); ok {
-		if _, err := s.App.Store.GetModule(r.Context(), ns, name, sys, t.Module.Ref); errors.Is(err, storage.ErrNotFound) {
-			fail(fmt.Sprintf("registry module %s has no version %q", t.Module.Source, t.Module.Ref))
-			return
-		} else if err != nil {
-			s.App.Log.Error("get module", "err", err)
-			fail("could not check registry module")
-			return
-		}
-	}
+	page := builderPage{Editing: editing, Selected: r.PostForm.Get("selected")}
 	if r.PostForm.Has("preview") { // the deploy form as end users get it, without saving
-		if _, err := templates.Encode(t); err != nil {
-			fail(err.Error())
-			return
-		}
-		rt, err := s.App.Resolve(r.Context(), t)
+		rt, err := s.App.PreviewTemplate(r.Context(), actor(r), t, editing)
 		if err != nil {
-			s.internalError(w, "resolve template", err)
+			page.T = rt
+			s.builderError(w, r, page, err)
 			return
 		}
-		vals, _ := formDefaults(rt, nil)
+		vals, _ := app.FormDefaults(rt, nil)
 		s.render(w, r, http.StatusOK, "form.html", formPage{T: rt, Values: vals, Preview: true})
 		return
 	}
-	if mode, _ := s.App.Templates.Source(); mode != "" {
-		pr, err := vcs.SaveTemplate(r.Context(), s.App.Store, s.App.SecretKey, s.App.Templates, t, auth.FromContext(r.Context()).Email)
-		if err != nil {
-			s.App.Log.Warn("save template to git", "id", t.ID, "err", err)
-			fail(err.Error())
-			return
-		}
-		if pr != "" { // the catalog changes once it's merged
-			s.App.Log.Info("template pull request opened", "id", t.ID, "url", pr)
-			s.renderBuilder(w, r, http.StatusOK, builderPage{T: t, Editing: editing, PullRequest: pr, Selected: r.PostForm.Get("selected")})
-			return
-		}
-	} else if err := s.App.Templates.Save(t, editing); err != nil {
-		fail(err.Error())
+	t, pr, err := s.App.SaveCatalogTemplate(r.Context(), actor(r), t, editing)
+	page.T = t
+	if err != nil {
+		s.builderError(w, r, page, err)
 		return
 	}
-	s.App.Log.Info("template saved", "id", t.ID)
+	if pr != "" { // the catalog changes once it's merged
+		page.PullRequest = pr
+		s.renderBuilder(w, r, http.StatusOK, page)
+		return
+	}
 	http.Redirect(w, r, "/templates/"+t.ID, http.StatusSeeOther)
 }
 
-// deleteTemplate removes a template from the catalog. Workspaces using it keep running
-// their pinned module; they just can't be reconfigured from it.
+// builderError shows a refused save on the builder form: invalid templates, and the directory's or
+// the Git provider's refusal (as these say). Not found and forbidden are answered as such.
+func (s *Server) builderError(w http.ResponseWriter, r *http.Request, p builderPage, err error) {
+	if errors.Is(err, app.ErrNotFound) || errors.Is(err, app.ErrForbidden) {
+		s.uiError(w, r, err)
+		return
+	}
+	if !isValidation(err) {
+		s.App.Log.Warn("save template", "id", p.T.ID, "err", err)
+	}
+	p.Error = err.Error()
+	s.renderBuilder(w, r, http.StatusUnprocessableEntity, p)
+}
+
+// deleteTemplate removes a template from the catalog (app.DeleteCatalogTemplate).
 func (s *Server) deleteTemplate(w http.ResponseWriter, r *http.Request) {
-	t, ok := s.App.Templates.Get(r.PathValue("id"))
-	if !ok {
-		http.NotFound(w, r)
+	t, pr, err := s.App.DeleteCatalogTemplate(r.Context(), actor(r), r.PathValue("id"))
+	page := builderPage{T: t, Editing: true}
+	if err != nil {
+		s.builderError(w, r, page, err)
 		return
 	}
-	fail := func(msg string) {
-		s.renderBuilder(w, r, http.StatusUnprocessableEntity, builderPage{T: t, Editing: true, Error: msg})
-	}
-	if mode, _ := s.App.Templates.Source(); mode != "" {
-		pr, err := vcs.DeleteTemplate(r.Context(), s.App.Store, s.App.SecretKey, s.App.Templates, t.ID, auth.FromContext(r.Context()).Email)
-		if err != nil {
-			s.App.Log.Warn("delete template in git", "id", t.ID, "err", err)
-			fail(err.Error())
-			return
-		}
-		if pr != "" { // the template goes once it's merged
-			s.App.Log.Info("template removal pull request opened", "id", t.ID, "url", pr)
-			s.renderBuilder(w, r, http.StatusOK, builderPage{T: t, Editing: true, PullRequest: pr})
-			return
-		}
-	} else if err := s.App.Templates.Delete(t.ID); err != nil {
-		fail(err.Error())
+	if pr != "" { // the template goes once it's merged
+		page.PullRequest = pr
+		s.renderBuilder(w, r, http.StatusOK, page)
 		return
 	}
-	s.App.Log.Info("template deleted", "id", t.ID)
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
@@ -474,17 +393,6 @@ func toJSON(v any) string {
 		return fmt.Sprint(v)
 	}
 	return string(b)
-}
-
-var uuidRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`) // newID's format
-
-// newID returns a random UUIDv4, the same format as deployment ids.
-func newID() string {
-	b := make([]byte, 16)
-	rand.Read(b)
-	b[6] = b[6]&0x0f | 0x40
-	b[8] = b[8]&0x3f | 0x80
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
 
 // templateFromForm reads the builder form. Field cards are parallel in_* lists, rows without a name are

@@ -100,7 +100,7 @@ func (s *Server) form(w http.ResponseWriter, r *http.Request) {
 		s.uiError(w, r, err)
 		return
 	}
-	vals, _ := formDefaults(t, nil)
+	vals, _ := app.FormDefaults(t, nil)
 	projects, err := s.creatableProjects(r)
 	if err != nil {
 		s.internalError(w, "list projects", err)
@@ -210,7 +210,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 	if tab == "" {
 		tab = "overview"
 	}
-	runs, err := s.App.Store.Runs(ctx, ws.ID, 25)
+	runs, err := st.Runs(ctx, 25)
 	if err != nil {
 		s.internalError(w, "list runs", err)
 		return
@@ -230,18 +230,17 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "outputs", err)
 		return
 	}
-	var active, assessment *storage.Run
+	var active *storage.Run
 	if len(runs) > 0 && runs[0].Active() {
 		active = &runs[0]
 	}
-	if a, err := s.App.Store.LatestAssessment(ctx, ws.ID); err == nil {
-		assessment = &a
-		if a.Active() { // a drift check holds the workspace like any run
-			active = assessment
-		}
-	} else if !errors.Is(err, storage.ErrNotFound) {
+	assessment, err := st.LatestAssessment(ctx)
+	if err != nil {
 		s.internalError(w, "latest assessment", err)
 		return
+	}
+	if assessment != nil && assessment.Active() { // a drift check holds the workspace like any run
+		active = assessment
 	}
 	var current *runItem
 	if len(runs) > 0 {
@@ -258,7 +257,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 
 	switch tab {
 	case "overview":
-		added, err := s.App.Store.WorkspaceTemplates(ctx, ws.ID)
+		added, err := st.Templates(ctx)
 		if err != nil {
 			s.internalError(w, "workspace templates", err)
 			return
@@ -278,14 +277,14 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		}
 		var latestPlan, latestApply phase
 		if len(runs) > 0 {
-			_, hist, err := s.App.Store.GetRun(ctx, runs[0].ID)
+			d, err := s.App.Run(ctx, actor(r), ws.Name, runs[0].ID, app.LevelRead)
 			if err != nil {
-				s.internalError(w, "latest run", err)
+				s.uiError(w, r, err)
 				return
 			}
-			latestPlan, latestApply = runPhases(runs[0], hist)
+			latestPlan, latestApply = runPhases(runs[0], d.History)
 		}
-		metrics, err := s.App.Store.RunMetrics(ctx, ws.ID)
+		metrics, err := st.RunMetrics(ctx)
 		if err != nil {
 			s.internalError(w, "run metrics", err)
 			return
@@ -358,9 +357,9 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		// selected even if this user can't see them
 		stateConsumers := picker{Name: "remote_state_consumers", Label: "Workspaces to share the state with"}
 		if page == "" && level == app.LevelOperate {
-			cur, err := s.App.Store.RemoteStateConsumers(ctx, ws.ID)
+			cur, err := st.RemoteStateConsumers(ctx)
 			if err != nil {
-				s.internalError(w, "remote state consumers", err)
+				s.uiError(w, r, err)
 				return
 			}
 			all, err := s.App.ListWorkspaces(ctx, actor(r), "")

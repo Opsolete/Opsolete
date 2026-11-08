@@ -1,11 +1,6 @@
 package httpserver
 
-import (
-	"encoding/json"
-	"net/http"
-
-	"github.com/opsolete/opsolete/internal/auth"
-)
+import "net/http"
 
 // Account settings: the signed-in user's profile and `terraform login`
 // tokens. Login is OIDC, so there are no passwords or second factors here; sessions are signed
@@ -18,29 +13,20 @@ func (s *Server) accountRoutes(mux *http.ServeMux) {
 }
 
 func (s *Server) accountPage(w http.ResponseWriter, r *http.Request) {
-	u := auth.FromContext(r.Context())
 	data := map[string]any{"Page": r.PathValue("page")}
+	var err error
 	switch r.PathValue("page") {
 	case "profile": // the groups recorded at the last login decide team access
-		raw, err := s.App.Store.UserGroups(r.Context(), u.ID)
-		var groups []string
-		if err == nil {
-			err = json.Unmarshal(raw, &groups)
-		}
-		if err != nil {
-			s.internalError(w, "user groups", err)
-			return
-		}
-		data["Groups"] = groups
+		data["Groups"], err = s.App.UserGroups(r.Context(), actor(r))
 	case "tokens":
-		tokens, err := s.App.Store.UserTokens(r.Context(), u.ID)
-		if err != nil {
-			s.internalError(w, "user tokens", err)
-			return
-		}
-		data["Tokens"], data["Host"] = tokens, s.App.Registry.PublicURL.Host
+		data["Tokens"], err = s.App.UserTokens(r.Context(), actor(r))
+		data["Host"] = s.App.Registry.PublicURL.Host
 	default:
 		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		s.uiError(w, r, err)
 		return
 	}
 	s.render(w, r, http.StatusOK, "account.html", data)
@@ -48,22 +34,18 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request) {
 
 // revokeToken revokes one of the user's own tokens; at once, since every request checks it.
 func (s *Server) revokeToken(w http.ResponseWriter, r *http.Request) {
-	u := auth.FromContext(r.Context())
 	id, _ := pathID(r, "id") // not an id: revokes nothing, as for an unknown one
-	if err := s.App.Store.RevokeUserToken(r.Context(), u.ID, id); err != nil {
-		s.internalError(w, "revoke token", err)
+	if err := s.App.RevokeUserToken(r.Context(), actor(r), id); err != nil {
+		s.uiError(w, r, err)
 		return
 	}
-	s.App.Log.Info("token revoked", "id", r.PathValue("id"), "user", u.Email)
 	http.Redirect(w, r, "/account/tokens", http.StatusSeeOther)
 }
 
 func (s *Server) revokeTokens(w http.ResponseWriter, r *http.Request) {
-	u := auth.FromContext(r.Context())
-	if err := s.App.Store.RevokeUserTokens(r.Context(), u.ID); err != nil {
-		s.internalError(w, "revoke tokens", err)
+	if err := s.App.RevokeUserTokens(r.Context(), actor(r)); err != nil {
+		s.uiError(w, r, err)
 		return
 	}
-	s.App.Log.Info("all tokens revoked", "user", u.Email)
 	http.Redirect(w, r, "/account/tokens", http.StatusSeeOther)
 }

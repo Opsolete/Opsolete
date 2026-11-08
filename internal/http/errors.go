@@ -57,7 +57,7 @@ func (s *Server) apiError(w http.ResponseWriter, r *http.Request, err error) {
 
 // runnerError answers an app error on the runner API as {"errors": [msg]}: not found 404 (no such
 // artifact), forbidden 403, conflict 409 (storage.ErrLeaseLost: "job lease lost", the runner stops
-// working on the job), validation 400, else 500.
+// working on the job), validation 400, else 500. The registry protocol has the same error shape.
 func (s *Server) runnerError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, app.ErrNotFound):

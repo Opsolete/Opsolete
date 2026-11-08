@@ -16,6 +16,16 @@ SELECT * FROM vcs_connection_list WHERE id = sqlc.arg(id)::uuid;
 -- name: SetVCSScope :exec
 UPDATE vcs_connections SET workspace_scope = sqlc.arg(workspace_scope)::text WHERE id = sqlc.arg(id)::uuid;
 
+-- name: LockConnectionWorkspaces :exec
+-- Locks every workspace linked to the connection: runs can't be queued on them until the transaction
+-- ends (their foreign key check waits).
+SELECT w.id FROM workspaces w JOIN workspace_vcs v ON v.workspace_id = w.id
+WHERE v.connection_id = sqlc.arg(id)::uuid FOR UPDATE OF w;
+
+-- name: ConnectionHasActiveRun :one
+SELECT EXISTS (SELECT 1 FROM runs r JOIN workspace_vcs v ON v.workspace_id = r.workspace_id
+    WHERE v.connection_id = sqlc.arg(id)::uuid AND run_active(r.status))::boolean;
+
 -- name: DeleteVCSConnection :exec
 DELETE FROM vcs_connections WHERE id = sqlc.arg(id)::uuid;
 

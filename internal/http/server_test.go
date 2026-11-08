@@ -198,13 +198,13 @@ func TestFeatureSwitches(t *testing.T) {
 		!strings.Contains(rec.Body.String(), "disabled") {
 		t.Fatalf("registry template saved with registry off: %d", rec.Code)
 	}
-	if err := newApp(t, dir, nil, a, Features{Deployments: true}).CheckTemplates(); err != nil {
+	if err := newApp(t, dir, nil, a, Features{Deployments: true}).App.CheckTemplates(); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(dir+"/reg.json", []byte(`{"id":"reg","name":"r","module":{"source":"ops.example.com/acme/storage/azurerm","ref":"1.0.0"},"inputs":[]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := newApp(t, dir, nil, a, Features{Deployments: true}).CheckTemplates(); err == nil {
+	if err := newApp(t, dir, nil, a, Features{Deployments: true}).App.CheckTemplates(); err == nil {
 		t.Fatal("startup must fail on a registry template while the registry is off")
 	}
 
@@ -1308,3 +1308,5 @@ func TestWorkspaceLock(t *testing.T) {
 		t.Fatalf("the run must start once unlocked: %+v %v %v", j, ok, err)
 	}
 }
+
+func newID() string { return uuid.NewString() }

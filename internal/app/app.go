@@ -24,7 +24,11 @@ type App struct {
 	Registry  *registry.Registry
 	// RegistryEnabled: templates pinning a module of this registry take their inputs from its variables.
 	RegistryEnabled bool
-	Log             *slog.Logger
+	VCSEnabled      bool // workspaces may link repositories (VCS connections themselves are admin-managed either way)
+	// TemplateEditor (TEMPLATE_EDITOR, for development): the template builder writes into
+	// TEMPLATES_DIR, and module uploads are on. A Git catalog has its own editor mode, uploads their own setting.
+	TemplateEditor bool
+	Log            *slog.Logger
 }
 
 // Actor is who performs an operation. A system actor (VCS poller, rollouts) has UserID uuid.Nil,

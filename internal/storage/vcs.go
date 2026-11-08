@@ -73,10 +73,23 @@ func (s *Store) SetVCSScope(ctx context.Context, id uuid.UUID, workspaceScope st
 	return s.q.SetVCSScope(ctx, db.SetVCSScopeParams{ID: id, WorkspaceScope: workspaceScope})
 }
 
-// DeleteVCSConnection also unlinks its modules (their published versions stay). It returns
-// ErrInUse while the template catalog uses the connection.
+// DeleteVCSConnection also unlinks its workspaces and modules (their published versions stay). It
+// returns ErrRunActive while a linked workspace has an active run (its next job would fetch from
+// the connection), ErrInUse while the template catalog uses the connection.
 func (s *Store) DeleteVCSConnection(ctx context.Context, id uuid.UUID) error {
-	err := s.q.DeleteVCSConnection(ctx, id)
+	err := s.tx(ctx, func(q *db.Queries) error {
+		if err := q.LockConnectionWorkspaces(ctx, id); err != nil {
+			return err
+		}
+		active, err := q.ConnectionHasActiveRun(ctx, id)
+		if err != nil {
+			return err
+		}
+		if active {
+			return ErrRunActive
+		}
+		return q.DeleteVCSConnection(ctx, id)
+	})
 	if _, ok := fkViolation(err); ok {
 		return ErrInUse
 	}

@@ -25,7 +25,7 @@ func (s *Server) loadTemplateForm(w http.ResponseWriter, r *http.Request) (formP
 	if f.Current != nil {
 		inputs, page.Cur = f.Current.Inputs, templates.Module{Source: f.Current.ModuleSource, Ref: f.Current.ModuleRef}
 	}
-	page.Values, page.Set = formDefaults(f.Template, inputs)
+	page.Values, page.Set = app.FormDefaults(f.Template, inputs)
 	return page, true
 }
 

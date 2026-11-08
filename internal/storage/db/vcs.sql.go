@@ -12,6 +12,18 @@ import (
 	"github.com/google/uuid"
 )
 
+const connectionHasActiveRun = `-- name: ConnectionHasActiveRun :one
+SELECT EXISTS (SELECT 1 FROM runs r JOIN workspace_vcs v ON v.workspace_id = r.workspace_id
+    WHERE v.connection_id = $1::uuid AND run_active(r.status))::boolean
+`
+
+func (q *Queries) ConnectionHasActiveRun(ctx context.Context, id uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, connectionHasActiveRun, id)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const createVCSConnection = `-- name: CreateVCSConnection :one
 INSERT INTO vcs_connections (name, provider, base_url, token)
 VALUES ($1::text, $2::text, $3::text, $4::bytea) RETURNING id
@@ -135,6 +147,18 @@ func (q *Queries) LinkVCSModule(ctx context.Context, arg LinkVCSModuleParams) er
 		arg.Repo,
 		arg.Dir,
 	)
+	return err
+}
+
+const lockConnectionWorkspaces = `-- name: LockConnectionWorkspaces :exec
+SELECT w.id FROM workspaces w JOIN workspace_vcs v ON v.workspace_id = w.id
+WHERE v.connection_id = $1::uuid FOR UPDATE OF w
+`
+
+// Locks every workspace linked to the connection: runs can't be queued on them until the transaction
+// ends (their foreign key check waits).
+func (q *Queries) LockConnectionWorkspaces(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, lockConnectionWorkspaces, id)
 	return err
 }
 

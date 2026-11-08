@@ -98,12 +98,13 @@ type EmptyWorkspace struct {
 	Project       string    // by name; "" is the default project
 	ProjectID     uuid.UUID // by id instead (the cloud API)
 	AutoApply     bool
-	ExecutionMode string           // "" is remote
-	VCS           *storage.VCSLink // already checked by the caller (connection allowed, branch readable)
+	ExecutionMode string       // "" is remote
+	VCS           VCSLinkInput // ConnectionID uuid.Nil: not linked
 }
 
 // CreateEmptyWorkspace creates a workspace with its execution mode and VCS link, all or nothing.
-// ValidationError: the name (FieldName, also when taken), project (FieldProject) or execution mode.
+// ValidationError: the name (FieldName, also when taken), project (FieldProject), execution mode or
+// VCS link (see resolveVCSLink: the connection must allow new workspaces in the project).
 func (a *App) CreateEmptyWorkspace(ctx context.Context, actor Actor, in EmptyWorkspace) (storage.Workspace, error) {
 	if !ValidName(in.Name) {
 		return storage.Workspace{}, invalid(FieldName, "a workspace name is "+NameRule)
@@ -115,19 +116,19 @@ func (a *App) CreateEmptyWorkspace(ctx context.Context, actor Actor, in EmptyWor
 	if err != nil {
 		return storage.Workspace{}, err
 	}
+	link, err := a.resolveVCSLink(ctx, storage.Workspace{ProjectName: p.Name}, in.VCS)
+	if err != nil {
+		return storage.Workspace{}, err
+	}
 	ws, err := a.Store.CreateEmptyWorkspace(ctx, storage.EmptyWorkspace{Name: in.Name, Project: p.Name, AutoApply: in.AutoApply,
-		ExecutionMode: in.ExecutionMode, VCS: in.VCS, CreatedBy: actor.UserID})
+		ExecutionMode: in.ExecutionMode, VCS: link, CreatedBy: actor.UserID})
 	if errors.Is(err, storage.ErrNameTaken) {
 		return ws, invalid(FieldName, err.Error())
 	}
 	if err != nil {
 		return ws, err
 	}
-	var repo string
-	if in.VCS != nil {
-		repo = in.VCS.Repo
-	}
-	a.Log.Info("workspace created", "workspace", ws.Name, "project", ws.ProjectName, "repo", repo, "mode", ws.ExecutionMode, "user", actor.Email)
+	a.Log.Info("workspace created", "workspace", ws.Name, "project", ws.ProjectName, "repo", ws.VCSRepo, "mode", ws.ExecutionMode, "user", actor.Email)
 	return ws, nil
 }
 

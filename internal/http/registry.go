@@ -2,19 +2,17 @@ package httpserver
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
 
+	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/auth"
 	"github.com/opsolete/opsolete/internal/registry"
 	"github.com/opsolete/opsolete/internal/storage"
-	"github.com/opsolete/opsolete/internal/templates"
 )
 
 // Terraform registry protocol (modules.v1): https://developer.hashicorp.com/terraform/internals/module-registry-protocol
@@ -30,28 +28,12 @@ func (s *Server) registryRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /registry/{ns}/{name}/{system}/delete", s.admin(s.deleteModule))
 }
 
-// deleteModule removes all versions of a module, unless a template still deploys it.
-// Workspaces already using it keep their state but can't download it again.
+// deleteModule removes all versions of a module (app.DeleteModule).
 func (s *Server) deleteModule(w http.ResponseWriter, r *http.Request) {
-	ns, name, sys, _, err := s.App.Registry.Address(r.PathValue("ns"), r.PathValue("name"), r.PathValue("system"))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if err := s.App.DeleteModule(r.Context(), actor(r), r.PathValue("ns"), r.PathValue("name"), r.PathValue("system")); err != nil {
+		s.uiError(w, r, err)
 		return
 	}
-	for _, t := range s.App.Templates.List() {
-		if tns, tname, tsys, ok := s.App.Registry.ParseSource(t.Module.Source); ok && tns == ns && tname == name && tsys == sys {
-			http.Error(w, fmt.Sprintf("template %q (%s) still uses this module; delete or repoint it first", t.Name, t.ID), http.StatusConflict)
-			return
-		}
-	}
-	if err := s.App.Store.DeleteModule(r.Context(), ns, name, sys); errors.Is(err, storage.ErrNotFound) {
-		http.NotFound(w, r)
-		return
-	} else if err != nil {
-		s.internalError(w, "delete module", err)
-		return
-	}
-	s.App.Log.Info("module deleted", "module", ns+"/"+name+"/"+sys, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/registry", http.StatusSeeOther)
 }
 
@@ -61,7 +43,7 @@ func (s *Server) requireToken(scope string, next http.HandlerFunc) http.Handler 
 		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if ok {
 			var err error
-			if ok, err = s.App.Store.ValidToken(r.Context(), token, scope); err != nil {
+			if ok, err = s.App.ValidToken(r.Context(), token, scope); err != nil {
 				s.App.Log.Error("check token", "err", err)
 				writeErrors(w, http.StatusInternalServerError, "internal error")
 				return
@@ -76,17 +58,11 @@ func (s *Server) requireToken(scope string, next http.HandlerFunc) http.Handler 
 }
 
 func (s *Server) moduleVersions(w http.ResponseWriter, r *http.Request) {
-	vs, err := s.App.Store.ModuleVersions(r.Context(), r.PathValue("ns"), r.PathValue("name"), r.PathValue("system"))
+	vs, err := s.App.ModuleVersions(r.Context(), r.PathValue("ns"), r.PathValue("name"), r.PathValue("system"))
 	if err != nil {
-		s.App.Log.Error("module versions", "err", err)
-		writeErrors(w, http.StatusInternalServerError, "internal error")
+		s.runnerError(w, r, err)
 		return
 	}
-	if len(vs) == 0 {
-		writeErrors(w, http.StatusNotFound, "module not found")
-		return
-	}
-	registry.SortVersions(vs)
 	type ver struct {
 		Version string `json:"version"`
 	}
@@ -98,35 +74,21 @@ func (s *Server) moduleVersions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) moduleDownload(w http.ResponseWriter, r *http.Request) {
-	ns, name, sys, ver := r.PathValue("ns"), r.PathValue("name"), r.PathValue("system"), r.PathValue("version")
-	if _, err := s.App.Store.GetModule(r.Context(), ns, name, sys, ver); errors.Is(err, storage.ErrNotFound) {
-		writeErrors(w, http.StatusNotFound, "module version not found")
-		return
-	} else if err != nil {
-		s.App.Log.Error("get module", "err", err)
-		writeErrors(w, http.StatusInternalServerError, "internal error")
+	u, err := s.App.ModuleDownload(r.Context(), r.PathValue("ns"), r.PathValue("name"), r.PathValue("system"), r.PathValue("version"))
+	if err != nil {
+		s.runnerError(w, r, err)
 		return
 	}
-	// Relative URL: Terraform resolves it against this endpoint's URL.
-	w.Header().Set("X-Terraform-Get", s.App.Registry.SignedArchiveURL(registry.ArchivePath(ns, name, sys, ver), 10*time.Minute))
+	w.Header().Set("X-Terraform-Get", u)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) moduleArchive(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	ver, ok := strings.CutSuffix(r.PathValue("file"), ".tar.gz")
-	if !ok || !s.App.Registry.VerifyArchiveURL(r.URL.Path, q.Get("expires"), q.Get("sig")) {
-		http.Error(w, "invalid or expired download link", http.StatusForbidden)
-		return
-	}
-	b, err := s.App.Store.ModuleArchive(r.Context(), r.PathValue("ns"), r.PathValue("name"), r.PathValue("system"), ver)
-	if errors.Is(err, storage.ErrNotFound) {
-		http.NotFound(w, r)
-		return
-	}
+	ver := strings.TrimSuffix(r.PathValue("file"), ".tar.gz") // without it, the signature can't match
+	b, err := s.App.ModuleArchive(r.Context(), r.URL.Path, q.Get("expires"), q.Get("sig"), r.PathValue("ns"), r.PathValue("name"), r.PathValue("system"), ver)
 	if err != nil {
-		s.App.Log.Error("module archive", "err", err)
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		s.uiError(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/gzip")
@@ -169,17 +131,16 @@ func latestVersions(mods []storage.Module) []latestModule {
 }
 
 func (s *Server) registryPage(w http.ResponseWriter, r *http.Request) {
-	mods, err := s.App.Store.ListModules(r.Context())
+	mods, err := s.App.Modules(r.Context())
 	if err != nil {
-		s.App.Log.Error("list modules", "err", err)
-		http.Error(w, "could not load modules", http.StatusInternalServerError)
+		s.uiError(w, r, err)
 		return
 	}
 	p := registryPage{Modules: latestVersions(mods), Templates: s.canEditTemplates(r), Upload: s.canUpload(r), Host: s.App.Registry.PublicURL.Host,
 		VCS: s.Features.VCS && auth.FromContext(r.Context()).Admin(), Admin: auth.FromContext(r.Context()).Admin()}
 	if p.VCS {
-		if p.Linked, err = s.App.Store.VCSModules(r.Context()); err != nil {
-			s.internalError(w, "vcs modules", err)
+		if p.Linked, err = s.App.VCSModules(r.Context(), actor(r)); err != nil {
+			s.uiError(w, r, err)
 			return
 		}
 	}
@@ -192,7 +153,7 @@ func (s *Server) renderUpload(w http.ResponseWriter, r *http.Request, status int
 }
 
 func (s *Server) uploadModule(w http.ResponseWriter, r *http.Request) {
-	if !s.canUpload(r) {
+	if !s.canUpload(r) { // before reading the archive
 		http.Error(w, "module uploads are off (Settings → Organization)", http.StatusForbidden)
 		return
 	}
@@ -206,111 +167,52 @@ func (s *Server) uploadModule(w http.ResponseWriter, r *http.Request) {
 	for _, k := range []string{"namespace", "name", "system", "version"} {
 		form[k] = strings.TrimSpace(r.FormValue(k))
 	}
-	fail := func(msg string) { s.renderUpload(w, r, http.StatusUnprocessableEntity, msg, form) }
-
-	ns, name, sys, _, err := s.App.Registry.Address(form["namespace"], form["name"], form["system"])
-	if err != nil {
-		fail(err.Error())
-		return
+	in := app.ModuleUpload{Namespace: form["namespace"], Name: form["name"], System: form["system"], Version: form["version"]}
+	if f, _, err := r.FormFile("archive"); err == nil { // none chosen: app says so
+		defer f.Close()
+		if in.Archive, err = io.ReadAll(io.LimitReader(f, registry.MaxArchiveSize+1)); err != nil {
+			s.renderUpload(w, r, http.StatusUnprocessableEntity, "could not read upload", form)
+			return
+		}
 	}
-	ver, err := registry.CanonicalVersion(form["version"])
-	if err != nil {
-		fail(err.Error())
-		return
-	}
-	f, _, err := r.FormFile("archive")
-	if err != nil {
-		fail("choose a .tar.gz module archive")
-		return
-	}
-	defer f.Close()
-	archive, err := io.ReadAll(io.LimitReader(f, registry.MaxArchiveSize+1))
-	if err != nil {
-		fail("could not read upload")
-		return
-	}
-	if len(archive) > registry.MaxArchiveSize {
-		fail(fmt.Sprintf("archive larger than %d MB", registry.MaxArchiveSize>>20))
-		return
-	}
-	ins, err := registry.Inspect(archive)
-	if err != nil {
-		fail(err.Error())
-		return
-	}
-	err = s.App.Store.CreateModule(r.Context(), storage.Module{Namespace: ns, Name: name, System: sys, Version: ver, Variables: ins.Variables},
-		storage.ModuleDocs{Module: ins.Module, Readme: ins.Readme}, archive)
-	if errors.Is(err, storage.ErrExists) {
-		fail(fmt.Sprintf("%s/%s/%s %s already exists; versions are immutable, upload a new version", ns, name, sys, ver))
+	m, err := s.App.UploadModule(r.Context(), actor(r), in)
+	if isValidation(err) {
+		s.renderUpload(w, r, http.StatusUnprocessableEntity, err.Error(), form)
 		return
 	}
 	if err != nil {
-		s.App.Log.Error("create module", "err", err)
-		fail("could not store module")
+		s.uiError(w, r, err)
 		return
 	}
-	s.App.Log.Info("module uploaded", "module", ns+"/"+name+"/"+sys, "version", ver, "variables", len(ins.Variables))
-	http.Redirect(w, r, fmt.Sprintf("/registry/%s/%s/%s/%s", ns, name, sys, ver), http.StatusSeeOther)
+	http.Redirect(w, r, fmt.Sprintf("/registry/%s/%s/%s/%s", m.Namespace, m.Name, m.System, m.Version), http.StatusSeeOther)
 }
 
 // moduleDocs renders generated documentation for one module version, as HTML or (docs.md) Markdown.
 func (s *Server) moduleDocs(w http.ResponseWriter, r *http.Request) {
 	ns, name, sys, ver := r.PathValue("ns"), r.PathValue("name"), r.PathValue("system"), r.PathValue("version")
-	docs, err := s.App.Store.GetModuleDocs(r.Context(), ns, name, sys, ver)
-	if errors.Is(err, storage.ErrNotFound) {
-		http.NotFound(w, r)
-		return
-	}
+	d, err := s.App.ModuleDocs(r.Context(), ns, name, sys, ver)
 	if err != nil {
-		s.App.Log.Error("module docs", "err", err)
-		http.Error(w, "could not load module docs", http.StatusInternalServerError)
+		s.uiError(w, r, err)
 		return
 	}
 	if strings.HasSuffix(r.URL.Path, "/docs.md") {
-		if docs.Module == nil {
+		if d.Docs.Module == nil {
 			http.NotFound(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-		docs.Module.Path = ns + "/" + name + "/" + sys + " " + ver // RenderMarkdown's title
-		if err := tfconfig.RenderMarkdown(w, docs.Module); err != nil {
+		d.Docs.Module.Path = ns + "/" + name + "/" + sys + " " + ver // RenderMarkdown's title
+		if err := tfconfig.RenderMarkdown(w, d.Docs.Module); err != nil {
 			s.App.Log.Error("render markdown", "err", err)
 		}
 		return
 	}
-	versions, err := s.App.Store.ModuleVersions(r.Context(), ns, name, sys)
-	if err != nil {
-		s.App.Log.Error("module versions", "err", err)
-		http.Error(w, "could not load module", http.StatusInternalServerError)
-		return
-	}
-	registry.SortVersions(versions)
-	_, _, _, source, err := s.App.Registry.Address(ns, name, sys)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	var linked *storage.VCSModule
-	if s.Features.VCS {
-		if m, err := s.App.Store.GetVCSModule(r.Context(), ns, name, sys); err == nil {
-			linked = &m
-		} else if !errors.Is(err, storage.ErrNotFound) {
-			s.internalError(w, "get vcs module", err)
-			return
-		}
-	}
-	// No-code ready: templates that deploy this module (their pinned version may differ).
-	var tpls []templates.Template
-	if s.Features.Deployments {
-		for _, t := range s.App.Templates.List() {
-			if t.Module.Source == source {
-				tpls = append(tpls, t)
-			}
-		}
+	if !s.Features.Deployments { // No-code ready: only with templates to deploy
+		d.Templates = nil
 	}
 	s.render(w, r, http.StatusOK, "module.html", map[string]any{
-		"Namespace": ns, "Name": name, "System": sys, "Version": ver, "Versions": versions,
-		"Source": source, "Docs": docs, "Editor": s.canEditTemplates(r), "Linked": linked, "Templates": tpls,
+		"Namespace": ns, "Name": name, "System": sys, "Version": ver, "Versions": d.Versions,
+		"Source": d.Source, "Docs": d.Docs, "Editor": s.canEditTemplates(r), "Linked": d.Linked, "Templates": d.Templates,
 		"Admin": auth.FromContext(r.Context()).Admin(),
 	})
 }

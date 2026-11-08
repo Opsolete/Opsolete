@@ -245,7 +245,7 @@ func serve(log *slog.Logger) error {
 			go vcs.PollCatalog(ctx, store, ops.SecretKey, tpls, time.Minute, log)
 		}
 	}
-	if err := server.CheckTemplates(); err != nil {
+	if err := server.App.CheckTemplates(); err != nil {
 		return err
 	}
 	log.Info("components", "deployments", cfg.Deployments, "registry", cfg.Registry, "vcs", vcsOn)
@@ -295,7 +295,7 @@ func reapLostRunners(ctx context.Context, server *httpserver.Server, staleLock t
 		case <-t.C:
 			server.App.ReapLeases(ctx)
 			server.App.ReleaseOrphanedLocks(ctx, staleLock)
-			server.TickRollouts(ctx)
+			server.App.TickRollouts(ctx)
 			server.App.QueueDriftChecks(ctx)
 		}
 	}

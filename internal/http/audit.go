@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/auth"
 	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage"
@@ -127,7 +128,7 @@ func (s *Server) audit(next http.Handler) http.Handler {
 		if p.Email != "" {
 			actor = p.Email
 			principal["id"], principal["role"] = p.ID, p.Role
-			if groups, err := s.App.Store.UserGroups(ctx, p.ID); err == nil {
+			if groups, err := s.App.UserGroups(ctx, app.Actor{UserID: p.ID}); err == nil {
 				principal["groups"] = groups
 			}
 		}
@@ -146,7 +147,7 @@ func (s *Server) audit(next http.Handler) http.Handler {
 		// shortcut: written after the response, so a failed write loses the entry (logged below); make it
 		// part of each handler's transaction if the log must never miss an action.
 		// escaped: a decoded %00 or %ff would fail the insert, and a probe would leave no entry
-		if err := s.App.Store.Audit(ctx, actor, r.Method+" "+r.URL.EscapedPath(), detail); err != nil {
+		if err := s.App.Audit(ctx, actor, r.Method+" "+r.URL.EscapedPath(), detail); err != nil {
 			s.App.Log.Error("audit log write failed", "err", err, "actor", actor, "method", r.Method, "path", r.URL.Path)
 		}
 	})
@@ -154,14 +155,9 @@ func (s *Server) audit(next http.Handler) http.Handler {
 
 func (s *Server) auditPage(w http.ResponseWriter, r *http.Request) {
 	access := r.URL.Query().Get("show") == "access"
-	entries, err := s.App.Store.AuditLog(r.Context(), 500, access)
+	entries, broken, err := s.App.AuditLog(r.Context(), actor(r), access)
 	if err != nil {
-		s.internalError(w, "audit log", err)
-		return
-	}
-	broken, err := s.App.Store.VerifyAuditLog(r.Context())
-	if err != nil {
-		s.internalError(w, "verify audit log", err)
+		s.uiError(w, r, err)
 		return
 	}
 	rows := make([]auditRow, len(entries))

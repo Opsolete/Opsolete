@@ -23,6 +23,23 @@ func InputAD(workspaceID uuid.UUID, module, name string) string {
 
 func IsSealed(v any) bool { _, ok := v.(map[string]any); return ok }
 
+// FormDefaults fills a form from stored inputs: sensitive ones stay empty, set lists those with a value.
+func FormDefaults(t templates.Template, stored map[string]any) (vals map[string]string, set map[string]bool) {
+	vals, set = map[string]string{}, map[string]bool{}
+	for _, in := range t.Inputs {
+		v, ok := stored[in.Name]
+		switch {
+		case in.Sensitive:
+			set[in.Name] = ok
+		case ok && !IsSealed(v): // a sealed value of a no longer sensitive input must be typed again
+			vals[in.Name] = templates.FormatValue(v)
+		case !ok:
+			vals[in.Name] = in.Default
+		}
+	}
+	return vals, set
+}
+
 // SealInputs seals t's sensitive inputs in vals, validated from the form values raw, for workspace
 // wsID's module. One left empty keeps its stored value in old (sealing it if it was stored before it
 // became sensitive); one the form hides is dropped.

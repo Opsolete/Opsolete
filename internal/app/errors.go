@@ -27,6 +27,8 @@ var (
 	ErrStateConflict = errors.New("the state conflicts with the workspace's state")
 	// ErrRemoteExecution: the CLI may not lock or write the state of a workspace its runs plan and apply.
 	ErrRemoteExecution = errors.New("the workspace uses remote execution: only its runs use its state")
+	// ErrChanged: what the request was based on changed meanwhile (a race): reload and try again.
+	ErrChanged = errors.New("changed meanwhile: reload and try again")
 
 	errReadOnly   = reason{ErrForbidden, "you have read-only access to this workspace"}
 	errAdminsOnly = reason{ErrForbidden, "admins only"}
@@ -45,8 +47,8 @@ func (r reason) Unwrap() error { return r.kind }
 // that is taken is not one: it is a ValidationError on that field (the input must change, not the state).
 var conflicts = []error{storage.ErrRunActive, storage.ErrNotConfirmable, storage.ErrNotCancelable,
 	storage.ErrHasResources, storage.ErrStateLocked, storage.ErrLocalExecution, storage.ErrExists,
-	storage.ErrProjectNotEmpty, storage.ErrDefaultProject,
-	storage.ErrLeaseLost, storage.ErrNotCloudLocked, ErrNoConfig, ErrStateConflict, ErrRemoteExecution}
+	storage.ErrProjectNotEmpty, storage.ErrDefaultProject, storage.ErrInUse,
+	storage.ErrLeaseLost, storage.ErrNotCloudLocked, storage.ErrRolloutClosed, ErrNoConfig, ErrStateConflict, ErrRemoteExecution, ErrChanged}
 
 // IsConflict reports whether err is a conflict (HTTP 409); its message says why.
 func IsConflict(err error) bool {

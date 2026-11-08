@@ -108,7 +108,7 @@ func TestCreateEmptyWorkspaceAtomic(t *testing.T) {
 	a, ctx := testApp(t), context.Background()
 	admin := Actor{Email: "admin@example.com", Admin: true}
 	name := uniq("atomic-")
-	_, err := a.CreateEmptyWorkspace(ctx, admin, EmptyWorkspace{Name: name, VCS: &storage.VCSLink{ConnectionID: uuid.New(), Repo: "o/r", Branch: "main"}})
+	_, err := a.Store.CreateEmptyWorkspace(ctx, storage.EmptyWorkspace{Name: name, VCS: &storage.VCSLink{ConnectionID: uuid.New(), Repo: "o/r", Branch: "main"}})
 	if err == nil {
 		t.Fatal("a link to an unknown connection was created")
 	}

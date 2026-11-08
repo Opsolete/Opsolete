@@ -1,9 +1,7 @@
 package httpserver
 
 import (
-	"crypto/hmac"
 	"crypto/md5"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -14,7 +12,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -30,12 +27,7 @@ import (
 // Opsolete is the state backend, with the same versions, locks and outputs as its runs.
 const cloudPrefix = "/api/v2"
 
-const (
-	oauthClient = "terraform-cli"
-	codeTTL     = 5 * time.Minute
-	// users list and revoke their own tokens under Account settings › Tokens
-	userTokenTTL = 30 * 24 * time.Hour
-)
+const oauthClient = "terraform-cli"
 
 // discovery is Terraform's service discovery: https://developer.hashicorp.com/terraform/internals/remote-service-discovery
 func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
@@ -118,7 +110,7 @@ func (s *Server) cloudError(w http.ResponseWriter, what string, err error) {
 func (s *Server) cloudUser(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		id, email, role, groups, err := s.App.Store.TokenUser(r.Context(), token)
+		id, email, role, groups, err := s.App.TokenUser(r.Context(), token)
 		if errors.Is(err, storage.ErrNotFound) {
 			writeAPIError(w, http.StatusUnauthorized, "missing, invalid or expired token: run terraform login "+s.App.Registry.PublicURL.Host)
 			return
@@ -422,12 +414,7 @@ func (s *Server) cloudCreateState(w http.ResponseWriter, r *http.Request) {
 }
 
 // authzRequest is Terraform's OAuth authorization request (authorization code + PKCE S256).
-type authzRequest struct {
-	User        uuid.UUID `json:"u"`
-	RedirectURI string    `json:"r"`
-	Challenge   string    `json:"c"`
-	Expires     int64     `json:"e"`
-}
+type authzRequest struct{ RedirectURI, Challenge string }
 
 // parseAuthz checks an authorization request; the code may only go to Terraform's local callback.
 func parseAuthz(q url.Values) (authzRequest, error) {
@@ -454,7 +441,7 @@ func (s *Server) authorizePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.render(w, r, http.StatusOK, "authorize.html", map[string]any{"Email": auth.FromContext(r.Context()).Email,
-		"Days": int(userTokenTTL.Hours() / 24)})
+		"Days": int(app.UserTokenTTL.Hours() / 24)})
 }
 
 // authorize: the user confirmed (a same-origin POST, so another site can't do it for them); send
@@ -466,19 +453,8 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	req.User, req.Expires = auth.FromContext(r.Context()).ID, time.Now().Add(codeTTL).Unix()
-	payload, _ := json.Marshal(req)
-	code := base64.RawURLEncoding.EncodeToString(payload)
-	code += "." + s.codeMAC(code)
+	code := s.App.LoginCode(actor(r), req.RedirectURI, req.Challenge)
 	http.Redirect(w, r, req.RedirectURI+"?"+url.Values{"code": {code}, "state": {q.Get("state")}}.Encode(), http.StatusSeeOther)
-}
-
-// codeMAC signs an authorization code. shortcut: codes are stateless, so one can be exchanged
-// more than once within codeTTL, but only with its PKCE verifier, which only that Terraform has.
-func (s *Server) codeMAC(code string) string {
-	m := hmac.New(sha256.New, s.App.Registry.Key)
-	m.Write([]byte("opsolete oauth code\x00" + code))
-	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
 
 // oauthToken exchanges an authorization code and its PKCE verifier for a user token.
@@ -492,22 +468,15 @@ func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) {
 		fail("unsupported_grant_type")
 		return
 	}
-	payload, mac, _ := strings.Cut(r.PostForm.Get("code"), ".")
-	var req authzRequest
-	raw, err := base64.RawURLEncoding.DecodeString(payload)
-	verifier := sha256.Sum256([]byte(r.PostForm.Get("code_verifier")))
-	if !hmac.Equal([]byte(mac), []byte(s.codeMAC(payload))) || err != nil || json.Unmarshal(raw, &req) != nil ||
-		time.Now().Unix() > req.Expires || r.PostForm.Get("redirect_uri") != req.RedirectURI ||
-		base64.RawURLEncoding.EncodeToString(verifier[:]) != req.Challenge {
+	token, err := s.App.RedeemLoginCode(r.Context(), r.PostForm.Get("code"), r.PostForm.Get("code_verifier"), r.PostForm.Get("redirect_uri"))
+	if errors.Is(err, app.ErrForbidden) {
 		fail("invalid_grant")
 		return
 	}
-	token, err := s.App.Store.CreateUserToken(r.Context(), req.User, "terraform login", userTokenTTL)
 	if err != nil {
 		s.App.Log.Error("create user token", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	s.App.Log.Info("user token created", "via", "terraform login", "user", req.User)
-	writeJSON(w, map[string]any{"access_token": token, "token_type": "bearer", "expires_in": int(userTokenTTL.Seconds())})
+	writeJSON(w, map[string]any{"access_token": token, "token_type": "bearer", "expires_in": int(app.UserTokenTTL.Seconds())})
 }
