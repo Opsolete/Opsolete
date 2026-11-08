@@ -8,10 +8,12 @@ against `fakeServer`). For background work with no HTTP surface (scheduler, noti
 the real component against real Postgres. `partial`: pieces tested at app/storage/package level, or steps or
 failure paths missing (named). `none`: no test.
 
-**Cross-cutting fact.** No Go test runs the real runner against the real server: HTTP tests play the runner
-(`claim`/`ack`/`finish` by hand), runner tests use `runner/helpers_test.go:fakeServer`. Only the dev tasks
-`just seed` (real server + real runner + real Terraform, not run in CI) and the NixOS VM test
-(`nix/test.nix`, boots both, runs no job) come close; `just smoke` only creates and lists a workspace.
+**Cross-cutting fact.** HTTP tests play the runner (`claim`/`ack`/`finish` by hand; `http/flows_test.go:fakeRunner`
+for the flow tests), runner tests use `runner/helpers_test.go:fakeServer`. One test runs both halves together:
+`e2e/e2e_test.go:TestRealRunner` (real server on a test database, real `runner.Runner`, real Terraform, the
+greeting module from the server's own registry; skipped without `terraform` on PATH). The dev task `just seed`
+and the NixOS VM test (`nix/test.nix`, boots both, runs no job) remain outside `go test`; `just smoke` only
+creates and lists a workspace.
 
 Test paths are relative to `internal/`.
 
@@ -98,11 +100,11 @@ Test paths are relative to `internal/`.
 - Steps: `POST /workspaces/{name}/runs action=apply` (or create/configure) → runner claims plan, acks, locks state, uploads plan + lock file, finishes with summary/cost → `needs_confirmation` → `POST …/runs/{id}/confirm` → runner claims apply (same state password), downloads artifacts, writes state under lock, finishes with outputs + resources.
 - Outcome: `applied`; state version indexed; sensitive outputs `(sensitive)`; artifacts and intermediate versions deleted; credential dead after the run.
 - Failures: stranger confirm → 404; second run while one waits → 409; no claim while waiting; state access while waiting → 403; Terraform refuses a stale plan at apply.
-- Coverage: `http/runs_test.go:TestWorkspaceFlow` (steps "plan job carries…" through "a finished apply indexes its state…", "plan page shows the changes and cost"); `runner/runner_test.go:TestPlanThenApply` (real Terraform: plan, apply, stale plan refused); `storage/jobs_test.go:TestRunLifecycle`; `app/runs_test.go:TestRunEndDeletesArtifacts`.
+- Coverage: `http/runs_test.go:TestWorkspaceFlow` (steps "plan job carries…" through "a finished apply indexes its state…", "plan page shows the changes and cost"); `e2e/e2e_test.go:TestRealRunner` (real runner and Terraform against the real server: plan, confirm, apply, outputs, indexed state, log; destroy); `runner/runner_test.go:TestPlanThenApply` (real Terraform: plan, apply, stale plan refused); `storage/jobs_test.go:TestRunLifecycle`; `app/runs_test.go:TestRunEndDeletesArtifacts`.
 
-**C2. Auto-apply** — `partial`
+**C2. Auto-apply** — `full`
 - Workspace setting; an apply plan with changes goes straight to `apply_queued`. Destroys, refresh-only and rollout plans still ask.
-- Coverage: `storage/jobs_test.go:TestAutoApplyAndDiscard` (store only); `http/runs_test.go:TestWorkspaceFlow/a_destroy_plan_asks_even_with_auto-apply…` (only the destroy exception). Missing: an apply auto-applied through HTTP; refresh-only exception.
+- Coverage: `http/flows_test.go:TestAutoApply` (apply plan → `apply_queued` without confirmation → applied; no changes → `no_changes`; plan-only → `planned`; destroy and rollout plans ask); `http/flows_test.go:TestRefreshOnlyRun` (refresh-only asks); `storage/jobs_test.go:TestAutoApplyAndDiscard`; `http/runs_test.go:TestWorkspaceFlow/a_destroy_plan_asks_even_with_auto-apply…`.
 
 **C3. Discard** — `full`
 - `POST …/runs/{id}/discard` → `discarded`, plan artifacts deleted, workspace free.
@@ -113,9 +115,10 @@ Test paths are relative to `internal/`.
 - Failures: stranger 404; reader 403.
 - Coverage: `http/runs_test.go:TestWorkspaceFlow/a_confirmed_destroy_empties_the_state`; `runner/runner_test.go:TestPlanThenApply` (destroy phase); `http/variables_test.go:TestTeamsVariablesRenameCancel` (reader 403).
 
-**C5. Refresh-only run** — `none`
+**C5. Refresh-only run** — `full`
 - `action=refresh` → `plan -refresh-only` → always asks (even with auto-apply) → apply updates state only.
-- Coverage: only refusals: `http/runs_test.go:TestWorkspaceFlow/replace_sends_only_addresses…` (refresh + replace → 422). The runner's `-refresh-only` path is exercised only by drift checks (`runner/runner_test.go:TestPlanThenApply`, assess).
+- Failures: discarded → nothing written, plan deleted; no changes → `no_changes`; refresh + replace → 422.
+- Coverage: `http/flows_test.go:TestRefreshOnlyRun`; `http/runs_test.go:TestWorkspaceFlow/replace_sends_only_addresses…` (refresh + replace → 422). The runner's `-refresh-only` flag: `runner/runner_test.go:TestPlanThenApply` (assess).
 
 **C6. Replace resources** — `full`
 - Tick resources → `action=apply replace=<addr>` → job carries `Replace` → plan shows replace.
@@ -129,18 +132,18 @@ Test paths are relative to `internal/`.
 **C8. One active run per workspace** — `full`
 - Coverage: `http/runs_test.go:TestWorkspaceFlow/a_plan_waiting_for_confirmation_holds_the_workspace…`; `storage/jobs_test.go:TestRunLifecycle`, `TestConcurrentTriggers`; `app/runs_test.go:TestStartRun`.
 
-**C9. Cancel a queued run** — `partial`
+**C9. Cancel a queued run** — `full`
 - `POST …/cancel` on a queued run → `canceled` at once, artifacts deleted, configuration change undone.
-- Coverage: `app/runs_test.go:TestRunEndDeletesArtifacts` (cancel), `storage/jobs_test.go:TestCancel`, `storage/runconfig_test.go:TestRunConfigRestore`; HTTP only as a 303 in `http/access_test.go:TestAccessMatrix/POST_/workspaces/{name}/runs/{run}/cancel`.
+- Coverage: `http/flows_test.go:TestCancelRun/a_queued_run_is_canceled_at_once…` (confirmed apply waiting behind a UI lock: canceled, lock and configuration kept, plan deleted, second cancel 409); `http/flows_test.go:TestConfigRestore/a_canceled_queued_plan_puts_it_back`; `app/runs_test.go:TestRunEndDeletesArtifacts`, `storage/jobs_test.go:TestCancel`, `storage/runconfig_test.go:TestRunConfigRestore`.
 
-**C10. Cancel a running run (graceful)** — `partial`
+**C10. Cancel a running run (graceful)** — `full`
 - Operator cancels → next heartbeat/log post answers `StatusCancel` (lease kept) → runner SIGINTs Terraform, which saves state → runner finishes `canceled` → run `canceled`, lock released.
-- Coverage: `http/variables_test.go:TestTeamsVariablesRenameCancel/cancel_reaches_the_runner_on_its_heartbeat…` (heartbeat answer only); `storage/jobs_test.go:TestCancel` (finish canceled); `runner/terraform_test.go:TestCancelSavesState`, `TestInterrupt/cancel_*`. Missing: the server half end to end (runner finish `canceled` through HTTP, state saved during cancel, run page shows it).
+- Coverage: `http/flows_test.go:TestCancelRun/a_running_apply_stops_when_its_runner_hears_the_cancel…` (page: "Cancel requested…", Force cancel; heartbeat and log 202; state write under the run's lock accepted and kept as current; finish `canceled`; lock released; message on the run page; late log 409); `http/variables_test.go:TestTeamsVariablesRenameCancel/cancel_reaches_the_runner_on_its_heartbeat…`; `storage/jobs_test.go:TestCancel`; `runner/terraform_test.go:TestCancelSavesState`, `TestInterrupt/cancel_*` (the runner half).
 
 **C11. Force cancel** — `full`
 - After a pending cancel, `force=1` → run `canceled`, runner fenced off (409), state lock and password dead.
 - Failures: cancel of a finished run → 409.
-- Coverage: `http/variables_test.go:TestTeamsVariablesRenameCancel/cancel_reaches…,_force_cancel_cuts_it_off`; `storage/jobs_test.go:TestCancel` (lock released), `TestStateWriteFenced`; `app/state_test.go:TestStateRunCredential` (credential dead).
+- Coverage: `http/flows_test.go:TestCancelRun/force_cancel_ends_a_running_run_at_once…` (lock released; heartbeat, log, finish 409; state write 403, nothing saved; message on the run page); `http/variables_test.go:TestTeamsVariablesRenameCancel/cancel_reaches…,_force_cancel_cuts_it_off`; `storage/jobs_test.go:TestCancel`, `TestStateWriteFenced`; `app/state_test.go:TestStateRunCredential` (credential dead).
 
 **C12. Follow a run's log (live SSE, raw log, reconnect, cap)** — `partial`
 - Run page streams `…/logs/stream` (SSE, `Last-Event-ID` resume, `done` event); raw `…/logs`; max 8 streams per user per replica (429).
@@ -170,9 +173,9 @@ Test paths are relative to `internal/`.
 - Failures: removing twice → 404; active run → 409.
 - Coverage: `http/workspacetemplates_test.go:TestWorkspaceTemplates` (destroy job + target via HTTP, but finished through `store.FinishJob`; immediate removal); `runner/assemble_test.go:TestAddedTemplates` (targeted destroy, outputs-only apply). Missing: the destroy confirmed and applied through the runner API with the template gone afterwards.
 
-**D4. Configuration restored when a run ends before its apply** — `partial`
+**D4. Configuration restored when a run ends before its apply** — `full`
 - Adding/configuring/rollout run discarded, canceled or errored while planning → previous version and inputs back (added template removed); once apply started the new one stays; a later change isn't overwritten.
-- Coverage: `storage/runconfig_test.go:TestRunConfigRestore`; `app/rollouts_test.go:TestTickRollout` (discard restores); `storage/rollout_test.go:TestUpgradeTemplates`. Missing: through HTTP (discard / cancel of a configure run, Templates tab shows the old version).
+- Coverage: `http/flows_test.go:TestConfigRestore` (configure to a new version and inputs, two catalogs on one database: discarded, failed plan, canceled while queued → old version and inputs back on the Templates tab with "update: v2"; added template discarded → gone; apply started then failed → new version kept); `storage/runconfig_test.go:TestRunConfigRestore` (a later change isn't overwritten); `app/rollouts_test.go:TestTickRollout` (discard restores); `storage/rollout_test.go:TestUpgradeTemplates`.
 
 **D5. Sensitive template inputs** — `full`
 - Password field, sealed bound to workspace+module, `(sensitive)` on pages, `(redacted)` in audit, kept when left empty, clear in the job; a moved sealed value fails the job.
@@ -224,9 +227,10 @@ Test paths are relative to `internal/`.
 - Failures: save without lock 409; second lock 409 (`ErrWorkspaceLocked`); unlock of another user's lock → `ErrWorkspaceLockedByUser`; of a run's lock → `ErrWorkspaceLockedByRun`; upload-URL flow → 422 fallback to inline; outputs list names only; reader → 403; stranger → 404.
 - Coverage: `http/cloud_gotfe_test.go:TestCloudGoTFE`; `http/cloud_test.go:TestCloudLoginAndState`; `storage/jobs_test.go:TestCloudStateWriteFenced`.
 
-**F4. `terraform force-unlock`** — `partial`
-- Releases a CLI lock (any operator); never a run's or rollback's.
-- Coverage: `storage/jobs_test.go:TestCloudStateWriteFenced` (a force-unlock racing an upload). Missing: `actions/force-unlock` through the API (go-tfe `ForceUnlock`), and its refusal on a run lock.
+**F4. `terraform force-unlock`** — `full`
+- Releases a CLI lock (any operator); never a run's or rollback's: 423 "workspace is locked by Run…" (not 409, which go-tfe reports as "workspace already unlocked"), the lock kept.
+- Failures: read access refused.
+- Coverage: `http/cloud_gotfe_test.go:TestCLIForceUnlock` (go-tfe `ForceUnlock`: another user's CLI lock released, rollback lock and a planning run's lock refused and kept, the run's lock gone when it ends); `storage/jobs_test.go:TestCloudStateWriteFenced` (a force-unlock racing an upload).
 
 **F5. Remote-execution workspace refuses the CLI** — `full`
 - Coverage: `http/cloud_test.go:TestCloudLoginAndState` (lock and state upload → 409 "remote execution"; run on a local workspace → `ErrLocalExecution`).
@@ -243,13 +247,13 @@ Test paths are relative to `internal/`.
 - Create (optionally for a project or workspace), add/delete variables, attach to workspaces and projects, global flag, delete set.
 - Coverage: `http/variables_test.go:TestTeamsVariablesRenameCancel` (create, vars, attach ws, non-admin 403, unknown ws 422); `http/projects_test.go:TestProjectPages` (attach/detach projects, create for project/workspace); `http/projects_test.go:TestAttachProjectsParsesForm`; `storage/jobs_test.go:TestRunVariables`. Missing through HTTP: making a set global (`POST /variable-sets/{set}`), deleting a set (only matrix 303), deleting a set variable.
 
-**G3. Variable precedence** — `partial`
+**G3. Variable precedence** — `full`
 - template inputs > workspace vars > sets on the workspace > sets on its project > global sets; same kind: first by name.
-- Coverage: `storage/jobs_test.go:TestRunVariables` (all set tiers); `app/variables_test.go:TestWithWorkspaceVars` (template inputs win; registry modules only); `http/variables_test.go:TestTeamsVariablesRenameCancel` (workspace var beats an attached set, in the job). Missing: project and global tiers in a claimed job through HTTP.
+- Coverage: `http/flows_test.go:TestJobVariables/workspace_variables_win…` (every tier, env and terraform, in the claimed job; sensitive values in `Env` and `Secrets`, on no page); `storage/jobs_test.go:TestRunVariables`; `app/variables_test.go:TestWithWorkspaceVars` (template inputs win; registry modules only); `http/variables_test.go:TestTeamsVariablesRenameCancel`.
 
-**G4. VCS-linked workspaces and sets (security rule)** — `partial`
+**G4. VCS-linked workspaces and sets (security rule)** — `full`
 - Linked workspaces get no global or project sets; changing repo/branch, switching to/changing tag triggers, or turning on PR plans detaches the workspace's own sets.
-- Coverage: `storage/jobs_test.go:TestVCSWorkspaceVariableSets`, `TestRunVariables/a_VCS-linked_workspace_gets_only_the_sets_attached_to_it`. Missing: through HTTP (`POST /workspaces/{name}/vcs` then the claimed job's `Env`).
+- Coverage: `http/flows_test.go:TestJobVariables` (link → no project/global sets, own sets detached; re-attached → in the job; saved unchanged → kept; PR plans on → detached; variables page follows); `storage/jobs_test.go:TestVCSWorkspaceVariableSets`, `TestRunVariables/a_VCS-linked_workspace_gets_only_the_sets_attached_to_it` (branch and tag changes).
 
 ---
 
@@ -465,9 +469,9 @@ Test paths are relative to `internal/`.
 - Not acked within 30 s → planning→plan_queued / applying→apply_queued, history names the runner, late ack fails; undecodable claim not acked by the runner.
 - Coverage: `app/runs_test.go:TestUnacknowledgedClaim` (via `ReapLeases`); `storage/jobs_test.go:TestUnclaim`; `runner/runner_test.go:TestUnreadableClaim`.
 
-**Q4. Lease loss (runner disappears; runner fenced off)** — `partial`
+**Q4. Lease loss (runner disappears; runner fenced off)** — `full`
 - Server: no heartbeat for the lease TTL → run errored ("runner stopped responding"), lock released, late writes 409, artifacts deleted. Runner: a 409 interrupts Terraform and reports nothing.
-- Coverage: `storage/jobs_test.go:TestExpiredLeaseIsErrored`; `app/runs_test.go:TestRunEndDeletesArtifacts` (reap); `runner/terraform_test.go:TestLostLeaseStopsTerraform`. Missing: both halves together; the run page's message.
+- Coverage: `http/flows_test.go:TestLeaseLoss` (apply phase, lease aged in the DB, `App.ReapLeases`: errored, message on the run page, state lock released, plan deleted; heartbeat, log, finish, artifact 409; state write 403, nothing saved; workspace free); `storage/jobs_test.go:TestExpiredLeaseIsErrored`; `runner/terraform_test.go:TestLostLeaseStopsTerraform` (the runner half).
 
 **Q5. Drain / scale down (first SIGTERM)** — `full`
 - Stops claiming; a claim in flight completes, is acked and run; then the runner exits.
@@ -483,7 +487,7 @@ Test paths are relative to `internal/`.
 
 **Q8. Log shipping, masking, caps** — `partial`
 - ~1 s batches cut at line ends; sensitive values and signed URLs masked; 10 MB per run; 256 KB per post.
-- Coverage: `runner/ship_test.go:TestShipperRedactsAndDrains` (signed URLs; `Job.Secrets` whole, per line, short ones kept); `runner/terraform_test.go:TestHeadBuffer`; `storage/jobs_test.go:TestRunLifecycle` (cap via `AppendLog` max); `runner/runner_test.go:TestPlanThenApply` (no leaks). Missing: the server filling `Job.Secrets` from sensitive variables and inputs (no test reads it); the 256 KB per-post limit (413).
+- Coverage: `runner/ship_test.go:TestShipperRedactsAndDrains` (signed URLs; `Job.Secrets` whole, per line, short ones kept); `runner/terraform_test.go:TestHeadBuffer`; `storage/jobs_test.go:TestRunLifecycle` (cap via `AppendLog` max); `runner/runner_test.go:TestPlanThenApply` (no leaks); `http/flows_test.go:TestJobVariables` (sensitive variables in `Job.Secrets`). Missing: sensitive template inputs in `Job.Secrets`; the 256 KB per-post limit (413).
 
 ---
 
@@ -493,11 +497,11 @@ Test paths are relative to `internal/`.
 |---|---|---|---|---|
 | A Platform, login, access | 5 | 4 | 1 | 0 |
 | B Workspaces | 8 | 7 | 1 | 0 |
-| C Runs | 13 | 7 | 5 | 1 |
-| D Templates on a workspace | 6 | 4 | 2 | 0 |
+| C Runs | 13 | 11 | 2 | 0 |
+| D Templates on a workspace | 6 | 5 | 1 | 0 |
 | E State | 5 | 4 | 1 | 0 |
-| F Terraform CLI | 5 | 4 | 1 | 0 |
-| G Variables | 4 | 1 | 3 | 0 |
+| F Terraform CLI | 5 | 5 | 0 | 0 |
+| G Variables | 4 | 3 | 1 | 0 |
 | H Projects | 5 | 4 | 0 | 1 |
 | I VCS | 9 | 4 | 5 | 0 |
 | J Registry | 6 | 6 | 0 | 0 |
@@ -507,8 +511,8 @@ Test paths are relative to `internal/`.
 | N Audit | 2 | 1 | 1 | 0 |
 | O Account, organization | 3 | 3 | 0 | 0 |
 | P Operations | 6 | 3 | 2 | 1 |
-| Q Runner lifecycle | 8 | 5 | 3 | 0 |
-| **Total** | **96** | **61** | **30** | **5** |
+| Q Runner lifecycle | 8 | 6 | 2 | 0 |
+| **Total** | **96** | **70** | **22** | **4** |
 
 A1, I1 and J2 are counted by their first verdict (`full`); their `partial` halves are listed in the gaps.
 
@@ -518,14 +522,7 @@ A1, I1 and J2 are counted by their first verdict (`full`); their `partial` halve
 
 ### P1 — core deploy / state / access / security, not covered end to end
 
-1. **C5 Refresh-only run** (`none`). http e2e in `TestWorkspaceFlow`: `action=refresh` → claim plan → finish with changes → `needs_confirmation` even with auto-apply → confirm → apply writes state → `applied`.
-2. **C2 Auto-apply** (store only). http e2e: auto-apply on, `action=apply` plan finishes with changes → claimable apply without confirm → `applied`; a plan without changes → `no_changes`.
-3. **C10 / C9 Cancel end to end**. http e2e: (a) running: cancel → heartbeat `StatusCancel` → state write under the lock still accepted → finish `canceled` → run `canceled`, lock released, intermediate state kept as current; (b) queued: cancel → `canceled`, workspace free, artifacts gone.
-4. **D4 Config restore through HTTP**. http e2e: configure a template to a new version → plan → discard (and: finish `failed` in plan) → Templates tab / job shows the previous version and inputs; added template discarded → gone.
-5. **G3 / G4 Variable precedence and VCS-linked exceptions in the claimed job**. http e2e: global set, project set, workspace set, workspace var with the same key → job `Env` has the right winner; link the workspace to VCS (`POST /workspaces/{name}/vcs`) → job has no global/project set vars; change branch / turn on PR plans → workspace-attached set detached.
-6. **Q4 Lease loss end to end**. http/app e2e: claim + ack, expire the lease, `ReapLeases` → run `errored` with "runner stopped responding" on the run page, state lock released, next log/finish → 409, artifacts deleted.
-7. **F4 CLI force-unlock**. http e2e (go-tfe): user A locks, user B `ForceUnlock` → released; `ForceUnlock` on a run's/rollback's lock → refused (`ErrWorkspaceLockedByRun`).
-8. **Real runner against the real server** (cross-cutting, `none` in `go test`). runner e2e: start `httptest.NewServer(srv.Handler())` and `runner.New(...).Execute` a real Terraform plan → confirm → apply with `terraform_data` (Terraform is already in CI for runner tests). Overlaps step 3 (`just smoke`).
+None left (closed in step 2: `http/flows_test.go`, `http/cloud_gotfe_test.go:TestCLIForceUnlock`, `e2e/e2e_test.go:TestRealRunner`).
 
 ### P2 — secondary flows (15)
 
@@ -543,7 +540,7 @@ A1, I1 and J2 are counted by their first verdict (`full`); their `partial` halve
 12. P2 `rotate-key` CLI path: env checks, audit entry, "value changed meanwhile" failure — app (extract or call `RotateKey` with a concurrent change).
 13. A2 Logout ends the session (cookie cleared, next request redirected) — http e2e.
 14. Runner token refused by the registry (documented: "the runner token can't use the registry") — add a principal to `onRegistry` in `TestAccessMatrix`.
-15. Q8 The server puts sensitive variable values and sensitive inputs into the claimed job's `Secrets` (the runner's masking is tested, the list it masks isn't) — http e2e (claim, check `job.Secrets`).
+15. Q8 The server puts sensitive template inputs into the claimed job's `Secrets` (sensitive variables: `TestJobVariables`) — http e2e (claim, check `job.Secrets`).
 
 ### P3 — nice to have (9)
 

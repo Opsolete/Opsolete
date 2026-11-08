@@ -6,7 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -136,5 +138,98 @@ func TestCloudGoTFE(t *testing.T) {
 	}
 	if _, err := alice.Workspaces.Unlock(ctx, ws.ID); !errors.Is(err, tfe.ErrWorkspaceLockedByRun) {
 		t.Fatalf("unlock of a run's lock: %v", err)
+	}
+}
+
+// TestCLIForceUnlock (F4): `terraform force-unlock` (go-tfe ForceUnlock) releases another user's CLI
+// lock for anyone with operate; a run's or rollback's lock ends only with them.
+func TestCLIForceUnlock(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	suffix := newID()[:8]
+	srv := newApp(t, "../../catalog", store, devAuth(t, store, "fu-admin-"+suffix+"@example.com", true), Features{Deployments: true})
+	srv.Organization = "acme"
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	group := "fu-grp-" + suffix
+	operateDefault(t, store, group)
+	client := func(email string, groups ...string) *tfe.Client {
+		t.Helper()
+		id, err := store.UpsertUser(ctx, "", email, "user", groups)
+		if err != nil {
+			t.Fatal(err)
+		}
+		token, err := store.CreateUserToken(ctx, id, "go-tfe test", time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := tfe.NewClient(&tfe.Config{Address: ts.URL, Token: token})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	alice, bob := client("fu-alice-"+suffix+"@example.com", group), client("fu-bob-"+suffix+"@example.com", group)
+	reader := client("fu-reader-"+suffix+"@example.com", "fu-readers-"+suffix)
+
+	ws, err := alice.Workspaces.Create(ctx, "acme", tfe.WorkspaceCreateOptions{Name: tfe.String("fu-" + suffix)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetGrant(ctx, uuid.MustParse(ws.ID), "fu-readers-"+suffix, "read"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := alice.Workspaces.Lock(ctx, ws.ID, tfe.WorkspaceLockOptions{}); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	if _, err := reader.Workspaces.ForceUnlock(ctx, ws.ID); err == nil {
+		t.Fatal("read access force-unlocked")
+	}
+	if _, err := bob.Workspaces.Unlock(ctx, ws.ID); !errors.Is(err, tfe.ErrWorkspaceLockedByUser) {
+		t.Fatalf("unlock of another user's lock: %v", err)
+	}
+	if got, err := bob.Workspaces.ForceUnlock(ctx, ws.ID); err != nil || got.Locked {
+		t.Fatalf("force-unlock of another user's lock: %+v %v", got, err)
+	}
+	if lock, _ := store.StateLockID(ctx, uuid.MustParse(ws.ID)); lock != "" {
+		t.Fatalf("lock after force-unlock: %q", lock)
+	}
+	if _, err := bob.Workspaces.Lock(ctx, ws.ID, tfe.WorkspaceLockOptions{}); err != nil {
+		t.Fatalf("the workspace locks again after a force-unlock: %v", err)
+	}
+	if _, err := bob.Workspaces.Unlock(ctx, ws.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// A rollback's lock (no run, not a CLI's) and a run's lock: refused, and kept.
+	refused := func(what string) {
+		t.Helper()
+		lock, _ := store.StateLockID(ctx, uuid.MustParse(ws.ID))
+		if _, err := bob.Workspaces.ForceUnlock(ctx, ws.ID); err == nil || !strings.Contains(err.Error(), "locked by Run") {
+			t.Fatalf("force-unlock of a %s lock: %v", what, err)
+		}
+		if after, _ := store.StateLockID(ctx, uuid.MustParse(ws.ID)); after != lock || lock == "" {
+			t.Fatalf("a %s lock must stay: %q → %q", what, lock, after)
+		}
+	}
+	if _, ok, err := store.LockState(ctx, uuid.MustParse(ws.ID), "rollback-lock", uuid.Nil, []byte(`{"ID":"rollback-lock"}`)); !ok || err != nil {
+		t.Fatalf("rollback lock: %v %v", ok, err)
+	}
+	refused("rollback")
+	store.UnlockState(ctx, uuid.MustParse(ws.ID), "rollback-lock", uuid.Nil)
+
+	h := srv.Handler()
+	name := "fu-run-" + suffix
+	r := &fakeRunner{h: h}
+	run := runID(t, post(h, "/templates/greeting", url.Values{fieldWorkspace: {name}, "greeting": {"hello"}, "name": {"world"}}))
+	r.claim(t, run, "plan")
+	if c := r.state("LOCK", "", `{"ID":"tf-run"}`); c != http.StatusOK {
+		t.Fatalf("run lock: %d", c)
+	}
+	ws, _ = bob.Workspaces.Read(ctx, "acme", name) // the admin's workspace: bob has operate on the default project
+	refused("run")
+	r.finish(t, planNone)
+	if lock, _ := store.StateLockID(ctx, uuid.MustParse(ws.ID)); lock != "" {
+		t.Fatalf("the run's lock ends with the run: %q", lock)
 	}
 }

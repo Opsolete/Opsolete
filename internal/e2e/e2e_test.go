@@ -1,0 +1,237 @@
+// Package e2e runs the real runner, with the real Terraform, against the real server on a test
+// database: the one place both halves of the runner protocol meet in `go test`. Its own package
+// because the runner hardens its process (on Linux: not dumpable, child subreaper, every child
+// killed after a job), which other packages' tests must not inherit.
+package e2e
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"context"
+	"io"
+	"log/slog"
+	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"gocloud.dev/blob/memblob"
+
+	"github.com/opsolete/opsolete/internal/app"
+	"github.com/opsolete/opsolete/internal/auth"
+	"github.com/opsolete/opsolete/internal/config"
+	httpserver "github.com/opsolete/opsolete/internal/http"
+	"github.com/opsolete/opsolete/internal/registry"
+	"github.com/opsolete/opsolete/internal/runner"
+	"github.com/opsolete/opsolete/internal/secrets"
+	"github.com/opsolete/opsolete/internal/storage"
+	"github.com/opsolete/opsolete/internal/templates"
+	"github.com/opsolete/opsolete/internal/testdb"
+	"github.com/opsolete/opsolete/internal/vcs"
+)
+
+const runnerToken = "e2e-runner-token-0123456789abcdef"
+
+// TestRealRunner: an admin uploads the greeting module to the registry and creates a workspace from
+// the catalog's greeting template; the runner plans it with Terraform, the admin confirms, the runner
+// applies; then the same for its destruction. Terraform fetches the module from the server's own
+// registry and keeps state in its http backend: no network beyond the test server.
+func TestRealRunner(t *testing.T) {
+	tf := os.Getenv("TERRAFORM")
+	if tf == "" {
+		var err error
+		if tf, err = exec.LookPath("terraform"); err != nil {
+			t.Skip("terraform is not on PATH (CI installs it): the real runner needs it")
+		}
+	}
+	ctx := context.Background()
+	store, err := storage.Open(ctx, testdb.URL(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	store.AuditKey = []byte("e2e-audit-key")
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	log := slog.New(slog.DiscardHandler)
+	if testing.Verbose() {
+		log = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
+	}
+	keys, err := secrets.New("e2e-secret-key", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tpls, err := templates.Open("../../catalog")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// the catalog's greeting template names this registry host
+	public, _ := url.Parse("http://opsolete.localhost:8080")
+	notify := &app.Notifier{DB: store.Pool.Config().ConnConfig, Log: log}
+	nctx, stopNotify := context.WithCancel(ctx)
+	waitNotify := notify.Start(nctx)
+	t.Cleanup(func() { stopNotify(); waitNotify() })
+	a := &app.App{Store: store, Blobs: memblob.OpenBucket(nil), Secrets: keys, Templates: tpls, Notify: notify, Log: log,
+		Registry: &registry.Registry{PublicURL: public, Key: []byte("e2e-registry-key")}, VCS: vcs.NewClient(nil)}
+	au, err := auth.New(ctx, auth.Config{DevUser: "admin@example.com", Admins: []string{"admin@example.com"}, PublicURL: public}, []byte("k"), store.UpsertUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httpserver.New(a, au, httpserver.Features{Deployments: true, Registry: true, Editor: true})
+	srv.RunnerToken, srv.ClaimWait = runnerToken, 500*time.Millisecond
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	// the runner, until the test ends
+	serverURL, _ := url.Parse(ts.URL)
+	r := runner.New(config.Runner{ServerURL: serverURL, Token: runnerToken, Name: "e2e", Terraform: tf, JobTimeout: time.Minute, JobGrace: 10 * time.Second}, log)
+	drain, stop := context.WithCancel(ctx)
+	hard, kill := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() { done <- r.Run(drain, hard) }()
+	t.Cleanup(func() {
+		stop()
+		kill()
+		if err := <-done; err != nil {
+			t.Errorf("runner: %v", err)
+		}
+	})
+
+	client := ts.Client()
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	send := func(t *testing.T, path, contentType string, body io.Reader) *http.Response {
+		t.Helper()
+		res, err := client.Post(ts.URL+path, contentType, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusSeeOther {
+			t.Fatalf("POST %s: %d", path, res.StatusCode)
+		}
+		return res
+	}
+	postForm := func(t *testing.T, path string, form url.Values) *http.Response {
+		return send(t, path, "application/x-www-form-urlencoded", strings.NewReader(form.Encode()))
+	}
+	page := func(t *testing.T, path string) string {
+		t.Helper()
+		res, err := client.Get(ts.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		b, _ := io.ReadAll(res.Body)
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s: %d", path, res.StatusCode)
+		}
+		return string(b)
+	}
+	const ws = "e2e-greeting"
+	var runID uuid.UUID
+	// await waits for the run to reach status, failing on any other ended status.
+	await := func(t *testing.T, status string) {
+		t.Helper()
+		for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+			run, _, err := store.GetRun(ctx, runID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if run.Status == status {
+				return
+			}
+			if storage.Ended(run.Status) {
+				t.Fatalf("run ended %s, want %s; log:\n%s", run.Status, status, page(t, "/workspaces/"+ws+"/runs/"+runID.String()+"/logs"))
+			}
+		}
+		t.Fatalf("run never reached %s; log:\n%s", status, page(t, "/workspaces/"+ws+"/runs/"+runID.String()+"/logs"))
+	}
+	runOf := func(res *http.Response) {
+		loc := res.Header.Get("Location")
+		runID = uuid.MustParse(loc[strings.LastIndex(loc, "/")+1:])
+	}
+	confirm := func(t *testing.T) {
+		t.Helper()
+		postForm(t, "/workspaces/"+ws+"/runs/"+runID.String()+"/confirm", nil)
+	}
+	start := time.Now()
+
+	t.Run("upload the greeting module to the registry", func(t *testing.T) {
+		var body bytes.Buffer
+		mw := multipart.NewWriter(&body)
+		for k, v := range map[string]string{"namespace": "examples", "name": "greeting", "system": "terraform", "version": "1.1.0"} {
+			mw.WriteField(k, v)
+		}
+		fw, _ := mw.CreateFormFile("archive", "greeting.tar.gz")
+		fw.Write(tarGz(t, "../../examples/modules/greeting/1.1.0"))
+		mw.Close()
+		send(t, "/registry", mw.FormDataContentType(), &body)
+	})
+	t.Run("create a workspace from the template: the runner plans it", func(t *testing.T) {
+		runOf(postForm(t, "/templates/greeting", url.Values{"ops-workspace": {ws}, "greeting": {"hi"}, "name": {"Opsolete"}}))
+		await(t, storage.NeedsConfirmation)
+		if p := page(t, "/workspaces/"+ws+"/runs/"+runID.String()); !strings.Contains(p, `<span class="change create">+1</span>`) {
+			t.Fatalf("plan page: %s", p)
+		}
+	})
+	t.Run("confirmed, the runner applies it", func(t *testing.T) {
+		confirm(t)
+		await(t, storage.Applied)
+		if out := page(t, "/workspaces/"+ws+"?show=outputs"); !strings.Contains(out, "hi, Opsolete!") {
+			t.Fatalf("outputs: %s", out)
+		}
+		w, _ := store.GetWorkspace(ctx, ws)
+		vs, _ := store.StateVersions(ctx, w.ID, 10)
+		if len(vs) != 1 || !vs[0].Indexed || vs[0].Resources != 1 {
+			t.Fatalf("state versions: %+v", vs)
+		}
+		if res, _ := store.Resources(ctx, w.ID); len(res) != 1 || !strings.HasSuffix(res[0].Address, ".terraform_data.greeting") {
+			t.Fatalf("resources: %+v", res)
+		}
+		if log := page(t, "/workspaces/"+ws+"/runs/"+runID.String()+"/logs"); !strings.Contains(log, "Plan: 1 to add") ||
+			!strings.Contains(log, "Apply complete! Resources: 1 added") {
+			t.Fatalf("log: %s", log)
+		}
+	})
+	t.Run("destroy: planned, confirmed, applied", func(t *testing.T) {
+		runOf(postForm(t, "/workspaces/"+ws+"/runs", url.Values{"action": {"destroy"}}))
+		await(t, storage.NeedsConfirmation)
+		confirm(t)
+		await(t, storage.Applied)
+		w, _ := store.GetWorkspace(ctx, ws)
+		if res, _ := store.Resources(ctx, w.ID); len(res) != 0 {
+			t.Fatalf("resources after destroy: %+v", res)
+		}
+		if p := page(t, "/workspaces/"+ws); !strings.Contains(p, "destroyed") {
+			t.Fatalf("workspace page after destroy: %s", p)
+		}
+		if log := page(t, "/workspaces/"+ws+"/runs/"+runID.String()+"/logs"); !strings.Contains(log, "Resources: 0 added, 0 changed, 1 destroyed") {
+			t.Fatalf("destroy log: %s", log)
+		}
+	})
+	t.Logf("plan, apply, destroy plan and destroy took %s", time.Since(start).Round(time.Millisecond))
+}
+
+// tarGz packs the files of dir, as `tar czf x.tar.gz -C dir .` does.
+func tarGz(t *testing.T, dir string) []byte {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	if err := tw.AddFS(os.DirFS(filepath.Clean(dir))); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	gz.Close()
+	return buf.Bytes()
+}

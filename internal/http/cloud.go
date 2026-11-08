@@ -281,7 +281,8 @@ func (s *Server) cloudLock(w http.ResponseWriter, r *http.Request) {
 		writeWorkspace(w, http.StatusOK, st.Workspace, true)
 		return
 	case "unlock", "force-unlock":
-		if err := st.Unlock(ctx, r.PathValue("action") == "force-unlock"); err != nil {
+		force := r.PathValue("action") == "force-unlock"
+		if err := st.Unlock(ctx, force); err != nil {
 			s.apiError(w, r, err)
 			return
 		}
@@ -295,7 +296,12 @@ func (s *Server) cloudLock(w http.ResponseWriter, r *http.Request) {
 			writeAPIError(w, http.StatusConflict, "workspace is locked by User: another user's terraform holds it (force-unlock releases it)")
 			return
 		} else if lock != nil {
-			writeAPIError(w, http.StatusConflict, "workspace is locked by Run: a Opsolete run or rollback holds it")
+			// go-tfe turns any 409 on force-unlock into "workspace already unlocked": 423 keeps this message
+			status := http.StatusConflict
+			if force {
+				status = http.StatusLocked
+			}
+			writeAPIError(w, status, "workspace is locked by Run: an Opsolete run or rollback holds it until it ends")
 			return
 		}
 		writeWorkspace(w, http.StatusOK, st.Workspace, false)
