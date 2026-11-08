@@ -102,7 +102,7 @@
 <h1>Variable sets</h1>
 <p class="muted">These sets apply to every workspace in the project except those linked to a repository: whoever operates one could link it to any code.
   A workspace's own variables and the sets attached to it override them; they override global sets.
-  {{if (user).Admin}}Attach a set to the project on <a href="/variable-sets">its page</a>.{{end}}</p>
+  {{if (user).Admin}}Create one for this project below, or attach an existing set on <a href="/variable-sets">its page</a>.{{end}}</p>
 <div class="card flush">
 <table>
 <tr><th>Set</th><th>Description</th></tr>
@@ -116,5 +116,16 @@
 {{end}}
 </table>
 </div>
+{{if (user).Admin}}
+<h2>Create a variable set for this project</h2>
+<form method="post" action="/variable-sets" class="card">
+  <input type="hidden" name="project" value="{{$p.Name}}">
+  <label for="set-name">Name <span class="req" aria-hidden="true">*</span></label>
+  <input id="set-name" name="name" required pattern="[a-z0-9][a-z0-9\-]{1,62}" placeholder="azure-prod">
+  <label for="set-description">Description</label>
+  <input id="set-description" name="description" class="wide" maxlength="500">
+  <div class="actions"><button type="submit">Create and attach</button></div>
+</form>
+{{end}}
 {{end}}
 {{template "bottom"}}

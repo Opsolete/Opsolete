@@ -180,7 +180,27 @@ func (s *Server) createVariableSet(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "a variable set name is 2–63 lowercase letters, digits and dashes", http.StatusBadRequest)
 		return
 	}
-	err := s.Store.CreateVariableSet(r.Context(), name, strings.TrimSpace(r.PostFormValue("description")), r.PostFormValue("global") != "")
+	// created from a project's or workspace's page: attach it there too, checked first so a bad name leaves no set behind
+	ctx, project, ws := r.Context(), r.PostFormValue("project"), r.PostFormValue("workspace")
+	attach := func(string) error { return nil }
+	exists, err := true, error(nil)
+	switch {
+	case project != "":
+		exists, err = s.Store.ProjectsExist(ctx, []string{project})
+		attach = func(id string) error { return s.Store.AttachVariableSetProject(ctx, id, project, true) }
+	case ws != "":
+		exists, err = s.Store.WorkspacesExist(ctx, []string{ws})
+		attach = func(id string) error { return s.Store.AttachVariableSet(ctx, id, ws, true) }
+	}
+	if err != nil {
+		s.internalError(w, "check attach target", err)
+		return
+	}
+	if !exists {
+		http.Error(w, "no such project or workspace", http.StatusBadRequest)
+		return
+	}
+	err = s.Store.CreateVariableSet(ctx, name, strings.TrimSpace(r.PostFormValue("description")), r.PostFormValue("global") != "")
 	if errors.Is(err, storage.ErrExists) {
 		http.Error(w, "a variable set with this name already exists", http.StatusConflict)
 		return
@@ -189,7 +209,15 @@ func (s *Server) createVariableSet(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "create variable set", err)
 		return
 	}
-	s.Log.Info("variable set created", "set", name, "user", auth.FromContext(r.Context()).Email)
+	set, err := s.Store.GetVariableSet(ctx, name)
+	if err == nil {
+		err = attach(set.ID)
+	}
+	if err != nil {
+		s.internalError(w, "attach variable set", err)
+		return
+	}
+	s.Log.Info("variable set created", "set", name, "project", project, "workspace", ws, "user", auth.FromContext(ctx).Email)
 	http.Redirect(w, r, "/variable-sets/"+name, http.StatusSeeOther)
 }
 

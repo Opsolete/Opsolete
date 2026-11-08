@@ -112,6 +112,20 @@ func TestProjectPages(t *testing.T) {
 		t.Fatal("the project's Variable sets page lists the set")
 	}
 	want(post(h, "/variable-sets/"+set+"/projects", nil), http.StatusSeeOther, "detach")
+
+	// created from the project's or workspace's page, a set is attached there
+	pset, wset := "prj-new-"+sfx, "ws-new-"+sfx
+	t.Cleanup(func() { store.DB.Exec(`DELETE FROM variable_sets WHERE name IN ($1, $2)`, pset, wset) })
+	want(post(user, "/variable-sets", url.Values{"name": {pset}, "project": {proj}}), http.StatusForbidden, "a user creates a set")
+	want(post(h, "/variable-sets", url.Values{"name": {pset}, "project": {"nope-" + sfx}}), http.StatusBadRequest, "unknown project")
+	want(post(h, "/variable-sets", url.Values{"name": {pset}, "project": {proj}}), http.StatusSeeOther, "create for project")
+	want(post(h, "/variable-sets", url.Values{"name": {wset}, "workspace": {ws}}), http.StatusSeeOther, "create for workspace")
+	if body := get(h, "/projects/"+proj+"/settings/variable-sets").Body.String(); !strings.Contains(body, `href="/variable-sets/`+pset+`"`) {
+		t.Fatal("a set created for the project is attached to it")
+	}
+	if body := get(h, "/workspaces/"+ws+"/variables").Body.String(); !strings.Contains(body, pset) || !strings.Contains(body, wset) {
+		t.Fatal("the workspace gets the sets created for it and its project")
+	}
 	if body := get(h, "/workspaces/"+ws+"/variables").Body.String(); strings.Contains(body, set) {
 		t.Fatal("a detached set still applies")
 	}
