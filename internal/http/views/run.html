@@ -131,11 +131,28 @@
   // Follow the log live; reload once a runner is done with the run (finished, or waiting for confirmation).
   const log = document.getElementById("log"), wasWorking = {{$r.Working}};
   const es = new EventSource(location.pathname + "/logs/stream");
-  let first = true;
+  // Terraform's own plan colors (tfexec forces -no-color), applied per whole line.
+  const styles = [[/^==> .*failed$/, "tf-del tf-b"], [/^==> /, "tf-step"], [/^\s*(-\/\+|\+\/-)\s/, "tf-chg"],
+    [/^\s*\+\s/, "tf-add"], [/^\s*-\s/, "tf-del"], [/^\s*~\s/, "tf-chg"], [/^\s*<=\s/, "tf-read"],
+    [/^\s*#\s/, "tf-b"], [/^Error: /, "tf-del tf-b"], [/^Warning: /, "tf-chg tf-b"],
+    [/^(Plan:|Apply complete!|Destroy complete!|No changes\.)/, "tf-b"]];
+  let first = true, rest = "", tail = null;
   es.onmessage = (e) => {
     if (first) { log.textContent = ""; first = false; }
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
-    log.append(e.data); // a text node: += would re-render the whole log on every chunk
+    const lines = (rest + e.data).split("\n");
+    rest = lines.pop(); // a chunk can end mid-line: style it once it's complete
+    tail?.remove();
+    for (const line of lines) {
+      const cls = styles.find(([re]) => re.test(line))?.[1];
+      if (!cls) { log.append(line + "\n"); continue; } // text nodes: += would re-render the whole log
+      const s = document.createElement("span");
+      s.className = cls;
+      s.textContent = line + "\n";
+      log.append(s);
+    }
+    tail = document.createTextNode(rest);
+    log.append(tail);
     if (atBottom) log.scrollTop = log.scrollHeight;
   };
   es.addEventListener("status", (e) => { if (e.data !== {{$r.Status}}) location.reload(); });
