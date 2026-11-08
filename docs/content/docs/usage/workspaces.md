@@ -7,7 +7,7 @@ A workspace holds exactly one Terraform [state]({{< relref "state" >}}). Every c
 
 ## Create a workspace
 
-Every workspace is in a [project]({{< relref "projects" >}}): pick it when creating the workspace (the default project unless you pick another; other projects need `operate` on them).
+Every workspace is in a [project]({{< relref "projects" >}}): pick it when creating the workspace. Creating one needs `operate` on the project, the default project too; admins create workspaces in any project.
 
 - **From a template:** pick a template, name the workspace and fill in the form. The template is added to the new workspace like any other (`module.<name>`, see below).
 - **Workspaces don't need a template** (**Workspaces → New workspace**). A blank workspace can stay empty or hold only [variables]({{< relref "variables" >}}).
@@ -66,4 +66,4 @@ A rollout of its own that errors, is discarded or is canceled **pauses** the rol
 
 ## Access
 
-The creator and admins operate a workspace; IdP groups get `read` or `operate` per workspace or per [project]({{< relref "projects#access" >}}), and the higher of the two wins. Without access, a workspace returns 404, as if it didn't exist. See [Teams: access per workspace]({{< relref "/docs/operations/authentication#teams-access-per-workspace" >}}).
+The creator and admins operate a workspace; IdP groups get `read` or `operate` per workspace or per [project]({{< relref "projects#access" >}}), and the higher of the two wins. Without access, a workspace returns 404, as if it didn't exist. A workspace's *Settings* need `operate`; with `read`, its Overview shows the project, repository link and trigger, execution mode, auto-apply and drift detection. See [Teams: access per workspace]({{< relref "/docs/operations/authentication#teams-access-per-workspace" >}}).

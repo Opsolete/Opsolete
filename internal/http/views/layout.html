@@ -506,7 +506,7 @@
     <a href="/workspaces/{{.}}/runs"{{if eq $t "runs"}} aria-current="page"{{end}}>Runs</a>
     <a href="/workspaces/{{.}}/states"{{if eq $t "states"}} aria-current="page"{{end}}>States</a>
     <a href="/workspaces/{{.}}/variables"{{if eq $t "variables"}} aria-current="page"{{end}}>Variables</a>
-    <a href="/workspaces/{{.}}/settings"{{if eq $t "settings"}} aria-current="page"{{end}}>Settings ›</a>
+    {{if or (not $) $.CanOperate}}<a href="/workspaces/{{.}}/settings"{{if eq $t "settings"}} aria-current="page"{{end}}>Settings ›</a>{{end}}
   </nav>
   {{end}}
   {{else}}{{with project}}{{$t := tab}}
@@ -525,7 +525,7 @@
     <span class="nav-head">{{.}}</span>
     <a href="/projects/{{.}}"{{if eq $t "overview"}} aria-current="page"{{end}}>Overview</a>
     <a href="/projects/{{.}}/workspaces"{{if eq $t "workspaces"}} aria-current="page"{{end}}>Workspaces{{with $}}{{with .P}} <span class="tag">{{.Workspaces}}</span>{{end}}{{end}}</a>
-    <a href="/projects/{{.}}/settings"{{if eq $t "settings"}} aria-current="page"{{end}}>Settings ›</a>
+    {{if (user).Admin}}<a href="/projects/{{.}}/settings"{{if eq $t "settings"}} aria-current="page"{{end}}>Settings ›</a>{{end}}
   </nav>
   {{end}}
   {{else}}
@@ -571,6 +571,8 @@
 {{end}}
 {{define "wscrumb"}}<!-- a workspace's breadcrumb: its project first -->
 <a href="/projects">Projects</a> / <a href="/projects/{{.ProjectName}}">{{.ProjectName}}</a> / <a href="/projects/{{.ProjectName}}/workspaces">Workspaces</a> / <a href="/workspaces/{{.Name}}">{{.Name}}</a>{{end}}
+{{define "nocreate"}}<!-- where the user may create workspaces nowhere (app.CreatableProjects is empty) -->
+<p class="muted">Ask an admin to create a workspace, or for operate access to a project.</p>{{end}}
 {{define "projectpick"}}<!-- the project of a new workspace: .Projects to pick from, .Project the picked name ("" = the default) -->
 <label for="ops-project">Project</label>
 <select id="ops-project" name="ops-project" aria-describedby="ops-project-hint">

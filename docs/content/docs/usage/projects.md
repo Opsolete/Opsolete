@@ -12,11 +12,11 @@ A **project** groups [workspaces]({{< relref "workspaces" >}}). Team access and 
 
 **Projects** in the menu lists the projects you can see, with their team and workspace counts; search by name. A project has its own menu:
 
-- **Overview:** its ID and description, and the most recently active workspaces. **+ New workspace** creates one in this project.
+- **Overview:** its ID and description, and the most recently active workspaces. **+ New workspace** creates one in this project, if you [may](#access).
 - **Workspaces:** all of the project's workspaces you can see.
-- **Settings:** *General* (name, description, default project, delete), *Team access* and *Variable sets*.
+- **Settings** (admins only): *General* (name, description, default project, delete), *Team access* and *Variable sets*.
 
-Everyone who can see a project sees these pages; only admins change them.
+Everyone who can see a project sees the first two; only admins see and change its settings.
 
 ## Manage projects
 
@@ -35,7 +35,7 @@ An admin grants an IdP group `read` or `operate` on a project under *Settings â€
 
 You see a project if you can see one of its workspaces or hold a grant on it; everyone sees the default project.
 
-**Creating a workspace in a project needs `operate` on the project** (admins: any project; everyone: the default project). A new workspace gets the project's variable sets, so `read` must not be enough to receive them.
+**Creating a workspace in a project needs `operate` on the project**; admins create workspaces in any project. That includes the default project: only admins create workspaces there, unless a group is granted `operate` on it. A new workspace gets the project's variable sets, so `read` must not be enough to receive them. Where you may create workspaces nowhere, the pages say to ask an admin to create one, or for `operate` on a project.
 
 ## Variable sets
 

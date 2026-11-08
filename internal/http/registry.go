@@ -210,7 +210,12 @@ func (s *Server) moduleDocs(w http.ResponseWriter, r *http.Request) {
 	if !s.Features.Deployments { // No-code ready: only with templates to deploy
 		d.Templates = nil
 	}
-	s.render(w, r, http.StatusOK, "module.html", map[string]any{
+	can, err := s.canCreateWorkspaces(r)
+	if err != nil {
+		s.internalError(w, "list projects", err)
+		return
+	}
+	s.render(w, r, http.StatusOK, "module.html", map[string]any{"CanCreate": can,
 		"Namespace": ns, "Name": name, "System": sys, "Version": ver, "Versions": d.Versions,
 		"Source": d.Source, "Docs": d.Docs, "Editor": s.canEditTemplates(r), "Linked": d.Linked, "Templates": d.Templates,
 		"Admin": auth.FromContext(r.Context()).Admin(),

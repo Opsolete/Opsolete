@@ -13,7 +13,7 @@ import (
 
 const creatableProjects = `-- name: CreatableProjects :many
 SELECT id, name, description, is_default, workspaces, grants, created_at FROM project_list p
-WHERE $1::boolean OR p.is_default
+WHERE $1::boolean
     OR EXISTS (SELECT 1 FROM project_access a JOIN users u ON u.id = $2::uuid
         WHERE a.project_id = p.id AND a.level = 'operate' AND a.group_name = ANY(u.groups))
 ORDER BY p.name
@@ -24,7 +24,7 @@ type CreatableProjectsParams struct {
 	Viewer uuid.NullUUID
 }
 
-// all for admins; else the default one and those granted operate to one of the viewer's groups
+// all for admins; else those granted operate to one of the viewer's groups (the default one too: only then)
 func (q *Queries) CreatableProjects(ctx context.Context, arg CreatableProjectsParams) ([]ProjectList, error) {
 	rows, err := q.db.Query(ctx, creatableProjects, arg.Admin, arg.Viewer)
 	if err != nil {

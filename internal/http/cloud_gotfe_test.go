@@ -28,9 +28,10 @@ func TestCloudGoTFE(t *testing.T) {
 	app.Organization = "acme"
 	srv := httptest.NewServer(app.Handler())
 	t.Cleanup(srv.Close)
+	group := "tfe-grp-" + suffix
 	client := func(email, role string) *tfe.Client { // role: as recorded at the user's last login
 		t.Helper()
-		id, err := store.UpsertUser(ctx, "", email, role, nil)
+		id, err := store.UpsertUser(ctx, "", email, role, []string{group})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -53,6 +54,10 @@ func TestCloudGoTFE(t *testing.T) {
 	if _, err := alice.Workspaces.Read(ctx, "acme", name); !errors.Is(err, tfe.ErrResourceNotFound) {
 		t.Fatalf("missing workspace: %v", err)
 	}
+	if _, err := alice.Workspaces.Create(ctx, "acme", tfe.WorkspaceCreateOptions{Name: tfe.String(name)}); err == nil || !strings.Contains(err.Error(), "operate") {
+		t.Fatalf("a user without operate on the default project creates a workspace in it: %v", err)
+	}
+	operateDefault(t, store, group)
 	ws, err := alice.Workspaces.Create(ctx, "acme", tfe.WorkspaceCreateOptions{Name: tfe.String(name)})
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)

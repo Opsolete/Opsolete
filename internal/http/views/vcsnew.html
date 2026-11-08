@@ -97,7 +97,7 @@
         {{range .Projects}}<label class="check"><input type="checkbox" name="project" value="{{.Value}}"{{if .Selected}} checked{{end}}><span>{{.Name}}</span></label>
         {{else}}<p class="hint">There are no projects.</p>{{end}}
         </div>
-        <p class="hint">Anyone with operate access to a selected project, and every user for the default project, may create a workspace there that links this connection's repositories. A workspace moved out of the project loses it.</p>
+        <p class="hint">Admins and anyone with operate access to a selected project (the default one too) may create a workspace there that links this connection's repositories. A workspace moved out of the project loses it.</p>
         <p class="field">Workspaces</p>
         {{template "picker" .Picker}}
         <p class="hint">A selected workspace links its repository under its own Settings → Version control. Runs of a deselected workspace that links a repository through this connection fail when they start.</p>

@@ -100,16 +100,20 @@ func (s *Server) renderNewWorkspace(w http.ResponseWriter, r *http.Request, stat
 		s.internalError(w, "list projects", err)
 		return
 	}
-	// ?project= is a URL parameter: one the user can't create in falls back to the default, else its connections' repos would list
+	if len(projects) == 0 { // the page says whom to ask
+		s.render(w, r, status, "newworkspace.html", map[string]any{"VCS": vcsForm{Form: form, Error: errMsg}})
+		return
+	}
+	// ?project= is a URL parameter: one the user can't create in falls back to the one the picker
+	// preselects (the default if the user may create there, else the first), else its connections' repos would list
 	if !slices.ContainsFunc(projects, func(p storage.Project) bool { return p.Name == form["project"] }) {
 		form["project"] = ""
 	}
-	project, err := s.App.NewWorkspaceProject(r.Context(), actor(r), form["project"], uuid.Nil)
-	if err != nil {
-		s.uiError(w, r, err)
-		return
+	project := form["project"]
+	if project == "" {
+		project = projects[max(0, slices.IndexFunc(projects, func(p storage.Project) bool { return p.Default }))].Name
 	}
-	f, err := s.loadVCSForm(r, form, errMsg, "", project.Name, reposOf)
+	f, err := s.loadVCSForm(r, form, errMsg, "", project, reposOf)
 	if err != nil {
 		s.uiError(w, r, err)
 		return

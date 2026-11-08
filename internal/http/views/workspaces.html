@@ -4,7 +4,7 @@
     <h1>Workspaces</h1>
     <p class="muted">Each workspace holds one Terraform state and the runs that changed it.</p>
   </div>
-  <a class="btn" href="/workspaces/new">+ New workspace</a>
+  {{if .CanCreate}}<a class="btn" href="/workspaces/new">+ New workspace</a>{{else}}{{template "nocreate"}}{{end}}
 </div>
 <form method="get" class="inline" style="margin-bottom:1rem">
   <label for="project-filter">Project</label>
@@ -28,7 +28,7 @@
   <td class="nowrap">{{with .Latest}}<span title="{{.UpdatedAt.Format "2006-01-02 15:04"}}">{{ago .UpdatedAt}}</span>{{else}}<span title="{{.CreatedAt.Format "2006-01-02 15:04"}}">{{ago .CreatedAt}}</span>{{end}}</td>
 </tr>
 {{else}}
-<tr><td colspan="7" class="empty">No workspaces{{if .Project}} in this project{{end}} yet. <a href="/workspaces/new">Create one</a>.</td></tr>
+<tr><td colspan="7" class="empty">No workspaces{{if .Project}} in this project{{end}} yet.{{if .CanCreate}} <a href="/workspaces/new">Create one</a>.{{end}}</td></tr>
 {{end}}
 </table>
 </div>

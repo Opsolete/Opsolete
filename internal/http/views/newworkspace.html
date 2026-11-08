@@ -11,6 +11,10 @@
 </div>
 {{with .VCS.Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
 
+{{if not .Projects}}
+{{template "nocreate"}}
+<div class="actions"><a class="btn secondary" href="/workspaces">Back</a></div>
+{{else}}
 {{if $t}}
 <ol class="stepper">
   <li class="done"><a href="/workspaces/new{{with $pq}}?project={{.}}{{end}}">Choose type</a></li>
@@ -120,6 +124,7 @@
   <p class="hint">Point Terraform's cloud block at this workspace, or link a repository later under its settings.</p>
   <div class="actions"><a href="/workspaces/new{{with $pq}}?project={{.}}{{end}}">‹ Previous</a><button type="submit">Create workspace</button><a class="btn secondary" href="/workspaces">Cancel</a></div>
 </form>
+{{end}}
 {{end}}
 {{template "bottom"}}
 

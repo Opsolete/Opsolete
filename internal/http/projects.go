@@ -47,7 +47,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 }
 
 // project serves a project's menu: Overview, Workspaces and Settings (General,
-// Team access, Variable sets). Everyone who sees the project sees them; only admins change them.
+// Team access, Variable sets). Everyone who sees the project sees the first two; only admins the settings.
 func (s *Server) project(w http.ResponseWriter, r *http.Request) {
 	page := r.PathValue("page") // settings sub-pages; "" is General
 	if !slices.Contains([]string{"", "access", "variable-sets"}, page) {
@@ -55,13 +55,17 @@ func (s *Server) project(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx, a := r.Context(), actor(r)
-	p, err := s.App.Project(ctx, a, r.PathValue("project"))
+	tab, _, _ := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/projects/"+r.PathValue("project")), "/"), "/")
+	load := s.App.Project
+	if tab == "settings" {
+		load = s.App.ProjectForSettings
+	}
+	p, err := load(ctx, a, r.PathValue("project"))
 	if err != nil {
 		s.uiError(w, r, err)
 		return
 	}
 	data := map[string]any{"P": p, "Page": page}
-	tab, _, _ := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/projects/"+p.Name), "/"), "/")
 	switch {
 	case tab == "" || tab == "workspaces":
 		list, err := s.App.ListWorkspaces(ctx, a, p.Name)
@@ -142,12 +146,18 @@ func (s *Server) moveWorkspace(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/workspaces/"+r.PathValue("name")+"/settings", http.StatusSeeOther)
 }
 
-// projectLabel names a project in the VCS and variable set pickers; the default one says it's open to every user.
+// projectLabel names a project in the VCS and variable set pickers, the default one marked.
 func projectLabel(p storage.Project) string {
 	if p.Default {
-		return p.Name + " (default: every user may create workspaces here)"
+		return p.Name + " (default)"
 	}
 	return p.Name
+}
+
+// canCreateWorkspaces: the user may create a workspace somewhere, for the "new workspace" entry points.
+func (s *Server) canCreateWorkspaces(r *http.Request) (bool, error) {
+	list, err := s.creatableProjects(r)
+	return len(list) > 0, err
 }
 
 // creatableProjects lists the projects the user may create workspaces in, to pick one.

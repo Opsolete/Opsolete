@@ -85,10 +85,11 @@
       {{with .Configure}}
       <button type="submit">{{if $.Adding}}Add template{{else}}Save configuration{{end}} &amp; start plan</button>
       <a class="btn secondary" href="/workspaces/{{.Name}}">Cancel</a>
-      {{else}}
+      {{else}}{{if or .Projects .Preview}}
       <button type="submit"{{if .Preview}} disabled{{end}}>Create workspace &amp; plan</button>
       <a class="btn secondary" href="/">Cancel</a>
-      {{end}}
+      {{else}}{{template "nocreate"}}
+      {{end}}{{end}}
     </div>
   </div>
 </form>
@@ -118,9 +119,9 @@
       check();
     }
     // one click, one plan: lock the button while the request runs; unlock when Back restores the page
-    const btn = form.querySelector("button[type=submit]"), text = btn.textContent;
+    const btn = form.querySelector("button[type=submit]"), text = btn?.textContent; // none: the user may create no workspace
     form.addEventListener("submit", () => { btn.disabled = true; btn.textContent = "Starting plan…"; });
-    addEventListener("pageshow", () => { btn.disabled = false; btn.textContent = text; });
+    addEventListener("pageshow", () => { if (btn) { btn.disabled = false; btn.textContent = text; } });
   })();
 </script>
 {{template "bottom"}}

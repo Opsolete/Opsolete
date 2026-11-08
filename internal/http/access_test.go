@@ -358,11 +358,11 @@ func accessRows() []accessRow {
 		{"GET /v1/archives/{ns}/{name}/{system}/{file}", "/v1/archives/{ns}/net/azurerm/1.0.0.tar.gz", "", onArchive, []int{403, 200}, false},
 		{"GET /v1/vcs-archives/{file}", "/v1/vcs-archives/{run}.tar.gz", "", onArchive, []int{403, 404}, false},
 
-		// Cloud API (terraform login tokens). Anyone may create a workspace in the default project;
-		// state reads need operate (the state holds secrets). 409: past the access check, nothing to do.
+		// Cloud API (terraform login tokens). Without a project a workspace goes into the default one,
+		// where only admins (and groups with operate on it) create workspaces; state reads need operate (the state holds secrets). 409: past the access check, nothing to do.
 		{"GET " + org + "/entitlement-set", acc + "/entitlement-set", "", onAPI, []int{401, 200, 200, 200, 200}, false},
 		{"GET " + org + "/workspaces/{name}", acc + "/workspaces/{cws}", "", onAPI, []int{401, 404, 200, 200, 200}, false},
-		{"POST " + org + "/workspaces", acc + "/workspaces", `{"data":{"attributes":{"name":"{cws}-new"}}}`, onAPI, []int{401, 201, 201, 201, 201}, true},
+		{"POST " + org + "/workspaces", acc + "/workspaces", `{"data":{"attributes":{"name":"{cws}-new"}}}`, onAPI, []int{401, 422, 422, 422, 201}, true},
 		{"GET " + org + "/projects", acc + "/projects", "", onAPI, []int{401, 200, 200, 200, 200}, false},
 		{"POST " + org + "/projects", acc + "/projects", `{"data":{"attributes":{"name":"{proj}-new"}}}`, onAPI, []int{401, 403, 403, 403, 201}, true},
 		{"PATCH " + cw, cid, `{"data":{"attributes":{"terraform-version":"1.14.0"}}}`, onAPI, []int{401, 404, 403, 200, 200}, false},
@@ -424,14 +424,16 @@ func accessRows() []accessRow {
 		{"POST /projects", "/projects", "name={proj}-new", onUI, []int{401, 403, 403, 403, 303}, true},
 		{"GET /projects/{project}", "/projects/{proj}", "", onUI, []int{302, 404, 200, 200, 200}, false},
 		{"GET /projects/{project}/workspaces", "/projects/{proj}/workspaces", "", onUI, []int{302, 404, 200, 200, 200}, false},
-		{"GET /projects/{project}/settings", "/projects/{proj}/settings", "", onUI, []int{302, 404, 200, 200, 200}, false},
-		{"GET /projects/{project}/settings/{page}", "/projects/{proj}/settings/access", "", onUI, []int{302, 404, 200, 200, 200}, false},
+		// settings pages: admins only, as only they save them
+		{"GET /projects/{project}/settings", "/projects/{proj}/settings", "", onUI, []int{302, 404, 403, 403, 200}, false},
+		{"GET /projects/{project}/settings/{page}", "/projects/{proj}/settings/access", "", onUI, []int{302, 404, 403, 403, 200}, false},
 		{"POST /projects/{project}/settings", "/projects/{proj}/settings", "name={proj}&description=d", onUI, []int{401, 403, 403, 403, 303}, false},
 		{"POST /projects/{project}/access", "/projects/{proj}/access", "group=acc-other&level=read", onUI, []int{401, 403, 403, 403, 303}, false},
 		{"POST /projects/{project}/delete", "/projects/{proj}/delete", "", onUI, []int{401, 403, 403, 403, 409}, true},
 
 		// UI: workspaces. 409 for operators: past the access check, the fixture's queued run is in the way.
-		// A project the user can't create in is a bad request (400), not a not-found.
+		// A project the user can't create in is a bad request (400), not a not-found: the operator has
+		// operate on the fixture's project, the reader only read. Settings pages need operate.
 		{"GET /workspaces", "/workspaces", "", onUI, []int{302, 200, 200, 200, 200}, false},
 		{"GET /workspaces/new", "/workspaces/new", "", onUI, []int{302, 200, 200, 200, 200}, false},
 		{"POST /workspaces/new", "/workspaces/new", "type=cli&name={ws}-new&ops-project={proj}", onUI, []int{401, 400, 400, 303, 303}, true},
@@ -439,9 +441,9 @@ func accessRows() []accessRow {
 		{"GET " + w + "/runs", ws + "/runs", "", onUI, []int{302, 404, 200, 200, 200}, false},
 		{"GET " + w + "/states", "/workspaces/{cws}/states", "", onUI, []int{302, 404, 200, 200, 200}, false},
 		{"GET " + w + "/variables", ws + "/variables", "", onUI, []int{302, 404, 200, 200, 200}, false},
-		{"GET " + w + "/settings", ws + "/settings", "", onUI, []int{302, 404, 200, 200, 200}, false},
+		{"GET " + w + "/settings", ws + "/settings", "", onUI, []int{302, 404, 403, 200, 200}, false},
 		{"GET " + w + "/deploy", ws + "/deploy", "", onUI, []int{302, 404, 200, 200, 200}, false},
-		{"GET " + w + "/settings/{page}", ws + "/settings/access", "", onUI, []int{302, 404, 200, 200, 200}, false},
+		{"GET " + w + "/settings/{page}", ws + "/settings/access", "", onUI, []int{302, 404, 403, 200, 200}, false},
 		{"GET " + w + "/states/{version}", "/workspaces/{cws}/states/{sv}", "", onUI, []int{302, 404, 403, 200, 200}, false}, // values: operators only
 		{"GET " + w + "/vcs", ws + "/vcs", "", onUI, []int{302, 404, 403, 200, 200}, false},
 		{"GET " + w + "/vcs/edit", ws + "/vcs/edit", "", onUI, []int{302, 404, 403, 200, 200}, false},

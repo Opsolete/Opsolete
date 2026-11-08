@@ -5,7 +5,7 @@
 <div class="page-head">
   <div>
     <h1>{{$w.Name}}{{if .Destroyed}} <span class="status destroyed">destroyed</span>{{end}}</h1>
-    <p class="meta">{{if and .Lock .Lock.Cloud}}<span><a href="/workspaces/{{$w.Name}}/settings/lock">Locked by {{or .Lock.Who "a user"}}</a></span>{{else if or .Active .Lock}}<span>Locked by a run</span>{{else}}<span>Unlocked</span>{{end}}<span>Resources {{len .Resources}}</span>{{with .Versions}}{{with index . 0}}<span>State v{{.Serial}}</span><span title="{{.CreatedAt.Format "2006-01-02 15:04"}}">Updated {{ago .CreatedAt}}</span>{{end}}{{end}}</p>
+    <p class="meta">{{if and .Lock .Lock.Cloud}}<span>{{if .CanOperate}}<a href="/workspaces/{{$w.Name}}/settings/lock">Locked by {{or .Lock.Who "a user"}}</a>{{else}}Locked by {{or .Lock.Who "a user"}}{{end}}</span>{{else if or .Active .Lock}}<span>Locked by a run</span>{{else}}<span>Unlocked</span>{{end}}<span>Resources {{len .Resources}}</span>{{with .Versions}}{{with index . 0}}<span>State v{{.Serial}}</span><span title="{{.CreatedAt.Format "2006-01-02 15:04"}}">Updated {{ago .CreatedAt}}</span>{{end}}{{end}}</p>
   </div>
   {{if .CanOperate}}
   <div class="inline">
@@ -139,11 +139,20 @@
 
 <aside class="side">
   <ul class="facts">
+    <li>Project: <a href="/projects/{{$w.ProjectName}}">{{$w.ProjectName}}</a></li>
     <li>Repository: {{if $w.VCSLinked}}<code>{{$w.VCSRepo}}</code> <span class="tag">{{$w.VCSBranch}}</span>{{else}}<span class="muted">none{{with $w.VCSRepo}} (was {{.}}; its VCS connection was deleted){{end}}</span>{{end}}
       {{if and .CanOperate (features).VCS}} · <a href="/workspaces/{{$w.Name}}/vcs">{{if $w.VCSLinked}}Change{{else}}Link{{end}}…</a>{{end}}</li>
-    <li>Execution mode: <a href="/workspaces/{{$w.Name}}/settings">{{if eq $w.ExecutionMode "local"}}Local{{else}}Remote{{end}}</a></li>
+    {{if $w.VCSLinked}}<li>Runs on: {{if not $w.VCSTrigger}}manual runs only{{else if $w.VCSTagsRegex}}new tags matching <code>{{$w.VCSTagsRegex}}</code>{{else}}pushes to the branch{{end}}{{if $w.VCSPullRequests}}; plans for pull requests{{end}}</li>{{end}}
+    {{$mode := "Remote"}}{{if eq $w.ExecutionMode "local"}}{{$mode = "Local"}}{{end}}
+    {{if .CanOperate}}<!-- readers can't open the settings: plain text for them -->
+    <li>Execution mode: <a href="/workspaces/{{$w.Name}}/settings">{{$mode}}</a></li>
     <li>Auto-apply: <a href="/workspaces/{{$w.Name}}/settings">{{if $w.AutoApply}}On{{else}}Off{{end}}</a></li>
     <li>Drift detection: <a href="/workspaces/{{$w.Name}}/settings/health">{{if $w.DriftDetection}}On{{else}}Off{{end}}</a></li>
+    {{else}}
+    <li>Execution mode: {{$mode}}</li>
+    <li>Auto-apply: {{if $w.AutoApply}}On{{else}}Off{{end}}</li>
+    <li>Drift detection: {{if $w.DriftDetection}}On{{else}}Off{{end}}</li>
+    {{end}}
     <li>Last drift check: {{with .Assessment}}<a href="/workspaces/{{$w.Name}}/runs/{{.ID}}"><span class="status {{.Status}}">{{status .Status}}</span></a> {{.UpdatedAt.Format "2006-01-02 15:04"}}{{else}}<span class="muted">never</span>{{end}}</li>
   </ul>
   <h3>Metrics <small>(last {{.Metrics.Runs}} runs)</small></h3>
@@ -255,7 +264,6 @@
 {{else}}
 <div class="field">Project</div><p><a href="/projects/{{$w.ProjectName}}">{{$w.ProjectName}}</a></p>
 {{end}}
-{{if .CanOperate}}
 <form method="post" action="/workspaces/{{$w.Name}}/settings">
   <!-- one settings endpoint: keep the Health page's value -->
   {{if $w.DriftDetection}}<input type="hidden" name="drift_detection" value="on">{{end}}
@@ -295,18 +303,11 @@
   </fieldset>
   <div class="actions"><button type="submit">Save settings</button></div>
 </form>
-{{else}}
-<div class="field">Name</div><p>{{$w.Name}}</p>
-<div class="field">Execution mode</div><p>{{if eq $w.ExecutionMode "local"}}Local: Terraform runs on your own machines{{else}}Remote: runs on Opsolete's runners{{end}}</p>
-<div class="field">Auto-apply</div><p>{{if $w.AutoApply}}On{{else}}Off: runs require operator approval{{end}}</p>
-<div class="field">Remote state sharing</div><p>{{if $w.GlobalRemoteState}}Shared with all workspaces{{else}}Shared with specific workspaces, if any{{end}}</p>
-{{end}}
 </div>
 
 {{else if eq $p "health"}}
 <h1>Health</h1>
 <p class="muted">Drift detection: whether the infrastructure still matches the state.</p>
-{{if .CanOperate}}
 <form method="post" action="/workspaces/{{$w.Name}}/settings" class="card">
   <input type="hidden" name="page" value="health">
   {{if $w.AutoApply}}<input type="hidden" name="auto_apply" value="on">{{end}}
@@ -314,7 +315,6 @@
     Drift detection: check daily for changes made outside Terraform (a refresh-only plan, never applied)</label>
   <div class="actions" style="margin-top:1rem"><button type="submit" class="secondary">Save</button></div>
 </form>
-{{else}}<p>Drift detection {{if $w.DriftDetection}}on{{else}}off{{end}}</p>{{end}}
 <p class="muted">Last drift check: {{with .Assessment}}<a href="/workspaces/{{$w.Name}}/runs/{{.ID}}"><span class="status {{.Status}}">{{status .Status}}</span></a> {{.UpdatedAt.Format "2006-01-02 15:04"}}{{else}}never{{end}}</p>
 
 {{else if eq $p "lock"}}
@@ -324,17 +324,15 @@
 <p>The <strong>{{$w.Name}}</strong> workspace is locked{{with .Who}} by <strong>{{.}}</strong>{{end}}{{if .OpsoleteRun}} (a run's Terraform){{else if not .Cloud}} (a state rollback){{else if ne .Operation "locked in Opsolete"}} (Terraform's cloud block){{end}}{{with .Created}} since {{.}}{{end}}.
   Runs wait until it is unlocked, and nobody else can take the state lock.</p>
 {{with .Info}}<div class="field">Reason</div><p>{{.}}</p>{{end}}
-{{if and $.CanOperate .Cloud}}
+{{if .Cloud}}
 <form method="post" action="/workspaces/{{$w.Name}}/lock" onsubmit="return opsConfirm(event, '{{if eq .UserID $.Me}}Unlock{{else}}Force unlock{{end}} {{$w.Name}}? Runs can proceed again.')">
   {{if eq .UserID $.Me}}<input type="hidden" name="action" value="unlock"><button type="submit">Unlock workspace</button>
   {{else}}<input type="hidden" name="action" value="force-unlock"><button type="submit" class="danger">Force unlock workspace</button>
   <p class="hint">Someone else holds this lock: force unlocking may disturb what they are doing.</p>{{end}}
 </form>
-{{else if .Cloud}}<p class="muted">Unlocking needs operate access.</p>
 {{else}}<p class="muted">This lock is released when the run or rollback ends.</p>{{end}}
 {{else}}
 <p>The <strong>{{$w.Name}}</strong> workspace is not currently locked. All operations can proceed normally. You can manually lock this workspace to prevent Terraform runs.</p>
-{{if .CanOperate}}
 <button type="button" onclick="document.getElementById('lock-workspace').showModal()">Lock workspace</button>
 <dialog id="lock-workspace" aria-labelledby="lock-workspace-title">
   <form method="post" action="/workspaces/{{$w.Name}}/lock"><input type="hidden" name="action" value="lock">
@@ -349,7 +347,6 @@
       <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancel</button></footer>
   </form>
 </dialog>
-{{else}}<p class="muted">Locking needs operate access.</p>{{end}}
 {{end}}
 </div>
 
@@ -367,7 +364,7 @@
   </table>
   {{else}}<p class="muted" style="margin:0">No groups have access to this workspace itself.</p>
   {{end}}
-  {{with .ProjectGrants}}<p class="hint">Through the project <a href="/projects/{{$w.ProjectName}}/settings/access">{{$w.ProjectName}}</a>:
+  {{with .ProjectGrants}}<p class="hint">Through the project {{if $.Admin}}<a href="/projects/{{$w.ProjectName}}/settings/access">{{$w.ProjectName}}</a>{{else}}<a href="/projects/{{$w.ProjectName}}">{{$w.ProjectName}}</a>{{end}}:
     {{range $i, $g := .}}{{if $i}}, {{end}}<code>{{$g.Group}}</code> {{$g.Level}}{{end}}</p>{{end}}
   {{if .Admin}}
   <form method="post" action="/workspaces/{{$w.Name}}/access" class="inline" style="margin-top:1rem">
@@ -380,7 +377,7 @@
   {{end}}
 </div>
 
-{{else if .CanOperate}}
+{{else}}
 <h1>Destruction and deletion</h1>
 <p class="muted" style="max-width:52rem">There are two independent steps for destroying this workspace and the infrastructure associated with it.
   First, its Terraform infrastructure should be destroyed. Second, the workspace in Opsolete, including its runs, variables, settings and state history, can be deleted.</p>
@@ -436,7 +433,6 @@
       <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancel</button></footer>
   </form>
 </dialog>
-{{else}}<p class="muted">Destroying or deleting this workspace needs operate access.</p>
 {{end}}
 {{end}}
 

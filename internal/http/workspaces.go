@@ -123,12 +123,10 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	in := app.NewWorkspace{Name: strings.TrimSpace(r.PostForm.Get(fieldWorkspace)), Project: r.PostForm.Get(fieldProject),
 		AutoApply: r.PostForm.Get(fieldAutoApply) != "", TemplateID: t.ID, Inputs: formValues(r, t)}
-	// a project the user can't pick is a bad request, not a form error (the picker only offers the others)
-	if in.Project != "" {
-		if _, err := s.App.NewWorkspaceProject(r.Context(), actor(r), in.Project, uuid.Nil); err != nil {
-			s.uiError(w, r, err)
-			return
-		}
+	// a project the user can't pick (the default one too) is a bad request, not a form error (the picker only offers the others)
+	if _, err := s.App.NewWorkspaceProject(r.Context(), actor(r), in.Project, uuid.Nil); err != nil {
+		s.uiError(w, r, err)
+		return
 	}
 	ws, run, err := s.App.CreateWorkspace(r.Context(), actor(r), in)
 	if ve, ok := errors.AsType[*app.ValidationError](err); ok {
@@ -165,7 +163,12 @@ func (s *Server) workspaces(w http.ResponseWriter, r *http.Request) {
 		s.uiError(w, r, err)
 		return
 	}
-	s.render(w, r, http.StatusOK, "workspaces.html", map[string]any{"Workspaces": list, "Projects": projects, "Project": project})
+	can, err := s.canCreateWorkspaces(r)
+	if err != nil {
+		s.internalError(w, "list projects", err)
+		return
+	}
+	s.render(w, r, http.StatusOK, "workspaces.html", map[string]any{"Workspaces": list, "Projects": projects, "Project": project, "CanCreate": can})
 }
 
 // loadWorkspace loads the {name} workspace if the user has at least need (app.Workspace); it writes
@@ -199,17 +202,21 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ctx := r.Context()
-	st, err := s.App.State(ctx, actor(r), r.PathValue("name"), app.LevelRead) // the header shows the state on every page
-	if err != nil {
-		s.uiError(w, r, err)
-		return
-	}
-	ws, level := st.Workspace, st.Level
 	// the side-menu page: each loads only what it shows (the header's data on every one)
 	tab, _, _ := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/workspaces/"+r.PathValue("name")), "/"), "/")
 	if tab == "" {
 		tab = "overview"
 	}
+	need := app.LevelRead
+	if tab == "settings" { // readers see what they need of the settings on the overview
+		need = app.LevelOperate
+	}
+	st, err := s.App.State(ctx, actor(r), r.PathValue("name"), need) // the header shows the state on every page
+	if err != nil {
+		s.uiError(w, r, err)
+		return
+	}
+	ws, level := st.Workspace, st.Level
 	runs, err := st.Runs(ctx, 25)
 	if err != nil {
 		s.internalError(w, "list runs", err)
@@ -356,7 +363,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		// General: workspaces to share the state with, the ones it already does first: they stay
 		// selected even if this user can't see them
 		stateConsumers := picker{Name: "remote_state_consumers", Label: "Workspaces to share the state with"}
-		if page == "" && level == app.LevelOperate {
+		if page == "" {
 			cur, err := st.RemoteStateConsumers(ctx)
 			if err != nil {
 				s.uiError(w, r, err)

@@ -41,15 +41,15 @@ func toProjects(rows []db.ProjectList, err error) ([]Project, error) {
 	return out, err
 }
 
-// Projects lists, by name, the projects v may see: all for admins, else the default project (anyone
-// may create workspaces there), those with a workspace v sees, and those granted to one of v's groups.
+// Projects lists, by name, the projects v may see: all for admins, else the default project, those
+// with a workspace v sees, and those granted to one of v's groups.
 func (s *Store) Projects(ctx context.Context, v Viewer) ([]Project, error) {
 	return toProjects(s.q.ListProjects(ctx, db.ListProjectsParams{Admin: v.Admin, Viewer: optID(v.UserID)}))
 }
 
-// CreatableProjects lists, by name, the projects v may create workspaces in: all for admins, else the
-// default project and those granted operate to one of v's groups. A workspace gets its project's
-// variable sets, so a read grant mustn't be enough.
+// CreatableProjects lists, by name, the projects v may create workspaces in: all for admins, else
+// those granted operate to one of v's groups (the default project too: only admins create workspaces
+// there without such a grant). A workspace gets its project's variable sets, so a read grant mustn't be enough.
 func (s *Store) CreatableProjects(ctx context.Context, v Viewer) ([]Project, error) {
 	return toProjects(s.q.CreatableProjects(ctx, db.CreatableProjectsParams{Admin: v.Admin, Viewer: optID(v.UserID)}))
 }

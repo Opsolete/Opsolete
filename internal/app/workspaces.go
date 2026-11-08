@@ -26,27 +26,34 @@ func (a *App) ListWorkspaces(ctx context.Context, actor Actor, project string) (
 	return a.Store.ListWorkspaces(ctx, actor.viewer(), project)
 }
 
-// CreatableProjects lists the projects actor may create workspaces in.
+// CreatableProjects lists the projects actor may create workspaces in: all for admins, else those
+// one of actor's groups has operate on (the default project too: only then).
 func (a *App) CreatableProjects(ctx context.Context, actor Actor) ([]storage.Project, error) {
 	return a.Store.CreatableProjects(ctx, actor.viewer())
 }
 
 // NewWorkspaceProject is the project a new workspace of actor goes into: the one named (or with
-// id), else the default. One actor may not create workspaces in is a ValidationError (FieldProject).
+// id), else the default. It's the one rule for who creates workspaces where (see CreatableProjects):
+// one actor may not create workspaces in, the default too, is a ValidationError (FieldProject), the
+// same whether the project exists or not.
 func (a *App) NewWorkspaceProject(ctx context.Context, actor Actor, name string, id uuid.UUID) (storage.Project, error) {
-	if name == "" && id == uuid.Nil {
-		return a.Store.DefaultProject(ctx)
-	}
 	list, err := a.CreatableProjects(ctx, actor)
 	if err != nil {
 		return storage.Project{}, err
 	}
-	i := slices.IndexFunc(list, func(p storage.Project) bool { return p.Name == name || id != uuid.Nil && p.ID == id })
+	i := slices.IndexFunc(list, func(p storage.Project) bool {
+		if name == "" && id == uuid.Nil {
+			return p.Default
+		}
+		return p.Name == name || id != uuid.Nil && p.ID == id
+	})
 	if i < 0 {
-		return storage.Project{}, invalid(FieldProject, "no such project, or you may not create workspaces in it: that needs operate access to it")
+		return storage.Project{}, invalid(FieldProject, notCreatable)
 	}
 	return list[i], nil
 }
+
+const notCreatable = "you may not create workspaces in this project: that needs operate access to it (admins create workspaces in the default project)"
 
 // NewWorkspace is a workspace to create from a template.
 type NewWorkspace struct {

@@ -234,7 +234,12 @@ func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
-	s.render(w, r, http.StatusOK, "index.html", map[string]any{"Templates": s.App.Templates.List(), "Editor": s.canEditTemplates(r)})
+	can, err := s.canCreateWorkspaces(r)
+	if err != nil {
+		s.internalError(w, "list projects", err)
+		return
+	}
+	s.render(w, r, http.StatusOK, "index.html", map[string]any{"Templates": s.App.Templates.List(), "Editor": s.canEditTemplates(r), "CanCreate": can})
 }
 
 type builderPage struct {

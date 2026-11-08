@@ -19,7 +19,7 @@
 <tr data-name="{{.Name}}">
   <td><a href="/projects/{{.Name}}"><strong>{{.Name}}</strong></a>{{if .Default}} <span class="tag" title="new workspaces go here unless another project is picked">default</span>{{end}}</td>
   <td>{{with .Description}}{{.}}{{else}}<span class="muted">No description</span>{{end}}</td>
-  <td><a href="/projects/{{.Name}}/settings/access">{{.Grants}}</a></td>
+  <td>{{if (user).Admin}}<a href="/projects/{{.Name}}/settings/access">{{.Grants}}</a>{{else}}{{.Grants}}{{end}}</td>
   <td><a href="/projects/{{.Name}}/workspaces">{{.Workspaces}}</a></td>
   {{if (user).Admin}}<td class="nowrap"><details class="menu kebab">
     <summary aria-label="Actions for {{.Name}}">…</summary>

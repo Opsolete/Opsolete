@@ -77,6 +77,20 @@ func devAuth(t *testing.T, store *storage.Store, email string, admin bool, group
 	return a
 }
 
+// operateDefault grants group operate on the default project, where only admins and such groups
+// create workspaces, until the test ends.
+func operateDefault(t *testing.T, store *storage.Store, group string) {
+	t.Helper()
+	def, err := store.DefaultProject(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetProjectGrant(t.Context(), def.ID, group, "operate"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.SetProjectGrant(context.Background(), def.ID, group, "") })
+}
+
 // testStore returns a migrated store, or skips without TEST_DATABASE_URL.
 func testStore(t *testing.T) *storage.Store {
 	dbURL := os.Getenv("TEST_DATABASE_URL")
@@ -226,7 +240,7 @@ func TestFeatureSwitches(t *testing.T) {
 }
 
 func TestInvalidSubmitRerendersForm(t *testing.T) {
-	rec := post(newTestServer(t), "/templates/storage-account", url.Values{"name": {"NO"}, "location": {"westeurope"}})
+	rec := post(newServer(t, "../../catalog", false, testStore(t)), "/templates/storage-account", url.Values{"name": {"NO"}, "location": {"westeurope"}})
 	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), `<p class="err">3-24 lowercase letters or digits, unique in Azure.</p>`) || // the label's help says what fits
 		!strings.Contains(rec.Body.String(), `<a href="#name">Account name</a>`) || // the error summary links the field
 		!strings.Contains(rec.Body.String(), `placeholder="azure-storage-account-prod"`) {
@@ -963,7 +977,8 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 	os.WriteFile(dir+"/vars.json", []byte(`{"id":"vars","name":"Vars","module":{"source":"git::https://x//m","ref":"v1"},
 		"inputs":[{"name":"location","type":"string","default":"westeurope"}]}`), 0o600)
 	admin := newServerAs(t, dir, false, store, devAuth(t, store, "admin@example.com", true))
-	owner := newServerAs(t, dir, false, store, devAuth(t, store, "owner@example.com", false))
+	operateDefault(t, store, "grp-owners") // where the owner creates the workspace
+	owner := newServerAs(t, dir, false, store, devAuth(t, store, "owner@example.com", false, "grp-owners"))
 	reader := newServerAs(t, dir, false, store, devAuth(t, store, "reader@example.com", false, "grp-readers"))
 	operator := newServerAs(t, dir, false, store, devAuth(t, store, "op@example.com", false, "grp-ops"))
 	outsider := newServerAs(t, dir, false, store, devAuth(t, store, "out@example.com", false, "grp-other"))

@@ -338,6 +338,7 @@ func TestVCSProjectScope(t *testing.T) {
 		}
 	}
 	post(h, "/projects/"+prj+"/access", url.Values{"group": {group}, "level": {"operate"}})
+	operateDefault(t, store, group) // the member may create workspaces in the default project too, not link the connection there
 
 	scope := url.Values{"workspaces": {"1"}, "workspace_scope": {"selected"}, "project": {prj, "nope-" + id}}
 	if rec := post(h, "/vcs/"+connID+"/settings", scope); rec.Code != http.StatusBadRequest {
@@ -352,8 +353,8 @@ func TestVCSProjectScope(t *testing.T) {
 	}
 	if page := get(h, "/vcs/"+connID+"/settings").Body.String(); !strings.Contains(page, `name="project" value="`+prj+`" checked>`) {
 		t.Fatal("the settings page shows the selected project")
-	} else if !strings.Contains(page, "(default: every user may create workspaces here)") {
-		t.Fatal("the picker must say the default project is open to every user")
+	} else if !strings.Contains(page, "(default)") {
+		t.Fatal("the picker must mark the default project")
 	}
 
 	// a new workspace: offered and allowed in the selected project, not in the default one

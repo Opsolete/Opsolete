@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/base64"
@@ -22,7 +23,8 @@ import (
 func TestCloudLoginAndState(t *testing.T) {
 	store := testStore(t)
 	email := fmt.Sprintf("cli-%s@example.com", newID()[:8])
-	app := newApp(t, "../../catalog", store, devAuth(t, store, email, false), Features{Deployments: true, Registry: true})
+	operateDefault(t, store, email) // the group: a user creates workspaces in the default project only with operate on it
+	app := newApp(t, "../../catalog", store, devAuth(t, store, email, false, email), Features{Deployments: true, Registry: true})
 	app.Organization = "acme"
 	h := app.Handler()
 
@@ -129,8 +131,16 @@ func TestCloudLoginAndState(t *testing.T) {
 		t.Fatalf("state upload to a remote workspace: %d %s", rec.Code, rec.Body)
 	}
 
-	// Another (non-admin) user's workspace is invisible.
-	other, err := store.CreateEmptyWorkspace(t.Context(), storage.EmptyWorkspace{Name: "cli-other-" + newID()[:8]})
+	// Another (non-admin) user's workspace is invisible: outside the default project, which this user operates.
+	otherPrj := "cli-prj-" + newID()[:8]
+	if _, err := store.CreateProject(t.Context(), otherPrj, ""); err != nil {
+		t.Fatal(err)
+	}
+	other, err := store.CreateEmptyWorkspace(t.Context(), storage.EmptyWorkspace{Name: "cli-other-" + newID()[:8], Project: otherPrj})
+	t.Cleanup(func() {
+		store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE id = $1`, other.ID)
+		store.Pool.Exec(context.Background(), `DELETE FROM projects WHERE name = $1`, otherPrj)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

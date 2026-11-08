@@ -31,6 +31,16 @@ func (a *App) Project(ctx context.Context, actor Actor, name string) (storage.Pr
 	return list[i], nil
 }
 
+// ProjectForSettings is Project for its settings pages: ErrForbidden unless actor is an admin, as
+// only admins change them (ErrNotFound first if actor can't see it).
+func (a *App) ProjectForSettings(ctx context.Context, actor Actor, name string) (storage.Project, error) {
+	p, err := a.Project(ctx, actor, name)
+	if err == nil && !actor.Admin {
+		return storage.Project{}, errAdminsOnly
+	}
+	return p, err
+}
+
 // adminProject is Project for an admin: ErrForbidden for anyone else.
 func (a *App) adminProject(ctx context.Context, actor Actor, name string) (storage.Project, error) {
 	if !actor.Admin {

@@ -46,8 +46,10 @@ func user(t *testing.T, a *App, groups ...string) Actor {
 	return Actor{UserID: id, Email: email}
 }
 
+// emptyWorkspace creates a workspace in the default project that by created (and so operates), also
+// where by may not create workspaces: who may is TestNewWorkspaceProject's.
 func emptyWorkspace(t *testing.T, a *App, by Actor) storage.Workspace {
-	ws, err := a.CreateEmptyWorkspace(context.Background(), by, EmptyWorkspace{Name: uniq("app-")})
+	ws, err := a.Store.CreateEmptyWorkspace(context.Background(), storage.EmptyWorkspace{Name: uniq("app-"), CreatedBy: by.UserID})
 	if err != nil {
 		t.Fatal(err)
 	}
