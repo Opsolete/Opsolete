@@ -122,6 +122,27 @@ test: db-start
     go vet ./...
     go test -count=1 ./...  # every DB test gets its own database (internal/testdb), so packages run in parallel
 
+# the non-DB tests on Linux in docker (go.mod's Go, CI's Terraform), twice: plain (the runner test binary is PID 1) and --init (tini is)
+test-linux:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    go=$(awk '$1 == "toolchain" {sub("go", "", $2); print $2}' go.mod)
+    tf=$(awk '/terraform_version:/ {print $2}' .github/workflows/ci.yml)
+    arch=$(docker version --format '{{{{.Server.Arch}}')
+    bin=.devdata/linux/terraform-$tf-$arch
+    if [ ! -x "$bin" ]; then
+        mkdir -p .devdata/linux
+        curl -fsSL -o "$bin.zip" "https://releases.hashicorp.com/terraform/$tf/terraform_${tf}_linux_$arch.zip"
+        unzip -p "$bin.zip" terraform > "$bin.tmp" && chmod +x "$bin.tmp" && mv "$bin.tmp" "$bin" && rm "$bin.zip"
+    fi
+    for init in "" --init; do
+        echo "==> Linux tests ${init:-plain}"
+        # exec: without --init the runner test binary replaces the shell as PID 1
+        docker run --rm $init -v "$PWD:/src" -w /src -v "$(go env GOMODCACHE):/go/pkg/mod" -v opsolete-linux-gocache:/root/.cache/go-build \
+            -v "$PWD/$bin:/usr/local/bin/terraform:ro" -e CGO_ENABLED=0 -e GOTOOLCHAIN=local -e GOFLAGS=-buildvcs=false "golang:$go" \
+            sh -c 'go test -count=1 ./... && go test -c -o /tmp/runner.test ./internal/runner && cd internal/runner && echo "runner test binary: PID $$" && exec /tmp/runner.test -test.count=1 -test.v'
+    done
+
 # fix flake.nix's vendorHash after go.mod/go.sum changes (no-op when it is current)
 vendorhash:
     #!/usr/bin/env bash

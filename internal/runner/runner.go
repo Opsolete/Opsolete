@@ -46,8 +46,8 @@ func (r *Runner) Run(ctx, hard context.Context) error {
 		return fmt.Errorf("harden runner process: %w", err)
 	}
 	r.Log.Info("runner started", "name", r.Name, "server", r.ServerURL.String())
-	if os.Getpid() != 1 {
-		r.Log.Warn("not running as a container's PID 1: processes a job leaves behind are not killed, so jobs aren't isolated from each other")
+	if !isolates {
+		r.Log.Warn("not on Linux: processes a job leaves behind are not killed, so jobs aren't isolated from each other")
 	}
 	backoff := time.Second
 	for ctx.Err() == nil {
@@ -114,7 +114,9 @@ func (r *Runner) Execute(hard context.Context, job runnerapi.Job) {
 	}
 	ship := newShipper(r, job, cancel, signed, p.end)
 	res := r.terraform(ctx, job, src, ship, p)
-	killJobProcesses()
+	if err := killJobProcesses(); err != nil {
+		log.Error("processes the job left behind could not be killed: the next job may not be isolated from them", "err", err)
+	}
 	ship.Close()
 	if ship.lost.Load() {
 		log.Warn("lease lost; result not reported")

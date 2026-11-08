@@ -410,7 +410,7 @@ in {
             User = "opsolete-runner"; # not DynamicUser: that fails to start together with PrivatePIDs
             Group = "opsolete-runner";
             StateDirectory = ["opsolete-runner" "opsolete-runner/plugin-cache"];
-            # PID 1 in its own namespace: the runner then kills what a job left running before the next one.
+            # own PID namespace: jobs see no other processes of the host (the runner kills what a job leaves running itself)
             PrivatePIDs = true;
             # for the launcher only (read secret files of any owner, drop to the user); gone after setpriv
             CapabilityBoundingSet = "CAP_SETUID CAP_SETGID CAP_DAC_READ_SEARCH";
