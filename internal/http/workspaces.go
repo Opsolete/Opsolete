@@ -933,7 +933,7 @@ func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "cancel run", err)
 		return
 	}
-	if status == storage.Canceled {
+	if storage.Ended(status) {
 		s.DeleteArtifacts(context.WithoutCancel(r.Context()), run.ID)
 	}
 	s.Log.Info("run cancel", "workspace", ws.Name, "run", run.ID, "status", status, "user", u.Email)

@@ -59,6 +59,15 @@ func (s *Store) Migrate(ctx context.Context) error {
 		version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`); err != nil {
 		return err
 	}
+	// A 0.x database recorded migrations 1.0 doesn't have (001_init.sql …): it isn't upgraded.
+	var foreign string
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(min(version), '') FROM schema_migrations WHERE version <> ALL($1)`,
+		files).Scan(&foreign); err != nil {
+		return err
+	}
+	if foreign != "" {
+		return fmt.Errorf("this database was created by Opsolete 0.x (it has migration %s): Opsolete 1.0 needs a new, empty database", foreign)
+	}
 	for _, f := range files {
 		var done bool
 		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=$1)`, f).Scan(&done); err != nil {

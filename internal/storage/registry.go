@@ -264,13 +264,11 @@ func (s *Store) RevokeUserTokens(ctx context.Context, userID string) error {
 	return err
 }
 
-// SigningKey returns the registry's HMAC key, creating it on first use.
+// SigningKey returns the registry's HMAC key, creating it on first use (concurrent first starts
+// agree: the first one set wins).
 func (s *Store) SigningKey(ctx context.Context) ([]byte, error) {
-	if _, err := s.DB.ExecContext(ctx, `INSERT INTO registry_signing_key (id, key) VALUES (1, $1) ON CONFLICT DO NOTHING`,
-		[]byte(rand.Text()+rand.Text())); err != nil {
-		return nil, err
-	}
 	var k []byte
-	err := s.DB.QueryRowContext(ctx, `SELECT key FROM registry_signing_key WHERE id=1`).Scan(&k)
+	err := s.DB.QueryRowContext(ctx, `UPDATE organization SET signing_key = COALESCE(signing_key, $1) RETURNING signing_key`,
+		[]byte(rand.Text()+rand.Text())).Scan(&k)
 	return k, err
 }

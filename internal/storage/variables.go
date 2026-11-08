@@ -90,8 +90,7 @@ func (s *Store) DeleteVariable(ctx context.Context, o VarOwner, id string) error
 
 // globalApplies: global sets apply to workspace $1 unless it's linked to a repository. That code
 // is whatever a user chose to link, so only an admin attaching a set may give it credentials.
-const globalApplies = `(vs.global AND NOT EXISTS (SELECT 1 FROM workspaces gw
-	WHERE gw.id = $1::uuid AND gw.vcs_connection_id IS NOT NULL))`
+const globalApplies = `(vs.global AND NOT EXISTS (SELECT 1 FROM workspace_vcs gw WHERE gw.workspace_id = $1::uuid))`
 
 // workspaceSets are the ids of the sets attached to workspace $1.
 const workspaceSets = `(SELECT set_id FROM variable_set_workspaces WHERE workspace_id = $1::uuid)`
@@ -100,7 +99,7 @@ const workspaceSets = `(SELECT set_id FROM variable_set_workspaces WHERE workspa
 // linked to a repository: anyone who operates it may relink it, and a project set, unlike an
 // attached one, isn't detached when the link changes.
 const projectSets = `(SELECT sp.set_id FROM variable_set_projects sp JOIN workspaces pw ON pw.project_id = sp.project_id
-	WHERE pw.id = $1::uuid AND pw.vcs_connection_id IS NULL)`
+	WHERE pw.id = $1::uuid AND NOT EXISTS (SELECT 1 FROM workspace_vcs v WHERE v.workspace_id = pw.id))`
 
 // RunVariables returns the variables a workspace's runs get, one per category and key. The
 // workspace's own win over sets attached to it, those over sets attached to its project, those

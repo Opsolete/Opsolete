@@ -25,7 +25,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 	claimWait = 100 * time.Millisecond
-	store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
+	store.DB.Exec(`UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
 	id := strings.ToLower(newID()[:8])
 	blank, linked, connName := "bl-"+id, "vc-"+id, "gh-"+id
 	t.Cleanup(func() {
@@ -171,7 +171,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	if rec := post(h, "/workspaces/"+linked+"/vcs", url.Values{}); rec.Code != http.StatusConflict {
 		t.Fatalf("relinking during a run: %d", rec.Code)
 	}
-	store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE id = $1`, job.RunID)
+	store.DB.Exec(`UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE id = $1`, job.RunID)
 
 	// VCS events: a new commit queues an apply run of it, an open pull request a speculative plan.
 	if rec := post(h, "/workspaces/"+linked+"/vcs", url.Values{"vcs_connection": {connID}, "vcs_repo": {"acme/infra"}, "vcs_branch": {"main"},
@@ -196,7 +196,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 		if tar := fetch(job.ModuleSource); !strings.Contains(tar, wantTar) {
 			t.Fatalf("%s run archive: %q, want %s", wantAction, tar, wantTar)
 		}
-		store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE id = $1`, job.RunID)
+		store.DB.Exec(`UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE id = $1`, job.RunID)
 	}
 	claimVCS("apply", "# at sha2")
 	claimVCS("apply", "# at sha3")

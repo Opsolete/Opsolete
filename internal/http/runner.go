@@ -232,7 +232,7 @@ func (s *Server) jobFinish(w http.ResponseWriter, r *http.Request) {
 		req.Outputs, req.Plan, req.Resources)
 	if err == nil {
 		s.Log.Info("job finished", "run", id, "result", req.Status, "status", status)
-		if status != storage.NeedsConfirmation && status != storage.ApplyQueued {
+		if storage.Ended(status) {
 			s.DeleteArtifacts(context.WithoutCancel(r.Context()), id) // the saved plan has been applied, or will never be
 		}
 		s.dropIntermediateStates(context.WithoutCancel(r.Context()), id)
@@ -303,6 +303,8 @@ func (s *Server) artifactAccess(w http.ResponseWriter, r *http.Request, phase st
 }
 
 // DeleteArtifacts deletes a run's saved plan and lock file; failures only leave a stale file behind.
+// Every path that ends a run calls it once the run ended (storage.Ended): finish, claim failure,
+// cancel, discard and the lease reaper.
 func (s *Server) DeleteArtifacts(ctx context.Context, runID string) {
 	for _, name := range []string{runnerapi.ArtifactPlan, runnerapi.ArtifactLockfile} {
 		if err := s.StateStore.Delete(ctx, artifactKey(runID, name)); err != nil && gcerrors.Code(err) != gcerrors.NotFound {

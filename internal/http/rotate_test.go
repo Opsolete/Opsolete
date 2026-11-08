@@ -18,7 +18,7 @@ import (
 func TestRotateKey(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-	store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
+	store.DB.Exec(`UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
 	oldKey, newKey := vcs.Key("rotate-old-"+newID()), vcs.Key("rotate-new-"+newID())
 	seal := func(plain, ad string) []byte {
 		b, err := vcs.Seal(oldKey, plain, ad)
@@ -68,7 +68,7 @@ func TestRotateKey(t *testing.T) {
 	if _, err := RotateKey(ctx, store, bucket, oldKey, newKey, log); err == nil {
 		t.Fatal("rotation while a run is active")
 	}
-	store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE id = $1::uuid`, run.ID)
+	store.DB.Exec(`UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE id = $1::uuid`, run.ID)
 	if n, err := RotateKey(ctx, store, bucket, oldKey, newKey, log); err != nil || n != 5 {
 		t.Fatalf("rotate: %d %v", n, err)
 	}

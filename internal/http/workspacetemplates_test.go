@@ -28,7 +28,7 @@ func TestWorkspaceTemplates(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 	claimWait = 100 * time.Millisecond
-	store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
+	store.DB.Exec(`UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
 	ws := "wt-" + strings.ToLower(newID()[:8])
 	t.Cleanup(func() { store.DB.Exec(`DELETE FROM workspaces WHERE name = $1`, ws) })
 	h := newServer(t, "../../catalog", false, store)
@@ -42,7 +42,7 @@ func TestWorkspaceTemplates(t *testing.T) {
 		if json.Unmarshal(rec.Body.Bytes(), &j); rec.Code != 200 {
 			t.Fatalf("claim: %d %s", rec.Code, rec.Body.String())
 		}
-		store.DB.Exec(`UPDATE runs SET status = 'applied' WHERE id = $1`, j.RunID) // free the workspace
+		store.DB.Exec(`UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL WHERE id = $1`, j.RunID) // free the workspace
 		return j
 	}
 	base := "/workspaces/" + ws + "/templates/"
@@ -260,7 +260,7 @@ func TestSensitiveInputs(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 	claimWait = 100 * time.Millisecond
-	store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
+	store.DB.Exec(`UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
 	id := strings.ToLower(newID()[:8])
 	ws, root := "sens-"+id, "sensroot-"+id
 	t.Cleanup(func() { store.DB.Exec(`DELETE FROM workspaces WHERE name IN ($1, $2)`, ws, root) })
@@ -278,7 +278,7 @@ func TestSensitiveInputs(t *testing.T) {
 		if json.Unmarshal(rec.Body.Bytes(), &j); rec.Code != 200 {
 			t.Fatalf("claim: %d %s", rec.Code, rec.Body.String())
 		}
-		store.DB.Exec(`UPDATE runs SET status = 'applied' WHERE id = $1`, j.RunID)
+		store.DB.Exec(`UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL WHERE id = $1`, j.RunID)
 		return j
 	}
 	leaks := func(what, s string) {

@@ -159,10 +159,6 @@ func (s *Store) LockState(ctx context.Context, id, lockID, runID string, info []
 	return held, ok, err
 }
 
-// releaseRunLock ($1 workspace id, $2 run id) drops the state lock a run's Terraform left behind,
-// never a rollback's or a CLI's.
-const releaseRunLock = `UPDATE workspaces SET state_lock = NULL WHERE id = $1 AND state_lock->>'OpsoleteRun' = $2::text`
-
 // ReleaseOrphanedLocks drops state locks nobody can release anymore and returns the workspace ids
 // with the released LockInfo:
 //   - a run's lock once that run no longer works with a lease (it took the lock just as it was
@@ -178,10 +174,10 @@ func (s *Store) ReleaseOrphanedLocks(ctx context.Context, timeout time.Duration)
 				WHEN w.state_lock->>'OpsoleteRun' IS NOT NULL THEN NOT EXISTS (SELECT 1 FROM runs r
 					WHERE r.id::text = w.state_lock->>'OpsoleteRun' AND r.`+working+` AND r.lease_id IS NOT NULL)
 				ELSE NOT starts_with(w.state_lock->>'ID', $2)
-					AND COALESCE(w.state_locked_at, '-infinity') < now() - make_interval(secs => $1)
+					AND w.state_locked_at < now() - make_interval(secs => $1)
 			END FOR UPDATE
 		)
-		UPDATE workspaces w SET state_lock = NULL FROM stale WHERE w.id = stale.id RETURNING w.id, stale.state_lock::text`,
+		UPDATE workspaces w SET state_lock = NULL, state_locked_at = NULL FROM stale WHERE w.id = stale.id RETURNING w.id, stale.state_lock::text`,
 		timeout.Seconds(), CloudLockPrefix)
 	if err != nil {
 		return nil, err
@@ -206,7 +202,7 @@ func lockOwner(p string) string {
 
 // UnlockState releases the lock if lockID holds it and runID ("" none) took it.
 func (s *Store) UnlockState(ctx context.Context, id, lockID, runID string) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET state_lock = NULL
+	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET state_lock = NULL, state_locked_at = NULL
 		WHERE id = ops_uuid($1) AND state_lock->>'ID' = $2 AND `+lockOwner("$3"), id, lockID, runID)
 	return err
 }
@@ -254,7 +250,7 @@ const CloudLockPrefix = "cloud-"
 // UnlockCloudState releases a lock taken through the cloud API by userID, or by anyone if userID
 // is "" (force unlock). Locks of runs and rollbacks are never released here.
 func (s *Store) UnlockCloudState(ctx context.Context, id, userID string) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET state_lock = NULL WHERE id = ops_uuid($1)
+	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET state_lock = NULL, state_locked_at = NULL WHERE id = ops_uuid($1)
 		AND starts_with(state_lock->>'ID', $3) AND ($2 = '' OR state_lock->>'UserID' = $2)
 		AND state_lock->>'OpsoleteRun' IS NULL`, id, userID, CloudLockPrefix) // a run's Terraform picks its own lock ID: it can't make it a cloud one
 	return err

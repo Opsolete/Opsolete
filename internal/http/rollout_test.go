@@ -112,7 +112,7 @@ func TestTickRollout(t *testing.T) {
 	})
 	end := func(n, status string) { // ends the workspace's active run
 		t.Helper()
-		if _, err := store.DB.Exec(`UPDATE runs SET status = $2, updated_at = now() WHERE workspace_id = $1
+		if _, err := store.DB.Exec(`UPDATE runs SET status = $2, lease_id = NULL, lease_until = NULL, updated_at = now() WHERE workspace_id = $1
 			AND status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`, ws[n], status); err != nil {
 			t.Fatal(err)
 		}
@@ -142,11 +142,19 @@ func TestTickRollout(t *testing.T) {
 			}
 		}
 	}
+	var runID string
 	tick("active", "1.1.0", "1.0.0", "1.0.0", "1.0.0") // batch of one: a
 	tick("active", "1.1.0", "1.0.0", "1.0.0", "1.0.0") // a's plan is still open
 	end("a", storage.Applied)
 	tick("active", "1.1.0", "1.0.0", "1.1.0", "1.0.0") // b is busy: c is next
-	end("c", storage.Discarded)
+	// discarded through the store: setStatus puts c's configuration back
+	if err := store.DB.QueryRow(`UPDATE runs SET status = 'needs_confirmation' WHERE workspace_id = $1 AND status = 'plan_queued'
+		RETURNING id`, ws["c"]).Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DiscardRun(ctx, runID, "x"); err != nil {
+		t.Fatal(err)
+	}
 	tick("paused", "1.1.0", "1.0.0", "1.0.0", "1.0.0") // the discard put c back on 1.0.0
 	if !strings.Contains(ro.Message, "discarded") {
 		t.Fatalf("pause message: %q", ro.Message)

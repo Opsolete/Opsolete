@@ -31,7 +31,7 @@ func testStore(t *testing.T) *Store {
 		t.Fatal(err)
 	}
 	// Leftovers from earlier runs would be claimed first.
-	if _, err := s.DB.Exec(`UPDATE runs SET status = 'errored'
+	if _, err := s.DB.Exec(`UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL
 		WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`); err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +351,7 @@ func TestCloudStateWriteFenced(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `UPDATE workspaces SET state_lock = NULL WHERE id = $1`, w.ID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE workspaces SET state_lock = NULL, state_locked_at = NULL WHERE id = $1`, w.ID); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
@@ -542,7 +542,8 @@ func TestRunVariables(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { s.DB.Exec(`DELETE FROM vcs_connections WHERE name = $1`, name) })
-	if _, err := s.DB.Exec(`UPDATE workspaces SET vcs_connection_id = (SELECT id FROM vcs_connections WHERE name = $2) WHERE id = $1`, w.ID, name); err != nil {
+	if _, err := s.DB.Exec(`INSERT INTO workspace_vcs (workspace_id, connection_id, repo, branch)
+		SELECT $1, id, 'acme/infra', 'main' FROM vcs_connections WHERE name = $2`, w.ID, name); err != nil {
 		t.Fatal(err)
 	}
 	if m := got(w.ID); m["env:"+k+"_P"] != "" || m["env:"+k+"_G"] != "" || m["env:"+k+"_X"] != "c" {
@@ -736,7 +737,7 @@ func TestRunMetrics(t *testing.T) {
 		($1, 'planning', now() + interval '1 hour'), ($1, 'errored', now() + interval '1 hour 90 seconds')`, run.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DB.Exec(`UPDATE runs SET status = 'errored' WHERE id = $1`, run.ID); err != nil {
+	if _, err := s.DB.Exec(`UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE id = $1`, run.ID); err != nil {
 		t.Fatal(err)
 	}
 	m, err := s.RunMetrics(ctx, w.ID)

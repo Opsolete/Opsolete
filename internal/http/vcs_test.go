@@ -171,7 +171,7 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("provision: %d %s", rec.Code, rec.Body.String())
 	}
-	store.DB.Exec(`UPDATE runs SET status = 'applied' FROM workspaces w WHERE w.id = runs.workspace_id AND w.name = $1`, wsName)
+	store.DB.Exec(`UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL FROM workspaces w WHERE w.id = runs.workspace_id AND w.name = $1`, wsName)
 
 	// New tag with a new required input; sync publishes it, the template moves to it.
 	mu.Lock()

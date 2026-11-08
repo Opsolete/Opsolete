@@ -491,7 +491,7 @@ func TestWorkspaceFlow(t *testing.T) {
 	ctx := context.Background()
 	claimWait = 100 * time.Millisecond
 	// Leftover runs from earlier tests would be claimed first.
-	store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
+	store.DB.Exec(`UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
 	app := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true, Registry: true})
 	h := app.Handler()
 	other := newServerAs(t, "../../catalog", false, store, devAuth(t, store, "other@example.com", false))
@@ -953,7 +953,7 @@ func TestWorkspaceFlow(t *testing.T) {
 func TestTeamsVariablesRenameCancel(t *testing.T) {
 	store := testStore(t)
 	claimWait = 100 * time.Millisecond
-	store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
+	store.DB.Exec(`UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
 	dir := t.TempDir()
 	os.WriteFile(dir+"/vars.json", []byte(`{"id":"vars","name":"Vars","module":{"source":"git::https://x//m","ref":"v1"},
 		"inputs":[{"name":"location","type":"string","default":"westeurope"}]}`), 0o600)
@@ -1180,7 +1180,7 @@ func TestRemoteStateSharing(t *testing.T) {
 		t.Fatal(err)
 	}
 	// as if a runner claimed it: the consumer's run is working, so its state credentials are valid
-	if _, err := store.DB.Exec(`UPDATE runs SET status = 'planning', lease_id = 'l' WHERE id::text = $1`, run.ID); err != nil {
+	if _, err := store.DB.Exec(`UPDATE runs SET status = 'planning', lease_id = 'l', lease_until = now() + interval '1 hour' WHERE id::text = $1`, run.ID); err != nil {
 		t.Fatal(err)
 	}
 	state := func(method, token string) int {
@@ -1226,7 +1226,9 @@ func TestRemoteStateSharing(t *testing.T) {
 		t.Fatalf("Health save changed sharing: %d", c)
 	}
 	// a pull request's speculative plan runs unreviewed code: no shared state, even when shared with all
-	store.DB.Exec(`UPDATE runs SET vcs_pull_request = 7 WHERE id::text = $1`, run.ID)
+	if _, err := store.DB.Exec(`UPDATE runs SET action = 'plan', vcs_pull_request = 7 WHERE id::text = $1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
 	if c := state("GET", token); c != http.StatusForbidden {
 		t.Fatalf("pull request plan read shared state: %d", c)
 	}
@@ -1238,7 +1240,7 @@ func TestRemoteStateSharing(t *testing.T) {
 func TestWorkspaceLock(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-	store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
+	store.DB.Exec(`UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
 	alice := newServerAs(t, "../../catalog", false, store, devAuth(t, store, "alice@example.com", true))
 	bob := newServerAs(t, "../../catalog", false, store, devAuth(t, store, "bob@example.com", true))
 	ws, err := store.CreateEmptyWorkspace(ctx, "lk-"+strings.ToLower(newID()[:8]), "", false, "")

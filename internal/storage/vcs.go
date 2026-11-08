@@ -53,7 +53,7 @@ const connCols = `c.id, c.name, c.provider, c.base_url, c.token, c.workspace_sco
 		WHERE a.connection_id = c.id ORDER BY w.name),
 	ARRAY(SELECT p.name FROM vcs_connection_projects a JOIN projects p ON p.id = a.project_id
 		WHERE a.connection_id = c.id ORDER BY p.name),
-	(SELECT count(*) FROM workspaces w WHERE w.vcs_connection_id = c.id),
+	(SELECT count(*) FROM workspace_vcs w WHERE w.connection_id = c.id),
 	(SELECT count(*) FROM vcs_modules m WHERE m.connection_id = c.id),
 	EXISTS (SELECT 1 FROM template_catalog t WHERE t.connection_id = c.id)`
 

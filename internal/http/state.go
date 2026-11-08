@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 
 	"gocloud.dev/blob"
 
@@ -196,7 +195,7 @@ func (s *Server) saveState(ctx context.Context, id, runID, cloudUser string, bod
 	if err != nil {
 		return s.stateFailure("get workspace", err)
 	}
-	v.BlobKey = fmt.Sprintf("%s/%d-%s.tfstate", strings.TrimSuffix(ws.StateKey, ".tfstate"), v.Serial, rand.Text())
+	v.BlobKey = fmt.Sprintf("workspaces/%s/%d-%s.tfstate", ws.ID, v.Serial, rand.Text())
 	if err := s.writeBlob(ctx, v.BlobKey, body); err != nil {
 		return s.stateFailure("write state", err)
 	}

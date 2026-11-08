@@ -41,20 +41,27 @@ func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration
 	defer tx.Rollback()
 	j := Job{LeaseID: rand.Text()}
 	var status string
-	var replace []byte
-	var removeTemplate string
-	err = tx.QueryRowContext(ctx, `
-		UPDATE runs SET status = CASE status WHEN 'plan_queued' THEN 'planning' ELSE 'applying' END,
-			runner = $1, lease_id = $2, lease_until = now() + make_interval(secs => $3), updated_at = now()
-		WHERE id = (SELECT id FROM runs r WHERE status IN ('plan_queued', 'apply_queued')
-			AND (r.action IN ('plan', 'assess') OR NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.id = r.workspace_id AND w.state_lock IS NOT NULL))
-			ORDER BY updated_at FOR UPDATE OF r SKIP LOCKED LIMIT 1)
-		RETURNING id, workspace_id, action, status, replace, COALESCE(vcs_commit, ''), COALESCE(remove_template, '')`,
-		runner, j.LeaseID, lease.Seconds()).Scan(&j.RunID, &j.WorkspaceID, &j.Action, &status, &replace, &j.VCSCommit, &removeTemplate)
+	err = tx.QueryRowContext(ctx, `SELECT id, status FROM runs r WHERE status IN ('plan_queued', 'apply_queued')
+		AND (r.action IN ('plan', 'assess') OR NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.id = r.workspace_id AND w.state_lock IS NOT NULL))
+		ORDER BY updated_at FOR UPDATE OF r SKIP LOCKED LIMIT 1`).Scan(&j.RunID, &status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, false, nil
 	}
 	if err != nil {
+		return Job{}, false, err
+	}
+	j.Phase, status = "plan", map[string]string{PlanQueued: Planning, ApplyQueued: Applying}[status]
+	if status == Applying {
+		j.Phase = "apply"
+	}
+	if _, err := setStatus(ctx, tx, j.RunID, status, j.Phase+" claimed by runner "+runner); err != nil {
+		return Job{}, false, err
+	}
+	var replace []byte
+	var removeTemplate string
+	if err := tx.QueryRowContext(ctx, `UPDATE runs SET runner = $2, lease_id = $3, lease_until = now() + make_interval(secs => $4)
+		WHERE id = $1::uuid RETURNING workspace_id, action, replace, COALESCE(vcs_commit, ''), COALESCE(remove_template, '')`,
+		j.RunID, runner, j.LeaseID, lease.Seconds()).Scan(&j.WorkspaceID, &j.Action, &replace, &j.VCSCommit, &removeTemplate); err != nil {
 		return Job{}, false, err
 	}
 	if replace != nil {
@@ -65,29 +72,15 @@ func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration
 	if removeTemplate != "" {
 		j.Target = []string{"module." + removeTemplate}
 	}
-	j.Phase = "plan"
-	if status == Applying {
-		j.Phase = "apply"
-	}
-	if err := tx.QueryRowContext(ctx, `SELECT vcs_connection_id IS NOT NULL FROM workspaces WHERE id = $1`,
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM workspace_vcs WHERE workspace_id = $1)`,
 		j.WorkspaceID).Scan(&j.VCS); err != nil {
 		return Job{}, false, err
 	}
 	if j.Modules, err = workspaceTemplates(ctx, tx, j.WorkspaceID); err != nil {
 		return Job{}, false, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO run_status_history (run_id, status, message)
-		VALUES ($1, $2, $3 || ' claimed by runner ' || $4)`, j.RunID, status, j.Phase, runner); err != nil {
-		return Job{}, false, err
-	}
 	return j, true, tx.Commit()
 }
-
-const working = `status IN ('planning', 'applying')`
-
-// activeRun is the status list of runs_one_active_idx (migration 009), at most one per workspace:
-// ON CONFLICT clauses on that index must match it exactly.
-const activeRun = `('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`
 
 // Heartbeat extends the lease of a running job. cancel reports that a user asked to cancel it.
 func (s *Store) Heartbeat(ctx context.Context, runID, lease string, ttl time.Duration) (cancel bool, err error) {
@@ -150,41 +143,35 @@ func (s *Store) CancelRun(ctx context.Context, id, email string, force bool) (st
 		return "", err
 	}
 	defer tx.Rollback()
-	var status, workspaceID string
-	err = tx.QueryRowContext(ctx, `SELECT status, workspace_id FROM runs WHERE id = ops_uuid($1) FOR UPDATE`, id).Scan(&status, &workspaceID)
+	var status string
+	err = tx.QueryRowContext(ctx, `SELECT status FROM runs WHERE id = ops_uuid($1) FOR UPDATE`, id).Scan(&status)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", ErrNotCancelable
 	}
 	if err != nil {
 		return "", err
 	}
-	msg := "canceled by " + email
-	switch {
-	case status == PlanQueued || status == ApplyQueued || ((status == Planning || status == Applying) && force):
-		if force && status != PlanQueued && status != ApplyQueued {
-			msg = "force-canceled by " + email + "; the runner was cut off, check the state for resources it may have missed"
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE runs SET status = 'canceled', lease_id = NULL, lease_until = NULL,
-			updated_at = now() WHERE id = ops_uuid($1)`, id); err != nil {
-			return "", err
-		}
-		if _, err := tx.ExecContext(ctx, releaseRunLock, workspaceID, id); err != nil {
-			return "", err
-		}
-		status = Canceled
-	case status == Planning || status == Applying:
+	busy := status == Planning || status == Applying
+	if busy && !force {
 		if _, err := tx.ExecContext(ctx, `UPDATE runs SET cancel_requested = true WHERE id = ops_uuid($1)`, id); err != nil {
 			return "", err
 		}
-		msg = "cancel requested by " + email + ": waiting for Terraform to stop and save state"
-	default:
-		return "", ErrNotCancelable
+		// a note, not a transition: the run ends when its runner reports it canceled
+		if err := addHistory(ctx, tx, id, status, "cancel requested by "+email+": waiting for Terraform to stop and save state"); err != nil {
+			return "", err
+		}
+		return status, tx.Commit()
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO run_status_history (run_id, status, message) VALUES ($1::uuid, $2, $3)`,
-		id, status, msg); err != nil {
+	msg := "canceled by " + email
+	if busy {
+		msg = "force-canceled by " + email + "; the runner was cut off, check the state for resources it may have missed"
+	}
+	if _, err := setStatus(ctx, tx, id, Canceled, msg); errors.Is(err, ErrTransition) {
+		return "", ErrNotCancelable
+	} else if err != nil {
 		return "", err
 	}
-	return status, tx.Commit()
+	return Canceled, tx.Commit()
 }
 
 // FinishJob records the result of a phase, releases the lease and the workspace's state lock, and
@@ -205,6 +192,7 @@ func (s *Store) FinishJob(ctx context.Context, runID, lease, result, message str
 	defer tx.Rollback()
 	var status, action, workspaceID string
 	var autoApply, confirm, cancelRequested bool
+	// the lease is checked here; setStatus then checks the transition
 	err = tx.QueryRowContext(ctx, `SELECT r.status, r.action, r.workspace_id, w.auto_apply, r.rollout_id IS NOT NULL, r.cancel_requested FROM runs r
 		JOIN workspaces w ON w.id = r.workspace_id
 		WHERE r.id = ops_uuid($1) AND r.lease_id = $2 AND r.`+working+` FOR UPDATE OF r`, runID, lease).
@@ -247,26 +235,14 @@ func (s *Store) FinishJob(ctx context.Context, runID, lease, result, message str
 			return "", err
 		}
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE runs SET status = $2, plan = COALESCE($3::jsonb, plan),
-		outputs = COALESCE($4::jsonb, outputs), lease_id = NULL, lease_until = NULL, updated_at = now() WHERE id = ops_uuid($1)`,
-		runID, final, nullJSON(planJSON), nullJSON(outJSON)); err != nil {
-		return "", err
-	}
-	if _, err := tx.ExecContext(ctx, releaseRunLock, workspaceID, runID); err != nil {
-		return "", err
-	}
-	if action == "destroy" && (final == Applied || final == NoChanges) {
-		// A destroy run that removes a template: its resources are gone now.
-		if _, err := tx.ExecContext(ctx, `DELETE FROM workspace_templates t USING runs r
-			WHERE r.id = ops_uuid($1) AND t.workspace_id = r.workspace_id AND t.name = r.remove_template`, runID); err != nil {
-			return "", err
-		}
-	}
 	if final == ApplyQueued && message == "" {
 		message = "auto-apply: waiting for a runner"
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO run_status_history (run_id, status, message)
-		VALUES ($1::uuid, $2, NULLIF($3, ''))`, runID, final, message); err != nil {
+	if _, err := setStatus(ctx, tx, runID, final, message); err != nil {
+		return "", err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE runs SET plan = COALESCE($2::jsonb, plan), outputs = COALESCE($3::jsonb, outputs)
+		WHERE id = $1::uuid`, runID, nullJSON(planJSON), nullJSON(outJSON)); err != nil {
 		return "", err
 	}
 	if resources != nil {
@@ -284,31 +260,39 @@ func nullJSON(b []byte) any {
 	return string(b)
 }
 
-// ReapExpiredLeases errors runs whose runner stopped heartbeating, and releases their state locks.
-// Runs are not retried: a half-applied terraform run needs a human to look at it.
+// ReapExpiredLeases errors runs whose runner stopped heartbeating (setStatus releases their state
+// locks) and returns their ids. Runs are not retried: a half-applied terraform run needs a human to
+// look at it. SKIP LOCKED: a run being finished or canceled right now isn't waited for.
 func (s *Store) ReapExpiredLeases(ctx context.Context) ([]string, error) {
-	rows, err := s.DB.QueryContext(ctx, `
-		WITH r AS (
-			UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL, updated_at = now()
-			WHERE `+working+` AND lease_id IS NOT NULL AND lease_until < now() RETURNING id, workspace_id
-		), unlocked AS (
-			UPDATE workspaces w SET state_lock = NULL FROM r WHERE w.id = r.workspace_id AND w.state_lock->>'OpsoleteRun' = r.id::text
-		)
-		INSERT INTO run_status_history (run_id, status, message)
-		SELECT id, 'errored', 'runner stopped responding (lease expired)' FROM r RETURNING run_id`)
+	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `SELECT id FROM runs WHERE `+working+` AND lease_id IS NOT NULL AND lease_until < now()
+		FOR UPDATE SKIP LOCKED`)
+	if err != nil {
+		return nil, err
+	}
 	var ids []string
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		ids = append(ids, id)
 	}
-	return ids, rows.Err()
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, id := range ids {
+		if _, err := setStatus(ctx, tx, id, Errored, "runner stopped responding (lease expired)"); err != nil {
+			return nil, err
+		}
+	}
+	return ids, tx.Commit()
 }
 
 type LogChunk struct {

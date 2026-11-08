@@ -19,7 +19,7 @@ func TestWorkspaceRoundTrip(t *testing.T) {
 	}
 	w, run := newWorkspace(t, s, false)
 	added, _ := s.WorkspaceTemplates(ctx, w.ID)
-	if w.StateKey != "opsolete/job-test/"+w.ID+".tfstate" || w.Templates != 1 || len(added) != 1 || added[0].Inputs["n"] != 1.0 ||
+	if w.Templates != 1 || len(added) != 1 || added[0].Inputs["n"] != 1.0 ||
 		run.Status != PlanQueued || run.Action != "apply" {
 		t.Fatalf("unexpected workspace/run: %+v %+v", w, run)
 	}
