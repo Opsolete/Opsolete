@@ -10,7 +10,7 @@ Pick a template, name a **workspace** and fill in a form generated from JSON. A 
 ## How it fits together
 
 - **Opsolete server:** authentication · JSON forms · module registry · PostgreSQL · job queue · log storage and streaming · Terraform state backend (versions in blob storage, locks in PostgreSQL).
-- **Opsolete runners:** pull jobs and run the approved module with Terraform via `terraform-exec`, with the credentials the job's variables carry.
+- **Opsolete runners:** pull jobs and run the approved module with Terraform, with the credentials the job's variables carry.
 - **Terraform + existing modules:** plan · apply · outputs, with state in the Opsolete `http` backend, one state per workspace.
 
 Runners never touch the database or the state store directly. The server holds read/write access to the state store, and cloud credentials only as sealed variables it never uses itself.

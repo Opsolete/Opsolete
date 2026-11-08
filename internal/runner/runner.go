@@ -1,5 +1,5 @@
 // Package runner executes Opsolete deployments with Terraform. It pulls jobs from the
-// server's runner API, runs init/plan/apply (or a destroy plan) via terraform-exec in a throwaway directory,
+// server's runner API, runs init/plan/apply (or a destroy plan) in a throwaway directory,
 // ships output back as it happens and reports the result with the terraform outputs.
 package runner
 
@@ -17,6 +17,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -182,8 +183,10 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	// After a cancel's SIGINT, Terraform finishes in-flight operations and saves state: that can take far
 	// longer than terraform-exec's 60s default before it kills the process (errors only on Windows).
 	_ = tf.SetWaitDelay(r.JobTimeout)
-	tf.SetStdout(w)
-	tf.SetStderr(w)
+	// terraform-exec only runs show and output (their output holds values); init, plan and apply
+	// run via tfRun, which keeps Terraform's colors.
+	tf.SetStdout(io.Discard)
+	tf.SetStderr(io.Discard)
 	// A throwaway HOME (outside dir: init -from-module needs it empty): a job must not leave a
 	// .terraformrc, .gitconfig or provider mirror (~/.terraform.d/plugins) behind for the next job.
 	home, err := os.MkdirTemp("", "ops-home-*")
@@ -206,11 +209,16 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	if err := tf.SetEnv(tfexec.CleanEnv(env)); err != nil {
 		return fail("set environment", err)
 	}
+	cmdEnv := []string{"TF_IN_AUTOMATION=1"} // what terraform-exec adds; CleanEnv cleaned env in place
+	for k, v := range env {
+		cmdEnv = append(cmdEnv, k+"="+v)
+	}
+	run := func(args ...string) (bool, error) { return r.tfRun(ctx, dir, cmdEnv, w, args...) }
 
 	fmt.Fprintf(w, "==> runner %s: %s phase of %s run %s\n", r.Name, job.Phase, job.Action, job.RunID)
 	if src != "" {
 		fmt.Fprintln(w, "==> terraform init (fetch module)")
-		if err := tf.Init(ctx, tfexec.FromModule(src), tfexec.Backend(false)); err != nil {
+		if _, err := run("init", "-input=false", "-from-module="+src, "-backend=false"); err != nil {
 			return fail("fetch module", err)
 		}
 	}
@@ -243,7 +251,7 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 		}
 	}
 	fmt.Fprintln(w, "\n==> terraform init (Opsolete state)")
-	if err := tf.Init(ctx, append(r.backendOptions(job), tfexec.Reconfigure(true))...); err != nil {
+	if _, err := run(append([]string{"init", "-input=false", "-reconfigure"}, r.backendArgs(job)...)...); err != nil {
 		return fail("init", err)
 	}
 	if len(job.Modules) > 0 { // after init: it reads the installed modules
@@ -252,19 +260,19 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 		}
 	}
 	if job.Phase == "plan" {
-		return r.plan(ctx, tf, dir, job, w, fail)
+		return r.plan(ctx, tf, run, dir, job, w, fail)
 	}
 
 	// The apply writes state: report what's in it however it ends, since a failed apply can
 	// leave resources behind too.
 	defer func() { res.Resources = inventory(ctx, tf) }()
 	fmt.Fprintln(w, "\n==> terraform apply (saved plan)")
-	if err := tf.Apply(ctx, tfexec.DirOrPlan(planFile)); err != nil {
+	if _, err := run("apply", "-auto-approve", "-input=false", planFile); err != nil {
 		return fail("apply", err)
 	}
 	if job.Action == "destroy" {
 		if len(job.Target) > 0 {
-			if err := dropRemoved(ctx, tf, dir, job, w); err != nil {
+			if err := dropRemoved(ctx, tf, run, dir, job, w); err != nil {
 				// the destroy itself succeeded: the next apply drops them instead
 				fmt.Fprintf(w, "\n==> outputs kept until the next apply: %v\n", err)
 			}
@@ -272,10 +280,7 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 		fmt.Fprintln(w, "\n==> done")
 		return runnerapi.FinishRequest{Status: "succeeded"}
 	}
-	// `output -json` prints sensitive values in clear text: keep it out of the streamed log.
-	tf.SetStdout(io.Discard)
-	tf.SetStderr(io.Discard)
-	outs, err := tf.Output(ctx)
+	outs, err := tf.Output(ctx) // prints sensitive values in clear text: tf's output is discarded
 	if err != nil {
 		return fail("read outputs", err)
 	}
@@ -298,7 +303,7 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 // Terraform keeps all outputs on a targeted destroy, so it plans the configuration without those
 // templates (their resources are gone, so their providers aren't needed anymore) and applies that
 // plan if it only changes outputs. -refresh=false: no API calls, and drift can't sneak in.
-func dropRemoved(ctx context.Context, tf *tfexec.Terraform, dir string, job runnerapi.Job, w io.Writer) error {
+func dropRemoved(ctx context.Context, tf *tfexec.Terraform, run func(...string) (bool, error), dir string, job runnerapi.Job, w io.Writer) error {
 	left := slices.DeleteFunc(slices.Clone(job.Modules), func(m runnerapi.Module) bool { return slices.Contains(job.Target, "module."+m.Name) })
 	for _, f := range []string{modulesFile, outputsFile} {
 		if err := os.Remove(filepath.Join(dir, f)); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -314,16 +319,12 @@ func dropRemoved(ctx context.Context, tf *tfexec.Terraform, dir string, job runn
 		return err
 	}
 	const cleanupPlan = "opsolete-cleanup.tfplan"
-	tf.SetStdout(w)
-	tf.SetStderr(w)
 	fmt.Fprintln(w, "\n==> terraform plan -refresh=false (without the removed templates, to drop their outputs)")
-	changes, err := tf.Plan(ctx, tfexec.Out(cleanupPlan), tfexec.Refresh(false))
+	changes, err := run("plan", "-input=false", "-detailed-exitcode", "-out="+cleanupPlan, "-refresh=false")
 	if err != nil || !changes {
 		return err
 	}
-	tf.SetStdout(io.Discard) // show -json includes values
-	p, err := tf.ShowPlanFile(ctx, cleanupPlan)
-	tf.SetStdout(w)
+	p, err := tf.ShowPlanFile(ctx, cleanupPlan) // includes values: tf's output is discarded
 	if err != nil {
 		return err
 	}
@@ -333,7 +334,8 @@ func dropRemoved(ctx context.Context, tf *tfexec.Terraform, dir string, job runn
 		}
 	}
 	fmt.Fprintln(w, "\n==> terraform apply (outputs only)")
-	return tf.Apply(ctx, tfexec.DirOrPlan(cleanupPlan))
+	_, err = run("apply", "-auto-approve", "-input=false", cleanupPlan)
+	return err
 }
 
 // templateEscape keeps an input a value: strings in .tf.json are templates, so "${...}" in a form
@@ -416,30 +418,28 @@ func writeOutputs(dir string, mods []runnerapi.Module) error {
 
 // plan saves a plan; with changes it reports a summary and uploads the plan and the lock file
 // for the apply phase.
-func (r *Runner) plan(ctx context.Context, tf *tfexec.Terraform, dir string, job runnerapi.Job, w io.Writer,
+func (r *Runner) plan(ctx context.Context, tf *tfexec.Terraform, run func(...string) (bool, error), dir string, job runnerapi.Job, w io.Writer,
 	fail func(string, error) runnerapi.FinishRequest) runnerapi.FinishRequest {
 	destroy := job.Action == "destroy"
 	refresh := job.Action == "refresh" || job.Action == "assess"
 	// never applied, so they don't write state: no lock, they run in locked workspaces (storage.ClaimJob)
 	readOnly := job.Action == "plan" || job.Action == "assess"
-	opts := []tfexec.PlanOption{tfexec.Out(planFile), tfexec.Destroy(destroy), tfexec.RefreshOnly(refresh), tfexec.Lock(!readOnly)}
-	step := "plan"
+	var flags []string
 	switch {
 	case destroy:
-		step += " -destroy"
+		flags = append(flags, "-destroy")
 	case refresh:
-		step += " -refresh-only"
+		flags = append(flags, "-refresh-only")
 	}
 	for _, a := range job.Replace {
-		opts = append(opts, tfexec.Replace(a))
-		step += " -replace=" + a
+		flags = append(flags, "-replace="+a)
 	}
 	for _, a := range job.Target {
-		opts = append(opts, tfexec.Target(a))
-		step += " -target=" + a
+		flags = append(flags, "-target="+a)
 	}
-	fmt.Fprintf(w, "\n==> terraform %s\n", step)
-	changes, err := tf.Plan(ctx, opts...)
+	fmt.Fprintf(w, "\n==> terraform %s\n", strings.Join(append([]string{"plan"}, flags...), " "))
+	changes, err := run(append([]string{"plan", "-input=false", "-detailed-exitcode", "-out=" + planFile,
+		"-lock=" + strconv.FormatBool(!readOnly)}, flags...)...)
 	if err != nil {
 		return fail("plan", err)
 	}
@@ -447,10 +447,7 @@ func (r *Runner) plan(ctx context.Context, tf *tfexec.Terraform, dir string, job
 		fmt.Fprintln(w, "\n==> no changes")
 		return runnerapi.FinishRequest{Status: "succeeded"}
 	}
-	// `show -json` of a plan includes variable and attribute values: keep it out of the log.
-	tf.SetStdout(io.Discard)
-	tf.SetStderr(io.Discard)
-	p, err := tf.ShowPlanFile(ctx, planFile)
+	p, err := tf.ShowPlanFile(ctx, planFile) // includes variable and attribute values: tf's output is discarded
 	if err != nil {
 		return fail("read plan", err)
 	}
@@ -588,9 +585,7 @@ func inventory(ctx context.Context, tf *tfexec.Terraform) []runnerapi.Resource {
 	// the state is still readable, and a half-applied state is the one most worth indexing.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
-	tf.SetStdout(io.Discard) // show -json prints the whole state, secrets included
-	tf.SetStderr(io.Discard)
-	st, err := tf.Show(ctx)
+	st, err := tf.Show(ctx) // prints the whole state, secrets included: tf's output is discarded
 	if err != nil {
 		return nil
 	}
@@ -602,13 +597,34 @@ func inventory(ctx context.Context, tf *tfexec.Terraform) []runnerapi.Resource {
 // command line, .terraform/ and the saved plan. It only works while this run is planning or applying
 // (module code can read it from the env): it reaches this workspace's state and, read-only, the states
 // shared with it.
-func (r *Runner) backendOptions(job runnerapi.Job) []tfexec.InitOption {
+func (r *Runner) backendArgs(job runnerapi.Job) []string {
 	addr := r.ServerURL.JoinPath(runnerapi.StatePrefix, job.WorkspaceID).String()
-	return []tfexec.InitOption{
-		tfexec.BackendConfig("address=" + addr),
-		tfexec.BackendConfig("lock_address=" + addr),
-		tfexec.BackendConfig("unlock_address=" + addr),
+	return []string{"-backend-config=address=" + addr, "-backend-config=lock_address=" + addr, "-backend-config=unlock_address=" + addr}
+}
+
+// ansiCodes matches Terraform's color codes (SGR sequences).
+var ansiCodes = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
+// tfRun runs a terraform command with its colors on, which terraform-exec can't do (it always adds
+// -no-color); the run page renders them. Otherwise like terraform-exec: SIGINT on cancel, stderr in
+// the error. With -detailed-exitcode, exit code 2 means "changes present", reported as true.
+func (r *Runner) tfRun(ctx context.Context, dir string, env []string, w io.Writer, args ...string) (bool, error) {
+	var stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, r.Terraform, args...)
+	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = dir, env, w, io.MultiWriter(w, &stderr)
+	// After SIGINT, Terraform finishes in-flight operations and saves state before it exits.
+	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
+	cmd.WaitDelay = r.JobTimeout
+	isolateCommand(cmd)
+	err := cmd.Run()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 2 && slices.Contains(args, "-detailed-exitcode") {
+		return true, nil
 	}
+	if err != nil {
+		return false, fmt.Errorf("%w\n%s", err, ansiCodes.ReplaceAllString(stderr.String(), ""))
+	}
+	return false, nil
 }
 
 func (r *Runner) finish(log *slog.Logger, job runnerapi.Job, res runnerapi.FinishRequest) {

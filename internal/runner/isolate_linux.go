@@ -4,8 +4,15 @@ package runner
 
 import (
 	"os"
+	"os/exec"
 	"syscall"
 )
+
+// isolateCommand gives terraform what terraform-exec does on Linux: killed if the runner dies, and
+// its own process group.
+func isolateCommand(cmd *exec.Cmd) {
+	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL, Setpgid: true}
+}
 
 // hardenProcess makes the runner non-dumpable, so the jobs it runs as the same user can't read its
 // /proc/<pid>/environ or memory: those still hold OPS_RUNNER_TOKEN, os.Unsetenv doesn't clear them.

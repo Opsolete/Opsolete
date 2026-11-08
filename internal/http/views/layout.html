@@ -465,8 +465,10 @@
   /* live log */
   pre.log { background: #0c0c0e; color: #dedfe3; border-radius: var(--radius); padding: 1rem 1.2rem; max-height: 34rem;
     white-space: pre-wrap; font-size: .8rem; line-height: 1.55; border: 1px solid #3b3d45; }
-  .tf-add { color: #5bd88a; } .tf-del { color: #ff8a8c; } .tf-chg { color: #f2b94a; } .tf-read { color: #64d8e8; }
-  .tf-dim { color: #8b8f98; } .tf-b { font-weight: 700; } .tf-step { color: #8fbaff; font-weight: 700; }
+  .ansi-b { font-weight: 700; } .ansi-dim { opacity: .7; } .ansi-u { text-decoration: underline; }
+  .ansi-c31, .ansi-c91 { color: #ff8a8c; } .ansi-c32, .ansi-c92 { color: #5bd88a; } .ansi-c33, .ansi-c93 { color: #f2b94a; }
+  .ansi-c34, .ansi-c94 { color: #8fbaff; } .ansi-c35, .ansi-c95 { color: #d6a8ff; } .ansi-c36, .ansi-c96 { color: #64d8e8; }
+  .ansi-c90 { color: #8b8f98; }
 </style>
 <!-- JavaScript is required: e.g. confirmations (opsConfirm) would be skipped without it -->
 <noscript><style>main { display: none; }</style></noscript>

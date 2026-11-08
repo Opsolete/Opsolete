@@ -1009,7 +1009,7 @@ func (s *Server) logText(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, c := range chunks {
-			io.WriteString(w, c.Chunk)
+			io.WriteString(w, ansiCodes.ReplaceAllString(c.Chunk, "")) // Terraform's colors are for the run page
 			after = c.Seq
 		}
 		if len(chunks) < 500 {
@@ -1019,6 +1019,9 @@ func (s *Server) logText(w http.ResponseWriter, r *http.Request) {
 }
 
 var sseNewlines = strings.NewReplacer("\r\n", "\n", "\r", "\n")
+
+// ansiCodes matches the color codes (SGR sequences) in Terraform's output.
+var ansiCodes = regexp.MustCompile("\x1b\\[[0-9;]*m")
 
 // logStream follows a run's log as Server-Sent Events. Event ids are log sequence numbers, so a
 // reconnecting EventSource resumes via Last-Event-ID. Ends with a "done" event (data: the run's

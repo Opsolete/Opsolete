@@ -222,6 +222,9 @@ func TestPlanThenApply(t *testing.T) {
 	if !strings.Contains(logs, "plan saved: 1 to add, 0 to change, 0 to destroy") || strings.Contains(logs, `"resource_changes"`) {
 		t.Fatalf("plan log (the plan's JSON must not be streamed):\n%s", logs)
 	}
+	if !strings.Contains(logs, "\x1b[32m+\x1b[0m") { // Terraform's own colors, for the run page
+		t.Fatalf("plan log without Terraform's colors:\n%q", logs)
+	}
 
 	// Apply phase: applies exactly the saved plan.
 	res, logs = f.do(t, r, job("run1", "apply", "apply", src, vars))
@@ -296,7 +299,8 @@ func TestExecuteReportsFailure(t *testing.T) {
 	defer srv.Close()
 	r := testRunner(t, srv)
 	src := f.module(t, `variable "n" { type = number }`)
-	if res, _ := f.do(t, r, job("bad", "plan", "apply", src, map[string]any{"n": "not a number"})); res.Status != "failed" || !strings.HasPrefix(res.Message, "plan: ") {
+	if res, _ := f.do(t, r, job("bad", "plan", "apply", src, map[string]any{"n": "not a number"})); res.Status != "failed" ||
+		!strings.HasPrefix(res.Message, "plan: ") || !strings.Contains(res.Message, "Error") || strings.Contains(res.Message, "\x1b") {
 		t.Fatalf("finish: %+v", res)
 	}
 	if res, _ := f.do(t, r, job("nosaved", "apply", "apply", src, nil)); res.Status != "failed" || !strings.HasPrefix(res.Message, "download plan: ") {

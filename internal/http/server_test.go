@@ -636,7 +636,7 @@ func TestWorkspaceFlow(t *testing.T) {
 	}
 	assertSealed(artifactKey(runID, runnerapi.ArtifactPlan), "PLANBYTES")
 	assertSealed(artifactKey(runID, runnerapi.ArtifactLockfile), "LOCKBYTES")
-	for _, chunk := range []string{"line one\n", "line two\n\nend\n"} {
+	for _, chunk := range []string{"line one\n", "line \x1b[1mtwo\x1b[0m\n\nend\n"} {
 		if rec := call("POST", runnerTok, "/jobs/"+runID+"/logs", job.LeaseID, chunk); rec.Code != http.StatusNoContent {
 			t.Fatalf("logs: %d %s", rec.Code, rec.Body.String())
 		}
@@ -731,13 +731,14 @@ func TestWorkspaceFlow(t *testing.T) {
 	}
 	assertSealed(vs[0].BlobKey, "s3cret") // indexing read it back, so sealed state still works
 
-	// Raw log and SSE stream: the stream replays everything, then ends with "done".
+	// Raw log and SSE stream: the stream replays everything, Terraform's colors included (the raw
+	// log drops them), then ends with "done".
 	if rec := get(h, runURL+"/logs"); rec.Body.String() != "line one\nline two\n\nend\n" {
 		t.Fatalf("raw log: %q", rec.Body.String())
 	}
 	rec = get(h, runURL+"/logs/stream")
 	stream := rec.Body.String()
-	if rec.Header().Get("Content-Type") != "text/event-stream" || !strings.Contains(stream, "data: line two\ndata: \ndata: end\n") ||
+	if rec.Header().Get("Content-Type") != "text/event-stream" || !strings.Contains(stream, "data: line \x1b[1mtwo\x1b[0m\ndata: \ndata: end\n") ||
 		!strings.HasSuffix(stream, "event: done\ndata: applied\n\n") {
 		t.Fatalf("stream: %q", stream)
 	}

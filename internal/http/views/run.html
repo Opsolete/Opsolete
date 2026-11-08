@@ -131,42 +131,30 @@
   // Follow the log live; reload once a runner is done with the run (finished, or waiting for confirmation).
   const log = document.getElementById("log"), wasWorking = {{$r.Working}};
   const es = new EventSource(location.pathname + "/logs/stream");
-  // Terraform's own plan colors (tfexec forces -no-color): like its renderer, only the action
-  // symbols, "->" and a few comments, and only in plan output (init prints "- Installing ...").
-  const span = (cls, text) => Object.assign(document.createElement("span"), { className: cls, textContent: text });
-  const symbols = { "+": [["tf-add", "+"]], "-": [["tf-del", "-"]], "~": [["tf-chg", "~"]], "<=": [["tf-read", "<="]],
-    "-/+": [["tf-del", "-"], ["", "/"], ["tf-add", "+"]], "+/-": [["tf-add", "+"], ["", "/"], ["tf-del", "-"]] };
-  const inline = { " -> null": "tf-dim", "->": "tf-chg", "# forces replacement": "tf-del" };
-  let inPlan = false;
-  const render = (line) => {
-    if (line.startsWith("==> ")) {
-      inPlan = line.startsWith("==> terraform plan");
-      return span(line.endsWith("failed") ? "tf-del tf-b" : "tf-step", line);
+  // Terraform's own colors: the log carries its ANSI color codes (SGR), rendered as ansi-* classes.
+  const attrs = { 1: "b", 2: "dim", 4: "u" }, style = new Set();
+  let fg = "", first = true, rest = "";
+  const render = (text) => text.split(/\x1b\[([\d;]*)m/).forEach((t, i) => {
+    if (i % 2) { // a code list, e.g. "0" or "1;32"; "" is a reset
+      for (const c of t.split(";").map(Number)) {
+        if (c === 0) { style.clear(); fg = ""; }
+        else if (attrs[c]) style.add(attrs[c]);
+        else if (c === 22) { style.delete("b"); style.delete("dim"); }
+        else if (c === 24) style.delete("u");
+        else if (c === 39) fg = "";
+        else if ((c >= 30 && c <= 37) || (c >= 90 && c <= 97)) fg = "c" + c;
+      }
+    } else if (t) {
+      const cls = [...style, fg].filter(Boolean).map((c) => "ansi-" + c).join(" ");
+      log.append(cls ? Object.assign(document.createElement("span"), { className: cls, textContent: t }) : t);
     }
-    if (/^Error: /.test(line)) return span("tf-del tf-b", line);
-    if (/^Warning: /.test(line)) return span("tf-chg tf-b", line);
-    if (/^(Apply|Destroy) complete!/.test(line)) return span("tf-add tf-b", line);
-    if (!inPlan) return line;
-    if (/^\s*# \(\d+ unchanged .* hidden\)$/.test(line)) return span("tf-dim", line);
-    if (/^\s*# |^Plan: |^No changes\./.test(line)) return span("tf-b", line);
-    const f = document.createDocumentFragment(), m = line.match(/^(\s*)(-\/\+|\+\/-|<=|[+~-])( .*|)$/);
-    if (m) {
-      f.append(m[1], ...symbols[m[2]].map(([c, t]) => c ? span(c, t) : t));
-      line = m[3];
-    }
-    line.split(/( -> null|->|# forces replacement)/).forEach((t, i) => f.append(i % 2 ? span(inline[t], t) : t));
-    return f;
-  };
-  let first = true, rest = "", tail = null;
+  });
   es.onmessage = (e) => {
     if (first) { log.textContent = ""; first = false; }
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
-    const lines = (rest + e.data).split("\n");
-    rest = lines.pop(); // a chunk can end mid-line: style it once it's complete
-    tail?.remove();
-    for (const line of lines) log.append(render(line), "\n"); // nodes: += would re-render the whole log
-    tail = document.createTextNode(rest);
-    log.append(tail);
+    const text = rest + e.data, cut = text.search(/\x1b(\[[\d;]*)?$/); // a code split over two chunks
+    rest = cut < 0 ? "" : text.slice(cut);
+    render(cut < 0 ? text : text.slice(0, cut)); // nodes: += would re-render the whole log
     if (atBottom) log.scrollTop = log.scrollHeight;
   };
   es.addEventListener("status", (e) => { if (e.data !== {{$r.Status}}) location.reload(); });
