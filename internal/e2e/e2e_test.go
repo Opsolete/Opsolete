@@ -42,7 +42,8 @@ const runnerToken = "e2e-runner-token-0123456789abcdef"
 
 // TestRealRunner: an admin uploads the greeting module to the registry and creates a workspace from
 // the catalog's greeting template; the runner plans it with Terraform, the admin confirms, the runner
-// applies; then the same for its destruction. Terraform fetches the module from the server's own
+// applies. A second template with a sensitive input is added (masked in the log) and removed again
+// (a targeted destroy, then its outputs dropped); then the workspace is destroyed. Terraform fetches the module from the server's own
 // registry and keeps state in its http backend: no network beyond the test server.
 func TestRealRunner(t *testing.T) {
 	tf := os.Getenv("TERRAFORM")
@@ -70,7 +71,24 @@ func TestRealRunner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tpls, err := templates.Open("../../catalog")
+	// the catalog's greeting template, and a copy whose "name" is a sensitive input: the module's
+	// message output (not sensitive) prints it, so only the runner's masking keeps it out of the log
+	dir := t.TempDir()
+	greeting, err := os.ReadFile("../../catalog/greeting.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := strings.NewReplacer(`"id": "greeting"`, `"id": "greeting-secret"`, `"name": "Greeting (example)"`, `"name": "Greeting (secret)"`,
+		`"required": true, "pattern": "^[A-Za-z0-9 ]{1,40}$", "default": "world", "key": true`, `"required": true, "sensitive": true`).Replace(string(greeting))
+	if !strings.Contains(secret, `"sensitive": true`) || !strings.Contains(secret, "greeting-secret") {
+		t.Fatalf("sensitive template: %s", secret)
+	}
+	for name, body := range map[string]string{"greeting.json": string(greeting), "greeting-secret.json": secret} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tpls, err := templates.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,6 +220,72 @@ func TestRealRunner(t *testing.T) {
 			t.Fatalf("log: %s", log)
 		}
 	})
+	const password = "Hunter2secret"
+	runLog := func(t *testing.T) string { return page(t, "/workspaces/"+ws+"/runs/"+runID.String()+"/logs") }
+	var secretModule string
+	t.Run("a sensitive input reaches Terraform, masked in the log and on no page", func(t *testing.T) {
+		runOf(postForm(t, "/workspaces/"+ws+"/templates/new?template=greeting-secret", url.Values{"greeting": {"hey"}, "secret.name": {password}}))
+		await(t, storage.NeedsConfirmation)
+		if log := runLog(t); !strings.Contains(log, `"hey, ***!"`) || strings.Contains(log, password) {
+			t.Fatalf("plan log must show the value masked: %s", log)
+		}
+		confirm(t)
+		await(t, storage.Applied)
+		if log := runLog(t); !strings.Contains(log, `"hey, ***!"`) || strings.Contains(log, password) {
+			t.Fatalf("apply log must show the value masked: %s", log)
+		}
+		w, _ := store.GetWorkspace(ctx, ws)
+		added, _ := store.WorkspaceTemplates(ctx, w.ID)
+		for _, a := range added {
+			if a.TemplateID == "greeting-secret" {
+				secretModule = a.Name
+			}
+		}
+		// Outputs (the run page's, the Outputs tab) are left out: they show what the module outputs, and
+		// it declares message not sensitive (docs: outputs follow the module's flag, masking is best-effort).
+		for _, p := range []string{"/workspaces/" + ws + "?show=templates", "/workspaces/" + ws + "/templates/" + secretModule,
+			"/workspaces/" + ws + "/runs", "/workspaces/" + ws + "/runs/" + runID.String() + "/logs/stream"} {
+			if body := page(t, p); strings.Contains(body, password) {
+				i := strings.Index(body, password)
+				t.Errorf("%s shows the sensitive value: …%s…", p, body[max(0, i-400):i+100])
+			}
+		}
+	})
+	t.Run("removing a deployed template destroys its resources, then drops its outputs", func(t *testing.T) {
+		runOf(postForm(t, "/workspaces/"+ws+"/templates/"+secretModule+"/remove", nil))
+		await(t, storage.NeedsConfirmation)
+		w, _ := store.GetWorkspace(ctx, ws)
+		added, _ := store.WorkspaceTemplates(ctx, w.ID)
+		if len(added) != 2 {
+			t.Fatalf("the template goes only once its destroy is applied: %+v", added)
+		}
+		other := added[0].Name
+		if other == secretModule {
+			other = added[1].Name
+		}
+		if r, err := client.Post(ts.URL+"/workspaces/"+ws+"/templates/"+other+"/remove", "application/x-www-form-urlencoded", nil); err != nil || r.StatusCode != http.StatusConflict {
+			t.Fatalf("removing another template during the run: %v %v", r, err)
+		} else {
+			r.Body.Close()
+		}
+		confirm(t)
+		await(t, storage.Applied)
+		log := runLog(t)
+		for _, want := range []string{"Resources: 0 added, 0 changed, 1 destroyed", "terraform apply (outputs only)"} {
+			if !strings.Contains(log, want) {
+				t.Fatalf("log lacks %q: %s", want, log)
+			}
+		}
+		if added, _ := store.WorkspaceTemplates(ctx, w.ID); len(added) != 1 || added[0].Name != other {
+			t.Fatalf("templates after the removal: %+v", added)
+		}
+		if res, _ := store.Resources(ctx, w.ID); len(res) != 1 || strings.Contains(res[0].Address, secretModule) {
+			t.Fatalf("resources after the removal: %+v", res)
+		}
+		if out := page(t, "/workspaces/"+ws+"?show=outputs"); strings.Contains(out, secretModule) || !strings.Contains(out, "hi, Opsolete!") {
+			t.Fatalf("outputs after the removal: %s", out)
+		}
+	})
 	t.Run("destroy: planned, confirmed, applied", func(t *testing.T) {
 		runOf(postForm(t, "/workspaces/"+ws+"/runs", url.Values{"action": {"destroy"}}))
 		await(t, storage.NeedsConfirmation)
@@ -218,7 +302,7 @@ func TestRealRunner(t *testing.T) {
 			t.Fatalf("destroy log: %s", log)
 		}
 	})
-	t.Logf("plan, apply, destroy plan and destroy took %s", time.Since(start).Round(time.Millisecond))
+	t.Logf("the runs took %s", time.Since(start).Round(time.Millisecond))
 }
 
 // tarGz packs the files of dir, as `tar czf x.tar.gz -C dir .` does.

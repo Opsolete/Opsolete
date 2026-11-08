@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -261,8 +262,8 @@ func TestSensitiveInputs(t *testing.T) {
 	if rec := post(h, base+"new?template=greeting", url.Values{"greeting": {"hi"}, "secret.name": {"hunter2"}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("add: %d %s", rec.Code, rec.Body.String())
 	}
-	if j := claim(); len(j.Modules) != 1 || j.Modules[0].Inputs["name"] != "hunter2" {
-		t.Fatalf("runner gets the value: %+v", j.Modules)
+	if j := claim(); len(j.Modules) != 1 || j.Modules[0].Inputs["name"] != "hunter2" || !slices.Contains(j.Secrets, "hunter2") {
+		t.Fatalf("runner gets the value, and in Secrets to mask it: %+v %v", j.Modules, j.Secrets)
 	}
 	var stored, audit string
 	store.Pool.QueryRow(context.Background(), `SELECT t.inputs::text FROM workspace_templates t JOIN workspaces w ON w.id = t.workspace_id WHERE w.name = $1`, ws).Scan(&stored)

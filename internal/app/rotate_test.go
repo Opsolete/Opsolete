@@ -5,11 +5,13 @@ import (
 	"encoding/base64"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"gocloud.dev/blob/memblob"
 
+	"github.com/opsolete/opsolete/internal/secrets"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/vcs"
 )
@@ -95,5 +97,74 @@ func TestRotateKey(t *testing.T) {
 	}
 	if n, err := RotateKey(ctx, store, bucket, both, log); err != nil || n != 0 {
 		t.Fatalf("second rotation: %d %v", n, err)
+	}
+}
+
+// onWarn is a log handler that calls f for each warning: a hook into RotateKey while it works.
+type onWarn struct {
+	slog.Handler
+	f func()
+}
+
+func (h onWarn) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h onWarn) Handle(ctx context.Context, r slog.Record) error {
+	if r.Level == slog.LevelWarn {
+		h.f()
+	}
+	return nil
+}
+
+// The servers keep running during rotate-key: a value changed between its reading and re-sealing
+// keeps the server's write and fails the rotation, as does a run started meanwhile; both say to run
+// it again. The hook is the warning about a value under neither key.
+func TestRotateKeyRace(t *testing.T) {
+	a := testApp(t)
+	store, ctx := a.Store, context.Background()
+	oldSecret, newSecret := "rotate-old-"+uniq(""), "rotate-new-"+uniq("")
+	both, newKey := keys(newSecret, oldSecret), keys(newSecret, "")
+	name := uniq("race-")
+	if err := store.CreateVariableSet(ctx, name, "", false); err != nil {
+		t.Fatal(err)
+	}
+	set, _ := store.GetVariableSet(ctx, name)
+	o := storage.VarOwner{SetID: set.ID}
+	put := func(key, plain string, k *secrets.Keyring) {
+		t.Helper()
+		v := storage.Variable{Owner: o, Category: "env", Key: key, Sensitive: true}
+		var err error
+		if v.Value, err = k.Seal(plain, VariableAD(v)); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.SetVariable(ctx, o, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// read in insertion order (a fresh table's sequential scan): LOST's warning comes before GOOD is re-sealed
+	put("LOST", "x", keys("rotate-lost-"+uniq(""), ""))
+	put("GOOD", "v1", keys(oldSecret, ""))
+	var hook func()
+	log := slog.New(onWarn{slog.DiscardHandler, func() { hook() }})
+
+	hook = func() { put("GOOD", "v2", both) } // a server saves GOOD meanwhile, under the new key
+	if _, err := RotateKey(ctx, store, nil, both, log); err == nil || !strings.Contains(err.Error(), "1 values changed while being re-sealed: run rotate-key again") {
+		t.Fatalf("a value changed meanwhile: %v", err)
+	}
+	vars, _ := store.Variables(ctx, o)
+	for _, v := range vars {
+		if got, err := newKey.Open(v.Value, VariableAD(v)); v.Key == "GOOD" && (err != nil || got != "v2") {
+			t.Fatalf("the server's write must stay: %q %v", got, err)
+		}
+	}
+
+	hook = func() { // a run starts meanwhile
+		if _, _, err := store.CreateWorkspace(ctx, uuid.New(), uniq("race-"), "", storage.WorkspaceTemplate{Name: "main", TemplateID: "t",
+			ModuleSource: "git::https://x//m", ModuleRef: "v1"}, false, uuid.Nil); err != nil {
+			t.Error(err)
+		}
+		hook = func() {}
+	}
+	if _, err := RotateKey(ctx, store, nil, both, log); err == nil || !strings.Contains(err.Error(), "a run started during the rotation") {
+		t.Fatalf("a run started meanwhile: %v", err)
 	}
 }

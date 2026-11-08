@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -702,6 +703,535 @@ func TestJobVariables(t *testing.T) {
 		has(t, job(t), map[string]string{"K1": "ws", "K2": "", "K3": "", "K4": "", "SEC": ""})
 		if page := get(h, "/workspaces/"+ws+"/variables").Body.String(); strings.Contains(page, setW) {
 			t.Fatal("a detached set is still listed")
+		}
+	})
+}
+
+// applied takes run id (an apply run with changes) through plan, confirmation and apply, writing
+// state serial n with one resource.
+func (r *fakeRunner) applied(t *testing.T, ws, id string, n int) {
+	t.Helper()
+	r.claim(t, id, "plan")
+	r.finish(t, planChanges)
+	if rec := post(r.h, "/workspaces/"+ws+"/runs/"+id+"/confirm", nil); rec.Code != http.StatusSeeOther {
+		t.Fatalf("confirm: %d %s", rec.Code, rec.Body.String())
+	}
+	r.claim(t, id, "apply")
+	r.saveState(t, stateV(n))
+	r.finish(t, `{"status":"succeeded","resources":[{"address":"module.m.terraform_data.greeting","type":"terraform_data","name":"greeting","provider":"p"}]}`)
+}
+
+// TestDriftChecks (M1, M2): the leader's daily drift check and "Check for drift" queue a refresh-only
+// plan that is never applied; drift shows on the overview and the workspace list until a check
+// without drift or an apply clears it.
+func TestDriftChecks(t *testing.T) {
+	srv, store, h, r := flowServer(t)
+	ctx := context.Background()
+	ws := "dr-" + strings.ToLower(newID()[:8])
+	r.applied(t, ws, greetingWorkspace(t, h, ws, false), 1)
+	w, _ := store.GetWorkspace(ctx, ws)
+	drifted := func(t *testing.T, want bool) {
+		t.Helper()
+		if w, _ := store.GetWorkspace(ctx, ws); w.Drifted != want {
+			t.Errorf("stored drifted = %v, want %v", w.Drifted, want)
+		}
+		if got := strings.Contains(get(h, "/workspaces/"+ws).Body.String(), "Drift detected"); got != want {
+			t.Errorf("overview banner shown = %v, want %v", got, want)
+		}
+		if got := strings.Contains(get(h, "/workspaces").Body.String(), `<span class="status drifted">drifted</span>`); got != want {
+			t.Errorf("workspace list tag shown = %v, want %v", got, want)
+		}
+	}
+	driftFound := `{"status":"succeeded","plan":{"add":0,"change":1,"destroy":0,"changes":[{"address":"module.m.terraform_data.greeting","action":"update"}]}}`
+	// assess runs the drift check id, which finds drift or not.
+	assess := func(t *testing.T, id string, drift bool) {
+		t.Helper()
+		if j := r.claim(t, id, "plan"); j.Action != "assess" {
+			t.Fatalf("drift check job: %+v", j)
+		}
+		want, body := storage.NoChanges, planNone
+		if drift {
+			want, body = storage.Drifted, driftFound
+		}
+		r.finish(t, body)
+		if s := runStatus(t, store, id).Status; s != want {
+			t.Fatalf("drift check: %s, want %s", s, want)
+		}
+		r.noJob(t, "a drift check is never applied")
+	}
+
+	step(t, "without drift detection the leader queues no check", func(t *testing.T) {
+		srv.App.QueueDriftChecks(ctx)
+		r.noJob(t, "drift detection off")
+	})
+	step(t, "turned on, the leader queues a check once a day, kept out of the runs list", func(t *testing.T) {
+		if rec := post(h, "/workspaces/"+ws+"/settings/health", url.Values{"drift_detection": {"on"}}); rec.Code != http.StatusSeeOther {
+			t.Fatalf("health settings: %d", rec.Code)
+		}
+		srv.App.QueueDriftChecks(ctx)
+		a, err := store.LatestAssessment(ctx, w.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assess(t, a.ID.String(), true)
+		drifted(t, true)
+		pageHas(t, h, "/workspaces/"+ws, "View drift", "/runs/"+a.ID.String())
+		if strings.Contains(get(h, "/workspaces/"+ws+"/runs").Body.String(), a.ID.String()) {
+			t.Error("a drift check is listed as a run")
+		}
+		srv.App.QueueDriftChecks(ctx)
+		r.noJob(t, "checked within the day")
+	})
+	step(t, "Check for drift now: none found clears the banner", func(t *testing.T) {
+		assess(t, runID(t, post(h, "/workspaces/"+ws+"/runs", url.Values{"action": {"assess"}})), false)
+		drifted(t, false)
+	})
+	step(t, "drift found again is cleared by the next apply", func(t *testing.T) {
+		assess(t, runID(t, post(h, "/workspaces/"+ws+"/runs", url.Values{"action": {"assess"}})), true)
+		drifted(t, true)
+		r.applied(t, ws, runID(t, post(h, "/workspaces/"+ws+"/runs", url.Values{"action": {"apply"}})), 2)
+		drifted(t, false)
+	})
+}
+
+// TestRollout (L1–L4): an admin rolls a template's new version out in batches; a discarded plan
+// pauses the rollout, resume retries the workspace, local workspaces are left for a hand update,
+// stop ends it with its plans left queued. Each upgraded workspace gets an audit entry in the
+// admin's name.
+func TestRollout(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	admin := devAuth(t, store, "admin@example.com", true)
+	f := Features{Deployments: true}
+	h1 := newApp(t, versionedTemplates(t, "v1"), store, admin, f).Handler()
+	srv := newApp(t, versionedTemplates(t, "v2"), store, admin, f) // the catalog after v2's release
+	h := srv.Handler()
+	r := &fakeRunner{h: h}
+	id := strings.ToLower(newID()[:8])
+	a, b, c, d := "ro-a-"+id, "ro-b-"+id, "ro-c-"+id, "ro-d-"+id
+	for _, ws := range []string{a, b, c, d} {
+		r.claim(t, runID(t, post(h1, "/templates/cfg", url.Values{fieldWorkspace: {ws}, "greeting": {"hello"}, "name": {"one"}})), "plan")
+		r.finish(t, planNone)
+	}
+	if rec := post(h, "/workspaces/"+d+"/settings", url.Values{"name": {d}, "execution_mode": {"local"}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("local execution: %d %s", rec.Code, rec.Body.String())
+	}
+	start := url.Values{"source": {"git::https://example.com/mods//cfg"}, "ref": {"v2"}}
+	page := "/templates/cfg/rollout"
+	// latest is ws's latest run: its id when it's queued by the rollout, "" otherwise.
+	latest := func(t *testing.T, ws string) string {
+		t.Helper()
+		w, _ := store.GetWorkspace(ctx, ws)
+		runs, _ := store.Runs(ctx, w.ID, 1)
+		if len(runs) == 0 || runs[0].Status != storage.PlanQueued {
+			return ""
+		}
+		return runs[0].ID.String()
+	}
+	queued := func(t *testing.T, want map[string]bool) map[string]string {
+		t.Helper()
+		ids := map[string]string{}
+		for ws, q := range want {
+			if ids[ws] = latest(t, ws); (ids[ws] != "") != q {
+				t.Fatalf("%s: rollout plan queued = %v, want %v", ws, !q, q)
+			}
+		}
+		return ids
+	}
+	status := func(t *testing.T, want, msg string) {
+		t.Helper()
+		ro, err := store.LatestRollout(ctx, "cfg")
+		if err != nil || ro.Status != want || !strings.Contains(ro.Message, msg) {
+			t.Fatalf("rollout: %+v %v, want %s %q", ro, err, want, msg)
+		}
+	}
+	tick := func(t *testing.T) {
+		t.Helper()
+		if _, err := store.Pool.Exec(ctx, `UPDATE template_rollouts SET ticked_at = now() - interval '1 hour'`); err != nil { // due
+			t.Fatal(err)
+		}
+		srv.App.TickRollouts(ctx)
+	}
+	action := func(t *testing.T, what string, want int) {
+		t.Helper()
+		if rec := post(h, page+"/"+what, nil); rec.Code != want {
+			t.Fatalf("%s: %d, want %d", what, rec.Code, want)
+		}
+	}
+	var ids map[string]string
+
+	step(t, "only admins start a rollout; the first batch is queued at once", func(t *testing.T) {
+		user := newApp(t, versionedTemplates(t, "v2"), store, devAuth(t, store, "user@example.com", false), f).Handler()
+		if rec := post(user, page, start); rec.Code != http.StatusForbidden {
+			t.Fatalf("a user starts a rollout: %d", rec.Code)
+		}
+		pageHas(t, h, page, a, b, c, d)
+		start.Set("batch", "2")
+		if rec := post(h, page, start); rec.Code != http.StatusSeeOther {
+			t.Fatalf("start: %d %s", rec.Code, rec.Body.String())
+		}
+		status(t, "active", "")
+		ids = queued(t, map[string]bool{a: true, b: true, c: false, d: false})
+		if j := r.claim(t, ids[a], "plan"); !strings.HasSuffix(j.Modules[0].Source, "ref=v2") {
+			t.Fatalf("rollout job: %+v", j.Modules)
+		}
+		pageHas(t, h, page, "2 workspace(s) at a time", "/rollout/pause")
+	})
+	step(t, "a discarded plan pauses the rollout; the workspace is back on v1", func(t *testing.T) {
+		r.finish(t, planChanges)
+		post(h, "/workspaces/"+a+"/runs/"+ids[a]+"/confirm", nil)
+		r.claim(t, ids[b], "plan") // queued before a's apply
+		r.finish(t, planChanges)
+		post(h, "/workspaces/"+b+"/runs/"+ids[b]+"/discard", nil)
+		r.claim(t, ids[a], "apply")
+		r.finish(t, `{"status":"succeeded"}`)
+		tick(t)
+		status(t, "paused", "the run in "+b+": discarded")
+		pageHas(t, h, page, "the run in "+b+": discarded", "/rollout/resume")
+		tick(t)
+		queued(t, map[string]bool{b: false, c: false})
+		pageHas(t, h, "/workspaces/"+b+"?show=templates", `<span class="tag">v1</span>`, "update: v2")
+	})
+	step(t, "resume retries it and queues the next one", func(t *testing.T) {
+		action(t, "resume", http.StatusSeeOther)
+		status(t, "active", "")
+		ids = queued(t, map[string]bool{b: true, c: true, d: false})
+		action(t, "pause", http.StatusSeeOther)
+		status(t, "paused", "paused by admin@example.com")
+		action(t, "resume", http.StatusSeeOther)
+		queued(t, map[string]bool{b: true, c: true}) // still the same runs: the batch is full
+		if latest(t, b) != ids[b] || latest(t, c) != ids[c] {
+			t.Fatal("resuming a full batch queued more")
+		}
+	})
+	step(t, "once every plan ended it is done; the local workspace needs an update by hand", func(t *testing.T) {
+		for _, ws := range []string{b, c} {
+			r.claim(t, ids[ws], "plan")
+			r.finish(t, planNone)
+		}
+		tick(t)
+		status(t, "done", "1 use(s) need an update by hand")
+		action(t, "pause", http.StatusConflict)
+		for _, ws := range []string{a, b, c} {
+			pageHas(t, h, "/workspaces/"+ws+"?show=templates", `<span class="tag">v2</span>`)
+		}
+		pageHas(t, h, "/workspaces/"+d+"?show=templates", `<span class="tag">v1</span>`)
+	})
+	step(t, "stop ends an open rollout; its plans stay queued", func(t *testing.T) {
+		post(h, "/workspaces/"+d+"/settings", url.Values{"name": {d}, "execution_mode": {"remote"}})
+		start.Set("batch", "0")
+		if rec := post(h, page, start); rec.Code != http.StatusSeeOther {
+			t.Fatalf("start: %d %s", rec.Code, rec.Body.String())
+		}
+		run := queued(t, map[string]bool{d: true})[d]
+		action(t, "stop", http.StatusSeeOther)
+		status(t, "stopped", "stopped by admin@example.com")
+		action(t, "stop", http.StatusConflict)
+		tick(t)
+		if latest(t, d) != run {
+			t.Fatal("a stopped rollout's plan must stay queued")
+		}
+	})
+	t.Run("one audit entry per upgraded workspace, in the admin's name", func(t *testing.T) {
+		rows, err := store.Pool.Query(ctx, `SELECT actor, detail->>'workspace', detail->>'to' FROM audit_log WHERE action = 'template rollout' ORDER BY id`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var got []string
+		for rows.Next() {
+			var actor, ws, to string
+			rows.Scan(&actor, &ws, &to)
+			got = append(got, actor+" "+ws+" "+to)
+		}
+		want := []string{"admin@example.com " + a + " v2", "admin@example.com " + b + " v2", "admin@example.com " + b + " v2",
+			"admin@example.com " + c + " v2", "admin@example.com " + d + " v2"}
+		if !slices.Equal(got, want) {
+			t.Fatalf("audit entries:\n%v\nwant\n%v", got, want)
+		}
+	})
+}
+
+// apiToken is a terraform login token of a (non-admin) user in groups.
+func apiToken(t *testing.T, store *storage.Store, email string, groups ...string) string {
+	t.Helper()
+	id, err := store.UpsertUser(context.Background(), "", email, "user", groups)
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := store.CreateUserToken(context.Background(), id, "flow test", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
+// api calls the cloud API (Terraform's cloud block) with token.
+func api(h http.Handler, token, method, path, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, cloudPrefix+path, strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	return do(h, req)
+}
+
+// TestDefaultProject (H5): an admin makes another project the default; workspaces created without
+// a project, in the UI and through the cloud API, land there, and the old default can be deleted.
+func TestDefaultProject(t *testing.T) {
+	srv, store, h, _ := flowServer(t)
+	srv.Organization = "acme"
+	ctx := context.Background()
+	id := strings.ToLower(newID()[:8])
+	prj := "dp-" + id
+	old, err := store.DefaultProject(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := post(h, "/projects", url.Values{"name": {prj}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("create project: %d %s", rec.Code, rec.Body.String())
+	}
+	project := func(ws string) string {
+		t.Helper()
+		w, err := store.GetWorkspace(ctx, ws)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return w.ProjectName
+	}
+
+	step(t, "only admins change the default", func(t *testing.T) {
+		user := newApp(t, "../../catalog", store, devAuth(t, store, "user@example.com", false), Features{Deployments: true}).Handler()
+		if rec := post(user, "/projects/"+prj+"/settings", url.Values{"name": {prj}, "default": {"on"}}); rec.Code != http.StatusForbidden {
+			t.Fatalf("a user makes a project the default: %d", rec.Code)
+		}
+		if p, _ := store.DefaultProject(ctx); p.ID != old.ID {
+			t.Fatalf("default changed to %s", p.Name)
+		}
+	})
+	step(t, "made the default, new workspaces land there", func(t *testing.T) {
+		if rec := post(h, "/projects/"+prj+"/settings", url.Values{"name": {prj}, "default": {"on"}}); rec.Code != http.StatusSeeOther {
+			t.Fatalf("make default: %d %s", rec.Code, rec.Body.String())
+		}
+		pageHas(t, h, "/projects/"+prj+"/settings", "This project is the default.")
+		if page := get(h, "/projects/"+old.Name+"/settings").Body.String(); strings.Contains(page, "This project is the default.") {
+			t.Fatal("the old default still says it is the default")
+		}
+		if rec := post(h, "/workspaces/new", url.Values{fieldWorkspace: {"dp-blank-" + id}}); rec.Code != http.StatusSeeOther {
+			t.Fatalf("blank workspace: %d %s", rec.Code, rec.Body.String())
+		}
+		greetingWorkspace(t, h, "dp-tpl-"+id, false)
+		// the cloud API's user operates the new default (its creation rule: H4)
+		if rec := post(h, "/projects/"+prj+"/access", url.Values{"group": {"cli-" + id}, "level": {"operate"}}); rec.Code != http.StatusSeeOther {
+			t.Fatalf("grant: %d %s", rec.Code, rec.Body.String())
+		}
+		rec := api(h, apiToken(t, store, "cli@example.com", "cli-"+id), "POST", "/organizations/acme/workspaces", `{"data":{"type":"workspaces","attributes":{"name":"dp-cli-`+id+`"}}}`)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("cloud API create: %d %s", rec.Code, rec.Body.String())
+		}
+		for _, ws := range []string{"dp-blank-" + id, "dp-tpl-" + id, "dp-cli-" + id} {
+			if p := project(ws); p != prj {
+				t.Errorf("%s landed in %s, want %s", ws, p, prj)
+			}
+		}
+	})
+	step(t, "the old default can be deleted, the new one can't", func(t *testing.T) {
+		if rec := post(h, "/projects/"+prj+"/delete", nil); rec.Code != http.StatusConflict {
+			t.Fatalf("delete the default: %d", rec.Code)
+		}
+		if rec := post(h, "/projects/"+old.Name+"/delete", nil); rec.Code != http.StatusSeeOther {
+			t.Fatalf("delete the old default: %d %s", rec.Code, rec.Body.String())
+		}
+	})
+}
+
+// TestVariableSetLifecycle (G2): a set made global reaches every workspace's job; deleting one of
+// its variables, turning global off, or deleting the set takes them out of the next job.
+func TestVariableSetLifecycle(t *testing.T) {
+	_, store, h, r := flowServer(t)
+	ctx := context.Background()
+	id := strings.ToLower(newID()[:8])
+	ws, set := "vs-"+id, "vs-set-"+id
+	r.claim(t, greetingWorkspace(t, h, ws, false), "plan")
+	r.finish(t, planNone)
+	mustPost := func(t *testing.T, path string, form url.Values) {
+		t.Helper()
+		if rec := post(h, path, form); rec.Code != http.StatusSeeOther {
+			t.Fatalf("%s %v: %d %s", path, form, rec.Code, rec.Body.String())
+		}
+	}
+	// env is the env of the next job's plan; the run ends without changes.
+	env := func(t *testing.T) map[string]string {
+		t.Helper()
+		j := r.claim(t, runID(t, post(h, "/workspaces/"+ws+"/runs", url.Values{"action": {"apply"}})), "plan")
+		r.finish(t, planNone)
+		return j.Env
+	}
+	has := func(t *testing.T, want map[string]string) {
+		t.Helper()
+		got := env(t)
+		for k, v := range want {
+			if g, ok := got[k]; g != v || ok != (v != "") {
+				t.Errorf("job env %s = %q (set %v), want %q", k, g, ok, v)
+			}
+		}
+	}
+	mustPost(t, "/variable-sets", url.Values{"name": {set}})
+	for _, k := range []string{"K1", "K2"} {
+		mustPost(t, "/variable-sets/"+set+"/variables", url.Values{"category": {"env"}, "key": {k}, "value": {"v-" + k}})
+	}
+
+	step(t, "an unattached set reaches no job; made global it reaches every one", func(t *testing.T) {
+		has(t, map[string]string{"K1": "", "K2": ""})
+		mustPost(t, "/variable-sets/"+set, url.Values{"description": {"for all"}, "global": {"on"}})
+		has(t, map[string]string{"K1": "v-K1", "K2": "v-K2"})
+		pageHas(t, h, "/workspaces/"+ws+"/variables", set)
+		pageHas(t, h, "/variable-sets/"+set, "for all")
+	})
+	step(t, "a deleted set variable leaves the job", func(t *testing.T) {
+		s, _ := store.GetVariableSet(ctx, set)
+		vars, _ := store.Variables(ctx, storage.VarOwner{SetID: s.ID})
+		i := slices.IndexFunc(vars, func(v storage.Variable) bool { return v.Key == "K1" })
+		mustPost(t, "/variable-sets/"+set+"/variables/"+vars[i].ID.String()+"/delete", nil)
+		has(t, map[string]string{"K1": "", "K2": "v-K2"})
+	})
+	step(t, "global off: gone from the job", func(t *testing.T) {
+		mustPost(t, "/variable-sets/"+set, url.Values{"description": {"for all"}})
+		has(t, map[string]string{"K2": ""})
+		mustPost(t, "/variable-sets/"+set, url.Values{"global": {"on"}})
+		has(t, map[string]string{"K2": "v-K2"})
+	})
+	step(t, "a deleted set is gone, from pages and jobs", func(t *testing.T) {
+		mustPost(t, "/variable-sets/"+set+"/delete", nil)
+		has(t, map[string]string{"K2": ""})
+		if rec := get(h, "/variable-sets/"+set); rec.Code != http.StatusNotFound {
+			t.Fatalf("deleted set's page: %d", rec.Code)
+		}
+		for _, p := range []string{"/variable-sets", "/workspaces/" + ws + "/variables"} {
+			if strings.Contains(get(h, p).Body.String(), set) {
+				t.Errorf("%s still lists the deleted set", p)
+			}
+		}
+	})
+}
+
+// fakeGitHubRepo serves acme/infra, branch main at sha1, to any token.
+func fakeGitHubRepo(t *testing.T) *httptest.Server {
+	gh := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/user/repos":
+			w.Write([]byte(`[{"full_name":"acme/infra"}]`))
+		case "/repos/acme/infra/branches/main":
+			w.Write([]byte(`{"commit":{"sha":"sha1"}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(gh.Close)
+	return gh
+}
+
+// TestDeleteVCSConnection (I4): a connection isn't deleted while a workspace it links has an active
+// run; deleted, it unlinks its workspaces, which then have nothing to plan.
+func TestDeleteVCSConnection(t *testing.T) {
+	store := testStore(t)
+	gh := fakeGitHubRepo(t)
+	srv := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true, VCS: true})
+	srv.App.VCS = vcs.NewClient(gh.Client())
+	h := srv.Handler()
+	ctx := context.Background()
+	id := strings.ToLower(newID()[:8])
+	name, w1, w2 := "gh-"+id, "vd-1-"+id, "vd-2-"+id
+	rec := post(h, "/vcs", url.Values{"name": {name}, "provider": {"github"}, "base_url": {gh.URL}, "token": {"pat"}})
+	conn := strings.TrimSuffix(strings.TrimPrefix(rec.Header().Get("Location"), "/vcs/new?connection="), "&return=")
+	if rec := post(h, "/vcs/"+conn+"/settings", url.Values{"workspaces": {"1"}, "workspace_scope": {"all"}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("allow workspaces: %d %s", rec.Code, rec.Body.String())
+	}
+	for _, ws := range []string{w1, w2} {
+		if rec := post(h, "/workspaces/new", url.Values{fieldWorkspace: {ws}, "vcs_connection": {conn}, "vcs_repo": {"acme/infra"}, "vcs_branch": {"main"}}); rec.Code != http.StatusSeeOther {
+			t.Fatalf("linked workspace: %d %s", rec.Code, rec.Body.String())
+		}
+	}
+	linked := func(ws string) bool {
+		w, _ := store.GetWorkspace(ctx, ws)
+		return w.VCSConnectionID != uuid.Nil
+	}
+
+	step(t, "refused while a linked workspace has an active run", func(t *testing.T) {
+		run := runID(t, post(h, "/workspaces/"+w1+"/runs", url.Values{"action": {"apply"}}))
+		rec := post(h, "/vcs/"+conn+"/delete", nil)
+		if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "has an active run") {
+			t.Fatalf("delete during a run: %d %s", rec.Code, rec.Body.String())
+		}
+		if !linked(w1) || !linked(w2) {
+			t.Fatal("a refused delete unlinked a workspace")
+		}
+		post(h, "/workspaces/"+w1+"/runs/"+run+"/cancel", nil)
+	})
+	step(t, "deleted, its workspaces are unlinked and have nothing to plan", func(t *testing.T) {
+		if rec := post(h, "/vcs/"+conn+"/delete", nil); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/vcs" {
+			t.Fatalf("delete: %d %q", rec.Code, rec.Header().Get("Location"))
+		}
+		if strings.Contains(get(h, "/vcs").Body.String(), name) {
+			t.Fatal("the deleted connection is still listed")
+		}
+		for _, ws := range []string{w1, w2} {
+			if linked(ws) {
+				t.Errorf("%s is still linked", ws)
+			}
+			if strings.Contains(get(h, "/workspaces/"+ws).Body.String(), "acme/infra") {
+				t.Errorf("%s still shows the repository", ws)
+			}
+			if rec := post(h, "/workspaces/"+ws+"/runs", url.Values{"action": {"apply"}}); rec.Code != http.StatusConflict {
+				t.Errorf("a run of unlinked %s: %d", ws, rec.Code)
+			}
+		}
+	})
+}
+
+// TestExecutionMode (B7): switched to local in Settings › General, a workspace refuses runs and
+// lets the CLI lock its state; back on remote, the other way round.
+func TestExecutionMode(t *testing.T) {
+	_, store, h, r := flowServer(t)
+	ctx := context.Background()
+	ws := "em-" + strings.ToLower(newID()[:8])
+	r.claim(t, greetingWorkspace(t, h, ws, false), "plan")
+	r.finish(t, planNone)
+	w, _ := store.GetWorkspace(ctx, ws)
+	operateDefault(t, store, "cli")
+	token := apiToken(t, store, "cli@example.com", "cli")
+	cli := func(action string) *httptest.ResponseRecorder {
+		return api(h, token, "POST", "/workspaces/"+w.ID.String()+"/actions/"+action, "")
+	}
+	mode := func(t *testing.T, m string) {
+		t.Helper()
+		if rec := post(h, "/workspaces/"+ws+"/settings", url.Values{"name": {ws}, "execution_mode": {m}}); rec.Code != http.StatusSeeOther {
+			t.Fatalf("execution mode %s: %d %s", m, rec.Code, rec.Body.String())
+		}
+		pageHas(t, h, "/workspaces/"+ws+"/settings", `value="`+m+`" checked`)
+	}
+
+	step(t, "remote: the CLI can't lock", func(t *testing.T) {
+		if rec := cli("lock"); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "remote execution") {
+			t.Fatalf("CLI lock of a remote workspace: %d %s", rec.Code, rec.Body.String())
+		}
+	})
+	step(t, "local: runs are refused, the CLI locks and unlocks", func(t *testing.T) {
+		mode(t, "local")
+		if rec := post(h, "/workspaces/"+ws+"/runs", url.Values{"action": {"apply"}}); rec.Code != http.StatusConflict {
+			t.Fatalf("a run of a local workspace: %d", rec.Code)
+		}
+		r.noJob(t, "a local workspace")
+		if rec := cli("lock"); rec.Code != http.StatusOK {
+			t.Fatalf("CLI lock: %d %s", rec.Code, rec.Body.String())
+		}
+		if rec := cli("unlock"); rec.Code != http.StatusOK {
+			t.Fatalf("CLI unlock: %d %s", rec.Code, rec.Body.String())
+		}
+	})
+	step(t, "back on remote: runs again, the CLI refused", func(t *testing.T) {
+		mode(t, "remote")
+		r.claim(t, runID(t, post(h, "/workspaces/"+ws+"/runs", url.Values{"action": {"apply"}})), "plan")
+		r.finish(t, planNone)
+		if rec := cli("lock"); rec.Code != http.StatusConflict {
+			t.Fatalf("CLI lock of a remote workspace: %d", rec.Code)
 		}
 	})
 }

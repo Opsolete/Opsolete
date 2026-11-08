@@ -1,10 +1,14 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -216,5 +220,64 @@ func TestStateDiffAccess(t *testing.T) {
 	}
 	if _, err := op.Diff(ctx, vs[0].ID+1000); !errors.Is(err, ErrNotFound) {
 		t.Errorf("unknown version: %v", err)
+	}
+}
+
+// TestReleaseOrphanedLocks (E5): the leader's job releases a run's lock once the run stopped
+// working (here its runner vanished before acknowledging, so it was queued again with its
+// Terraform's lock left behind) and an old rollback's, logs each and wakes claimers: the run
+// waiting behind its own lost lock is claimed. CLI and UI locks stay.
+func TestReleaseOrphanedLocks(t *testing.T) {
+	a, ctx := testApp(t), context.Background()
+	n := listening(t, a, time.Hour)
+	var logged bytes.Buffer
+	a.Log = slog.New(slog.NewTextHandler(&logged, nil))
+	lock := func(ws uuid.UUID, id string, run uuid.UUID, age string) {
+		t.Helper()
+		if _, ok, err := a.Store.LockState(ctx, ws, id, run, []byte(`{"ID":"`+id+`"}`)); err != nil || !ok {
+			t.Fatalf("lock %s: %v %v", id, ok, err)
+		}
+		if _, err := a.Store.Pool.Exec(ctx, `UPDATE workspaces SET state_locked_at = now() - $2::interval WHERE id = $1`, ws, age); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ws, run := configured(t, a)
+	lock(ws.ID, "tf", run.ID, "0s")
+	rollback, newRollback, cli := emptyWorkspace(t, a, admin), emptyWorkspace(t, a, admin), emptyWorkspace(t, a, admin)
+	lock(rollback.ID, "rb1", uuid.Nil, "1 hour")
+	lock(newRollback.ID, "rb2", uuid.Nil, "1 minute")
+	lock(cli.ID, storage.CloudLockPrefix+"x", uuid.Nil, "1 day")
+	if _, ok, err := a.Store.ClaimJob(ctx, "r", time.Minute); err != nil || ok {
+		t.Fatalf("claimed behind a state lock: %v %v", ok, err)
+	}
+
+	jobs := n.Jobs()
+	defer jobs.Close()
+	a.ReleaseOrphanedLocks(ctx, 15*time.Minute)
+	if !signalled(jobs, time.Second) {
+		t.Fatal("releasing locks didn't wake claimers")
+	}
+	for w, want := range map[uuid.UUID]string{ws.ID: "", rollback.ID: "", newRollback.ID: "rb2", cli.ID: storage.CloudLockPrefix + "x"} {
+		if got, _ := a.Store.StateLockID(ctx, w); got != want {
+			t.Errorf("workspace %s: lock %q, want %q", w, got, want)
+		}
+	}
+	for _, want := range []string{`msg="orphaned state lock released" workspace=` + ws.ID.String(), `lock="{\"ID\": \"tf\"`,
+		`msg="orphaned state lock released" workspace=` + rollback.ID.String()} {
+		if !strings.Contains(logged.String(), want) {
+			t.Errorf("log lacks %s:\n%s", want, logged.String())
+		}
+	}
+	if strings.Count(logged.String(), "orphaned state lock released") != 2 {
+		t.Errorf("logged releases:\n%s", logged.String())
+	}
+	if j, ok, err := a.Store.ClaimJob(ctx, "r", time.Minute); err != nil || !ok || j.RunID != run.ID {
+		t.Fatalf("the run behind the released lock: %+v %v %v", j, ok, err)
+	}
+	a.ReleaseOrphanedLocks(ctx, 15*time.Minute) // its new claim works with a lease: its next lock stays
+	lock(ws.ID, "tf2", run.ID, "1 day")
+	a.ReleaseOrphanedLocks(ctx, 15*time.Minute)
+	if got, _ := a.Store.StateLockID(ctx, ws.ID); got != "tf2" {
+		t.Fatalf("a working run's lock was released: %q", got)
 	}
 }

@@ -33,7 +33,7 @@ const (
 	onAPI                     // the same five via user tokens (terraform login); anonymous sends none
 	onRunner                  // no token, a registry token, the runner token (with the claimed job's lease)
 	onState                   // no credentials, a forged password, the claimed run's state credential
-	onRegistry                // no token, a user token, a registry token
+	onRegistry                // no token, a user token, a registry token, the runner token (which the registry refuses)
 	onArchive                 // archive links: unsigned, signed
 	onPublic                  // anyone
 )
@@ -228,8 +228,9 @@ func TestAccessMatrix(t *testing.T) {
 	principals := map[surface][]principal{
 		onRunner: {{"none", anon, none}, {"registry token", anon, bearer(registryToken)},
 			{"runner", anon, func(r *http.Request) { bearer(testRunnerToken)(r); r.Header.Set(runnerapi.LeaseHeader, job.LeaseID) }}},
-		onState:    {{"none", anon, none}, {"forged", anon, basic("forged")}, {"run", anon, basic(job.StateToken)}},
-		onRegistry: {{"none", anon, none}, {"user token", anon, bearer(adminToken)}, {"registry token", anon, bearer(registryToken)}},
+		onState: {{"none", anon, none}, {"forged", anon, basic("forged")}, {"run", anon, basic(job.StateToken)}},
+		onRegistry: {{"none", anon, none}, {"user token", anon, bearer(adminToken)}, {"registry token", anon, bearer(registryToken)},
+			{"runner token", anon, bearer(testRunnerToken)}},
 		onArchive: {{"unsigned", anon, none}, {"signed", anon, func(r *http.Request) {
 			u, _ := url.Parse(testReg.SignedArchiveURL(r.URL.Path, time.Minute))
 			r.URL.RawQuery = u.RawQuery
@@ -345,8 +346,8 @@ func accessRows() []accessRow {
 		{"GET " + cloudPrefix + "/ping", cloudPrefix + "/ping", "", onPublic, []int{204}, false},
 
 		// Registry protocol and signed archive links. A terraform login token also reads the registry.
-		{"GET /v1/modules/{ns}/{name}/{system}/versions", "/v1/modules/{ns}/net/azurerm/versions", "", onRegistry, []int{401, 200, 200}, false},
-		{"GET /v1/modules/{ns}/{name}/{system}/{version}/download", "/v1/modules/{ns}/net/azurerm/1.0.0/download", "", onRegistry, []int{401, 204, 204}, false},
+		{"GET /v1/modules/{ns}/{name}/{system}/versions", "/v1/modules/{ns}/net/azurerm/versions", "", onRegistry, []int{401, 200, 200, 401}, false},
+		{"GET /v1/modules/{ns}/{name}/{system}/{version}/download", "/v1/modules/{ns}/net/azurerm/1.0.0/download", "", onRegistry, []int{401, 204, 204, 401}, false},
 		{"GET /v1/archives/{ns}/{name}/{system}/{file}", "/v1/archives/{ns}/net/azurerm/1.0.0.tar.gz", "", onArchive, []int{403, 200}, false},
 		{"GET /v1/vcs-archives/{file}", "/v1/vcs-archives/{run}.tar.gz", "", onArchive, []int{403, 404}, false},
 

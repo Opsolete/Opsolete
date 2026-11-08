@@ -215,6 +215,55 @@ func TestLoginRequired(t *testing.T) {
 	}
 }
 
+// TestLogout (A2): signed in through the IdP, a user signs out: the session cookie is cleared and
+// the browser's next request goes to the login again.
+func TestLogout(t *testing.T) {
+	store := testStore(t)
+	is := authtest.New(t)
+	a, err := auth.New(context.Background(), auth.Config{Issuer: is.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret,
+		PublicURL: testReg.PublicURL}, []byte("k"), store.UpsertUser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newServerAs(t, "../../catalog", false, store, a)
+	with := func(req *http.Request, cookies []*http.Cookie) *http.Request {
+		for _, c := range cookies {
+			req.AddCookie(c)
+		}
+		return req
+	}
+	// sign in: login → IdP → callback, as a browser follows them
+	rec := get(h, "/auth/login?next=%2Fworkspaces")
+	noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	res, err := noFollow.Get(rec.Header().Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	cb, _ := url.Parse(res.Header.Get("Location"))
+	rec = do(h, with(httptest.NewRequest("GET", cb.RequestURI(), nil), rec.Result().Cookies()))
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/workspaces" {
+		t.Fatalf("callback: %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	session := rec.Result().Cookies()
+	if rec := do(h, with(httptest.NewRequest("GET", "/workspaces", nil), session)); rec.Code != http.StatusOK {
+		t.Fatalf("signed in: %d", rec.Code)
+	}
+
+	rec = do(h, with(httptest.NewRequest("POST", "/auth/logout", nil), session))
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/" {
+		t.Fatalf("logout: %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	cleared := rec.Result().Cookies()
+	if len(cleared) != 1 || cleared[0].Name != "ops_session" || cleared[0].Value != "" || cleared[0].MaxAge >= 0 {
+		t.Fatalf("logout must clear the session cookie: %+v", cleared)
+	}
+	// the browser dropped it: the next page view asks for a login
+	if rec := get(h, "/workspaces"); rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), "/auth/login") {
+		t.Fatalf("after logout: %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+}
+
 func TestCrossSitePostRejected(t *testing.T) {
 	req := httptest.NewRequest("POST", "/templates/storage-account", strings.NewReader("name=abc"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")

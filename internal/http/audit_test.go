@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -91,4 +92,38 @@ func TestAuditRowSummary(t *testing.T) {
 	if row.Summary != want || row.From != "100.1.2.3 (via 127.0.0.1)" || row.StatusText != "rejected" || !strings.Contains(row.Pretty, "\n  ") {
 		t.Fatalf("row: %q %q %q", row.Summary, row.From, row.StatusText)
 	}
+}
+
+// TestAuditLogTampered (N2): the table refuses changes, and an entry appended without SECRET_KEY
+// breaks the chain: the page names it, even with valid entries after it.
+func TestAuditLogTampered(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	h := newServer(t, "../../catalog", false, store)
+	change := func() {
+		t.Helper()
+		if rec := post(h, "/workspaces/new", url.Values{fieldWorkspace: {"at-" + strings.ToLower(newID()[:8])}}); rec.Code != http.StatusSeeOther {
+			t.Fatalf("create: %d", rec.Code)
+		}
+	}
+	change()
+	if _, err := store.Pool.Exec(ctx, `UPDATE audit_log SET actor = 'mallory'`); err == nil || !strings.Contains(err.Error(), "append-only") {
+		t.Fatalf("UPDATE of the audit log: %v", err)
+	}
+	if _, err := store.Pool.Exec(ctx, `DELETE FROM audit_log`); err == nil {
+		t.Fatal("DELETE from the audit log succeeded")
+	}
+	// someone with database access but not SECRET_KEY appends an entry, chained like a real one
+	key := store.AuditKey
+	store.AuditKey = []byte("not-the-secret-key")
+	if err := store.Audit(ctx, "mallory", "forged", nil); err != nil {
+		t.Fatal(err)
+	}
+	store.AuditKey = key
+	var forged int64
+	if err := store.Pool.QueryRow(ctx, `SELECT max(id) FROM audit_log`).Scan(&forged); err != nil {
+		t.Fatal(err)
+	}
+	change() // signed again, after the forged one
+	pageHas(t, h, "/audit", fmt.Sprintf("The audit log was tampered with: entry %d was changed", forged))
 }

@@ -105,3 +105,19 @@ func TestLogStreamCap(t *testing.T) {
 		t.Fatalf("after closing one: %d %q", rec.Code, rec.Body.String())
 	}
 }
+
+// TestLogPostLimit (Q8): one log post carries at most 256 KB (the runner cuts its batches there).
+func TestLogPostLimit(t *testing.T) {
+	_, store, h, r := flowServer(t)
+	id := greetingWorkspace(t, h, "lp-"+strings.ToLower(newID()[:8]), false)
+	r.claim(t, id, "plan")
+	if c := r.jobCall("POST", "logs", strings.Repeat("a", maxLogChunk+1)); c != http.StatusRequestEntityTooLarge {
+		t.Fatalf("log post over the limit: %d", c)
+	}
+	if c := r.jobCall("POST", "logs", strings.Repeat("b", maxLogChunk)); c != http.StatusNoContent {
+		t.Fatalf("log post at the limit: %d", c)
+	}
+	if chunks, err := store.Logs(context.Background(), uuid.MustParse(id), 0, 10); err != nil || len(chunks) != 1 || chunks[0].Chunk != strings.Repeat("b", maxLogChunk) {
+		t.Fatalf("stored log: %d chunks %v, want only the accepted post", len(chunks), err)
+	}
+}
