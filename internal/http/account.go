@@ -22,7 +22,7 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request) {
 	data := map[string]any{"Page": r.PathValue("page")}
 	switch r.PathValue("page") {
 	case "profile": // the groups recorded at the last login decide team access
-		raw, err := s.Store.UserGroups(r.Context(), u.ID)
+		raw, err := s.App.Store.UserGroups(r.Context(), u.ID)
 		var groups []string
 		if err == nil {
 			err = json.Unmarshal(raw, &groups)
@@ -33,12 +33,12 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request) {
 		}
 		data["Groups"] = groups
 	case "tokens":
-		tokens, err := s.Store.UserTokens(r.Context(), u.ID)
+		tokens, err := s.App.Store.UserTokens(r.Context(), u.ID)
 		if err != nil {
 			s.internalError(w, "user tokens", err)
 			return
 		}
-		data["Tokens"], data["Host"] = tokens, s.Registry.PublicURL.Host
+		data["Tokens"], data["Host"] = tokens, s.App.Registry.PublicURL.Host
 	default:
 		http.NotFound(w, r)
 		return
@@ -50,20 +50,20 @@ func (s *Server) accountPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) revokeToken(w http.ResponseWriter, r *http.Request) {
 	u := auth.FromContext(r.Context())
 	id, _ := pathID(r, "id") // not an id: revokes nothing, as for an unknown one
-	if err := s.Store.RevokeUserToken(r.Context(), u.ID, id); err != nil {
+	if err := s.App.Store.RevokeUserToken(r.Context(), u.ID, id); err != nil {
 		s.internalError(w, "revoke token", err)
 		return
 	}
-	s.Log.Info("token revoked", "id", r.PathValue("id"), "user", u.Email)
+	s.App.Log.Info("token revoked", "id", r.PathValue("id"), "user", u.Email)
 	http.Redirect(w, r, "/account/tokens", http.StatusSeeOther)
 }
 
 func (s *Server) revokeTokens(w http.ResponseWriter, r *http.Request) {
 	u := auth.FromContext(r.Context())
-	if err := s.Store.RevokeUserTokens(r.Context(), u.ID); err != nil {
+	if err := s.App.Store.RevokeUserTokens(r.Context(), u.ID); err != nil {
 		s.internalError(w, "revoke tokens", err)
 		return
 	}
-	s.Log.Info("all tokens revoked", "user", u.Email)
+	s.App.Log.Info("all tokens revoked", "user", u.Email)
 	http.Redirect(w, r, "/account/tokens", http.StatusSeeOther)
 }

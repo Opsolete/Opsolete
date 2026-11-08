@@ -13,6 +13,7 @@ import (
 
 	"gocloud.dev/blob"
 
+	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/vcs"
 )
@@ -93,7 +94,7 @@ func RotateKey(ctx context.Context, st *storage.Store, bucket *blob.Bucket, oldK
 			if err != nil {
 				return n, fmt.Errorf("input %s of %s: %w", k, u.Name, err)
 			}
-			sealed, err := reseal("input "+k+" of "+u.Name, old, inputAD(u.WorkspaceID, u.Name, k), false)
+			sealed, err := reseal("input "+k+" of "+u.Name, old, app.InputAD(u.WorkspaceID, u.Name, k), false)
 			if err != nil {
 				return n, err
 			}
@@ -131,15 +132,15 @@ func RotateKey(ctx context.Context, st *storage.Store, bucket *blob.Bucket, oldK
 		if err != nil {
 			return n, err
 		}
-		if !bytes.HasPrefix(b, []byte(sealedPrefix)) {
+		if !bytes.HasPrefix(b, []byte(app.SealedPrefix)) {
 			continue // plaintext, from before files were sealed
 		}
-		sealed, err := reseal("file "+obj.Key, b[len(sealedPrefix):], blobAD(obj.Key), true)
+		sealed, err := reseal("file "+obj.Key, b[len(app.SealedPrefix):], app.BlobAD(obj.Key), true)
 		if err != nil {
 			return n, err
 		}
 		if sealed != nil {
-			if err := bucket.WriteAll(ctx, obj.Key, append([]byte(sealedPrefix), sealed...),
+			if err := bucket.WriteAll(ctx, obj.Key, append([]byte(app.SealedPrefix), sealed...),
 				&blob.WriterOptions{ContentType: "application/octet-stream"}); err != nil {
 				return n, err
 			}

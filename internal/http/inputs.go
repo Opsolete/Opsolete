@@ -1,31 +1,14 @@
 package httpserver
 
 import (
-	"encoding/base64"
-	"encoding/json"
-	"fmt"
-	"maps"
 	"net/http"
-	"strings"
 
-	"github.com/google/uuid"
-
+	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/templates"
-	"github.com/opsolete/opsolete/internal/vcs"
 )
-
-// Sensitive template inputs are stored in a workspace's inputs as {"sealed": "<base64 AES-GCM>"}.
-// A form value is a string, number or bool, never an object, so it can't pass for a sealed one.
 
 // secretPrefix names the form fields of sensitive inputs, so the audit log redacts them.
 const secretPrefix = "secret."
-
-// inputAD binds a sealed input to its workspace, its module and its name.
-func inputAD(workspaceID uuid.UUID, module, name string) string {
-	return "template input\x00" + workspaceID.String() + "\x00" + module + "\x00" + name
-}
-
-func isSealed(v any) bool { _, ok := v.(map[string]any); return ok }
 
 // formValues reads t's inputs from a posted form.
 func formValues(r *http.Request, t templates.Template) map[string]string {
@@ -40,71 +23,6 @@ func formValues(r *http.Request, t templates.Template) map[string]string {
 	return raw
 }
 
-// sealInputs seals t's sensitive inputs in vals, validated from the form values raw, for workspace
-// wsID's module. One left empty keeps its stored value in old (sealing it if it was stored before it
-// became sensitive); one the form hides is dropped.
-func (s *Server) sealInputs(t templates.Template, raw map[string]string, vals, old map[string]any, errs map[string]string, wsID uuid.UUID, module string) error {
-	for _, in := range t.Inputs {
-		if !in.Sensitive || !t.Match(in.ShowIf, raw) {
-			continue
-		}
-		v, ok := vals[in.Name]
-		if !ok {
-			if strings.TrimSpace(raw[in.Name]) != "" {
-				continue // a new value Validate rejected: keep its error, not the stored value
-			}
-			if v, ok = old[in.Name]; !ok {
-				continue
-			}
-			delete(errs, in.Name) // "required": it has a value
-		}
-		if isSealed(v) {
-			vals[in.Name] = v
-			continue
-		}
-		plain, err := json.Marshal(v)
-		if err != nil {
-			return err
-		}
-		sealed, err := vcs.Seal(s.SecretKey, string(plain), inputAD(wsID, module, in.Name))
-		if err != nil {
-			return err
-		}
-		vals[in.Name] = map[string]any{"sealed": base64.StdEncoding.EncodeToString(sealed)}
-	}
-	return nil
-}
-
-// openInputs returns inputs with their sealed values decrypted, for the runner.
-func (s *Server) openInputs(inputs map[string]any, wsID uuid.UUID, module string) (map[string]any, []string, error) {
-	var secrets []string // the opened values, for the runner to mask in the log
-	out := maps.Clone(inputs)
-	for k, v := range inputs {
-		m, ok := v.(map[string]any)
-		if !ok {
-			continue
-		}
-		str, _ := m["sealed"].(string)
-		sealed, err := base64.StdEncoding.DecodeString(str)
-		if err != nil {
-			return nil, nil, fmt.Errorf("input %s: %w", k, err)
-		}
-		plain, err := vcs.Open(s.SecretKey, sealed, inputAD(wsID, module, k))
-		if err != nil {
-			return nil, nil, fmt.Errorf("input %s: %w", k, err)
-		}
-		var val any
-		if err := json.Unmarshal([]byte(plain), &val); err != nil {
-			return nil, nil, fmt.Errorf("input %s: %w", k, err)
-		}
-		if str, ok := val.(string); ok { // shortcut: only string values are masked; numbers and lists print in other forms
-			secrets = append(secrets, str)
-		}
-		out[k] = val
-	}
-	return out, secrets, nil
-}
-
 // formDefaults fills a form from stored inputs: sensitive ones stay empty, set lists those with a value.
 func formDefaults(t templates.Template, stored map[string]any) (vals map[string]string, set map[string]bool) {
 	vals, set = map[string]string{}, map[string]bool{}
@@ -113,7 +31,7 @@ func formDefaults(t templates.Template, stored map[string]any) (vals map[string]
 		switch {
 		case in.Sensitive:
 			set[in.Name] = ok
-		case ok && !isSealed(v): // a sealed value of a no longer sensitive input must be typed again
+		case ok && !app.IsSealed(v): // a sealed value of a no longer sensitive input must be typed again
 			vals[in.Name] = templates.FormatValue(v)
 		case !ok:
 			vals[in.Name] = in.Default

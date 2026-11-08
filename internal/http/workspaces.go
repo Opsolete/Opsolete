@@ -19,8 +19,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
-	"gocloud.dev/gcerrors"
 
+	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/auth"
 	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage"
@@ -34,13 +34,6 @@ const (
 	fieldAutoApply = "ops-auto-apply"
 	fieldProject   = "ops-project"
 )
-
-var workspaceNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,62}$`)
-
-const workspaceNameRule = "2–63 lowercase letters, digits and dashes, starting with a letter or digit (not \"new\")"
-
-// validWorkspaceName: "new" is reserved for /workspaces/new.
-func validWorkspaceName(name string) bool { return workspaceNameRe.MatchString(name) && name != "new" }
 
 func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /templates/{id}", s.form)
@@ -69,7 +62,7 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /workspaces/{name}/templates/{module}", s.workspaceTemplateForm)
 	mux.HandleFunc("POST /workspaces/{name}/templates/{module}", s.saveWorkspaceTemplate)
 	mux.HandleFunc("POST /workspaces/{name}/templates/{module}/remove", s.removeWorkspaceTemplate)
-	mux.HandleFunc("POST /workspaces/{name}/access", s.admin(s.workspaceAccess))
+	mux.HandleFunc("POST /workspaces/{name}/access", s.workspaceAccess)
 	mux.HandleFunc("GET /workspaces/{name}/runs/{run}", s.run)
 	mux.HandleFunc("POST /workspaces/{name}/runs/{run}/confirm", s.confirmRun)
 	mux.HandleFunc("POST /workspaces/{name}/runs/{run}/discard", s.discardRun)
@@ -79,20 +72,8 @@ func (s *Server) workspaceRoutes(mux *http.ServeMux) {
 }
 
 func viewer(r *http.Request) storage.Viewer {
-	u := auth.FromContext(r.Context())
-	return storage.Viewer{UserID: u.ID, Admin: u.Admin()}
-}
-
-// Access levels in a workspace: admins and its creator operate it (runs, confirm, destroy, settings,
-// rename), groups get read or operate per workspace. Without access a workspace doesn't exist (404).
-const (
-	levelRead    = "read"
-	levelOperate = "operate"
-)
-
-func (s *Server) internalError(w http.ResponseWriter, what string, err error) {
-	s.Log.Error(what, "err", err)
-	http.Error(w, "internal error", http.StatusInternalServerError)
+	a := actor(r)
+	return storage.Viewer{UserID: a.UserID, Admin: a.Admin}
 }
 
 type formPage struct {
@@ -110,26 +91,22 @@ type formPage struct {
 	Adding    bool
 	Cur       templates.Module // with Configure: the module version it runs now
 	Error     string
-	Set       map[string]bool             // sensitive inputs with a stored value: left empty, it's kept
-	old       map[string]any              // the stored inputs, with Configure
-	added     []storage.WorkspaceTemplate // with Configure: the workspace's templates
+	Set       map[string]bool // sensitive inputs with a stored value: left empty, it's kept
 }
+
+var nonNameChars = regexp.MustCompile(`[^a-z0-9]+`)
 
 // NamePlaceholder suggests a workspace name from the template's name ("Windows VM" → windows-vm-prod):
 // builder-made templates have UUID ids, which read badly.
 func (p formPage) NamePlaceholder() string {
-	base := cmp.Or(strings.Trim(nonModuleChars.ReplaceAllString(strings.ToLower(p.T.Name), "-"), "-"), "workspace")
+	base := cmp.Or(strings.Trim(nonNameChars.ReplaceAllString(strings.ToLower(p.T.Name), "-"), "-"), "workspace")
 	return strings.TrimRight(base[:min(len(base), 58)], "-") + "-prod"
 }
 
 func (s *Server) form(w http.ResponseWriter, r *http.Request) {
-	t, ok, err := s.template(r.Context(), r.PathValue("id"))
+	t, err := s.App.Template(r.Context(), r.PathValue("id"))
 	if err != nil {
-		s.internalError(w, "template", err)
-		return
-	}
-	if !ok {
-		http.NotFound(w, r)
+		s.uiError(w, r, err)
 		return
 	}
 	vals, _ := formDefaults(t, nil)
@@ -144,68 +121,55 @@ func (s *Server) form(w http.ResponseWriter, r *http.Request) {
 
 // createWorkspace creates a workspace with the template added to it and queues its first plan.
 func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
-	t, ok, err := s.template(r.Context(), r.PathValue("id"))
+	t, err := s.App.Template(r.Context(), r.PathValue("id"))
 	if err != nil {
-		s.internalError(w, "template", err)
-		return
-	}
-	if !ok {
-		http.NotFound(w, r)
+		s.uiError(w, r, err)
 		return
 	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
 	}
-	raw := formValues(r, t)
-	vals, errs := t.Validate(raw) // errs is never nil
-	name := strings.TrimSpace(r.PostForm.Get(fieldWorkspace))
-	if !validWorkspaceName(name) {
-		errs[fieldWorkspace] = workspaceNameRule
+	in := app.NewWorkspace{Name: strings.TrimSpace(r.PostForm.Get(fieldWorkspace)), Project: r.PostForm.Get(fieldProject),
+		AutoApply: r.PostForm.Get(fieldAutoApply) != "", TemplateID: t.ID, Inputs: formValues(r, t)}
+	// a project the user can't pick is a bad request, not a form error (the picker only offers the others)
+	if in.Project != "" {
+		if _, err := s.App.NewWorkspaceProject(r.Context(), actor(r), in.Project, uuid.Nil); err != nil {
+			s.uiError(w, r, err)
+			return
+		}
 	}
-	page := formPage{T: t, Editor: s.canEditTemplates(r), Values: raw, Errors: errs, Workspace: name,
-		AutoApply: r.PostForm.Get(fieldAutoApply) != "", Project: r.PostForm.Get(fieldProject)}
-	if !s.pickableProject(w, r, page.Project) {
-		return
-	}
-	if page.Projects, err = s.creatableProjects(r); err != nil {
-		s.internalError(w, "list projects", err)
-		return
-	}
-	id := uuid.New() // sensitive inputs are sealed to the workspace's id and module name
-	module := defaultModule(t, raw, nil)
-	if err := s.sealInputs(t, raw, vals, nil, errs, id, module); err != nil {
-		page.Error = err.Error()
-	}
-	if len(errs) > 0 || page.Error != "" {
-		s.render(w, r, http.StatusUnprocessableEntity, "form.html", page)
-		return
-	}
-	u := auth.FromContext(r.Context())
-	ws, run, err := s.Store.CreateWorkspace(r.Context(), id, name, page.Project, storage.WorkspaceTemplate{Name: module, TemplateID: t.ID,
-		ModuleSource: t.Module.Source, ModuleRef: t.Module.Ref, Inputs: vals}, page.AutoApply, u.ID)
-	if errors.Is(err, storage.ErrNameTaken) {
-		errs[fieldWorkspace] = err.Error()
+	ws, run, err := s.App.CreateWorkspace(r.Context(), actor(r), in)
+	if ve, ok := errors.AsType[*app.ValidationError](err); ok {
+		page := formPage{T: t, Editor: s.canEditTemplates(r), Values: in.Inputs, Errors: ve.Fields, Workspace: in.Name,
+			AutoApply: in.AutoApply, Project: in.Project}
+		if msg, ok := ve.Fields[app.FieldName]; ok {
+			page.Errors[fieldWorkspace] = msg
+			delete(page.Errors, app.FieldName)
+		}
+		if page.Projects, err = s.creatableProjects(r); err != nil {
+			s.internalError(w, "list projects", err)
+			return
+		}
 		s.render(w, r, http.StatusUnprocessableEntity, "form.html", page)
 		return
 	}
 	if err != nil {
-		s.internalError(w, "create workspace", err)
+		s.uiError(w, r, err)
 		return
 	}
-	s.Log.Info("workspace created", "workspace", ws.Name, "template", t.ID, "run", run.ID, "user", u.Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID.String(), http.StatusSeeOther)
 }
 
 // workspaces lists the workspaces the user may see; ?project= (a name) filters by project.
 func (s *Server) workspaces(w http.ResponseWriter, r *http.Request) {
 	project := r.URL.Query().Get("project")
-	list, err := s.Store.ListWorkspaces(r.Context(), viewer(r), project)
+	list, err := s.App.ListWorkspaces(r.Context(), actor(r), project)
 	if err != nil {
-		s.internalError(w, "list workspaces", err)
+		s.uiError(w, r, err)
 		return
 	}
-	projects, err := s.Store.Projects(r.Context(), viewer(r))
+	projects, err := s.App.Store.Projects(r.Context(), viewer(r))
 	if err != nil {
 		s.internalError(w, "list projects", err)
 		return
@@ -213,58 +177,27 @@ func (s *Server) workspaces(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, http.StatusOK, "workspaces.html", map[string]any{"Workspaces": list, "Projects": projects, "Project": project})
 }
 
-// loadWorkspace loads the {name} workspace if the user has at least the given access level; it
-// writes a 404 (no access looks like no workspace), 403 or 500 and returns ok=false otherwise.
-func (s *Server) loadWorkspace(w http.ResponseWriter, r *http.Request, need string) (ws storage.Workspace, level string, ok bool) {
-	ws, err := s.Store.GetWorkspace(r.Context(), r.PathValue("name"))
-	if errors.Is(err, storage.ErrNotFound) {
-		http.NotFound(w, r)
-		return ws, "", false
-	}
+// loadWorkspace loads the {name} workspace if the user has at least need (app.Workspace); it writes
+// the error (uiError) and returns ok=false otherwise.
+func (s *Server) loadWorkspace(w http.ResponseWriter, r *http.Request, need app.Level) (storage.Workspace, app.Level, bool) {
+	ws, level, err := s.App.Workspace(r.Context(), actor(r), r.PathValue("name"), need)
 	if err != nil {
-		s.internalError(w, "get workspace", err)
-		return ws, "", false
-	}
-	if level, err = s.accessLevel(r, ws); err != nil {
-		s.internalError(w, "workspace access", err)
-		return ws, "", false
-	}
-	switch {
-	case level == "":
-		http.NotFound(w, r)
-		return ws, "", false
-	case need == levelOperate && level != levelOperate:
-		http.Error(w, "you have read-only access to this workspace", http.StatusForbidden)
+		s.uiError(w, r, err)
 		return ws, level, false
 	}
 	return ws, level, true
 }
 
-// accessLevel is what the request's user may do in ws: levelOperate, levelRead or "" (nothing).
-func (s *Server) accessLevel(r *http.Request, ws storage.Workspace) (string, error) {
-	if u := auth.FromContext(r.Context()); !u.Admin() {
-		return s.Store.Access(r.Context(), ws.ID, u.ID)
-	}
-	return levelOperate, nil
-}
-
-// loadRun loads the {run} of the {name} workspace; a run of another workspace is a 404.
-func (s *Server) loadRun(w http.ResponseWriter, r *http.Request, need string) (storage.Workspace, storage.Run, []storage.StatusEntry, string, bool) {
-	ws, level, ok := s.loadWorkspace(w, r, need)
-	if !ok {
-		return ws, storage.Run{}, nil, "", false
-	}
+// loadRun loads the {run} of the {name} workspace (app.Run); it writes the error (uiError) and
+// returns ok=false otherwise.
+func (s *Server) loadRun(w http.ResponseWriter, r *http.Request, need app.Level) (app.RunDetail, bool) {
 	id, _ := pathID(r, "run") // not an id: not found
-	run, hist, err := s.Store.GetRun(r.Context(), id)
-	if errors.Is(err, storage.ErrNotFound) || (err == nil && run.WorkspaceID != ws.ID) {
-		http.NotFound(w, r)
-		return ws, run, nil, "", false
-	}
+	d, err := s.App.Run(r.Context(), actor(r), r.PathValue("name"), id, need)
 	if err != nil {
-		s.internalError(w, "get run", err)
-		return ws, run, nil, "", false
+		s.uiError(w, r, err)
+		return d, false
 	}
-	return ws, run, hist, level, true
+	return d, true
 }
 
 func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
@@ -274,7 +207,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	ws, level, ok := s.loadWorkspace(w, r, levelRead)
+	ws, level, ok := s.loadWorkspace(w, r, app.LevelRead)
 	if !ok {
 		return
 	}
@@ -284,22 +217,22 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 	if tab == "" {
 		tab = "overview"
 	}
-	runs, err := s.Store.Runs(ctx, ws.ID, 25)
+	runs, err := s.App.Store.Runs(ctx, ws.ID, 25)
 	if err != nil {
 		s.internalError(w, "list runs", err)
 		return
 	}
-	res, err := s.Store.Resources(ctx, ws.ID)
+	res, err := s.App.Store.Resources(ctx, ws.ID)
 	if err != nil {
 		s.internalError(w, "workspace resources", err)
 		return
 	}
-	versions, err := s.Store.StateVersions(ctx, ws.ID, 10)
+	versions, err := s.App.Store.StateVersions(ctx, ws.ID, 10)
 	if err != nil {
 		s.internalError(w, "state versions", err)
 		return
 	}
-	outputs, destroyed, err := s.Store.CurrentOutputs(ctx, ws.ID)
+	outputs, destroyed, err := s.App.Store.CurrentOutputs(ctx, ws.ID)
 	if err != nil {
 		s.internalError(w, "outputs", err)
 		return
@@ -308,7 +241,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 	if len(runs) > 0 && runs[0].Active() {
 		active = &runs[0]
 	}
-	if a, err := s.Store.LatestAssessment(ctx, ws.ID); err == nil {
+	if a, err := s.App.Store.LatestAssessment(ctx, ws.ID); err == nil {
 		assessment = &a
 		if a.Active() { // a drift check holds the workspace like any run
 			active = assessment
@@ -321,18 +254,18 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 	if len(runs) > 0 {
 		current = &runItem{runs[0], true}
 	}
-	lock, err := s.Store.GetStateLock(ctx, ws.ID)
+	lock, err := s.App.Store.GetStateLock(ctx, ws.ID)
 	if err != nil {
 		s.internalError(w, "state lock", err)
 		return
 	}
 	data := map[string]any{"W": ws, "Lock": lock, "Me": auth.FromContext(ctx).ID.String(), "Runs": runs, "Active": active, "Current": current, "Page": page,
 		"Resources": res, "Versions": versions, "Outputs": outputs, "Destroyed": destroyed,
-		"Assessment": assessment, "CanOperate": level == levelOperate, "Admin": auth.FromContext(ctx).Admin()}
+		"Assessment": assessment, "CanOperate": level == app.LevelOperate, "Admin": auth.FromContext(ctx).Admin()}
 
 	switch tab {
 	case "overview":
-		added, err := s.Store.WorkspaceTemplates(ctx, ws.ID)
+		added, err := s.App.Store.WorkspaceTemplates(ctx, ws.ID)
 		if err != nil {
 			s.internalError(w, "workspace templates", err)
 			return
@@ -341,7 +274,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		names := map[string]string{}                   // template id -> display name; a deleted template shows its id
 		inputs := map[string][]templates.StoredValue{} // added template name -> its inputs as its form asks them
 		for _, a := range added {
-			t, ok := s.Templates.Get(a.TemplateID)
+			t, ok := s.App.Templates.Get(a.TemplateID)
 			if ok {
 				names[t.ID] = t.Name
 			}
@@ -352,14 +285,14 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		}
 		var latestPlan, latestApply phase
 		if len(runs) > 0 {
-			_, hist, err := s.Store.GetRun(ctx, runs[0].ID)
+			_, hist, err := s.App.Store.GetRun(ctx, runs[0].ID)
 			if err != nil {
 				s.internalError(w, "latest run", err)
 				return
 			}
 			latestPlan, latestApply = runPhases(runs[0], hist)
 		}
-		metrics, err := s.Store.RunMetrics(ctx, ws.ID)
+		metrics, err := s.App.Store.RunMetrics(ctx, ws.ID)
 		if err != nil {
 			s.internalError(w, "run metrics", err)
 			return
@@ -375,7 +308,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 			"LatestPlan": latestPlan, "LatestApply": latestApply, "Metrics": metrics, "Show": r.URL.Query().Get("show")})
 
 	case "deploy": // the catalog, each template one click from its add form
-		data["Catalog"] = s.Templates.List()
+		data["Catalog"] = s.App.Templates.List()
 
 	case "runs": // status filters, counted over the runs listed
 		filter := r.URL.Query().Get("filter")
@@ -395,11 +328,11 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		}
 		id, err := strconv.ParseInt(r.PathValue("version"), 10, 64)
 		// The diff shows attribute values, and the redaction misses unmarked secrets: like the cloud API's state, operators only.
-		if err != nil || level != levelOperate {
+		if err != nil || level != app.LevelOperate {
 			http.NotFound(w, r)
 			return
 		}
-		pair, err := s.Store.StateVersionsUpTo(ctx, ws.ID, id, 2) // the version and the one before it
+		pair, err := s.App.Store.StateVersionsUpTo(ctx, ws.ID, id, 2) // the version and the one before it
 		if err != nil {
 			s.internalError(w, "state versions", err)
 			return
@@ -428,12 +361,12 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		maps.Copy(data, map[string]any{"State": pair[0], "Prev": prev, "Changes": changes, "IsCurrent": current, "RollbackChanges": rollback})
 
 	case "variables": // each applied set with its variables, read-only (sets are edited by admins on their page)
-		vars, err := s.varsBlock(ctx, storage.VarOwner{WorkspaceID: ws.ID}, "/workspaces/"+ws.Name, level == levelOperate)
+		vars, err := s.varsBlock(ctx, storage.VarOwner{WorkspaceID: ws.ID}, "/workspaces/"+ws.Name, level == app.LevelOperate)
 		if err != nil {
 			s.internalError(w, "workspace variables", err)
 			return
 		}
-		sets, err := s.Store.WorkspaceVariableSets(ctx, ws.ID)
+		sets, err := s.App.Store.WorkspaceVariableSets(ctx, ws.ID)
 		if err != nil {
 			s.internalError(w, "workspace variable sets", err)
 			return
@@ -450,35 +383,25 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		maps.Copy(data, map[string]any{"Variables": vars, "Sets": setVars})
 
 	case "settings":
-		var grants []storage.Grant
-		var groups []string
+		var acc app.Access
 		if page == "access" {
 			var err error
-			if grants, err = s.Store.Grants(ctx, ws.ID); err != nil {
-				s.internalError(w, "workspace grants", err)
+			if acc, err = s.App.Access(ctx, actor(r), ws.Name); err != nil {
+				s.uiError(w, r, err)
 				return
 			}
-			if data["ProjectGrants"], err = s.Store.ProjectGrants(ctx, ws.ProjectID); err != nil {
-				s.internalError(w, "project grants", err)
-				return
-			}
-			if auth.FromContext(ctx).Admin() {
-				if groups, err = s.Store.KnownGroups(ctx); err != nil {
-					s.internalError(w, "known groups", err)
-					return
-				}
-			}
+			data["ProjectGrants"] = acc.ProjectGrants
 		}
 		// General: workspaces to share the state with, the ones it already does first: they stay
 		// selected even if this user can't see them
 		stateConsumers := picker{Name: "remote_state_consumers", Label: "Workspaces to share the state with"}
-		if page == "" && level == levelOperate {
-			cur, err := s.Store.RemoteStateConsumers(ctx, ws.ID)
+		if page == "" && level == app.LevelOperate {
+			cur, err := s.App.Store.RemoteStateConsumers(ctx, ws.ID)
 			if err != nil {
 				s.internalError(w, "remote state consumers", err)
 				return
 			}
-			all, err := s.Store.ListWorkspaces(ctx, viewer(r), "")
+			all, err := s.App.ListWorkspaces(ctx, actor(r), "")
 			if err != nil {
 				s.internalError(w, "list workspaces", err)
 				return
@@ -498,13 +421,13 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		var projects []storage.Project // General: where an admin can move it
 		if page == "" && auth.FromContext(ctx).Admin() {
 			var err error
-			if projects, err = s.Store.Projects(ctx, viewer(r)); err != nil {
+			if projects, err = s.App.Store.Projects(ctx, viewer(r)); err != nil {
 				s.internalError(w, "list projects", err)
 				return
 			}
 		}
-		maps.Copy(data, map[string]any{"Grants": grants, "Groups": groups, "StateConsumers": stateConsumers, "Projects": projects,
-			"StateAddress": s.Registry.PublicURL.JoinPath(runnerapi.StatePrefix, ws.ID.String()).String()})
+		maps.Copy(data, map[string]any{"Grants": acc.Grants, "Groups": acc.Groups, "StateConsumers": stateConsumers, "Projects": projects,
+			"StateAddress": s.App.Registry.PublicURL.JoinPath(runnerapi.StatePrefix, ws.ID.String()).String()})
 	}
 	s.render(w, r, http.StatusOK, "workspace.html", data)
 }
@@ -589,64 +512,19 @@ func groupResources(res []storage.Resource, added []storage.WorkspaceTemplate, n
 // number of times plans replacing those resources), destroy, refresh (refresh-only), assess
 // (check for drift now) or plan (plan only: a speculative plan, never applied).
 func (s *Server) newRun(w http.ResponseWriter, r *http.Request) {
-	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
-	if !ok {
-		return
-	}
-	u := auth.FromContext(r.Context())
-	action := r.PostFormValue("action")
-	if !slices.Contains([]string{"apply", "destroy", "refresh", "assess", "plan"}, action) {
-		http.Error(w, "action must be apply, destroy, refresh, assess or plan", http.StatusBadRequest)
-		return
-	}
-	if !ws.HasConfig() {
-		http.Error(w, "this workspace has no configuration to plan: link a repository first", http.StatusConflict)
-		return
-	}
-	replace := r.PostForm["replace"]
-	if len(replace) > 0 {
-		if action != "apply" {
-			http.Error(w, "only apply runs can replace resources", http.StatusBadRequest)
-			return
-		}
-		// Only addresses of the current state: they become Terraform arguments.
-		a, unknown, err := s.Store.UnknownResource(r.Context(), ws.ID, replace)
-		if err != nil {
-			s.internalError(w, "workspace resources", err)
-			return
-		}
-		if unknown {
-			http.Error(w, "not a resource of this workspace: "+a, http.StatusBadRequest)
-			return
-		}
-	}
-	run, err := s.Store.CreateRun(r.Context(), ws.ID, action, u.ID, replace)
-	if errors.Is(err, storage.ErrRunActive) || errors.Is(err, storage.ErrLocalExecution) {
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	}
+	r.ParseForm()
+	ws, run, err := s.App.StartRun(r.Context(), actor(r), r.PathValue("name"), app.NewRun{Action: r.PostForm.Get("action"), Replace: r.PostForm["replace"]})
 	if err != nil {
-		s.internalError(w, "create run", err)
+		s.uiError(w, r, err)
 		return
 	}
-	s.Log.Info("run queued", "workspace", ws.Name, "run", run.ID, "action", action, "user", u.Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID.String(), http.StatusSeeOther)
 }
 
-// workspaceSettings saves the General (name, execution mode, auto-apply, remote state sharing) and Health pages. A new name changes
-// the URL; state, runs and grants stay (keyed by id).
+// workspaceSettings saves the General (name, execution mode, auto-apply, remote state sharing) and Health pages.
 func (s *Server) workspaceSettings(w http.ResponseWriter, r *http.Request) {
-	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
-	if !ok {
-		return
-	}
-	mode := r.PostFormValue("execution_mode")                    // General page only
-	if !slices.Contains([]string{"", "remote", "local"}, mode) { // before any write: a bad form saves nothing
-		http.Error(w, "execution mode is remote or local", http.StatusBadRequest)
-		return
-	}
-	set := storage.Settings{AutoApply: r.PostFormValue("auto_apply") != "", DriftDetection: r.PostFormValue("drift_detection") != "",
-		ExecutionMode: mode}
+	set := storage.Settings{Name: r.PostFormValue("name"), AutoApply: r.PostFormValue("auto_apply") != "",
+		DriftDetection: r.PostFormValue("drift_detection") != "", ExecutionMode: r.PostFormValue("execution_mode")} // name, mode: General page only
 	for _, v := range r.PostForm["remote_state_consumers"] {
 		if id, ok := parseID(v); ok { // not an id: ignored, as unknown ids are
 			set.Consumers = append(set.Consumers, id)
@@ -655,23 +533,10 @@ func (s *Server) workspaceSettings(w http.ResponseWriter, r *http.Request) {
 	if sharing := r.PostFormValue("remote_state"); sharing != "" { // General page only
 		set.Sharing, set.Global = true, sharing == "all"
 	}
-	if name := strings.TrimSpace(r.PostFormValue("name")); name != "" && name != ws.Name {
-		if !validWorkspaceName(name) {
-			http.Error(w, "a workspace name is "+workspaceNameRule, http.StatusBadRequest)
-			return
-		}
-		set.Name = name
-	}
-	if err := s.Store.SaveSettings(r.Context(), ws.ID, set); errors.Is(err, storage.ErrNameTaken) {
-		http.Error(w, err.Error(), http.StatusConflict)
+	ws, err := s.App.SaveSettings(r.Context(), actor(r), r.PathValue("name"), set)
+	if err != nil {
+		s.uiError(w, r, err)
 		return
-	} else if err != nil {
-		s.internalError(w, "workspace settings", err)
-		return
-	}
-	if set.Name != "" {
-		s.Log.Info("workspace renamed", "from", ws.Name, "to", set.Name, "user", auth.FromContext(r.Context()).Email)
-		ws.Name = set.Name
 	}
 	back := "/workspaces/" + ws.Name + "/settings"
 	if r.PostFormValue("page") == "health" {
@@ -685,7 +550,7 @@ func (s *Server) workspaceSettings(w http.ResponseWriter, r *http.Request) {
 // the CLI, `terraform force-unlock` and the cloud API see it too; runs wait until it is released.
 // Unlock releases only the user's own lock, force-unlock anyone's; locks of runs and rollbacks end with them.
 func (s *Server) lockWorkspace(w http.ResponseWriter, r *http.Request) {
-	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
+	ws, _, ok := s.loadWorkspace(w, r, app.LevelOperate)
 	if !ok {
 		return
 	}
@@ -713,7 +578,7 @@ func (s *Server) lockWorkspace(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "action is lock, unlock or force-unlock", http.StatusBadRequest)
 		return
 	}
-	s.Log.Info("workspace lock", "workspace", ws.Name, "action", action, "user", u.Email)
+	s.App.Log.Info("workspace lock", "workspace", ws.Name, "action", action, "user", u.Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/settings/lock", http.StatusSeeOther)
 }
 
@@ -726,7 +591,7 @@ func (s *Server) userLock(ctx context.Context, wsID uuid.UUID, u auth.User, oper
 		info["Info"] = reason
 	}
 	b, _ := json.Marshal(info)
-	_, ok, err := s.Store.LockState(ctx, wsID, lockID, uuid.Nil, b)
+	_, ok, err := s.App.Store.LockState(ctx, wsID, lockID, uuid.Nil, b)
 	return ok, err
 }
 
@@ -736,75 +601,46 @@ func (s *Server) userUnlock(ctx context.Context, wsID uuid.UUID, u auth.User, fo
 	if force {
 		holder = ""
 	}
-	return s.Store.UnlockCloudState(ctx, wsID, holder)
+	return s.App.Store.UnlockCloudState(ctx, wsID, holder)
 }
 
 // deleteWorkspace deletes a workspace that manages no resources, with its state files; force=1
 // deletes it anyway, leaving any real resources unmanaged.
 func (s *Server) deleteWorkspace(w http.ResponseWriter, r *http.Request) {
-	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
-	if !ok {
+	if err := s.App.DeleteWorkspace(r.Context(), actor(r), r.PathValue("name"), r.PostFormValue("force") != ""); err != nil {
+		s.uiError(w, r, err)
 		return
 	}
-	force := r.PostFormValue("force") != ""
-	keys, err := s.Store.DeleteWorkspace(r.Context(), ws.ID, force)
-	switch {
-	case errors.Is(err, storage.ErrNotFound): // deleted meanwhile
-		http.NotFound(w, r)
-		return
-	case errors.Is(err, storage.ErrRunActive), errors.Is(err, storage.ErrHasResources), errors.Is(err, storage.ErrStateLocked):
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	case err != nil:
-		s.internalError(w, "delete workspace", err)
-		return
-	}
-	for _, k := range keys { // failures only leave an unreferenced file behind
-		if err := s.StateStore.Delete(context.WithoutCancel(r.Context()), k); err != nil && gcerrors.Code(err) != gcerrors.NotFound {
-			s.Log.Warn("delete state file", "workspace", ws.Name, "key", k, "err", err)
-		}
-	}
-	s.Log.Info("workspace deleted", "workspace", ws.Name, "id", ws.ID, "force", force, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/workspaces", http.StatusSeeOther)
 }
 
-// workspaceAccess grants an IdP group read or operate access to a workspace (level "" revokes).
-// Admins only (enforced by the route).
+// workspaceAccess grants an IdP group read or operate access to a workspace (level "" revokes). Admins only.
 func (s *Server) workspaceAccess(w http.ResponseWriter, r *http.Request) {
-	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
-	if !ok {
+	if err := s.App.SetGrant(r.Context(), actor(r), r.PathValue("name"), r.PostFormValue("group"), r.PostFormValue("level")); err != nil {
+		s.uiError(w, r, err)
 		return
 	}
-	group, level, ok := grantFromForm(w, r)
-	if !ok {
-		return
-	}
-	if err := s.Store.SetGrant(r.Context(), ws.ID, group, level); err != nil {
-		s.internalError(w, "set grant", err)
-		return
-	}
-	s.Log.Info("workspace access", "workspace", ws.Name, "group", group, "level", level, "user", auth.FromContext(r.Context()).Email)
-	http.Redirect(w, r, "/workspaces/"+ws.Name+"/settings/access", http.StatusSeeOther)
+	http.Redirect(w, r, "/workspaces/"+r.PathValue("name")+"/settings/access", http.StatusSeeOther)
 }
 
 // grantFromForm reads a grant's group and level ("" revokes); it writes a 400 and returns false if invalid.
 func grantFromForm(w http.ResponseWriter, r *http.Request) (group, level string, ok bool) {
-	group, level = strings.TrimSpace(r.PostFormValue("group")), r.PostFormValue("level")
-	if group == "" || len(group) > 256 || (level != "" && level != levelRead && level != levelOperate) {
-		http.Error(w, "group is required, and level must be read, operate or empty (revoke)", http.StatusBadRequest)
+	group, l, err := app.ParseGrant(r.PostFormValue("group"), r.PostFormValue("level"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return "", "", false
 	}
-	return group, level, true
+	return group, l.String(), true
 }
 
 func (s *Server) run(w http.ResponseWriter, r *http.Request) {
-	ws, run, hist, level, ok := s.loadRun(w, r, levelRead)
+	d, ok := s.loadRun(w, r, app.LevelRead)
 	if !ok {
 		return
 	}
-	plan, apply := runPhases(run, hist)
-	s.render(w, r, http.StatusOK, "run.html", map[string]any{"W": ws, "R": run, "History": hist,
-		"Plan": plan, "Apply": apply, "CanOperate": level == levelOperate})
+	plan, apply := runPhases(d.Run, d.History)
+	s.render(w, r, http.StatusOK, "run.html", map[string]any{"W": d.Workspace, "R": d.Run, "History": d.History,
+		"Plan": plan, "Apply": apply, "CanOperate": d.Level == app.LevelOperate})
 }
 
 // runItem is a row of the runs page; Current: the workspace's latest run.
@@ -925,69 +761,57 @@ func runPhases(r storage.Run, hist []storage.StatusEntry) (plan, apply phase) {
 // cancelRun cancels a queued run, asks a running one to stop (Terraform still saves state), or with
 // force=1 cuts off a runner that doesn't react.
 func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request) {
-	ws, run, _, _, ok := s.loadRun(w, r, levelOperate)
-	if !ok {
+	id, _ := pathID(r, "run") // not an id: not found
+	if _, err := s.App.CancelRun(r.Context(), actor(r), r.PathValue("name"), id, r.PostFormValue("force") != ""); err != nil {
+		s.uiError(w, r, err)
 		return
 	}
-	u := auth.FromContext(r.Context())
-	status, err := s.Store.CancelRun(r.Context(), run.ID, u.Email, r.PostFormValue("force") != "")
-	if errors.Is(err, storage.ErrNotCancelable) {
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	}
-	if err != nil {
-		s.internalError(w, "cancel run", err)
-		return
-	}
-	if storage.Ended(status) {
-		s.DeleteArtifacts(context.WithoutCancel(r.Context()), run.ID)
-	}
-	s.Log.Info("run cancel", "workspace", ws.Name, "run", run.ID, "status", status, "user", u.Email)
-	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID.String(), http.StatusSeeOther)
+	http.Redirect(w, r, "/workspaces/"+r.PathValue("name")+"/runs/"+id.String(), http.StatusSeeOther)
 }
 
-func (s *Server) confirmRun(w http.ResponseWriter, r *http.Request) { s.decideRun(w, r, true) }
-func (s *Server) discardRun(w http.ResponseWriter, r *http.Request) { s.decideRun(w, r, false) }
+// confirmRun queues the apply of a plan that waits for confirmation.
+func (s *Server) confirmRun(w http.ResponseWriter, r *http.Request) {
+	id, _ := pathID(r, "run") // not an id: not found
+	s.decided(w, r, id, s.App.ConfirmRun(r.Context(), actor(r), r.PathValue("name"), id))
+}
 
-// decideRun confirms (queues the apply of) or discards a plan that waits for confirmation.
-func (s *Server) decideRun(w http.ResponseWriter, r *http.Request, confirm bool) {
-	ws, run, _, _, ok := s.loadRun(w, r, levelOperate)
-	if !ok {
-		return
-	}
-	u := auth.FromContext(r.Context())
-	var err error
-	if confirm {
-		err = s.Store.ConfirmRun(r.Context(), run.ID, u.ID, u.Email)
-	} else {
-		err = s.Store.DiscardRun(r.Context(), run.ID, u.Email)
-	}
-	if errors.Is(err, storage.ErrNotConfirmable) {
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	}
+// discardRun ends a plan that waits for confirmation without applying it.
+func (s *Server) discardRun(w http.ResponseWriter, r *http.Request) {
+	id, _ := pathID(r, "run") // not an id: not found
+	s.decided(w, r, id, s.App.DiscardRun(r.Context(), actor(r), r.PathValue("name"), id))
+}
+
+func (s *Server) decided(w http.ResponseWriter, r *http.Request, id uuid.UUID, err error) {
 	if err != nil {
-		s.internalError(w, "decide run", err)
+		s.uiError(w, r, err)
 		return
 	}
-	if !confirm {
-		s.DeleteArtifacts(context.WithoutCancel(r.Context()), run.ID)
+	http.Redirect(w, r, "/workspaces/"+r.PathValue("name")+"/runs/"+id.String(), http.StatusSeeOther)
+}
+
+// runLog opens the {run} log of the {name} workspace (app.RunLog); it writes the error and returns
+// ok=false otherwise.
+func (s *Server) runLog(w http.ResponseWriter, r *http.Request) (app.RunLog, bool) {
+	id, _ := pathID(r, "run") // not an id: not found
+	l, err := s.App.RunLog(r.Context(), actor(r), r.PathValue("name"), id)
+	if err != nil {
+		s.uiError(w, r, err)
+		return l, false
 	}
-	s.Log.Info("run decided", "workspace", ws.Name, "run", run.ID, "confirmed", confirm, "user", u.Email)
-	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID.String(), http.StatusSeeOther)
+	return l, true
 }
 
 func (s *Server) logText(w http.ResponseWriter, r *http.Request) {
-	_, run, _, _, ok := s.loadRun(w, r, levelRead)
+	l, ok := s.runLog(w, r)
 	if !ok {
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	var after int64
 	for {
-		chunks, err := s.Store.Logs(r.Context(), run.ID, after, 500)
+		chunks, err := l.Chunks(r.Context(), after, 500)
 		if err != nil {
-			s.Log.Error("read logs", "err", err)
+			s.App.Log.Error("read logs", "err", err)
 			return
 		}
 		for _, c := range chunks {
@@ -1010,7 +834,7 @@ var ansiCodes = regexp.MustCompile("\x1b\\[[0-9;]*m")
 // status) once no runner works on the run any more: finished, or waiting for confirmation.
 // shortcut: polls Postgres every second; switch to LISTEN/NOTIFY if many viewers make that costly.
 func (s *Server) logStream(w http.ResponseWriter, r *http.Request) {
-	_, run, _, _, ok := s.loadRun(w, r, levelRead)
+	l, ok := s.runLog(w, r)
 	if !ok {
 		return
 	}
@@ -1027,7 +851,7 @@ func (s *Server) logStream(w http.ResponseWriter, r *http.Request) {
 	defer tick.Stop()
 	idle, ended, sent := 0, false, ""
 	for {
-		chunks, err := s.Store.Logs(ctx, run.ID, cursor, 200)
+		chunks, err := l.Chunks(ctx, cursor, 200)
 		if err != nil {
 			return
 		}
@@ -1041,7 +865,7 @@ func (s *Server) logStream(w http.ResponseWriter, r *http.Request) {
 			cursor = c.Seq
 		}
 		if len(chunks) < 200 {
-			cur, err := s.Store.RunStatus(ctx, run.ID)
+			cur, err := l.Status(ctx)
 			if err != nil {
 				return
 			}

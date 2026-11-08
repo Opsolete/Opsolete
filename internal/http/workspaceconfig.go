@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/auth"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/vcs"
@@ -42,7 +43,7 @@ func (s *Server) loadVCSForm(ctx context.Context, form map[string]string, errMsg
 	if !s.Features.VCS {
 		return f, nil
 	}
-	conns, err := s.Store.VCSConnections(ctx)
+	conns, err := s.App.Store.VCSConnections(ctx)
 	if err != nil {
 		return f, err
 	}
@@ -54,7 +55,7 @@ func (s *Server) loadVCSForm(ctx context.Context, form map[string]string, errMsg
 		if reposOf != sc.ID.String() {
 			continue
 		}
-		c, err := vcs.ConnFor(s.SecretKey, sc)
+		c, err := vcs.ConnFor(s.App.SecretKey, sc)
 		if err == nil {
 			var repos []string
 			if repos, err = c.Repos(ctx); err == nil {
@@ -62,7 +63,7 @@ func (s *Server) loadVCSForm(ctx context.Context, form map[string]string, errMsg
 			}
 		}
 		if err != nil { // typing the repo still works
-			s.Log.Warn("list vcs repos", "connection", sc.Name, "err", err)
+			s.App.Log.Warn("list vcs repos", "connection", sc.Name, "err", err)
 		}
 	}
 	return f, nil
@@ -105,7 +106,7 @@ func (s *Server) vcsLink(ctx context.Context, workspace, project string, form ma
 	if !s.Features.VCS {
 		return uuid.Nil, "", "", "", errors.New("VCS connections are disabled")
 	}
-	connID, _ = parseID(form["vcs_connection"]) // not an id: vcsConn finds no such connection
+	connID, _ = parseID(form["vcs_connection"]) // not an id: VCSConn finds no such connection
 	if branch == "" {
 		branch = "main"
 	}
@@ -120,7 +121,7 @@ func (s *Server) vcsLink(ctx context.Context, workspace, project string, form ma
 			}
 		}
 	}
-	c, err := s.vcsConn(ctx, connID, workspace, project)
+	c, err := s.App.VCSConn(ctx, connID, workspace, project)
 	if err != nil {
 		return uuid.Nil, "", "", "", err
 	}
@@ -132,24 +133,6 @@ func (s *Server) vcsLink(ctx context.Context, workspace, project string, form ma
 		return uuid.Nil, "", "", "", fmt.Errorf("can't read branch %s of %q: %w", branch, repo, err)
 	}
 	return connID, repo, branch, tags, nil
-}
-
-// vcsConn opens a connection the workspace (by name, "" = a new one) in project (by name) may link.
-func (s *Server) vcsConn(ctx context.Context, connID uuid.UUID, workspace, project string) (vcs.Conn, error) {
-	sc, err := s.Store.GetVCSConnection(ctx, connID)
-	if errors.Is(err, storage.ErrNotFound) {
-		return vcs.Conn{}, errors.New("the VCS connection no longer exists")
-	}
-	if err != nil {
-		return vcs.Conn{}, err
-	}
-	if !sc.Allows(workspace, project) {
-		if workspace == "" {
-			return vcs.Conn{}, fmt.Errorf("new workspaces in project %s may not link repositories through VCS connection %s: ask an admin", project, sc.Name)
-		}
-		return vcs.Conn{}, fmt.Errorf("workspace %q may not link repositories through VCS connection %s: ask an admin", workspace, sc.Name)
-	}
-	return vcs.ConnFor(s.SecretKey, sc)
 }
 
 // newWorkspacePage is a wizard: ?type= picks the workflow (vcs, cli, template),
@@ -188,17 +171,17 @@ func (s *Server) renderNewWorkspace(w http.ResponseWriter, r *http.Request, stat
 	if !slices.ContainsFunc(projects, func(p storage.Project) bool { return p.Name == form["project"] }) {
 		form["project"] = ""
 	}
-	project, err := s.newWorkspaceProject(r.Context(), form["project"])
+	project, err := s.App.NewWorkspaceProject(r.Context(), actor(r), form["project"], uuid.Nil)
 	if err != nil {
-		s.internalError(w, "default project", err)
+		s.uiError(w, r, err)
 		return
 	}
-	f, err := s.loadVCSForm(r.Context(), form, errMsg, "", project, reposOf)
+	f, err := s.loadVCSForm(r.Context(), form, errMsg, "", project.Name, reposOf)
 	if err != nil {
 		s.internalError(w, "vcs connections", err)
 		return
 	}
-	data := map[string]any{"Templates": s.Templates.List(), "VCS": f, "Providers": vcs.Providers, "Projects": projects, "Project": form["project"]}
+	data := map[string]any{"Templates": s.App.Templates.List(), "VCS": f, "Providers": vcs.Providers, "Projects": projects, "Project": form["project"]}
 	for _, c := range f.Conns {
 		if c.ID.String() == form["vcs_connection"] {
 			data["Conn"] = c
@@ -216,21 +199,14 @@ func (s *Server) createEmptyWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	form["project"] = r.PostFormValue(fieldProject)
 	fail := func(msg string) { s.renderNewWorkspace(w, r, http.StatusUnprocessableEntity, form, msg) }
-	name := form["name"]
-	if !validWorkspaceName(name) {
-		fail("Workspace name: " + workspaceNameRule)
-		return
-	}
-	if !s.pickableProject(w, r, form["project"]) {
+	// first: the VCS check needs the project; one the user can't pick is a bad request (the picker only offers the others)
+	p, err := s.App.NewWorkspaceProject(r.Context(), actor(r), form["project"], uuid.Nil)
+	if err != nil {
+		s.uiError(w, r, err)
 		return
 	}
 	// "": selected-scope connections list existing workspaces, so a new one only gets "all" connections
-	project, err := s.newWorkspaceProject(r.Context(), form["project"])
-	if err != nil {
-		s.internalError(w, "default project", err)
-		return
-	}
-	connID, repo, branch, tags, err := s.vcsLink(r.Context(), "", project, form)
+	connID, repo, branch, tags, err := s.vcsLink(r.Context(), "", p.Name, form)
 	if err != nil {
 		fail(err.Error())
 		return
@@ -240,25 +216,20 @@ func (s *Server) createEmptyWorkspace(w http.ResponseWriter, r *http.Request) {
 		fail(err.Error())
 		return
 	}
-	u := auth.FromContext(r.Context())
-	ws, err := s.Store.CreateEmptyWorkspace(r.Context(), name, form["project"], form["auto_apply"] != "", u.ID)
-	if errors.Is(err, storage.ErrNameTaken) {
+	in := app.EmptyWorkspace{Name: form["name"], Project: p.Name, AutoApply: form["auto_apply"] != ""}
+	if connID != uuid.Nil {
+		in.VCS = &storage.VCSLink{ConnectionID: connID, Repo: repo, Branch: branch, TagsRegex: tags, TagBaseline: baseline,
+			Trigger: form["vcs_trigger"] != "" || tags != "", PullRequests: form["vcs_pull_requests"] != "" && tags == ""}
+	}
+	ws, err := s.App.CreateEmptyWorkspace(r.Context(), actor(r), in)
+	if isValidation(err) {
 		fail(err.Error())
 		return
 	}
-	if err == nil && connID != uuid.Nil {
-		err = s.Store.SetWorkspaceVCS(r.Context(), ws.ID, connID, repo, branch, tags, baseline, form["vcs_trigger"] != "" || tags != "", form["vcs_pull_requests"] != "" && tags == "")
-		if err != nil { // don't leave a half-made workspace whose name blocks the retry
-			if _, derr := s.Store.DeleteWorkspace(context.WithoutCancel(r.Context()), ws.ID, true); derr != nil {
-				s.Log.Error("delete half-created workspace", "workspace", ws.Name, "err", derr)
-			}
-		}
-	}
 	if err != nil {
-		s.internalError(w, "create workspace", err)
+		s.uiError(w, r, err)
 		return
 	}
-	s.Log.Info("workspace created", "workspace", ws.Name, "repo", repo, "branch", branch, "user", u.Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name, http.StatusSeeOther)
 }
 
@@ -266,7 +237,7 @@ func (s *Server) createEmptyWorkspace(w http.ResponseWriter, r *http.Request) {
 // workspace sees its repository and branch settings; "Change source" (/vcs/edit, or any unlinked
 // workspace) is a wizard: ?type= the workflow, then for vcs ?conn= the connection and ?repo= the repository.
 func (s *Server) workspaceVCSPage(w http.ResponseWriter, r *http.Request) {
-	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
+	ws, _, ok := s.loadWorkspace(w, r, app.LevelOperate)
 	if !ok {
 		return
 	}
@@ -316,7 +287,7 @@ func (s *Server) renderWorkspaceVCS(w http.ResponseWriter, r *http.Request, stat
 
 func (s *Server) linkWorkspaceVCS(w http.ResponseWriter, r *http.Request) {
 	// SetWorkspaceVCS refuses a change during an active run: its apply must fetch from the repository its plan used.
-	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
+	ws, _, ok := s.loadWorkspace(w, r, app.LevelOperate)
 	if !ok {
 		return
 	}
@@ -331,7 +302,7 @@ func (s *Server) linkWorkspaceVCS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// tag-based: tags always trigger, and pull requests get no plans
-	err = s.Store.SetWorkspaceVCS(r.Context(), ws.ID, connID, repo, branch, tags, baseline, form["vcs_trigger"] != "" || tags != "", form["vcs_pull_requests"] != "" && tags == "")
+	err = s.App.Store.SetWorkspaceVCS(r.Context(), ws.ID, connID, repo, branch, tags, baseline, form["vcs_trigger"] != "" || tags != "", form["vcs_pull_requests"] != "" && tags == "")
 	if errors.Is(err, storage.ErrRunActive) {
 		s.renderWorkspaceVCS(w, r, http.StatusConflict, ws, form, err.Error())
 		return
@@ -340,7 +311,7 @@ func (s *Server) linkWorkspaceVCS(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "link workspace vcs", err)
 		return
 	}
-	s.Log.Info("workspace vcs", "workspace", ws.Name, "repo", repo, "branch", branch,
+	s.App.Log.Info("workspace vcs", "workspace", ws.Name, "repo", repo, "branch", branch,
 		"trigger", form["vcs_trigger"] != "", "tags", tags, "pull_requests", form["vcs_pull_requests"] != "", "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name, http.StatusSeeOther)
 }
@@ -351,11 +322,11 @@ func (s *Server) tagBaseline(ctx context.Context, connID uuid.UUID, repo, tags s
 	if tags == "" {
 		return "", nil
 	}
-	sc, err := s.Store.GetVCSConnection(ctx, connID)
+	sc, err := s.App.Store.GetVCSConnection(ctx, connID)
 	if err != nil {
 		return "", fmt.Errorf("load connection: %w", err)
 	}
-	c, err := vcs.ConnFor(s.SecretKey, sc)
+	c, err := vcs.ConnFor(s.App.SecretKey, sc)
 	if err != nil {
 		return "", err
 	}
@@ -371,7 +342,7 @@ func (s *Server) tagBaseline(ctx context.Context, connID uuid.UUID, repo, tags s
 // page's "Connected to VCS" mark: its connection and, if the workspace may use it, its branch or tags.
 // It returns the connection, if it still exists, and the problem ("" if none).
 func (s *Server) vcsHealth(ctx context.Context, ws storage.Workspace) (*storage.VCSConnection, string) {
-	sc, err := s.Store.GetVCSConnection(ctx, ws.VCSConnectionID)
+	sc, err := s.App.Store.GetVCSConnection(ctx, ws.VCSConnectionID)
 	if errors.Is(err, storage.ErrNotFound) {
 		return nil, "its VCS connection was deleted"
 	}
@@ -383,7 +354,7 @@ func (s *Server) vcsHealth(ctx context.Context, ws storage.Workspace) (*storage.
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	c, err := vcs.ConnFor(s.SecretKey, sc)
+	c, err := vcs.ConnFor(s.App.SecretKey, sc)
 	if err == nil && ws.VCSTagsRegex != "" {
 		_, err = c.Tags(ctx, ws.VCSRepo)
 	} else if err == nil {
@@ -395,72 +366,36 @@ func (s *Server) vcsHealth(ctx context.Context, ws storage.Workspace) (*storage.
 	return &sc, ""
 }
 
-// pinCommit records the commit a plan job runs, unless the run was queued with its commit: the head
-// of the workspace's branch, or for tag-based workspaces the newest matching tag.
-func (s *Server) pinCommit(ctx context.Context, j storage.Job) error {
-	ws, err := s.Store.GetWorkspaceByID(ctx, j.WorkspaceID)
-	if err != nil {
-		return err
-	}
-	c, err := s.vcsConn(ctx, ws.VCSConnectionID, ws.Name, ws.ProjectName) // fails if the admin deselected the workspace since the link
-	if err != nil {
-		return fmt.Errorf("vcs: %w", err)
-	}
-	if j.VCSCommit != "" { // queued for a pushed commit or pull request
-		return nil
-	}
-	var head string
-	if ws.VCSTagsRegex != "" {
-		tags, err := c.Tags(ctx, ws.VCSRepo)
-		if err != nil {
-			return fmt.Errorf("vcs: %w", err)
-		}
-		tag, ok := vcs.LatestTag(tags, ws.VCSTagsRegex)
-		if !ok {
-			return fmt.Errorf("vcs: no tag of %s matches %s", ws.VCSRepo, ws.VCSTagsRegex)
-		}
-		head = tag.Commit
-	} else if head, err = c.Head(ctx, ws.VCSRepo, ws.VCSBranch); err != nil {
-		return fmt.Errorf("vcs: %w", err)
-	}
-	_, err = s.Store.PinVCSCommit(ctx, j.RunID, head)
-	return err
-}
-
-// vcsArchivePath ends in .tar.gz so Terraform's getter unpacks it; under /v1/, it's public and
-// authorised by its signature.
-func vcsArchivePath(runID uuid.UUID) string { return "/v1/vcs-archives/" + runID.String() + ".tar.gz" }
-
 // vcsArchive serves a run's pinned commit of its workspace's repository to the runner.
 func (s *Server) vcsArchive(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	runID, ok := strings.CutSuffix(r.PathValue("file"), ".tar.gz")
-	if !ok || !s.Registry.VerifyArchiveURL(r.URL.Path, q.Get("expires"), q.Get("sig")) {
+	if !ok || !s.App.Registry.VerifyArchiveURL(r.URL.Path, q.Get("expires"), q.Get("sig")) {
 		http.Error(w, "invalid or expired download link", http.StatusForbidden)
 		return
 	}
 	ctx := r.Context()
 	id, _ := parseID(runID) // not an id: not found
-	run, _, err := s.Store.GetRun(ctx, id)
+	run, _, err := s.App.Store.GetRun(ctx, id)
 	if errors.Is(err, storage.ErrNotFound) || (err == nil && run.VCSCommit == "") {
 		http.NotFound(w, r)
 		return
 	}
 	var ws storage.Workspace
 	if err == nil {
-		ws, err = s.Store.GetWorkspaceByID(ctx, run.WorkspaceID)
+		ws, err = s.App.Store.GetWorkspaceByID(ctx, run.WorkspaceID)
 	}
 	if err != nil {
 		s.internalError(w, "vcs archive", err)
 		return
 	}
-	c, err := s.vcsConn(ctx, ws.VCSConnectionID, ws.Name, ws.ProjectName)
+	c, err := s.App.VCSConn(ctx, ws.VCSConnectionID, ws.Name, ws.ProjectName)
 	var b []byte
 	if err == nil {
 		b, err = c.Archive(ctx, ws.VCSRepo, run.VCSCommit, "commit", "")
 	}
 	if err != nil {
-		s.Log.Warn("vcs archive", "run", run.ID, "repo", ws.VCSRepo, "err", err)
+		s.App.Log.Warn("vcs archive", "run", run.ID, "repo", ws.VCSRepo, "err", err)
 		http.Error(w, "fetching the repository failed: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -472,7 +407,7 @@ func (s *Server) vcsArchive(w http.ResponseWriter, r *http.Request) {
 // same content, serial one above the current one, older versions kept.
 // It holds the state lock and refuses during a run, so no run writes or applies a plan meanwhile.
 func (s *Server) rollbackState(w http.ResponseWriter, r *http.Request) {
-	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
+	ws, _, ok := s.loadWorkspace(w, r, app.LevelOperate)
 	if !ok {
 		return
 	}
@@ -485,7 +420,7 @@ func (s *Server) rollbackState(w http.ResponseWriter, r *http.Request) {
 	u := auth.FromContext(ctx)
 	lockID := rand.Text()
 	info, _ := json.Marshal(map[string]string{"ID": lockID, "Operation": "OperationTypeRollback", "Who": u.Email})
-	if _, ok, err := s.Store.LockState(ctx, ws.ID, lockID, uuid.Nil, info); err != nil {
+	if _, ok, err := s.App.Store.LockState(ctx, ws.ID, lockID, uuid.Nil, info); err != nil {
 		s.internalError(w, "lock state", err)
 		return
 	} else if !ok {
@@ -493,13 +428,13 @@ func (s *Server) rollbackState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() {
-		if err := s.Store.UnlockState(context.WithoutCancel(ctx), ws.ID, lockID, uuid.Nil); err != nil {
-			s.Log.Error("unlock state", "workspace", ws.Name, "err", err)
+		if err := s.App.Store.UnlockState(context.WithoutCancel(ctx), ws.ID, lockID, uuid.Nil); err != nil {
+			s.App.Log.Error("unlock state", "workspace", ws.Name, "err", err)
 		}
 	}()
 	// After locking: a run that starts now can't touch the state until the rollback is done, and one
 	// that is between phases (e.g. waiting for confirmation) would apply a plan made against the old state.
-	runs, err := s.Store.Runs(ctx, ws.ID, 1)
+	runs, err := s.App.Store.Runs(ctx, ws.ID, 1)
 	if err != nil {
 		s.internalError(w, "list runs", err)
 		return
@@ -508,7 +443,7 @@ func (s *Server) rollbackState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, storage.ErrRunActive.Error(), http.StatusConflict)
 		return
 	}
-	key, err := s.Store.StateVersionBlob(ctx, ws.ID, from)
+	key, err := s.App.Store.StateVersionBlob(ctx, ws.ID, from)
 	if errors.Is(err, storage.ErrNotFound) {
 		http.NotFound(w, r)
 		return
@@ -517,7 +452,7 @@ func (s *Server) rollbackState(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "state version", err)
 		return
 	}
-	cur, err := s.Store.StateVersions(ctx, ws.ID, 1)
+	cur, err := s.App.Store.StateVersions(ctx, ws.ID, 1)
 	if err != nil {
 		s.internalError(w, "list state versions", err)
 		return
@@ -526,7 +461,7 @@ func (s *Server) rollbackState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "this is already the current state version", http.StatusConflict)
 		return
 	}
-	old, err := s.readBlob(ctx, key)
+	old, err := s.App.ReadBlob(ctx, key)
 	if err != nil {
 		s.internalError(w, "read state", err)
 		return
@@ -546,9 +481,9 @@ func (s *Server) rollbackState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, msg, code) // e.g. a version of another lineage
 		return
 	}
-	if err := s.Store.CopyStateIndex(ctx, ws.ID, from); err != nil {
-		s.Log.Error("copy state index", "workspace", ws.Name, "err", err) // the next apply indexes it
+	if err := s.App.Store.CopyStateIndex(ctx, ws.ID, from); err != nil {
+		s.App.Log.Error("copy state index", "workspace", ws.Name, "err", err) // the next apply indexes it
 	}
-	s.Log.Info("state rolled back", "workspace", ws.Name, "version", from, "user", u.Email)
+	s.App.Log.Info("state rolled back", "workspace", ws.Name, "version", from, "user", u.Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name, http.StatusSeeOther)
 }

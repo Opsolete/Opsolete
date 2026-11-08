@@ -1,7 +1,6 @@
 package httpserver
 
 import (
-	"context"
 	"crypto/hmac"
 	"crypto/md5"
 	"crypto/sha256"
@@ -20,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	tfjson "github.com/hashicorp/terraform-json"
 
+	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/auth"
 	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage"
@@ -111,7 +111,7 @@ func writeAPIError(w http.ResponseWriter, status int, msg string) {
 }
 
 func (s *Server) cloudError(w http.ResponseWriter, what string, err error) {
-	s.Log.Error(what, "err", err)
+	s.App.Log.Error(what, "err", err)
 	writeAPIError(w, http.StatusInternalServerError, "internal error")
 }
 
@@ -120,9 +120,9 @@ func (s *Server) cloudError(w http.ResponseWriter, what string, err error) {
 func (s *Server) cloudUser(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		id, email, role, groups, err := s.Store.TokenUser(r.Context(), token)
+		id, email, role, groups, err := s.App.Store.TokenUser(r.Context(), token)
 		if errors.Is(err, storage.ErrNotFound) {
-			writeAPIError(w, http.StatusUnauthorized, "missing, invalid or expired token: run terraform login "+s.Registry.PublicURL.Host)
+			writeAPIError(w, http.StatusUnauthorized, "missing, invalid or expired token: run terraform login "+s.App.Registry.PublicURL.Host)
 			return
 		}
 		if err != nil {
@@ -143,37 +143,27 @@ func (s *Server) cloudUser(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// cloudWorkspace loads the {id} or {name} workspace if the user has at least the given access;
-// no access looks like no workspace (404). Everything but reading the workspace needs operate:
-// the state holds secrets in plain text.
-func (s *Server) cloudWorkspace(w http.ResponseWriter, r *http.Request, need string) (storage.Workspace, bool) {
+// cloudWorkspace loads the {id} or {name} workspace if the user has at least need (app.Workspace),
+// else writes the error (apiError). Everything but reading the workspace needs operate: the state
+// holds secrets in plain text.
+func (s *Server) cloudWorkspace(w http.ResponseWriter, r *http.Request, need app.Level) (storage.Workspace, bool) {
 	var ws storage.Workspace
 	var err error
 	if r.PathValue("id") != "" {
 		id, _ := pathID(r, "id") // not an id: not found
-		ws, err = s.Store.GetWorkspaceByID(r.Context(), id)
+		ws, _, err = s.App.WorkspaceByID(r.Context(), actor(r), id, need)
 	} else {
-		ws, err = s.Store.GetWorkspace(r.Context(), r.PathValue("name"))
+		ws, _, err = s.App.Workspace(r.Context(), actor(r), r.PathValue("name"), need)
 	}
-	var level string
-	if err == nil {
-		level, err = s.accessLevel(r, ws)
+	if err != nil {
+		s.apiError(w, r, err)
+		return ws, false
 	}
-	switch {
-	case errors.Is(err, storage.ErrNotFound) || err == nil && level == "":
-		writeAPIError(w, http.StatusNotFound, "workspace not found")
-	case err != nil:
-		s.cloudError(w, "get workspace", err)
-	case need == levelOperate && level != levelOperate:
-		writeAPIError(w, http.StatusForbidden, "you have read-only access to this workspace")
-	default:
-		return ws, true
-	}
-	return ws, false
+	return ws, true
 }
 
 func (s *Server) writeWorkspace(w http.ResponseWriter, r *http.Request, status int, ws storage.Workspace) {
-	lock, err := s.Store.StateLockID(r.Context(), ws.ID)
+	lock, err := s.App.Store.StateLockID(r.Context(), ws.ID)
 	if err != nil {
 		s.cloudError(w, "state lock", err)
 		return
@@ -186,9 +176,9 @@ func (s *Server) writeWorkspace(w http.ResponseWriter, r *http.Request, status i
 }
 
 func (s *Server) cloudGetWorkspace(w http.ResponseWriter, r *http.Request) {
-	need := levelRead
+	need := app.LevelRead
 	if r.Method == http.MethodPatch {
-		need = levelOperate
+		need = app.LevelOperate
 	}
 	if ws, ok := s.cloudWorkspace(w, r, need); ok {
 		s.writeWorkspace(w, r, http.StatusOK, ws)
@@ -216,46 +206,20 @@ func (s *Server) cloudCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "body must be a JSON:API workspace")
 		return
 	}
-	name := body.Data.Attributes.Name
-	if !validWorkspaceName(name) {
-		writeAPIError(w, http.StatusUnprocessableEntity, "workspace name: "+workspaceNameRule)
-		return
-	}
-	project := "" // no project in the cloud block: the default one
+	pid := uuid.Nil // no project in the cloud block: the default one
 	if id := body.Data.Relationships.Project.Data.ID; id != "" {
-		list, err := s.Store.CreatableProjects(r.Context(), viewer(r))
-		if err != nil {
-			s.cloudError(w, "list projects", err)
+		pid, _ = parseID(id)
+		if pid == uuid.Nil { // not an id: no such project
+			s.apiError(w, r, &app.ValidationError{Message: "no such project"})
 			return
 		}
-		pid, _ := parseID(id) // not an id: no such project
-		i := slices.IndexFunc(list, func(p storage.Project) bool { return p.ID == pid })
-		if i < 0 { // 422, not 404: Terraform shows the message
-			writeAPIError(w, http.StatusUnprocessableEntity, "you may not create workspaces in this project: that needs operate access to it")
-			return
-		}
-		project = list[i].Name
 	}
-	u := auth.FromContext(r.Context())
-	ws, err := s.Store.CreateEmptyWorkspace(r.Context(), name, project, false, u.ID)
-	if errors.Is(err, storage.ErrNameTaken) {
-		writeAPIError(w, http.StatusUnprocessableEntity, err.Error())
-		return
-	}
+	// local: Terraform runs on the user's machine; a remote-mode workspace would refuse this CLI its lock
+	ws, err := s.App.CreateEmptyWorkspace(r.Context(), actor(r), app.EmptyWorkspace{Name: body.Data.Attributes.Name, ProjectID: pid, ExecutionMode: "local"})
 	if err != nil {
-		s.cloudError(w, "create workspace", err)
+		s.apiError(w, r, err)
 		return
 	}
-	if err := s.Store.SetExecutionMode(r.Context(), ws.ID, "local"); err != nil {
-		// a remote-mode leftover would refuse this CLI its lock; let the retry create it again
-		if _, derr := s.Store.DeleteWorkspace(context.WithoutCancel(r.Context()), ws.ID, true); derr != nil {
-			s.Log.Error("delete half-created workspace", "workspace", ws.Name, "err", derr)
-		}
-		s.cloudError(w, "execution mode", err)
-		return
-	}
-	ws.ExecutionMode = "local"
-	s.Log.Info("workspace created", "workspace", ws.Name, "project", ws.ProjectName, "via", "terraform cloud block", "user", u.Email)
 	s.writeWorkspace(w, r, http.StatusCreated, ws)
 }
 
@@ -265,7 +229,7 @@ func projectObject(p storage.Project) apiObject {
 
 // cloudProjects lists the projects the user may see; filter[names] (comma-separated) picks by name.
 func (s *Server) cloudProjects(w http.ResponseWriter, r *http.Request) {
-	list, err := s.Store.Projects(r.Context(), viewer(r))
+	list, err := s.App.Store.Projects(r.Context(), viewer(r))
 	if err != nil {
 		s.cloudError(w, "list projects", err)
 		return
@@ -300,11 +264,11 @@ func (s *Server) cloudCreateProject(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusForbidden, fmt.Sprintf("there is no project %q you may use: an Opsolete admin creates projects", name))
 		return
 	}
-	if !validWorkspaceName(name) {
-		writeAPIError(w, http.StatusUnprocessableEntity, "project name: "+workspaceNameRule)
+	if !app.ValidName(name) {
+		writeAPIError(w, http.StatusUnprocessableEntity, "project name: "+app.NameRule)
 		return
 	}
-	p, err := s.Store.CreateProject(r.Context(), name, body.Data.Attributes.Description)
+	p, err := s.App.Store.CreateProject(r.Context(), name, body.Data.Attributes.Description)
 	if errors.Is(err, storage.ErrProjectNameTaken) {
 		writeAPIError(w, http.StatusUnprocessableEntity, err.Error())
 		return
@@ -313,7 +277,7 @@ func (s *Server) cloudCreateProject(w http.ResponseWriter, r *http.Request) {
 		s.cloudError(w, "create project", err)
 		return
 	}
-	s.Log.Info("project created", "project", p.Name, "via", "terraform cloud block", "user", u.Email)
+	s.App.Log.Info("project created", "project", p.Name, "via", "terraform cloud block", "user", u.Email)
 	writeAPI(w, http.StatusCreated, projectObject(p))
 }
 
@@ -321,7 +285,7 @@ func (s *Server) cloudCreateProject(w http.ResponseWriter, r *http.Request) {
 // a CLI and a run never write the state at once. Unlock releases only the user's own CLI lock,
 // force-unlock anyone's CLI lock; locks of runs and rollbacks end with them.
 func (s *Server) cloudLock(w http.ResponseWriter, r *http.Request) {
-	ws, ok := s.cloudWorkspace(w, r, levelOperate)
+	ws, ok := s.cloudWorkspace(w, r, app.LevelOperate)
 	if !ok {
 		return
 	}
@@ -347,7 +311,7 @@ func (s *Server) cloudLock(w http.ResponseWriter, r *http.Request) {
 			s.cloudError(w, "unlock state", err)
 			return
 		}
-		lock, err := s.Store.StateLockID(ctx, ws.ID)
+		lock, err := s.App.Store.StateLockID(ctx, ws.ID)
 		if err != nil {
 			s.cloudError(w, "state lock", err)
 			return
@@ -373,11 +337,11 @@ func stateVersionObject(workspaceID uuid.UUID, v storage.StateVersion) apiObject
 }
 
 func (s *Server) cloudCurrentState(w http.ResponseWriter, r *http.Request) {
-	ws, ok := s.cloudWorkspace(w, r, levelOperate)
+	ws, ok := s.cloudWorkspace(w, r, app.LevelOperate)
 	if !ok {
 		return
 	}
-	vs, err := s.Store.StateVersions(r.Context(), ws.ID, 1)
+	vs, err := s.App.Store.StateVersions(r.Context(), ws.ID, 1)
 	if err != nil {
 		s.cloudError(w, "list state versions", err)
 		return
@@ -392,11 +356,11 @@ func (s *Server) cloudCurrentState(w http.ResponseWriter, r *http.Request) {
 // cloudOutputs lists the current outputs by name only. Without a detailed-type Terraform falls back
 // to reading the whole state for their values, so this needs no copy of them.
 func (s *Server) cloudOutputs(w http.ResponseWriter, r *http.Request) {
-	ws, ok := s.cloudWorkspace(w, r, levelOperate)
+	ws, ok := s.cloudWorkspace(w, r, app.LevelOperate)
 	if !ok {
 		return
 	}
-	outputs, _, err := s.Store.CurrentOutputs(r.Context(), ws.ID)
+	outputs, _, err := s.App.Store.CurrentOutputs(r.Context(), ws.ID)
 	if err != nil {
 		s.cloudError(w, "current outputs", err)
 		return
@@ -409,7 +373,7 @@ func (s *Server) cloudOutputs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) cloudDownloadState(w http.ResponseWriter, r *http.Request) {
-	ws, ok := s.cloudWorkspace(w, r, levelOperate)
+	ws, ok := s.cloudWorkspace(w, r, app.LevelOperate)
 	if !ok {
 		return
 	}
@@ -418,7 +382,7 @@ func (s *Server) cloudDownloadState(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusNotFound, "state version not found")
 		return
 	}
-	key, err := s.Store.StateVersionBlob(r.Context(), ws.ID, id)
+	key, err := s.App.Store.StateVersionBlob(r.Context(), ws.ID, id)
 	if errors.Is(err, storage.ErrNotFound) {
 		writeAPIError(w, http.StatusNotFound, "state version not found")
 		return
@@ -427,7 +391,7 @@ func (s *Server) cloudDownloadState(w http.ResponseWriter, r *http.Request) {
 		s.cloudError(w, "state version", err)
 		return
 	}
-	b, err := s.readBlob(r.Context(), key)
+	b, err := s.App.ReadBlob(r.Context(), key)
 	if err != nil {
 		s.cloudError(w, "read state", err)
 		return
@@ -439,7 +403,7 @@ func (s *Server) cloudDownloadState(w http.ResponseWriter, r *http.Request) {
 // cloudCreateState saves a state version. It must come with the state in the body: go-tfe first
 // tries without (the newer upload-URL flow) and, on exactly this error, retries with it.
 func (s *Server) cloudCreateState(w http.ResponseWriter, r *http.Request) {
-	ws, ok := s.cloudWorkspace(w, r, levelOperate)
+	ws, ok := s.cloudWorkspace(w, r, app.LevelOperate)
 	if !ok {
 		return
 	}
@@ -482,7 +446,7 @@ func (s *Server) cloudCreateState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// the lock is checked again atomically with the save (AddStateVersion); this only spares writing the file
-	if locked, err := s.Store.CloudLocked(ctx, ws.ID, u.ID.String()); err != nil {
+	if locked, err := s.App.Store.CloudLocked(ctx, ws.ID, u.ID.String()); err != nil {
 		s.cloudError(w, "state lock", err)
 		return
 	} else if !locked {
@@ -496,11 +460,11 @@ func (s *Server) cloudCreateState(w http.ResponseWriter, r *http.Request) {
 	// The JSON state lists the resources, so the workspace page shows them as after a run.
 	var js tfjson.State
 	if raw, err := base64.StdEncoding.DecodeString(a.JSONState); err == nil && len(raw) > 0 && json.Unmarshal(raw, &js) == nil {
-		if err := s.Store.IndexState(ctx, ws.ID, runnerapi.Inventory(&js)); err != nil {
-			s.Log.Error("index state", "workspace", ws.Name, "err", err) // stays unindexed: deletion keeps refusing
+		if err := s.App.Store.IndexState(ctx, ws.ID, runnerapi.Inventory(&js)); err != nil {
+			s.App.Log.Error("index state", "workspace", ws.Name, "err", err) // stays unindexed: deletion keeps refusing
 		}
 	}
-	vs, err := s.Store.StateVersions(ctx, ws.ID, 1)
+	vs, err := s.App.Store.StateVersions(ctx, ws.ID, 1)
 	if err != nil {
 		s.cloudError(w, "list state versions", err)
 		return
@@ -563,7 +527,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 // codeMAC signs an authorization code. shortcut: codes are stateless, so one can be exchanged
 // more than once within codeTTL, but only with its PKCE verifier, which only that Terraform has.
 func (s *Server) codeMAC(code string) string {
-	m := hmac.New(sha256.New, s.Registry.Key)
+	m := hmac.New(sha256.New, s.App.Registry.Key)
 	m.Write([]byte("opsolete oauth code\x00" + code))
 	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
@@ -589,12 +553,12 @@ func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) {
 		fail("invalid_grant")
 		return
 	}
-	token, err := s.Store.CreateUserToken(r.Context(), req.User, "terraform login", userTokenTTL)
+	token, err := s.App.Store.CreateUserToken(r.Context(), req.User, "terraform login", userTokenTTL)
 	if err != nil {
-		s.Log.Error("create user token", "err", err)
+		s.App.Log.Error("create user token", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	s.Log.Info("user token created", "via", "terraform login", "user", req.User)
+	s.App.Log.Info("user token created", "via", "terraform login", "user", req.User)
 	writeJSON(w, map[string]any{"access_token": token, "token_type": "bearer", "expires_in": int(userTokenTTL.Seconds())})
 }

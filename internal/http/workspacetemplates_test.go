@@ -3,7 +3,6 @@ package httpserver
 import (
 	"context"
 	"encoding/json"
-	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,12 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hashicorp/terraform-config-inspect/tfconfig"
-
-	"github.com/opsolete/opsolete/internal/registry"
+	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage"
-	"github.com/opsolete/opsolete/internal/templates"
 )
 
 // TestWorkspaceTemplates: any number of templates can be added to a workspace, each a module the
@@ -78,6 +74,11 @@ func TestWorkspaceTemplates(t *testing.T) {
 		claim()
 	}
 	one, two := named("one"), named("two")
+	// a failed add shows the add form again (form.html reads .Module only when configuring)
+	if rec := post(h, base+"new?template=greeting", url.Values{"greeting": {"hi"}, "name": {"!!"}}); rec.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(rec.Body.String(), "<h1>Add Greeting (example) to "+ws+"</h1>") || strings.Contains(rec.Body.String(), "<h1>Configure") {
+		t.Fatalf("failed add: %d %s", rec.Code, rec.Body.String())
+	}
 
 	// Both reach the runner as modules, with their inputs; there is no root module.
 	if rec := post(h, "/workspaces/"+ws+"/runs", url.Values{"action": {"apply"}}); rec.Code != http.StatusSeeOther {
@@ -182,7 +183,7 @@ func TestDeleteWorkspace(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := "test/" + w.ID.String() + ".tfstate"
-	if err := app.StateStore.WriteAll(ctx, key, []byte("{}"), nil); err != nil {
+	if err := app.App.Blobs.WriteAll(ctx, key, []byte("{}"), nil); err != nil {
 		t.Fatal(err)
 	}
 	var vid int64
@@ -198,44 +199,11 @@ func TestDeleteWorkspace(t *testing.T) {
 	if rec := post(h, url0+"/delete", url.Values{"force": {"1"}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("delete: %d %s", rec.Code, rec.Body.String())
 	}
-	if ok, _ := app.StateStore.Exists(ctx, key); ok {
+	if ok, _ := app.App.Blobs.Exists(ctx, key); ok {
 		t.Fatal("state file left behind")
 	}
 	if rec := get(h, url0); rec.Code != http.StatusNotFound {
 		t.Fatalf("deleted workspace: %d", rec.Code)
-	}
-}
-
-// moduleNameRe is a Terraform module call name; "new" is the add route.
-var moduleNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
-
-func TestModuleName(t *testing.T) {
-	for name, want := range map[string]string{"Greeting (example)": "greeting_example", "Virtual machine – Windows": "virtual_machine_windows",
-		"2 VMs": "t_2_vms", "": "t", "New": "template", strings.Repeat("a ", 40): strings.Repeat("a_", 31) + "a"} {
-		if got := moduleName(name); got != want || !moduleNameRe.MatchString(got) {
-			t.Errorf("moduleName(%q) = %q, want %q", name, got, want)
-		}
-	}
-}
-
-func TestDefaultModule(t *testing.T) {
-	keyed := templates.Template{Name: "Virtual machine", Inputs: []templates.Input{{Name: "vm", Type: "string", Key: true}}}
-	long := strings.Repeat("a", 63)
-	taken := []storage.WorkspaceTemplate{{Name: "web_prod_01"}, {Name: "virtual_machine"}, {Name: long}}
-	for _, c := range []struct {
-		t    templates.Template
-		raw  map[string]string
-		want string // a regexp
-	}{
-		{keyed, map[string]string{"vm": "Web-Prod 01"}, `web_prod_01_[0-9a-f]{4}`},
-		{keyed, map[string]string{"vm": "db"}, `db_[0-9a-f]{4}`},             // always a suffix
-		{keyed, map[string]string{"vm": " "}, `virtual_machine_[0-9a-f]{4}`}, // empty key: the template's name
-		{templates.Template{Name: "Virtual machine"}, nil, `virtual_machine_[0-9a-f]{4}`},
-		{keyed, map[string]string{"vm": long}, `a{58}_[0-9a-f]{4}`},
-	} {
-		if got := defaultModule(c.t, c.raw, taken); !regexp.MustCompile("^"+c.want+"$").MatchString(got) || !moduleNameRe.MatchString(got) {
-			t.Errorf("defaultModule(%v) = %q, want %s", c.raw, got, c.want)
-		}
 	}
 }
 
@@ -353,35 +321,7 @@ func TestSensitiveInputs(t *testing.T) {
 		t.Fatalf("created workspace's job: %+v", j)
 	}
 	w, _ := store.GetWorkspace(ctx, root)
-	if added, _ := store.WorkspaceTemplates(ctx, w.ID); len(added) != 1 || !isSealed(added[0].Inputs["name"]) {
+	if added, _ := store.WorkspaceTemplates(ctx, w.ID); len(added) != 1 || !app.IsSealed(added[0].Inputs["name"]) {
 		t.Fatalf("created workspace's template: %+v", added)
-	}
-}
-
-// TestWithWorkspaceVars: an added template gets the workspace's Terraform variables its registry
-// module declares, under its own inputs; other sources and undeclared variables are left alone.
-func TestWithWorkspaceVars(t *testing.T) {
-	store := testStore(t)
-	ctx := context.Background()
-	s := newApp(t, "../../catalog", store, nil, Features{Registry: true})
-	ns := "wv" + strings.ToLower(newID()[:8])
-	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM modules WHERE namespace = $1`, ns) })
-	decl := []registry.Variable{{Variable: tfconfig.Variable{Name: "greeting"}}, {Variable: tfconfig.Variable{Name: "name"}}}
-	if err := store.CreateModule(ctx, storage.Module{Namespace: ns, Name: "m", System: "null", Version: "1.0.0", Variables: decl},
-		storage.ModuleDocs{}, []byte("x")); err != nil {
-		t.Fatal(err)
-	}
-	src := testReg.PublicURL.Host + "/" + ns + "/m/null"
-	vars := map[string]any{"greeting": "from-set", "name": "from-set", "region": "undeclared"}
-	got, err := s.withWorkspaceVars(ctx, "", src, "1.0.0", map[string]any{"name": "own"}, vars)
-	if want := map[string]any{"greeting": "from-set", "name": "own"}; err != nil || !maps.Equal(got, want) {
-		t.Fatalf("registry module: %v %v", got, err)
-	}
-	// the greeting template asks both: unset (hidden or left empty), they keep the module's default
-	if got, err := s.withWorkspaceVars(ctx, "greeting", src, "1.0.0", map[string]any{}, vars); err != nil || len(got) != 0 {
-		t.Fatalf("inputs the template asks: %v %v", got, err)
-	}
-	if got, err := s.withWorkspaceVars(ctx, "", "git::https://example.com/m.git", "v1", nil, vars); err != nil || got != nil {
-		t.Fatalf("external source: %v %v", got, err)
 	}
 }

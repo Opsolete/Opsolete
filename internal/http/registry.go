@@ -33,25 +33,25 @@ func (s *Server) registryRoutes(mux *http.ServeMux) {
 // deleteModule removes all versions of a module, unless a template still deploys it.
 // Workspaces already using it keep their state but can't download it again.
 func (s *Server) deleteModule(w http.ResponseWriter, r *http.Request) {
-	ns, name, sys, _, err := s.Registry.Address(r.PathValue("ns"), r.PathValue("name"), r.PathValue("system"))
+	ns, name, sys, _, err := s.App.Registry.Address(r.PathValue("ns"), r.PathValue("name"), r.PathValue("system"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	for _, t := range s.Templates.List() {
-		if tns, tname, tsys, ok := s.Registry.ParseSource(t.Module.Source); ok && tns == ns && tname == name && tsys == sys {
+	for _, t := range s.App.Templates.List() {
+		if tns, tname, tsys, ok := s.App.Registry.ParseSource(t.Module.Source); ok && tns == ns && tname == name && tsys == sys {
 			http.Error(w, fmt.Sprintf("template %q (%s) still uses this module; delete or repoint it first", t.Name, t.ID), http.StatusConflict)
 			return
 		}
 	}
-	if err := s.Store.DeleteModule(r.Context(), ns, name, sys); errors.Is(err, storage.ErrNotFound) {
+	if err := s.App.Store.DeleteModule(r.Context(), ns, name, sys); errors.Is(err, storage.ErrNotFound) {
 		http.NotFound(w, r)
 		return
 	} else if err != nil {
 		s.internalError(w, "delete module", err)
 		return
 	}
-	s.Log.Info("module deleted", "module", ns+"/"+name+"/"+sys, "user", auth.FromContext(r.Context()).Email)
+	s.App.Log.Info("module deleted", "module", ns+"/"+name+"/"+sys, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/registry", http.StatusSeeOther)
 }
 
@@ -61,8 +61,8 @@ func (s *Server) requireToken(scope string, next http.HandlerFunc) http.Handler 
 		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if ok {
 			var err error
-			if ok, err = s.Store.ValidToken(r.Context(), token, scope); err != nil {
-				s.Log.Error("check token", "err", err)
+			if ok, err = s.App.Store.ValidToken(r.Context(), token, scope); err != nil {
+				s.App.Log.Error("check token", "err", err)
 				writeErrors(w, http.StatusInternalServerError, "internal error")
 				return
 			}
@@ -76,9 +76,9 @@ func (s *Server) requireToken(scope string, next http.HandlerFunc) http.Handler 
 }
 
 func (s *Server) moduleVersions(w http.ResponseWriter, r *http.Request) {
-	vs, err := s.Store.ModuleVersions(r.Context(), r.PathValue("ns"), r.PathValue("name"), r.PathValue("system"))
+	vs, err := s.App.Store.ModuleVersions(r.Context(), r.PathValue("ns"), r.PathValue("name"), r.PathValue("system"))
 	if err != nil {
-		s.Log.Error("module versions", "err", err)
+		s.App.Log.Error("module versions", "err", err)
 		writeErrors(w, http.StatusInternalServerError, "internal error")
 		return
 	}
@@ -99,33 +99,33 @@ func (s *Server) moduleVersions(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) moduleDownload(w http.ResponseWriter, r *http.Request) {
 	ns, name, sys, ver := r.PathValue("ns"), r.PathValue("name"), r.PathValue("system"), r.PathValue("version")
-	if _, err := s.Store.GetModule(r.Context(), ns, name, sys, ver); errors.Is(err, storage.ErrNotFound) {
+	if _, err := s.App.Store.GetModule(r.Context(), ns, name, sys, ver); errors.Is(err, storage.ErrNotFound) {
 		writeErrors(w, http.StatusNotFound, "module version not found")
 		return
 	} else if err != nil {
-		s.Log.Error("get module", "err", err)
+		s.App.Log.Error("get module", "err", err)
 		writeErrors(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	// Relative URL: Terraform resolves it against this endpoint's URL.
-	w.Header().Set("X-Terraform-Get", s.Registry.SignedArchiveURL(registry.ArchivePath(ns, name, sys, ver), 10*time.Minute))
+	w.Header().Set("X-Terraform-Get", s.App.Registry.SignedArchiveURL(registry.ArchivePath(ns, name, sys, ver), 10*time.Minute))
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) moduleArchive(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	ver, ok := strings.CutSuffix(r.PathValue("file"), ".tar.gz")
-	if !ok || !s.Registry.VerifyArchiveURL(r.URL.Path, q.Get("expires"), q.Get("sig")) {
+	if !ok || !s.App.Registry.VerifyArchiveURL(r.URL.Path, q.Get("expires"), q.Get("sig")) {
 		http.Error(w, "invalid or expired download link", http.StatusForbidden)
 		return
 	}
-	b, err := s.Store.ModuleArchive(r.Context(), r.PathValue("ns"), r.PathValue("name"), r.PathValue("system"), ver)
+	b, err := s.App.Store.ModuleArchive(r.Context(), r.PathValue("ns"), r.PathValue("name"), r.PathValue("system"), ver)
 	if errors.Is(err, storage.ErrNotFound) {
 		http.NotFound(w, r)
 		return
 	}
 	if err != nil {
-		s.Log.Error("module archive", "err", err)
+		s.App.Log.Error("module archive", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -169,16 +169,16 @@ func latestVersions(mods []storage.Module) []latestModule {
 }
 
 func (s *Server) registryPage(w http.ResponseWriter, r *http.Request) {
-	mods, err := s.Store.ListModules(r.Context())
+	mods, err := s.App.Store.ListModules(r.Context())
 	if err != nil {
-		s.Log.Error("list modules", "err", err)
+		s.App.Log.Error("list modules", "err", err)
 		http.Error(w, "could not load modules", http.StatusInternalServerError)
 		return
 	}
-	p := registryPage{Modules: latestVersions(mods), Templates: s.canEditTemplates(r), Upload: s.canUpload(r), Host: s.Registry.PublicURL.Host,
+	p := registryPage{Modules: latestVersions(mods), Templates: s.canEditTemplates(r), Upload: s.canUpload(r), Host: s.App.Registry.PublicURL.Host,
 		VCS: s.Features.VCS && auth.FromContext(r.Context()).Admin(), Admin: auth.FromContext(r.Context()).Admin()}
 	if p.VCS {
-		if p.Linked, err = s.Store.VCSModules(r.Context()); err != nil {
+		if p.Linked, err = s.App.Store.VCSModules(r.Context()); err != nil {
 			s.internalError(w, "vcs modules", err)
 			return
 		}
@@ -188,7 +188,7 @@ func (s *Server) registryPage(w http.ResponseWriter, r *http.Request) {
 
 // renderUpload is the upload step of the add-module wizard.
 func (s *Server) renderUpload(w http.ResponseWriter, r *http.Request, status int, errMsg string, form map[string]string) {
-	s.render(w, r, status, "publish.html", publishPage{Type: "upload", Host: s.Registry.PublicURL.Host, Error: errMsg, Form: form})
+	s.render(w, r, status, "publish.html", publishPage{Type: "upload", Host: s.App.Registry.PublicURL.Host, Error: errMsg, Form: form})
 }
 
 func (s *Server) uploadModule(w http.ResponseWriter, r *http.Request) {
@@ -208,7 +208,7 @@ func (s *Server) uploadModule(w http.ResponseWriter, r *http.Request) {
 	}
 	fail := func(msg string) { s.renderUpload(w, r, http.StatusUnprocessableEntity, msg, form) }
 
-	ns, name, sys, _, err := s.Registry.Address(form["namespace"], form["name"], form["system"])
+	ns, name, sys, _, err := s.App.Registry.Address(form["namespace"], form["name"], form["system"])
 	if err != nil {
 		fail(err.Error())
 		return
@@ -238,31 +238,31 @@ func (s *Server) uploadModule(w http.ResponseWriter, r *http.Request) {
 		fail(err.Error())
 		return
 	}
-	err = s.Store.CreateModule(r.Context(), storage.Module{Namespace: ns, Name: name, System: sys, Version: ver, Variables: ins.Variables},
+	err = s.App.Store.CreateModule(r.Context(), storage.Module{Namespace: ns, Name: name, System: sys, Version: ver, Variables: ins.Variables},
 		storage.ModuleDocs{Module: ins.Module, Readme: ins.Readme}, archive)
 	if errors.Is(err, storage.ErrExists) {
 		fail(fmt.Sprintf("%s/%s/%s %s already exists; versions are immutable, upload a new version", ns, name, sys, ver))
 		return
 	}
 	if err != nil {
-		s.Log.Error("create module", "err", err)
+		s.App.Log.Error("create module", "err", err)
 		fail("could not store module")
 		return
 	}
-	s.Log.Info("module uploaded", "module", ns+"/"+name+"/"+sys, "version", ver, "variables", len(ins.Variables))
+	s.App.Log.Info("module uploaded", "module", ns+"/"+name+"/"+sys, "version", ver, "variables", len(ins.Variables))
 	http.Redirect(w, r, fmt.Sprintf("/registry/%s/%s/%s/%s", ns, name, sys, ver), http.StatusSeeOther)
 }
 
 // moduleDocs renders generated documentation for one module version, as HTML or (docs.md) Markdown.
 func (s *Server) moduleDocs(w http.ResponseWriter, r *http.Request) {
 	ns, name, sys, ver := r.PathValue("ns"), r.PathValue("name"), r.PathValue("system"), r.PathValue("version")
-	docs, err := s.Store.GetModuleDocs(r.Context(), ns, name, sys, ver)
+	docs, err := s.App.Store.GetModuleDocs(r.Context(), ns, name, sys, ver)
 	if errors.Is(err, storage.ErrNotFound) {
 		http.NotFound(w, r)
 		return
 	}
 	if err != nil {
-		s.Log.Error("module docs", "err", err)
+		s.App.Log.Error("module docs", "err", err)
 		http.Error(w, "could not load module docs", http.StatusInternalServerError)
 		return
 	}
@@ -274,25 +274,25 @@ func (s *Server) moduleDocs(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 		docs.Module.Path = ns + "/" + name + "/" + sys + " " + ver // RenderMarkdown's title
 		if err := tfconfig.RenderMarkdown(w, docs.Module); err != nil {
-			s.Log.Error("render markdown", "err", err)
+			s.App.Log.Error("render markdown", "err", err)
 		}
 		return
 	}
-	versions, err := s.Store.ModuleVersions(r.Context(), ns, name, sys)
+	versions, err := s.App.Store.ModuleVersions(r.Context(), ns, name, sys)
 	if err != nil {
-		s.Log.Error("module versions", "err", err)
+		s.App.Log.Error("module versions", "err", err)
 		http.Error(w, "could not load module", http.StatusInternalServerError)
 		return
 	}
 	registry.SortVersions(versions)
-	_, _, _, source, err := s.Registry.Address(ns, name, sys)
+	_, _, _, source, err := s.App.Registry.Address(ns, name, sys)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	var linked *storage.VCSModule
 	if s.Features.VCS {
-		if m, err := s.Store.GetVCSModule(r.Context(), ns, name, sys); err == nil {
+		if m, err := s.App.Store.GetVCSModule(r.Context(), ns, name, sys); err == nil {
 			linked = &m
 		} else if !errors.Is(err, storage.ErrNotFound) {
 			s.internalError(w, "get vcs module", err)
@@ -302,7 +302,7 @@ func (s *Server) moduleDocs(w http.ResponseWriter, r *http.Request) {
 	// No-code ready: templates that deploy this module (their pinned version may differ).
 	var tpls []templates.Template
 	if s.Features.Deployments {
-		for _, t := range s.Templates.List() {
+		for _, t := range s.App.Templates.List() {
 			if t.Module.Source == source {
 				tpls = append(tpls, t)
 			}

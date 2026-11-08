@@ -75,7 +75,7 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 	b, _ := json.Marshal(tpl)
 	os.WriteFile(filepath.Join(dir, tplID+".json"), b, 0o644)
 	app := newApp(t, dir, store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true, Registry: true, VCS: true})
-	app.SecretKey = vcs.Key("test-secret-key")
+	app.App.SecretKey = vcs.Key("test-secret-key")
 	h := app.Handler()
 
 	// Connect: a bad token is rejected by the connection check; the good one is stored sealed.
@@ -181,7 +181,7 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 		t.Fatalf("sync: %d %q", rec.Code, rec.Header().Get("Location"))
 	}
 	tpl.Module.Ref = "1.0.1" // db_encrypted isn't added to the JSON: the form takes it from the module's variables
-	if err := app.Templates.Save(tpl, true); err != nil {
+	if err := app.App.Templates.Save(tpl, true); err != nil {
 		t.Fatal(err)
 	}
 

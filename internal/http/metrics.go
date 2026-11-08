@@ -50,9 +50,9 @@ func (c dbStats) Describe(ch chan<- *prometheus.Desc) { ch <- runsDesc; ch <- qu
 func (c dbStats) Collect(ch chan<- prometheus.Metric) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	st, err := c.s.Store.Stats(ctx)
+	st, err := c.s.App.Store.Stats(ctx)
 	if err != nil { // skip, don't fail the scrape: the runtime metrics still matter, and /readyz reports the database
-		c.s.Log.Error("metrics: read database stats", "err", err)
+		c.s.App.Log.Error("metrics: read database stats", "err", err)
 		return
 	}
 	for _, status := range runStatuses { // zeros too, so queue alerts don't depend on absent()
@@ -65,7 +65,7 @@ func (c dbStats) Collect(ch chan<- prometheus.Metric) {
 // MetricsHandler serves Prometheus metrics: Go runtime, process, HTTP requests, the database pool and runs.
 // Call it once: it registers on the default registry.
 func (s *Server) MetricsHandler() http.Handler {
-	prometheus.MustRegister(poolStats{s.Store.Pool}, dbStats{s})
+	prometheus.MustRegister(poolStats{s.App.Store.Pool}, dbStats{s})
 	return promhttp.Handler()
 }
 

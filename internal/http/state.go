@@ -6,7 +6,6 @@ import (
 	"crypto/hmac"
 	"crypto/md5"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -16,18 +15,16 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
-	"gocloud.dev/blob"
 
 	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage"
-	"github.com/opsolete/opsolete/internal/vcs"
 )
 
 const maxStateSize = 64 << 20
 
 // Terraform http state backend, one state per workspace (deployment):
 // https://developer.hashicorp.com/terraform/language/backend/http
-// Runners authenticate with per-run credentials (username = workspace id, password = stateToken),
+// Runners authenticate with per-run credentials (username = workspace id, password = app.StateToken),
 // so only the run a runner is working on can read or write the workspace's state, and only while it
 // is planning or applying. A run of another workspace may read it (terraform_remote_state, its own
 // credentials) if the workspace shares its state with that one.
@@ -37,14 +34,6 @@ func (s *Server) stateRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST "+p, s.stateAuth(s.putState))
 	mux.HandleFunc("LOCK "+p, s.stateAuth(s.lockState))
 	mux.HandleFunc("UNLOCK "+p, s.stateAuth(s.unlockState))
-}
-
-// stateToken is a run's state password. It is per run, not per phase: Terraform embeds the backend
-// config in the saved plan, so the apply phase authenticates with what the plan phase used.
-func (s *Server) stateToken(workspaceID, runID uuid.UUID) string {
-	m := hmac.New(sha256.New, s.Registry.Key)
-	m.Write([]byte("opsolete state\x00" + workspaceID.String() + "\x00" + runID.String()))
-	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
 
 func (s *Server) stateAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -61,17 +50,17 @@ func (s *Server) stateAuth(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "only this workspace's runs may change its state", http.StatusForbidden)
 			return
 		}
-		run, status, pullRequest, err := s.Store.WorkingRun(r.Context(), user)
+		run, status, pullRequest, err := s.App.Store.WorkingRun(r.Context(), user)
 		if errors.Is(err, storage.ErrNotFound) {
 			http.Error(w, "no run is working on this workspace", http.StatusForbidden)
 			return
 		}
 		if err != nil {
-			s.Log.Error("state auth", "err", err)
+			s.App.Log.Error("state auth", "err", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
-		if !hmac.Equal([]byte(pass), []byte(s.stateToken(user, run))) {
+		if !hmac.Equal([]byte(pass), []byte(s.App.StateToken(user, run))) {
 			http.Error(w, "invalid state credentials", http.StatusForbidden)
 			return
 		}
@@ -86,7 +75,7 @@ func (s *Server) stateAuth(next http.HandlerFunc) http.HandlerFunc {
 				http.Error(w, "a pull request's speculative plan can't read other workspaces' state", http.StatusForbidden)
 				return
 			}
-			shared, err := s.Store.SharesState(r.Context(), id, user)
+			shared, err := s.App.Store.SharesState(r.Context(), id, user)
 			if err != nil {
 				s.internalError(w, "remote state sharing", err)
 				return
@@ -103,7 +92,7 @@ func (s *Server) stateAuth(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 	id, _ := pathID(r, "id") // stateAuth checked it
-	vs, err := s.Store.StateVersions(r.Context(), id, 1)
+	vs, err := s.App.Store.StateVersions(r.Context(), id, 1)
 	if err != nil {
 		s.internalError(w, "list state versions", err)
 		return
@@ -112,7 +101,7 @@ func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent) // new workspace: no state yet
 		return
 	}
-	b, err := s.readBlob(r.Context(), vs[0].BlobKey)
+	b, err := s.App.ReadBlob(r.Context(), vs[0].BlobKey)
 	if err != nil {
 		s.internalError(w, "read state", err)
 		return
@@ -127,7 +116,7 @@ func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
 	id, _ := pathID(r, "id") // stateAuth checked both
 	run, _ := pathID(r, "run")
 	// the lock this run took, not just its ID: a 423 shows other locks' IDs to any run
-	if locked, err := s.Store.StateLockedBy(ctx, id, r.URL.Query().Get("ID"), run); err != nil {
+	if locked, err := s.App.Store.StateLockedBy(ctx, id, r.URL.Query().Get("ID"), run); err != nil {
 		s.internalError(w, "state lock", err)
 		return
 	} else if !locked {
@@ -179,7 +168,7 @@ func (s *Server) saveState(ctx context.Context, id, runID uuid.UUID, cloudUser s
 			v.Outputs[k] = "(sensitive)"
 		}
 	}
-	cur, err := s.Store.StateVersions(ctx, id, 1)
+	cur, err := s.App.Store.StateVersions(ctx, id, 1)
 	if err != nil {
 		return s.stateFailure("list state versions", err)
 	}
@@ -195,18 +184,18 @@ func (s *Server) saveState(ctx context.Context, id, runID uuid.UUID, cloudUser s
 			return http.StatusConflict, "state serial equals the workspace's state, but its content differs"
 		}
 	}
-	ws, err := s.Store.GetWorkspaceByID(ctx, id)
+	ws, err := s.App.Store.GetWorkspaceByID(ctx, id)
 	if err != nil {
 		return s.stateFailure("get workspace", err)
 	}
 	v.BlobKey = fmt.Sprintf("workspaces/%s/%d-%s.tfstate", ws.ID, v.Serial, rand.Text())
-	if err := s.writeBlob(ctx, v.BlobKey, body); err != nil {
+	if err := s.App.WriteBlob(ctx, v.BlobKey, body); err != nil {
 		return s.stateFailure("write state", err)
 	}
-	if err := s.Store.AddStateVersion(ctx, id, runID, cloudUser, v); err != nil {
+	if err := s.App.Store.AddStateVersion(ctx, id, runID, cloudUser, v); err != nil {
 		// WithoutCancel: a dropped request must not stop the cleanup and leave the file behind.
-		if derr := s.StateStore.Delete(context.WithoutCancel(ctx), v.BlobKey); derr != nil {
-			s.Log.Warn("delete unrecorded state file", "key", v.BlobKey, "err", derr)
+		if derr := s.App.Blobs.Delete(context.WithoutCancel(ctx), v.BlobKey); derr != nil {
+			s.App.Log.Warn("delete unrecorded state file", "key", v.BlobKey, "err", derr)
 		}
 		if errors.Is(err, storage.ErrLeaseLost) {
 			return http.StatusConflict, "the run was canceled or lost its runner: state not saved"
@@ -216,46 +205,12 @@ func (s *Server) saveState(ctx context.Context, id, runID uuid.UUID, cloudUser s
 		}
 		return s.stateFailure("record state version", err)
 	}
-	s.Log.Info("state saved", "workspace", id, "serial", v.Serial, "bytes", v.Size)
+	s.App.Log.Info("state saved", "workspace", id, "serial", v.Serial, "bytes", v.Size)
 	return http.StatusOK, ""
 }
 
-// sealedPrefix marks state store files encrypted with SECRET_KEY; files without it are plaintext
-// (written before SECRET_KEY was set) and are still read as is.
-const sealedPrefix = "opsolete-sealed-v1\n"
-
-// writeBlob stores a state file or run artifact, encrypted (AES-256-GCM) with SECRET_KEY:
-// they hold secrets, so bucket read access alone must not expose them.
-func (s *Server) writeBlob(ctx context.Context, key string, body []byte) error {
-	sealed, err := vcs.Seal(s.SecretKey, string(body), blobAD(key))
-	if err != nil {
-		return err
-	}
-	body = append([]byte(sealedPrefix), sealed...)
-	return s.StateStore.WriteAll(ctx, key, body, &blob.WriterOptions{ContentType: "application/octet-stream"})
-}
-
-// readBlob reads a file written by writeBlob, decrypting it if it was sealed.
-func (s *Server) readBlob(ctx context.Context, key string) ([]byte, error) {
-	b, err := s.StateStore.ReadAll(ctx, key)
-	if err != nil || !bytes.HasPrefix(b, []byte(sealedPrefix)) {
-		return b, err
-	}
-	plain, err := vcs.Open(s.SecretKey, b[len(sealedPrefix):], blobAD(key))
-	if err != nil { // sealed before files were bound to their key
-		plain, err = vcs.OpenLegacy(s.SecretKey, b[len(sealedPrefix):])
-	}
-	if err != nil {
-		return nil, fmt.Errorf("decrypt %s: SECRET_KEY changed?", key)
-	}
-	return []byte(plain), nil
-}
-
-// blobAD binds a sealed file to its key: a state file copied over another workspace's doesn't open.
-func blobAD(key string) string { return "blob\x00" + key }
-
 func (s *Server) stateFailure(what string, err error) (int, string) {
-	s.Log.Error(what, "err", err)
+	s.App.Log.Error(what, "err", err)
 	return http.StatusInternalServerError, "internal error"
 }
 
@@ -266,7 +221,7 @@ func (s *Server) lockState(w http.ResponseWriter, r *http.Request) {
 	}
 	id, _ := pathID(r, "id") // stateAuth checked both
 	run, _ := pathID(r, "run")
-	held, ok, err := s.Store.LockState(r.Context(), id, lockID, run, info)
+	held, ok, err := s.App.Store.LockState(r.Context(), id, lockID, run, info)
 	if err != nil {
 		s.internalError(w, "lock state", err)
 		return
@@ -287,7 +242,7 @@ func (s *Server) unlockState(w http.ResponseWriter, r *http.Request) {
 	}
 	id, _ := pathID(r, "id") // stateAuth checked both
 	run, _ := pathID(r, "run")
-	if err := s.Store.UnlockState(r.Context(), id, lockID, run); err != nil {
+	if err := s.App.Store.UnlockState(r.Context(), id, lockID, run); err != nil {
 		s.internalError(w, "unlock state", err)
 		return
 	}

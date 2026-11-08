@@ -206,7 +206,7 @@ func (s *Server) diffVersions(ctx context.Context, a, b *storage.StateVersion) (
 			continue
 		}
 		var err error
-		if files[i], err = s.readBlob(ctx, v.BlobKey); err != nil {
+		if files[i], err = s.App.ReadBlob(ctx, v.BlobKey); err != nil {
 			return nil, err
 		}
 	}

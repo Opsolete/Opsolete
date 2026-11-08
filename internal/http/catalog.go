@@ -42,7 +42,7 @@ type catalogPage struct {
 
 func (s *Server) catalogPage(w http.ResponseWriter, r *http.Request) {
 	form := map[string]string{"mode": "pr"}
-	tc, err := s.Store.GetTemplateCatalog(r.Context())
+	tc, err := s.App.Store.GetTemplateCatalog(r.Context())
 	if err == nil {
 		form = catalogForm(tc)
 	} else if !errors.Is(err, storage.ErrNotFound) {
@@ -57,15 +57,15 @@ func (s *Server) catalogPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) renderCatalog(w http.ResponseWriter, r *http.Request, status int, form map[string]string, errMsg string) {
-	p := catalogPage{Form: form, Error: errMsg, Count: len(s.Templates.List()), Saved: r.URL.Query().Has("saved")}
-	tc, err := s.Store.GetTemplateCatalog(r.Context())
+	p := catalogPage{Form: form, Error: errMsg, Count: len(s.App.Templates.List()), Saved: r.URL.Query().Has("saved")}
+	tc, err := s.App.Store.GetTemplateCatalog(r.Context())
 	if err == nil {
 		p.Catalog = &tc
 	} else if !errors.Is(err, storage.ErrNotFound) {
 		s.internalError(w, "template catalog", err)
 		return
 	}
-	if p.Conns, err = s.Store.VCSConnections(r.Context()); err != nil {
+	if p.Conns, err = s.App.Store.VCSConnections(r.Context()); err != nil {
 		s.internalError(w, "vcs connections", err)
 		return
 	}
@@ -73,12 +73,12 @@ func (s *Server) renderCatalog(w http.ResponseWriter, r *http.Request, status in
 		if sc.ID.String() != form["connection"] {
 			continue
 		}
-		c, err := vcs.ConnFor(s.SecretKey, sc)
+		c, err := vcs.ConnFor(s.App.SecretKey, sc)
 		if err == nil {
 			p.Repos, err = c.Repos(r.Context())
 		}
 		if err != nil { // typing the repo still works
-			s.Log.Warn("list vcs repos", "connection", sc.Name, "err", err)
+			s.App.Log.Warn("list vcs repos", "connection", sc.Name, "err", err)
 			p.ListErr = true
 		}
 		// the configured repo stays selectable even if the token no longer lists it (or GitHub's 1000 cut it off)
@@ -112,7 +112,7 @@ func (s *Server) saveCatalog(w http.ResponseWriter, r *http.Request) {
 		fail(fmt.Sprintf("%q is not a folder of the repository", form["dir"]))
 		return
 	}
-	sc, err := s.Store.GetVCSConnection(r.Context(), tc.ConnectionID)
+	sc, err := s.App.Store.GetVCSConnection(r.Context(), tc.ConnectionID)
 	if errors.Is(err, storage.ErrNotFound) {
 		fail("choose a VCS connection")
 		return
@@ -120,7 +120,7 @@ func (s *Server) saveCatalog(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "vcs connection", err)
 		return
 	}
-	c, err := vcs.ConnFor(s.SecretKey, sc)
+	c, err := vcs.ConnFor(s.App.SecretKey, sc)
 	if err == nil {
 		_, err = c.Head(r.Context(), tc.Repo, tc.Branch)
 	}
@@ -128,11 +128,11 @@ func (s *Server) saveCatalog(w http.ResponseWriter, r *http.Request) {
 		fail(fmt.Sprintf("can't read branch %s of %q: %v", tc.Branch, tc.Repo, err))
 		return
 	}
-	if err := s.Store.SetTemplateCatalog(r.Context(), tc); err != nil {
+	if err := s.App.Store.SetTemplateCatalog(r.Context(), tc); err != nil {
 		s.internalError(w, "set template catalog", err)
 		return
 	}
-	if err := vcs.SyncCatalog(r.Context(), s.Store, s.SecretKey, s.Templates); err != nil {
+	if err := vcs.SyncCatalog(r.Context(), s.App.Store, s.App.SecretKey, s.App.Templates); err != nil {
 		s.renderCatalog(w, r, http.StatusUnprocessableEntity, form, "Saved, but loading the templates failed: "+err.Error())
 		return
 	}
@@ -144,18 +144,18 @@ func catalogForm(tc storage.TemplateCatalog) map[string]string {
 }
 
 func (s *Server) syncCatalog(w http.ResponseWriter, r *http.Request) {
-	if err := vcs.SyncCatalog(r.Context(), s.Store, s.SecretKey, s.Templates); err != nil {
-		s.Log.Warn("template catalog sync", "err", err) // shown on the page as the sync error
+	if err := vcs.SyncCatalog(r.Context(), s.App.Store, s.App.SecretKey, s.App.Templates); err != nil {
+		s.App.Log.Warn("template catalog sync", "err", err) // shown on the page as the sync error
 	}
 	http.Redirect(w, r, "/catalog", http.StatusSeeOther)
 }
 
 func (s *Server) deleteCatalog(w http.ResponseWriter, r *http.Request) {
-	if err := s.Store.DeleteTemplateCatalog(r.Context()); err != nil {
+	if err := s.App.Store.DeleteTemplateCatalog(r.Context()); err != nil {
 		s.internalError(w, "delete template catalog", err)
 		return
 	}
-	if err := s.Templates.Reopen(); err != nil {
+	if err := s.App.Templates.Reopen(); err != nil {
 		s.internalError(w, "load TEMPLATES_DIR", err)
 		return
 	}

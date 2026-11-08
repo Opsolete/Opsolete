@@ -756,7 +756,7 @@ func TestVCSWorkspaceVariableSets(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	name := "t-" + strings.ToLower(rand.Text()[:10])
-	w, err := s.CreateEmptyWorkspace(ctx, name, "", false, uuid.Nil)
+	w, err := s.CreateEmptyWorkspace(ctx, EmptyWorkspace{Name: name})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -840,7 +840,7 @@ func TestQueueVCSRun(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	name := "t-" + strings.ToLower(rand.Text()[:10])
-	w, err := s.CreateEmptyWorkspace(ctx, name, "", false, uuid.Nil)
+	w, err := s.CreateEmptyWorkspace(ctx, EmptyWorkspace{Name: name})
 	if err != nil {
 		t.Fatal(err)
 	}

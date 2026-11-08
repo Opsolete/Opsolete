@@ -94,26 +94,59 @@ func toRun(r db.RunList) (Run, error) {
 // is a user id, or uuid.Nil. id is the new workspace's id (uuid.Nil = a random one): set when inputs are
 // sealed to it beforehand. project is the name of the project it goes into; "" is the default project.
 func (s *Store) CreateWorkspace(ctx context.Context, id uuid.UUID, name, project string, t WorkspaceTemplate, autoApply bool, createdBy uuid.UUID) (Workspace, Run, error) {
-	return s.createWorkspace(ctx, id, name, project, &t, autoApply, createdBy)
+	return s.createWorkspace(ctx, id, EmptyWorkspace{Name: name, Project: project, AutoApply: autoApply, CreatedBy: createdBy}, &t)
 }
 
-// CreateEmptyWorkspace creates a workspace without configuration and without a run.
-func (s *Store) CreateEmptyWorkspace(ctx context.Context, name, project string, autoApply bool, createdBy uuid.UUID) (Workspace, error) {
-	w, _, err := s.createWorkspace(ctx, uuid.Nil, name, project, nil, autoApply, createdBy)
+// EmptyWorkspace is a workspace to create without templates and without a run.
+type EmptyWorkspace struct {
+	Name          string
+	Project       string // by name; "" is the default project
+	AutoApply     bool
+	ExecutionMode string   // "" keeps the default, remote
+	VCS           *VCSLink // nil: not linked
+	CreatedBy     uuid.UUID
+}
+
+// VCSLink is a workspace's repository branch (or tags), as SetWorkspaceVCS takes it.
+type VCSLink struct {
+	ConnectionID            uuid.UUID
+	Repo, Branch, TagsRegex string
+	TagBaseline             string
+	Trigger, PullRequests   bool
+}
+
+// CreateEmptyWorkspace creates a workspace, its execution mode and its VCS link in one transaction:
+// if any part fails there is no workspace. ErrNameTaken: the name is in use.
+func (s *Store) CreateEmptyWorkspace(ctx context.Context, e EmptyWorkspace) (Workspace, error) {
+	w, _, err := s.createWorkspace(ctx, uuid.Nil, e, nil)
 	return w, err
 }
 
-func (s *Store) createWorkspace(ctx context.Context, id uuid.UUID, name, project string, t *WorkspaceTemplate, autoApply bool, createdBy uuid.UUID) (Workspace, Run, error) {
+func (s *Store) createWorkspace(ctx context.Context, id uuid.UUID, e EmptyWorkspace, t *WorkspaceTemplate) (Workspace, Run, error) {
 	var run Run
 	err := s.tx(ctx, func(q *db.Queries) error {
 		var err error
-		id, err = q.InsertWorkspace(ctx, db.InsertWorkspaceParams{ID: optID(id), Name: name, AutoApply: autoApply,
-			CreatedBy: optID(createdBy), Project: project})
+		id, err = q.InsertWorkspace(ctx, db.InsertWorkspaceParams{ID: optID(id), Name: e.Name, AutoApply: e.AutoApply,
+			CreatedBy: optID(e.CreatedBy), Project: e.Project})
 		if isUnique(err) {
 			return ErrNameTaken
 		}
-		if err != nil || t == nil {
+		if err != nil {
 			return err
+		}
+		if e.ExecutionMode != "" {
+			if err := q.SetExecutionMode(ctx, db.SetExecutionModeParams{ID: id, Mode: e.ExecutionMode}); err != nil {
+				return err
+			}
+		}
+		if l := e.VCS; l != nil {
+			if err := q.UpsertWorkspaceVCS(ctx, db.UpsertWorkspaceVCSParams{WorkspaceID: id, ConnectionID: l.ConnectionID, Repo: l.Repo,
+				Branch: l.Branch, Trigger: l.Trigger, PullRequests: l.PullRequests, TagsRegex: l.TagsRegex, TagBaseline: l.TagBaseline}); err != nil {
+				return err
+			}
+		}
+		if t == nil {
+			return nil
 		}
 		raw, err := json.Marshal(t.Inputs)
 		if err != nil {
@@ -123,7 +156,7 @@ func (s *Store) createWorkspace(ctx context.Context, id uuid.UUID, name, project
 			ModuleSource: t.ModuleSource, ModuleRef: t.ModuleRef, Inputs: raw}); err != nil {
 			return err
 		}
-		run, err = createRun(ctx, q, id, "apply", createdBy)
+		run, err = createRun(ctx, q, id, "apply", e.CreatedBy)
 		return err
 	})
 	if err != nil {

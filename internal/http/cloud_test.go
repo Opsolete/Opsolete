@@ -130,7 +130,7 @@ func TestCloudLoginAndState(t *testing.T) {
 	}
 
 	// Another (non-admin) user's workspace is invisible.
-	other, err := store.CreateEmptyWorkspace(t.Context(), "cli-other-"+newID()[:8], "", false, uuid.Nil)
+	other, err := store.CreateEmptyWorkspace(t.Context(), storage.EmptyWorkspace{Name: "cli-other-" + newID()[:8]})
 	if err != nil {
 		t.Fatal(err)
 	}

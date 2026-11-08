@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
 	"github.com/opsolete/opsolete/internal/vcs"
@@ -18,7 +19,7 @@ import (
 
 // A rollout upgrades stale remote uses with their inputs plus new defaults, and skips the rest.
 func TestRolloutPlan(t *testing.T) {
-	s := &Server{SecretKey: vcs.Key("test-secret-key")}
+	s := &Server{App: &app.App{SecretKey: vcs.Key("test-secret-key")}}
 	tpl := templates.Template{ID: "sa", Module: templates.Module{Source: "git::x", Ref: "v3"}, Inputs: []templates.Input{
 		{Name: "name", Type: "string", Required: true},
 		{Name: "tls", Type: "select", Required: true, Options: []templates.Option{{Value: "1.2"}, {Value: "1.3"}}, Default: "1.3"}, // new in v3
@@ -56,13 +57,13 @@ func TestRolloutPlan(t *testing.T) {
 	if u.ModuleRef != "v3" || u.Module != "sa_c8ad" || u.From.ModuleRef != "v2" {
 		t.Errorf("upgrade: %+v", u)
 	}
-	if u.Inputs["name"] != "a" || u.Inputs["tls"] != "1.3" || u.Inputs["gone"] != nil || !isSealed(u.Inputs["key"]) {
+	if u.Inputs["name"] != "a" || u.Inputs["tls"] != "1.3" || u.Inputs["gone"] != nil || !app.IsSealed(u.Inputs["key"]) {
 		t.Errorf("inputs: %v", u.Inputs)
 	}
 }
 
 func TestRenderRollout(t *testing.T) {
-	s := New(nil, nil, nil, nil, nil, Features{}, nil)
+	s := New(&app.App{}, nil, Features{})
 	w := httptest.NewRecorder()
 	r1 := uuid.New()
 	ro := &storage.Rollout{ModuleRef: "v3", ProjectName: "team-a", BatchSize: 2, Status: "paused", Message: "the run in a: errored"}
@@ -89,7 +90,7 @@ func TestTickRollout(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 	s := newApp(t, "../../catalog", store, nil, Features{Deployments: true})
-	tpl, _ := s.Templates.Get("greeting")
+	tpl, _ := s.App.Templates.Get("greeting")
 	store.Pool.Exec(context.Background(), `UPDATE template_rollouts SET status = 'stopped' WHERE template_id = 'greeting'`) // from earlier runs
 	sfx := strings.ToLower(rand.Text()[:8])
 	p, err := store.CreateProject(ctx, "ro-"+sfx, "")

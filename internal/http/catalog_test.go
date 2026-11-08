@@ -190,8 +190,8 @@ func TestTemplateCatalogInGit(t *testing.T) {
 	if rec := post(h, "/catalog", set); rec.Code != http.StatusSeeOther {
 		t.Fatalf("set up catalog: %d %s", rec.Code, rec.Body.String())
 	}
-	if _, ok := app.Templates.Get("web-" + id); !ok || len(app.Templates.List()) != 1 {
-		t.Fatalf("templates from git: %v", app.Templates.List())
+	if _, ok := app.App.Templates.Get("web-" + id); !ok || len(app.App.Templates.List()) != 1 {
+		t.Fatalf("templates from git: %v", app.App.Templates.List())
 	}
 	if page := get(h, "/catalog").Body.String(); !strings.Contains(page, `<option value="acme/catalog" selected>`) {
 		t.Fatalf("the configured repo is selected: %s", page)
@@ -233,15 +233,15 @@ func TestTemplateCatalogInGit(t *testing.T) {
 	if !strings.Contains(saved, `"ref": "v2"`) {
 		t.Fatalf("committed file: %s", saved)
 	}
-	if tpl, _ := app.Templates.Get("web-" + id); tpl.Module.Ref != "v2" {
+	if tpl, _ := app.App.Templates.Get("web-" + id); tpl.Module.Ref != "v2" {
 		t.Fatalf("catalog must reload after the commit: %+v", tpl)
 	}
 	// Another instance: starts from the snapshot in Postgres, without the provider.
 	other := newApp(t, t.TempDir(), store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true, Registry: true, VCS: true})
-	if err := vcs.LoadCatalog(ctx, store, other.Templates); err != nil {
+	if err := vcs.LoadCatalog(ctx, store, other.App.Templates); err != nil {
 		t.Fatal(err)
 	}
-	if tpl, _ := other.Templates.Get("web-" + id); tpl.Module.Ref != "v2" {
+	if tpl, _ := other.App.Templates.Get("web-" + id); tpl.Module.Ref != "v2" {
 		t.Fatalf("snapshot: %+v", tpl)
 	}
 
@@ -253,7 +253,7 @@ func TestTemplateCatalogInGit(t *testing.T) {
 	if rec := post(h, "/templates/web-"+id+"/edit", edit); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "review and save again") {
 		t.Fatalf("stale save: %d %s", rec.Code, rec.Body.String())
 	}
-	if tpl, _ := app.Templates.Get("web-" + id); tpl.Name != "Changed in git" {
+	if tpl, _ := app.App.Templates.Get("web-" + id); tpl.Name != "Changed in git" {
 		t.Fatalf("a refused save reloads the catalog: %+v", tpl)
 	}
 	// An earlier failure (say, the provider was down) clears once a sync finds the branch still at the loaded commit.
@@ -272,13 +272,13 @@ func TestTemplateCatalogInGit(t *testing.T) {
 	g.held, g.release = held, release
 	g.mu.Unlock()
 	slow := make(chan error)
-	go func() { slow <- vcs.SyncCatalog(ctx, store, app.SecretKey, app.Templates) }()
+	go func() { slow <- vcs.SyncCatalog(ctx, store, app.App.SecretKey, app.App.Templates) }()
 	older := <-held
 	g.mu.Lock()
 	g.commit("main", map[string]string{"catalog/web.json": tplJSON("web-"+id, "Newer")})
 	newer := g.branches["main"]
 	g.mu.Unlock()
-	if err := vcs.SyncCatalog(ctx, store, other.SecretKey, other.Templates); err != nil {
+	if err := vcs.SyncCatalog(ctx, store, other.App.SecretKey, other.App.Templates); err != nil {
 		t.Fatal(err)
 	}
 	close(release)
@@ -286,8 +286,8 @@ func TestTemplateCatalogInGit(t *testing.T) {
 		t.Fatal(err)
 	}
 	stored, _ := store.GetTemplateCatalog(ctx)
-	tpl, _ := app.Templates.Get("web-" + id)
-	if _, loaded := app.Templates.Source(); stored.Commit != newer || loaded != newer || tpl.Name != "Newer" {
+	tpl, _ := app.App.Templates.Get("web-" + id)
+	if _, loaded := app.App.Templates.Source(); stored.Commit != newer || loaded != newer || tpl.Name != "Newer" {
 		t.Fatalf("stale write: fetched %s, stored %s, loaded %s (%q), want %s", older, stored.Commit, loaded, tpl.Name, newer)
 	}
 	// A commit with an invalid template isn't loaded: the last good one stays, the error is shown.
@@ -300,7 +300,7 @@ func TestTemplateCatalogInGit(t *testing.T) {
 	if page := get(h, "/catalog").Body.String(); !strings.Contains(page, "Last sync failed") || !strings.Contains(page, "bad.json") {
 		t.Fatalf("sync error: %s", page)
 	}
-	if _, ok := app.Templates.Get("web-" + id); !ok {
+	if _, ok := app.App.Templates.Get("web-" + id); !ok {
 		t.Fatal("the last good catalog must stay")
 	}
 	g.mu.Lock()
@@ -314,7 +314,7 @@ func TestTemplateCatalogInGit(t *testing.T) {
 	g.mu.Lock()
 	_, onMain := g.commits[g.branches["main"]]["catalog/web.json"]
 	g.mu.Unlock()
-	if _, ok := app.Templates.Get("web-" + id); ok || onMain {
+	if _, ok := app.App.Templates.Get("web-" + id); ok || onMain {
 		t.Fatalf("deleted template: loaded %v, on main %v", ok, onMain)
 	}
 
@@ -323,7 +323,7 @@ func TestTemplateCatalogInGit(t *testing.T) {
 	if rec := post(h, "/catalog", set); rec.Code != http.StatusSeeOther {
 		t.Fatalf("pr mode: %d %s", rec.Code, rec.Body.String())
 	}
-	n := len(app.Templates.List())
+	n := len(app.App.Templates.List())
 	rec := post(h, "/templates/new", url.Values{"name": {"Queue"}, "module_source": {"git::https://example.com/q.git"}, "module_ref": {"v1"}})
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "https://github.example/acme/catalog/pull/1") {
 		t.Fatalf("pull request: %d %s", rec.Code, rec.Body.String())
@@ -338,8 +338,8 @@ func TestTemplateCatalogInGit(t *testing.T) {
 	}
 	mainHasIt := strings.Contains(fmt.Sprint(g.commits[g.branches["main"]]), `"Queue"`)
 	g.mu.Unlock()
-	if !strings.HasPrefix(head, "opsolete/template-") || !strings.HasPrefix(added, "catalog/") || mainHasIt || len(app.Templates.List()) != n {
-		t.Fatalf("pr branch %q file %q, on main %v, catalog %d -> %d", head, added, mainHasIt, n, len(app.Templates.List()))
+	if !strings.HasPrefix(head, "opsolete/template-") || !strings.HasPrefix(added, "catalog/") || mainHasIt || len(app.App.Templates.List()) != n {
+		t.Fatalf("pr branch %q file %q, on main %v, catalog %d -> %d", head, added, mainHasIt, n, len(app.App.Templates.List()))
 	}
 	// Saving the page again while its pull request is open adds a commit to it instead of opening another.
 	kept := regexp.MustCompile(`name="id" value="([^"]+)"`).FindStringSubmatch(rec.Body.String())
@@ -365,10 +365,10 @@ func TestTemplateCatalogInGit(t *testing.T) {
 	if rec := post(h, "/vcs/"+connID+"/delete", nil); rec.Code != http.StatusConflict {
 		t.Fatalf("delete a connection in use: %d", rec.Code)
 	}
-	if rec := post(h, "/catalog/delete", nil); rec.Code != http.StatusSeeOther || len(app.Templates.List()) != 0 {
-		t.Fatalf("disconnect: %d, %d templates", rec.Code, len(app.Templates.List()))
+	if rec := post(h, "/catalog/delete", nil); rec.Code != http.StatusSeeOther || len(app.App.Templates.List()) != 0 {
+		t.Fatalf("disconnect: %d, %d templates", rec.Code, len(app.App.Templates.List()))
 	}
-	if mode, _ := app.Templates.Source(); mode != "" {
+	if mode, _ := app.App.Templates.Source(); mode != "" {
 		t.Fatalf("mode after disconnect: %q", mode)
 	}
 }

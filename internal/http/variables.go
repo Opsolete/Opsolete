@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/auth"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/vcs"
@@ -79,7 +80,7 @@ func (s *Server) variableFromForm(r *http.Request, o storage.VarOwner) (storage.
 	}
 	v := storage.Variable{Category: cat, Key: key, Sensitive: r.PostFormValue("sensitive") != "", Owner: o}
 	var err error
-	v.Value, err = vcs.Seal(s.SecretKey, val, vcs.VariableAD(v))
+	v.Value, err = vcs.Seal(s.App.SecretKey, val, vcs.VariableAD(v))
 	return v, err
 }
 
@@ -102,12 +103,12 @@ type varView struct {
 }
 
 func (s *Server) varsBlock(ctx context.Context, o storage.VarOwner, base string, canEdit bool) (varsBlock, error) {
-	vars, err := s.Store.Variables(ctx, o)
+	vars, err := s.App.Store.Variables(ctx, o)
 	b := varsBlock{Base: base, CanEdit: canEdit}
 	for _, v := range vars {
 		vv := varView{ID: v.ID.String(), Category: v.Category, Key: v.Key, Sensitive: v.Sensitive}
 		if !v.Sensitive {
-			if vv.Value, err = vcs.Open(s.SecretKey, v.Value, vcs.VariableAD(v)); err != nil {
+			if vv.Value, err = vcs.Open(s.App.SecretKey, v.Value, vcs.VariableAD(v)); err != nil {
 				vv.Value, err = "(can't decrypt: SECRET_KEY changed? Set it again)", nil
 			}
 		}
@@ -116,33 +117,8 @@ func (s *Server) varsBlock(ctx context.Context, o storage.VarOwner, base string,
 	return b, err
 }
 
-// runVariables opens the variables of a workspace's run: environment variables for Terraform's
-// environment, and Terraform variables.
-func (s *Server) runVariables(ctx context.Context, workspaceID uuid.UUID) (env map[string]string, vars map[string]any, secrets []string, err error) {
-	list, err := s.Store.RunVariables(ctx, workspaceID)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("load variables: %w", err)
-	}
-	env, vars = map[string]string{}, map[string]any{}
-	for _, v := range list {
-		val, err := vcs.Open(s.SecretKey, v.Value, vcs.VariableAD(v))
-		if err != nil {
-			return nil, nil, nil, fmt.Errorf("can't decrypt variable %s: SECRET_KEY missing or changed? Set the variable again", v.Key)
-		}
-		if v.Sensitive {
-			secrets = append(secrets, val)
-		}
-		if v.Category == "env" {
-			env[v.Key] = val
-		} else {
-			vars[v.Key] = val
-		}
-	}
-	return env, vars, secrets, nil
-}
-
 func (s *Server) setWorkspaceVariable(w http.ResponseWriter, r *http.Request) {
-	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
+	ws, _, ok := s.loadWorkspace(w, r, app.LevelOperate)
 	if !ok {
 		return
 	}
@@ -151,30 +127,30 @@ func (s *Server) setWorkspaceVariable(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.Store.SetVariable(r.Context(), storage.VarOwner{WorkspaceID: ws.ID}, v); err != nil {
+	if err := s.App.Store.SetVariable(r.Context(), storage.VarOwner{WorkspaceID: ws.ID}, v); err != nil {
 		s.internalError(w, "set variable", err)
 		return
 	}
-	s.Log.Info("variable set", "workspace", ws.Name, "category", v.Category, "key", v.Key, "user", auth.FromContext(r.Context()).Email)
+	s.App.Log.Info("variable set", "workspace", ws.Name, "category", v.Category, "key", v.Key, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/variables", http.StatusSeeOther)
 }
 
 func (s *Server) deleteWorkspaceVariable(w http.ResponseWriter, r *http.Request) {
-	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
+	ws, _, ok := s.loadWorkspace(w, r, app.LevelOperate)
 	if !ok {
 		return
 	}
 	id, _ := pathID(r, "id") // not an id: deletes nothing, as for an unknown one
-	if err := s.Store.DeleteVariable(r.Context(), storage.VarOwner{WorkspaceID: ws.ID}, id); err != nil {
+	if err := s.App.Store.DeleteVariable(r.Context(), storage.VarOwner{WorkspaceID: ws.ID}, id); err != nil {
 		s.internalError(w, "delete variable", err)
 		return
 	}
-	s.Log.Info("variable deleted", "workspace", ws.Name, "id", id, "user", auth.FromContext(r.Context()).Email)
+	s.App.Log.Info("variable deleted", "workspace", ws.Name, "id", id, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/variables", http.StatusSeeOther)
 }
 
 func (s *Server) variableSets(w http.ResponseWriter, r *http.Request) {
-	sets, err := s.Store.VariableSets(r.Context())
+	sets, err := s.App.Store.VariableSets(r.Context())
 	if err != nil {
 		s.internalError(w, "list variable sets", err)
 		return
@@ -184,7 +160,7 @@ func (s *Server) variableSets(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createVariableSet(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.PostFormValue("name"))
-	if !workspaceNameRe.MatchString(name) {
+	if !app.ValidName(name) && name != "new" { // the name rule, "new" allowed
 		http.Error(w, "a variable set name is 2–63 lowercase letters, digits and dashes", http.StatusBadRequest)
 		return
 	}
@@ -194,11 +170,11 @@ func (s *Server) createVariableSet(w http.ResponseWriter, r *http.Request) {
 	exists, err := true, error(nil)
 	switch {
 	case project != "":
-		exists, err = s.Store.ProjectsExist(ctx, []string{project})
-		attach = func(id uuid.UUID) error { return s.Store.AttachVariableSetProject(ctx, id, project, true) }
+		exists, err = s.App.Store.ProjectsExist(ctx, []string{project})
+		attach = func(id uuid.UUID) error { return s.App.Store.AttachVariableSetProject(ctx, id, project, true) }
 	case ws != "":
-		exists, err = s.Store.WorkspacesExist(ctx, []string{ws})
-		attach = func(id uuid.UUID) error { return s.Store.AttachVariableSet(ctx, id, ws, true) }
+		exists, err = s.App.Store.WorkspacesExist(ctx, []string{ws})
+		attach = func(id uuid.UUID) error { return s.App.Store.AttachVariableSet(ctx, id, ws, true) }
 	}
 	if err != nil {
 		s.internalError(w, "check attach target", err)
@@ -208,7 +184,7 @@ func (s *Server) createVariableSet(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no such project or workspace", http.StatusBadRequest)
 		return
 	}
-	err = s.Store.CreateVariableSet(ctx, name, strings.TrimSpace(r.PostFormValue("description")), r.PostFormValue("global") != "")
+	err = s.App.Store.CreateVariableSet(ctx, name, strings.TrimSpace(r.PostFormValue("description")), r.PostFormValue("global") != "")
 	if errors.Is(err, storage.ErrExists) {
 		http.Error(w, "a variable set with this name already exists", http.StatusConflict)
 		return
@@ -217,7 +193,7 @@ func (s *Server) createVariableSet(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "create variable set", err)
 		return
 	}
-	set, err := s.Store.GetVariableSet(ctx, name)
+	set, err := s.App.Store.GetVariableSet(ctx, name)
 	if err == nil {
 		err = attach(set.ID)
 	}
@@ -225,12 +201,12 @@ func (s *Server) createVariableSet(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "attach variable set", err)
 		return
 	}
-	s.Log.Info("variable set created", "set", name, "project", project, "workspace", ws, "user", auth.FromContext(ctx).Email)
+	s.App.Log.Info("variable set created", "set", name, "project", project, "workspace", ws, "user", auth.FromContext(ctx).Email)
 	http.Redirect(w, r, "/variable-sets/"+name, http.StatusSeeOther)
 }
 
 func (s *Server) loadSet(w http.ResponseWriter, r *http.Request) (storage.VariableSet, bool) {
-	set, err := s.Store.GetVariableSet(r.Context(), r.PathValue("set"))
+	set, err := s.App.Store.GetVariableSet(r.Context(), r.PathValue("set"))
 	if errors.Is(err, storage.ErrNotFound) {
 		http.NotFound(w, r)
 		return set, false
@@ -253,13 +229,13 @@ func (s *Server) variableSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// shortcut: offers the 200 most recently active workspaces; add search if there are more.
-	all, err := s.Store.ListWorkspaces(r.Context(), storage.Viewer{Admin: true}, "") // admin-only page
+	all, err := s.App.Store.ListWorkspaces(r.Context(), storage.Viewer{Admin: true}, "") // admin-only page
 	if err != nil {
 		s.internalError(w, "list workspaces", err)
 		return
 	}
 	p := workspacePicker("workspace", "Workspaces to apply the set to", set.Workspaces, all)
-	projects, err := s.Store.Projects(r.Context(), storage.Viewer{Admin: true})
+	projects, err := s.App.Store.Projects(r.Context(), storage.Viewer{Admin: true})
 	if err != nil {
 		s.internalError(w, "list projects", err)
 		return
@@ -277,11 +253,11 @@ func (s *Server) updateVariableSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	global := r.PostFormValue("global") != ""
-	if err := s.Store.UpdateVariableSet(r.Context(), set.ID, strings.TrimSpace(r.PostFormValue("description")), global); err != nil {
+	if err := s.App.Store.UpdateVariableSet(r.Context(), set.ID, strings.TrimSpace(r.PostFormValue("description")), global); err != nil {
 		s.internalError(w, "update variable set", err)
 		return
 	}
-	s.Log.Info("variable set updated", "set", set.Name, "global", global, "user", auth.FromContext(r.Context()).Email)
+	s.App.Log.Info("variable set updated", "set", set.Name, "global", global, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/variable-sets/"+set.Name, http.StatusSeeOther)
 }
 
@@ -290,11 +266,11 @@ func (s *Server) deleteVariableSet(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := s.Store.DeleteVariableSet(r.Context(), set.ID); err != nil {
+	if err := s.App.Store.DeleteVariableSet(r.Context(), set.ID); err != nil {
 		s.internalError(w, "delete variable set", err)
 		return
 	}
-	s.Log.Info("variable set deleted", "set", set.Name, "user", auth.FromContext(r.Context()).Email)
+	s.App.Log.Info("variable set deleted", "set", set.Name, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/variable-sets", http.StatusSeeOther)
 }
 
@@ -308,11 +284,11 @@ func (s *Server) setSetVariable(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.Store.SetVariable(r.Context(), storage.VarOwner{SetID: set.ID}, v); err != nil {
+	if err := s.App.Store.SetVariable(r.Context(), storage.VarOwner{SetID: set.ID}, v); err != nil {
 		s.internalError(w, "set variable", err)
 		return
 	}
-	s.Log.Info("variable set", "set", set.Name, "category", v.Category, "key", v.Key, "user", auth.FromContext(r.Context()).Email)
+	s.App.Log.Info("variable set", "set", set.Name, "category", v.Category, "key", v.Key, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/variable-sets/"+set.Name, http.StatusSeeOther)
 }
 
@@ -322,11 +298,11 @@ func (s *Server) deleteSetVariable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id, _ := pathID(r, "id") // not an id: deletes nothing, as for an unknown one
-	if err := s.Store.DeleteVariable(r.Context(), storage.VarOwner{SetID: set.ID}, id); err != nil {
+	if err := s.App.Store.DeleteVariable(r.Context(), storage.VarOwner{SetID: set.ID}, id); err != nil {
 		s.internalError(w, "delete variable", err)
 		return
 	}
-	s.Log.Info("variable deleted", "set", set.Name, "id", id, "user", auth.FromContext(r.Context()).Email)
+	s.App.Log.Info("variable deleted", "set", set.Name, "id", id, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/variable-sets/"+set.Name, http.StatusSeeOther)
 }
 
@@ -338,7 +314,7 @@ func (s *Server) attachVariableSet(w http.ResponseWriter, r *http.Request) {
 	}
 	r.ParseForm()
 	want := r.PostForm["workspace"]
-	err := s.Store.Select(r.Context(), set.ID, storage.Pick{Selection: storage.SetWorkspaces, Names: want})
+	err := s.App.Store.Select(r.Context(), set.ID, storage.Pick{Selection: storage.SetWorkspaces, Names: want})
 	if errors.Is(err, storage.ErrNotFound) {
 		http.Error(w, "choose existing workspaces", http.StatusBadRequest)
 		return
@@ -347,7 +323,7 @@ func (s *Server) attachVariableSet(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "attach variable set", err)
 		return
 	}
-	s.Log.Info("variable set workspaces", "set", set.Name, "workspaces", want, "user", auth.FromContext(r.Context()).Email)
+	s.App.Log.Info("variable set workspaces", "set", set.Name, "workspaces", want, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/variable-sets/"+set.Name, http.StatusSeeOther)
 }
 
@@ -358,7 +334,7 @@ func (s *Server) attachVariableSetProjects(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	want := r.PostForm["project"]
-	err := s.Store.Select(r.Context(), set.ID, storage.Pick{Selection: storage.SetProjects, Names: want})
+	err := s.App.Store.Select(r.Context(), set.ID, storage.Pick{Selection: storage.SetProjects, Names: want})
 	if errors.Is(err, storage.ErrNotFound) {
 		http.Error(w, "choose existing projects", http.StatusBadRequest)
 		return
@@ -367,6 +343,6 @@ func (s *Server) attachVariableSetProjects(w http.ResponseWriter, r *http.Reques
 		s.internalError(w, "attach variable set", err)
 		return
 	}
-	s.Log.Info("variable set projects", "set", set.Name, "projects", want, "user", auth.FromContext(r.Context()).Email)
+	s.App.Log.Info("variable set projects", "set", set.Name, "projects", want, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/variable-sets/"+set.Name, http.StatusSeeOther)
 }

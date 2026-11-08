@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"gocloud.dev/blob/memblob"
 
+	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/auth"
 	"github.com/opsolete/opsolete/internal/auth/authtest"
 	"github.com/opsolete/opsolete/internal/registry"
@@ -54,8 +55,8 @@ func newApp(t *testing.T, dir string, store *storage.Store, a *auth.Auth, f Feat
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := New(store, tpls, testReg, a, memblob.OpenBucket(nil), f, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	srv.SecretKey = vcs.Key("test-secret-key")
+	srv := New(&app.App{Store: store, Blobs: memblob.OpenBucket(nil), SecretKey: vcs.Key("test-secret-key"), Templates: tpls, Registry: testReg,
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil))}, a, f)
 	srv.RunnerToken = testRunnerToken
 	return srv
 }
@@ -493,8 +494,8 @@ func TestWorkspaceFlow(t *testing.T) {
 	claimWait = 100 * time.Millisecond
 	// Leftover runs from earlier tests would be claimed first.
 	store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE run_active(status)`)
-	app := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true, Registry: true})
-	h := app.Handler()
+	srv := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true, Registry: true})
+	h := srv.Handler()
 	other := newServerAs(t, "../../catalog", false, store, devAuth(t, store, "other@example.com", false))
 
 	// Create the workspace from a template.
@@ -630,13 +631,13 @@ func TestWorkspaceFlow(t *testing.T) {
 	// bucket read access alone must not reveal what the runner uploaded
 	assertSealed := func(key, secret string) {
 		t.Helper()
-		raw, err := app.StateStore.ReadAll(ctx, key)
-		if err != nil || !bytes.HasPrefix(raw, []byte(sealedPrefix)) || bytes.Contains(raw, []byte(secret)) {
+		raw, err := srv.App.Blobs.ReadAll(ctx, key)
+		if err != nil || !bytes.HasPrefix(raw, []byte(app.SealedPrefix)) || bytes.Contains(raw, []byte(secret)) {
 			t.Fatalf("%s not sealed: %q %v", key, raw, err)
 		}
 	}
-	assertSealed(artifactKey(uuid.MustParse(runID), runnerapi.ArtifactPlan), "PLANBYTES")
-	assertSealed(artifactKey(uuid.MustParse(runID), runnerapi.ArtifactLockfile), "LOCKBYTES")
+	assertSealed(app.ArtifactKey(uuid.MustParse(runID), runnerapi.ArtifactPlan), "PLANBYTES")
+	assertSealed(app.ArtifactKey(uuid.MustParse(runID), runnerapi.ArtifactLockfile), "LOCKBYTES")
 	for _, chunk := range []string{"line one\n", "line \x1b[1mtwo\x1b[0m\n\nend\n"} {
 		if rec := call("POST", runnerTok, "/jobs/"+runID+"/logs", job.LeaseID, chunk); rec.Code != http.StatusNoContent {
 			t.Fatalf("logs: %d %s", rec.Code, rec.Body.String())
@@ -718,7 +719,7 @@ func TestWorkspaceFlow(t *testing.T) {
 	finish(`{"status":"succeeded","outputs":{"id":"abc"},
 		"resources":[{"address":"azurerm_storage_account.this","type":"azurerm_storage_account","name":"this","provider":"registry.terraform.io/hashicorp/azurerm"}]}`)
 	for _, name := range []string{runnerapi.ArtifactPlan, runnerapi.ArtifactLockfile} {
-		if ok, _ := app.StateStore.Exists(ctx, artifactKey(uuid.MustParse(runID), name)); ok {
+		if ok, _ := srv.App.Blobs.Exists(ctx, app.ArtifactKey(uuid.MustParse(runID), name)); ok {
 			t.Fatalf("%s must be deleted once applied", name)
 		}
 	}
@@ -730,7 +731,7 @@ func TestWorkspaceFlow(t *testing.T) {
 		t.Fatalf("the apply must index the current state version: %+v", vs)
 	}
 	// v1 was this run's intermediate snapshot: superseded by v2, so gone with its file
-	if ok, _ := app.StateStore.Exists(ctx, v1s[0].BlobKey); len(vs) != 1 || ok {
+	if ok, _ := srv.App.Blobs.Exists(ctx, v1s[0].BlobKey); len(vs) != 1 || ok {
 		t.Fatalf("intermediate state versions must be dropped when the run ends: %+v, file kept %v", vs, ok)
 	}
 	assertSealed(vs[0].BlobKey, "s3cret") // indexing read it back, so sealed state still works
@@ -881,7 +882,7 @@ func TestWorkspaceFlow(t *testing.T) {
 	if rec := post(h, runURL+"/discard", nil); rec.Code != http.StatusSeeOther {
 		t.Fatalf("discard: %d", rec.Code)
 	}
-	if ok, _ := app.StateStore.Exists(ctx, artifactKey(uuid.MustParse(runID), runnerapi.ArtifactPlan)); ok {
+	if ok, _ := srv.App.Blobs.Exists(ctx, app.ArtifactKey(uuid.MustParse(runID), runnerapi.ArtifactPlan)); ok {
 		t.Fatal("a discarded plan must be deleted")
 	}
 	destroyRun()
@@ -944,7 +945,7 @@ func TestWorkspaceFlow(t *testing.T) {
 	if page := get(h, "/workspaces/"+name+"/states").Body.String(); !strings.Contains(page, "rollback to v2") {
 		t.Fatalf("version list must show the rollback: %s", page)
 	}
-	if b, _ := app.readBlob(ctx, vs[0].BlobKey); !strings.Contains(string(b), `"serial": 4`) || !strings.Contains(string(b), "azurerm_storage_account") {
+	if b, _ := srv.App.ReadBlob(ctx, vs[0].BlobKey); !strings.Contains(string(b), `"serial": 4`) || !strings.Contains(string(b), "azurerm_storage_account") {
 		t.Fatalf("rolled back state: %s", b)
 	}
 	if lock, _ := store.StateLockID(ctx, ws.ID); lock != "" {
@@ -1145,21 +1146,21 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 // TestBlobEncryption: state store files are sealed with SECRET_KEY; plaintext ones from before still read.
 func TestBlobEncryption(t *testing.T) {
 	ctx := context.Background()
-	s := &Server{StateStore: memblob.OpenBucket(nil), SecretKey: vcs.Key("test-secret-key")}
-	if err := s.writeBlob(ctx, "a", []byte(`{"password":"hunter2"}`)); err != nil {
+	s := &Server{App: &app.App{Blobs: memblob.OpenBucket(nil), SecretKey: vcs.Key("test-secret-key")}}
+	if err := s.App.WriteBlob(ctx, "a", []byte(`{"password":"hunter2"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if raw, _ := s.StateStore.ReadAll(ctx, "a"); bytes.Contains(raw, []byte("hunter2")) {
+	if raw, _ := s.App.Blobs.ReadAll(ctx, "a"); bytes.Contains(raw, []byte("hunter2")) {
 		t.Fatalf("stored in plaintext: %s", raw)
 	}
-	if b, err := s.readBlob(ctx, "a"); err != nil || string(b) != `{"password":"hunter2"}` {
+	if b, err := s.App.ReadBlob(ctx, "a"); err != nil || string(b) != `{"password":"hunter2"}` {
 		t.Fatalf("read back: %s %v", b, err)
 	}
-	s.StateStore.WriteAll(ctx, "legacy", []byte(`{"serial":1}`), nil)
-	if b, err := s.readBlob(ctx, "legacy"); err != nil || string(b) != `{"serial":1}` {
+	s.App.Blobs.WriteAll(ctx, "legacy", []byte(`{"serial":1}`), nil)
+	if b, err := s.App.ReadBlob(ctx, "legacy"); err != nil || string(b) != `{"serial":1}` {
 		t.Fatalf("legacy plaintext: %s %v", b, err)
 	}
-	if _, err := (&Server{StateStore: s.StateStore, SecretKey: vcs.Key("other")}).readBlob(ctx, "a"); err == nil {
+	if _, err := (&app.App{Blobs: s.App.Blobs, SecretKey: vcs.Key("other")}).ReadBlob(ctx, "a"); err == nil {
 		t.Fatal("a wrong key must fail")
 	}
 }
@@ -1172,11 +1173,11 @@ func TestRemoteStateSharing(t *testing.T) {
 	app := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true})
 	h := app.Handler()
 	suffix := strings.ToLower(newID()[:8])
-	src, err := store.CreateEmptyWorkspace(ctx, "rs-src-"+suffix, "", false, uuid.Nil)
+	src, err := store.CreateEmptyWorkspace(ctx, storage.EmptyWorkspace{Name: "rs-src-" + suffix})
 	if err != nil {
 		t.Fatal(err)
 	}
-	cons, err := store.CreateEmptyWorkspace(ctx, "rs-cons-"+suffix, "", false, uuid.Nil)
+	cons, err := store.CreateEmptyWorkspace(ctx, storage.EmptyWorkspace{Name: "rs-cons-" + suffix})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1202,7 +1203,7 @@ func TestRemoteStateSharing(t *testing.T) {
 			t.Fatalf("share %s: %d %s", mode, rec.Code, rec.Body.String())
 		}
 	}
-	token := app.stateToken(cons.ID, run.ID)
+	token := app.App.StateToken(cons.ID, run.ID)
 	if c := state("GET", token); c != http.StatusForbidden {
 		t.Fatalf("not shared by default: %d", c)
 	}
@@ -1251,7 +1252,7 @@ func TestWorkspaceLock(t *testing.T) {
 	store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE run_active(status)`)
 	alice := newServerAs(t, "../../catalog", false, store, devAuth(t, store, "alice@example.com", true))
 	bob := newServerAs(t, "../../catalog", false, store, devAuth(t, store, "bob@example.com", true))
-	ws, err := store.CreateEmptyWorkspace(ctx, "lk-"+strings.ToLower(newID()[:8]), "", false, uuid.Nil)
+	ws, err := store.CreateEmptyWorkspace(ctx, storage.EmptyWorkspace{Name: "lk-" + strings.ToLower(newID()[:8])})
 	if err != nil {
 		t.Fatal(err)
 	}

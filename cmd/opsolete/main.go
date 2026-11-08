@@ -26,6 +26,7 @@ import (
 	_ "gocloud.dev/blob/gcsblob"   // gs://
 	_ "gocloud.dev/blob/s3blob"    // s3:// (AWS and S3-compatible stores)
 
+	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/auth"
 	"github.com/opsolete/opsolete/internal/config"
 	httpserver "github.com/opsolete/opsolete/internal/http"
@@ -217,23 +218,23 @@ func serve(log *slog.Logger) error {
 	}
 
 	vcsOn := cfg.Registry || cfg.Deployments // modules for the registry, workspaces and the catalog for deployments
-	app := httpserver.New(store, tpls, reg, authn, state, httpserver.Features{
-		Deployments: cfg.Deployments, Registry: cfg.Registry, Editor: cfg.TemplateEditor, VCS: vcsOn}, log)
-	app.Organization = cfg.Organization
-	app.RunnerToken = cfg.RunnerToken
-	app.SecretKey = vcs.Key(cfg.SecretKey)
+	ops := &app.App{Store: store, Blobs: state, SecretKey: vcs.Key(cfg.SecretKey), Templates: tpls, Registry: reg, Log: log}
+	server := httpserver.New(ops, authn, httpserver.Features{
+		Deployments: cfg.Deployments, Registry: cfg.Registry, Editor: cfg.TemplateEditor, VCS: vcsOn})
+	server.Organization = cfg.Organization
+	server.RunnerToken = cfg.RunnerToken
 	// values sealed before they were bound to their row only open after this
-	if n, err := vcs.Reseal(ctx, store, app.SecretKey); err != nil {
+	if n, err := vcs.Reseal(ctx, store, ops.SecretKey); err != nil {
 		return fmt.Errorf("re-seal variables and VCS tokens: %w", err)
 	} else if n > 0 {
 		log.Info("re-sealed variables and VCS tokens", "count", n)
 	}
 	if vcsOn {
 		if cfg.Registry {
-			go vcs.Poll(ctx, store, app.SecretKey, 5*time.Minute, log)
+			go vcs.Poll(ctx, store, ops.SecretKey, 5*time.Minute, log)
 		}
 		if cfg.Deployments {
-			go vcs.PollRuns(ctx, store, app.SecretKey, time.Minute, log)
+			go vcs.PollRuns(ctx, store, ops.SecretKey, time.Minute, log)
 			// A catalog in Git (Settings → Templates) replaces TEMPLATES_DIR: its last loaded commit now, then the branch head.
 			if err := vcs.LoadCatalog(ctx, store, tpls); err != nil {
 				return err
@@ -241,15 +242,15 @@ func serve(log *slog.Logger) error {
 			if mode, commit := tpls.Source(); mode != "" {
 				log.Info("templates loaded from git", "count", len(tpls.List()), "commit", commit, "editor", mode)
 			}
-			go vcs.PollCatalog(ctx, store, app.SecretKey, tpls, time.Minute, log)
+			go vcs.PollCatalog(ctx, store, ops.SecretKey, tpls, time.Minute, log)
 		}
 	}
-	if err := app.CheckTemplates(); err != nil {
+	if err := server.CheckTemplates(); err != nil {
 		return err
 	}
 	log.Info("components", "deployments", cfg.Deployments, "registry", cfg.Registry, "vcs", vcsOn)
 	if cfg.Deployments {
-		go reapLostRunners(ctx, store, app, cfg.StaleLockTimeout, log)
+		go reapLostRunners(ctx, store, server, cfg.StaleLockTimeout, log)
 	}
 
 	if cfg.MetricsAddr != "" { // its own listener, so /metrics isn't reachable through the public ingress
@@ -257,12 +258,12 @@ func serve(log *slog.Logger) error {
 		if err != nil {
 			return fmt.Errorf("METRICS_ADDR: %w", err)
 		}
-		msrv := &http.Server{Handler: app.MetricsHandler(), ReadHeaderTimeout: 10 * time.Second}
+		msrv := &http.Server{Handler: server.MetricsHandler(), ReadHeaderTimeout: 10 * time.Second}
 		go msrv.Serve(ln)
 		defer msrv.Close()
 		log.Info("metrics listening", "addr", cfg.MetricsAddr)
 	}
-	srv := &http.Server{Addr: cfg.Addr, Handler: app.Handler(),
+	srv := &http.Server{Addr: cfg.Addr, Handler: server.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		// Shutdown doesn't cancel requests; this ends log streams and runner long-polls on SIGTERM.
 		BaseContext: func(net.Listener) context.Context { return ctx }}
@@ -282,12 +283,9 @@ func serve(log *slog.Logger) error {
 	return nil
 }
 
-// driftInterval is how often workspaces with drift detection are assessed.
-const driftInterval = 24 * time.Hour
-
 // reapLostRunners fails running jobs whose runner stopped heartbeating (crash, node loss), and
 // releases orphaned state locks, queues the next batches of template rollouts and the drift checks that are due.
-func reapLostRunners(ctx context.Context, store *storage.Store, app *httpserver.Server, staleLock time.Duration, log *slog.Logger) {
+func reapLostRunners(ctx context.Context, store *storage.Store, server *httpserver.Server, staleLock time.Duration, log *slog.Logger) {
 	t := time.NewTicker(15 * time.Second)
 	defer t.Stop()
 	for {
@@ -295,14 +293,7 @@ func reapLostRunners(ctx context.Context, store *storage.Store, app *httpserver.
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			ids, err := store.ReapExpiredLeases(ctx)
-			if err != nil {
-				log.Error("reap expired leases", "err", err)
-			}
-			for _, id := range ids {
-				log.Warn("runner lost, deployment failed", "id", id)
-				app.DeleteArtifacts(ctx, id) // its saved plan will never be applied
-			}
+			server.App.ReapLeases(ctx)
 			released, err := store.ReleaseOrphanedLocks(ctx, staleLock)
 			if err != nil {
 				log.Error("release orphaned state locks", "err", err)
@@ -310,12 +301,8 @@ func reapLostRunners(ctx context.Context, store *storage.Store, app *httpserver.
 			for ws, info := range released {
 				log.Warn("orphaned state lock released", "workspace", ws, "lock", info)
 			}
-			app.TickRollouts(ctx)
-			if n, err := store.QueueAssessments(ctx, driftInterval); err != nil {
-				log.Error("queue drift checks", "err", err)
-			} else if n > 0 {
-				log.Info("drift checks queued", "count", n)
-			}
+			server.TickRollouts(ctx)
+			server.App.QueueDriftChecks(ctx)
 		}
 	}
 }

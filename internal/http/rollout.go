@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/auth"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
@@ -67,7 +68,7 @@ func (s *Server) rolloutPlan(t templates.Template, uses []storage.TemplateUse) (
 		}
 		raw, _ := formDefaults(t, u.Inputs)
 		vals, errs := t.Validate(raw)
-		if err := s.sealInputs(t, raw, vals, u.Inputs, errs, u.WorkspaceID, u.Module); err != nil {
+		if err := s.App.SealInputs(t, raw, vals, u.Inputs, errs, u.WorkspaceID, u.Module); err != nil {
 			return nil, nil, err
 		}
 		for _, in := range t.Inputs { // in the form's order
@@ -91,14 +92,14 @@ func (s *Server) rolloutPlan(t templates.Template, uses []storage.TemplateUse) (
 
 // TickRollouts works on the active rollouts that are due; app instances take turns.
 func (s *Server) TickRollouts(ctx context.Context) {
-	ros, err := s.Store.DueRollouts(ctx, rolloutEvery)
+	ros, err := s.App.Store.DueRollouts(ctx, rolloutEvery)
 	if err != nil {
-		s.Log.Error("due template rollouts", "err", err)
+		s.App.Log.Error("due template rollouts", "err", err)
 		return
 	}
 	for _, ro := range ros {
 		if err := s.tickRollout(ctx, ro); err != nil {
-			s.Log.Error("template rollout", "template", ro.TemplateID, "err", err)
+			s.App.Log.Error("template rollout", "template", ro.TemplateID, "err", err)
 		}
 	}
 }
@@ -107,25 +108,25 @@ func (s *Server) TickRollouts(ctx context.Context) {
 // inputs were checked against this one), pauses it when one of its runs failed or was discarded,
 // and ends it when no workspace is left to upgrade and its runs are done.
 func (s *Server) tickRollout(ctx context.Context, ro storage.Rollout) error {
-	t, ok, err := s.template(ctx, ro.TemplateID)
-	if err != nil {
+	t, err := s.App.Template(ctx, ro.TemplateID)
+	if err != nil && !errors.Is(err, app.ErrNotFound) {
 		return err
 	}
-	status := func(st, msg string) error { _, err := s.Store.SetRolloutStatus(ctx, ro.ID, st, msg); return err }
+	status := func(st, msg string) error { _, err := s.App.Store.SetRolloutStatus(ctx, ro.ID, st, msg); return err }
 	switch {
-	case !ok:
+	case err != nil:
 		return status("stopped", "the template was deleted")
 	case t.Module.Source != ro.ModuleSource || t.Module.Ref != ro.ModuleRef:
 		return status("stopped", "the template moved to "+t.Module.Ref+": start a new rollout")
 	}
-	open, failed, err := s.Store.RolloutRuns(ctx, ro.ID, ro.ResumedAt)
+	open, failed, err := s.App.Store.RolloutRuns(ctx, ro.ID, ro.ResumedAt)
 	if err != nil {
 		return err
 	}
 	if failed != "" {
 		return status("paused", failed+": check it, then resume (a workspace whose plan ended before its apply is back on its previous version and is retried)")
 	}
-	uses, err := s.Store.TemplateUses(ctx, t.ID, ro.ProjectID)
+	uses, err := s.App.Store.TemplateUses(ctx, t.ID, ro.ProjectID)
 	if err != nil {
 		return err
 	}
@@ -162,38 +163,35 @@ func (s *Server) tickRollout(ctx context.Context, ro storage.Rollout) error {
 			break
 		}
 		delete(ups, r.WorkspaceID) // all of its uses go in one run
-		run, err := s.Store.UpgradeTemplates(ctx, r.WorkspaceID, list, ro.CreatedBy, ro.ID)
+		run, err := s.App.Store.UpgradeTemplates(ctx, r.WorkspaceID, list, ro.CreatedBy, ro.ID)
 		switch {
 		case errors.Is(err, storage.ErrRolloutClosed):
 			return nil
 		case errors.Is(err, storage.ErrRunActive), errors.Is(err, storage.ErrLocalExecution), errors.Is(err, storage.ErrNotFound):
 			continue // changed meanwhile: the next turn sees it as it is now
 		case err != nil: // the others may still go through
-			s.Log.Error("template rollout", "workspace", r.Workspace, "err", err)
+			s.App.Log.Error("template rollout", "workspace", r.Workspace, "err", err)
 			continue
 		}
 		slots--
 		for _, up := range list {
-			if err := s.Store.Audit(ctx, cmp.Or(ro.CreatedByEmail, "rollout"), "template rollout", map[string]any{"rollout": ro.ID,
+			if err := s.App.Store.Audit(ctx, cmp.Or(ro.CreatedByEmail, "rollout"), "template rollout", map[string]any{"rollout": ro.ID,
 				"workspace": r.Workspace, "module": up.Module, "template": t.ID, "from": up.From.ModuleRef, "to": up.ModuleRef, "run": run.ID}); err != nil {
-				s.Log.Error("audit log write failed", "err", err, "workspace", r.Workspace)
+				s.App.Log.Error("audit log write failed", "err", err, "workspace", r.Workspace)
 			}
 		}
-		s.Log.Info("template rolled out", "workspace", r.Workspace, "template", t.ID, "ref", t.Module.Ref, "run", run.ID, "rollout", ro.ID)
+		s.App.Log.Info("template rolled out", "workspace", r.Workspace, "template", t.ID, "ref", t.Module.Ref, "run", run.ID, "rollout", ro.ID)
 	}
 	return nil
 }
 
 func (s *Server) loadRolloutTemplate(w http.ResponseWriter, r *http.Request) (templates.Template, bool) {
-	t, ok, err := s.template(r.Context(), r.PathValue("id"))
+	t, err := s.App.Template(r.Context(), r.PathValue("id"))
 	if err != nil {
-		s.internalError(w, "template", err)
+		s.uiError(w, r, err)
 		return t, false
 	}
-	if !ok {
-		http.NotFound(w, r)
-	}
-	return t, ok
+	return t, true
 }
 
 func (s *Server) rolloutPage(w http.ResponseWriter, r *http.Request) {
@@ -204,13 +202,13 @@ func (s *Server) rolloutPage(w http.ResponseWriter, r *http.Request) {
 	}
 	page := rolloutPage{T: t, Project: r.URL.Query().Get("project")}
 	var err error
-	if page.Projects, err = s.Store.Projects(ctx, storage.Viewer{Admin: true}); err != nil {
+	if page.Projects, err = s.App.Store.Projects(ctx, storage.Viewer{Admin: true}); err != nil {
 		s.internalError(w, "projects", err)
 		return
 	}
 	var projectID uuid.UUID
 	if page.Project != "" {
-		p, err := s.Store.Project(ctx, page.Project)
+		p, err := s.App.Store.Project(ctx, page.Project)
 		if errors.Is(err, storage.ErrNotFound) {
 			http.Error(w, "no such project", http.StatusNotFound)
 			return
@@ -220,7 +218,7 @@ func (s *Server) rolloutPage(w http.ResponseWriter, r *http.Request) {
 		}
 		projectID = p.ID
 	}
-	uses, err := s.Store.TemplateUses(ctx, t.ID, projectID)
+	uses, err := s.App.Store.TemplateUses(ctx, t.ID, projectID)
 	if err != nil {
 		s.internalError(w, "template uses", err)
 		return
@@ -236,11 +234,11 @@ func (s *Server) rolloutPage(w http.ResponseWriter, r *http.Request) {
 			page.Pending++
 		}
 	}
-	ro, err := s.Store.LatestRollout(ctx, t.ID)
+	ro, err := s.App.Store.LatestRollout(ctx, t.ID)
 	switch {
 	case err == nil:
 		page.Rollout = &ro
-		if page.OpenRuns, _, err = s.Store.RolloutRuns(ctx, ro.ID, ro.ResumedAt); err != nil {
+		if page.OpenRuns, _, err = s.App.Store.RolloutRuns(ctx, ro.ID, ro.ResumedAt); err != nil {
 			s.internalError(w, "rollout runs", err)
 			return
 		}
@@ -270,7 +268,7 @@ func (s *Server) startRollout(w http.ResponseWriter, r *http.Request) {
 	}
 	name, projectID := r.PostFormValue("project"), uuid.Nil
 	if name != "" {
-		p, err := s.Store.Project(ctx, name)
+		p, err := s.App.Store.Project(ctx, name)
 		if errors.Is(err, storage.ErrNotFound) {
 			http.Error(w, "no such project", http.StatusBadRequest)
 			return
@@ -281,7 +279,7 @@ func (s *Server) startRollout(w http.ResponseWriter, r *http.Request) {
 		projectID = p.ID
 	}
 	u := auth.FromContext(ctx)
-	ro, err := s.Store.CreateRollout(ctx, storage.Rollout{TemplateID: t.ID, ModuleSource: t.Module.Source, ModuleRef: t.Module.Ref,
+	ro, err := s.App.Store.CreateRollout(ctx, storage.Rollout{TemplateID: t.ID, ModuleSource: t.Module.Source, ModuleRef: t.Module.Ref,
 		ProjectID: projectID, BatchSize: batch, CreatedBy: u.ID})
 	if errors.Is(err, storage.ErrExists) {
 		http.Error(w, "this template's last rollout is still open: stop it first", http.StatusConflict)
@@ -290,9 +288,9 @@ func (s *Server) startRollout(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "create rollout", err)
 		return
 	}
-	s.Log.Info("template rollout started", "template", t.ID, "ref", t.Module.Ref, "project", name, "batch", batch, "rollout", ro.ID, "user", u.Email)
+	s.App.Log.Info("template rollout started", "template", t.ID, "ref", t.Module.Ref, "project", name, "batch", batch, "rollout", ro.ID, "user", u.Email)
 	if err := s.tickRollout(ctx, ro); err != nil {
-		s.Log.Error("template rollout", "template", t.ID, "err", err) // the next turn retries
+		s.App.Log.Error("template rollout", "template", t.ID, "err", err) // the next turn retries
 	}
 	http.Redirect(w, r, "/templates/"+t.ID+"/rollout?project="+url.QueryEscape(name), http.StatusSeeOther)
 }
@@ -309,7 +307,7 @@ func (s *Server) rolloutAction(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	ro, err := s.Store.LatestRollout(ctx, t.ID)
+	ro, err := s.App.Store.LatestRollout(ctx, t.ID)
 	if errors.Is(err, storage.ErrNotFound) {
 		http.NotFound(w, r)
 		return
@@ -318,7 +316,7 @@ func (s *Server) rolloutAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := auth.FromContext(ctx)
-	changed, err := s.Store.SetRolloutStatus(ctx, ro.ID, status, map[string]string{"paused": "paused by " + u.Email, "stopped": "stopped by " + u.Email}[status])
+	changed, err := s.App.Store.SetRolloutStatus(ctx, ro.ID, status, map[string]string{"paused": "paused by " + u.Email, "stopped": "stopped by " + u.Email}[status])
 	if err != nil {
 		s.internalError(w, "set rollout status", err)
 		return
@@ -328,11 +326,11 @@ func (s *Server) rolloutAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if status == "active" {
-		if ro, err = s.Store.LatestRollout(ctx, t.ID); err == nil { // resumed_at moved
+		if ro, err = s.App.Store.LatestRollout(ctx, t.ID); err == nil { // resumed_at moved
 			err = s.tickRollout(ctx, ro)
 		}
 		if err != nil {
-			s.Log.Error("template rollout", "template", t.ID, "err", err)
+			s.App.Log.Error("template rollout", "template", t.ID, "err", err)
 		}
 	}
 	http.Redirect(w, r, "/templates/"+t.ID+"/rollout?project="+url.QueryEscape(ro.ProjectName), http.StatusSeeOther)

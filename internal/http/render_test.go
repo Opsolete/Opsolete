@@ -8,13 +8,14 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/auth"
 	"github.com/opsolete/opsolete/internal/templates"
 )
 
 // Pooled template clones are rebound per request: concurrent renders show their own user only.
 func TestRenderConcurrentUsers(t *testing.T) {
-	s := New(nil, nil, nil, nil, nil, Features{}, nil)
+	s := New(&app.App{}, nil, Features{})
 	var wg sync.WaitGroup
 	for i := range 50 {
 		wg.Go(func() {
@@ -32,7 +33,7 @@ func TestRenderConcurrentUsers(t *testing.T) {
 }
 
 func BenchmarkRender(b *testing.B) {
-	s := New(nil, nil, nil, nil, nil, Features{}, nil)
+	s := New(&app.App{}, nil, Features{})
 	for b.Loop() {
 		s.render(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil), 200, "authorize.html", map[string]any{"Email": "a@b", "Days": 30})
 	}
@@ -44,7 +45,7 @@ func TestRenderShowIf(t *testing.T) {
 		{Name: "os", Type: "select", Options: []templates.Option{{Value: "windows"}, {Value: "linux"}}},
 		{Name: "admin_password", Type: "string", Sensitive: true, ShowIf: &templates.ShowIf{Input: "os", Equals: []string{"windows"}}},
 	}}
-	s := New(nil, nil, nil, nil, nil, Features{}, nil)
+	s := New(&app.App{}, nil, Features{})
 	// "": no value yet counts as the first option, as the browser shows it
 	for osv, hidden := range map[string]bool{"linux": true, "windows": false, "": false} {
 		w := httptest.NewRecorder()
