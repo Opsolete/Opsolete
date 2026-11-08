@@ -448,6 +448,20 @@ func TestRunVariables(t *testing.T) {
 	if err := s.AttachVariableSet(ctx, sets["b-attached"], "no-such-workspace", true); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("attach to an unknown workspace: %v", err)
 	}
+	// Select makes the selection exactly its names; an unknown name changes nothing, not even the other picks.
+	attached := func() []string { vs, _ := s.GetVariableSet(ctx, name+"c-attached"); return vs.Workspaces }
+	if err := s.Select(ctx, sets["c-attached"], Pick{SetWorkspaces, nil}, Pick{SetProjects, []string{"no-such-project"}}); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("select an unknown project: %v", err)
+	}
+	if a := attached(); !slices.Equal(a, []string{w.Name}) {
+		t.Fatalf("a failed select changed the selection: %v", a)
+	}
+	if err := s.Select(ctx, sets["c-attached"], Pick{SetWorkspaces, nil}); err != nil || len(attached()) != 0 {
+		t.Fatalf("deselect all: %v %v", err, attached())
+	}
+	if err := s.Select(ctx, sets["c-attached"], Pick{SetWorkspaces, []string{w.Name}}); err != nil || !slices.Equal(attached(), []string{w.Name}) {
+		t.Fatalf("select: %v %v", err, attached())
+	}
 	k := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
 	set(VarOwner{SetID: sets["a-global"]}, "env", k+"_G", "global")
 	set(VarOwner{SetID: sets["a-global"]}, "env", k+"_X", "global")
@@ -634,16 +648,19 @@ func TestAccess(t *testing.T) {
 	}
 
 	other, _ := newWorkspace(t, s, false)
-	if err := s.RenameWorkspace(ctx, w.ID, other.Name); !errors.Is(err, ErrNameTaken) {
+	if err := s.SaveSettings(ctx, w.ID, Settings{Name: other.Name, AutoApply: true, ExecutionMode: "local"}); !errors.Is(err, ErrNameTaken) {
 		t.Fatalf("rename onto a taken name: %v", err)
 	}
-	if err := s.RenameWorkspace(ctx, w.ID, name+"-new"); err != nil {
+	if got, _ := s.GetWorkspaceByID(ctx, w.ID); got.AutoApply || got.ExecutionMode != "remote" {
+		t.Fatalf("a failed save changed settings: %+v", got)
+	}
+	if err := s.SaveSettings(ctx, w.ID, Settings{Name: name + "-new"}); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.GetWorkspace(ctx, name+"-new"); err != nil || got.ID != w.ID {
 		t.Fatalf("renamed: %+v %v", got, err)
 	}
-	if err := s.RenameWorkspace(ctx, "00000000-0000-0000-0000-000000000000", name+"-gone"); !errors.Is(err, sql.ErrNoRows) {
+	if err := s.SaveSettings(ctx, "00000000-0000-0000-0000-000000000000", Settings{Name: name + "-gone"}); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("rename of an unknown workspace: %v", err)
 	}
 }

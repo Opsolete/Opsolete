@@ -349,15 +349,6 @@ func (s *Store) WorkspacesExist(ctx context.Context, names []string) (bool, erro
 	return ok, err
 }
 
-// RenameWorkspace changes a workspace's name; its state and runs are keyed by id and stay put.
-func (s *Store) RenameWorkspace(ctx context.Context, id, name string) error {
-	err := affected(s.DB.ExecContext(ctx, `UPDATE workspaces SET name = $2, updated_at = now() WHERE id = ops_uuid($1)`, id, name))
-	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
-		return ErrNameTaken
-	}
-	return err
-}
-
 // DeleteWorkspace deletes a workspace with its runs, variables, grants and state versions, and
 // returns the blob keys of its state files for the caller to delete. It refuses while a run is
 // active (ErrRunActive) or the current state manages resources or isn't indexed (ErrHasResources),
@@ -632,11 +623,44 @@ func (s *Store) PinVCSCommit(ctx context.Context, runID, commit string) (string,
 	return commit, err
 }
 
-// SetSettings changes whether apply plans run without confirmation and whether drift is checked daily.
-func (s *Store) SetSettings(ctx context.Context, workspaceID string, autoApply, driftDetection bool) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET auto_apply = $2, drift_detection = $3, updated_at = now()
-		WHERE id = ops_uuid($1)`, workspaceID, autoApply, driftDetection)
-	return err
+// Settings are a workspace's settings pages: General (all fields) and Health (only the booleans).
+type Settings struct {
+	Name                      string // "" keeps it; a rename keeps state, runs and grants (keyed by id)
+	AutoApply, DriftDetection bool   // apply plans without confirmation; check drift daily
+	ExecutionMode             string // "remote" or "local"; "" keeps it
+	// remote state sharing, only if Sharing: with all workspaces (Global) or with the Consumers
+	// (workspace ids; unknown ids and the workspace itself are ignored)
+	Sharing, Global bool
+	Consumers       []string
+}
+
+// SaveSettings saves all of them or, on an error, none. ErrNameTaken: the new name is in use;
+// sql.ErrNoRows: no such workspace.
+func (s *Store) SaveSettings(ctx context.Context, id string, set Settings) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	err = affected(tx.ExecContext(ctx, `UPDATE workspaces SET name = COALESCE(NULLIF($2, ''), name), auto_apply = $3,
+		drift_detection = $4, execution_mode = COALESCE(NULLIF($5, ''), execution_mode),
+		global_remote_state = CASE WHEN $6 THEN $7 ELSE global_remote_state END, updated_at = now()
+		WHERE id = ops_uuid($1)`, id, set.Name, set.AutoApply, set.DriftDetection, set.ExecutionMode, set.Sharing, set.Global))
+	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
+		return ErrNameTaken
+	} else if err != nil {
+		return err
+	}
+	if set.Sharing {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM remote_state_consumers WHERE workspace_id = ops_uuid($1)`, id); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO remote_state_consumers (workspace_id, consumer_id)
+			SELECT $1::uuid, id FROM workspaces WHERE id::text = ANY($2::text[]) AND id <> $1::uuid`, id, set.Consumers); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 // SetExecutionMode sets a workspace's execution mode, "remote" or "local". Runs and CLI locks
@@ -663,28 +687,6 @@ func (s *Store) RemoteStateConsumers(ctx context.Context, workspaceID string) ([
 		out = append(out, w)
 	}
 	return out, rows.Err()
-}
-
-// SetRemoteStateSharing shares a workspace's state with all workspaces (global) or with the
-// consumers (workspace ids; unknown ids and the workspace itself are ignored).
-func (s *Store) SetRemoteStateSharing(ctx context.Context, workspaceID string, global bool, consumers []string) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `UPDATE workspaces SET global_remote_state = $2, updated_at = now() WHERE id = ops_uuid($1)`,
-		workspaceID, global); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM remote_state_consumers WHERE workspace_id = ops_uuid($1)`, workspaceID); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO remote_state_consumers (workspace_id, consumer_id)
-		SELECT $1::uuid, id FROM workspaces WHERE id::text = ANY($2::text[]) AND id <> $1::uuid`, workspaceID, consumers); err != nil {
-		return err
-	}
-	return tx.Commit()
 }
 
 // SharesState reports whether consumerID's runs may read workspaceID's state.

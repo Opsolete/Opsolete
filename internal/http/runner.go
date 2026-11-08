@@ -189,8 +189,11 @@ func (s *Server) jobSource(ctx context.Context, j storage.Job) (string, error) {
 
 func (s *Server) jobLogs(w http.ResponseWriter, r *http.Request) {
 	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxLogChunk))
-	if err != nil {
+	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 		writeErrors(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("log chunks are limited to %d KB", maxLogChunk>>10))
+		return
+	} else if err != nil {
+		writeErrors(w, http.StatusBadRequest, "reading the log chunk failed")
 		return
 	}
 	cancel, err := s.Store.AppendLog(r.Context(), r.PathValue("id"), r.Header.Get(runnerapi.LeaseHeader), strings.ReplaceAll(strings.ToValidUTF8(string(b), "\uFFFD"), "\x00", "\uFFFD"), leaseTTL, maxLogBytes)
@@ -248,8 +251,11 @@ func (s *Server) putArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxArtifactSize))
-	if err != nil {
+	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 		writeErrors(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("artifacts are limited to %d MB", maxArtifactSize>>20))
+		return
+	} else if err != nil {
+		writeErrors(w, http.StatusBadRequest, "reading the artifact failed")
 		return
 	}
 	if err := s.writeBlob(context.WithoutCancel(r.Context()), artifactKey(id, name), body); err != nil {

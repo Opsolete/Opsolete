@@ -534,36 +534,6 @@ func workspacePicker(field, label string, selected []string, all []storage.Works
 	return p
 }
 
-// syncSelection attaches the names in want that have lacks, then detaches the ones want lacks.
-// A name exist doesn't know (e.g. Store.WorkspacesExist) fails (sql.ErrNoRows) before anything changes.
-func (s *Server) syncSelection(ctx context.Context, have, want []string, exist func(context.Context, []string) (bool, error),
-	attach func(name string, on bool) error) error {
-	var added []string
-	for _, n := range want {
-		if !slices.Contains(have, n) {
-			added = append(added, n)
-		}
-	}
-	if ok, err := exist(ctx, added); err != nil {
-		return err
-	} else if !ok {
-		return sql.ErrNoRows
-	}
-	for _, n := range added {
-		if err := attach(n, true); err != nil {
-			return err
-		}
-	}
-	for _, n := range have {
-		if !slices.Contains(want, n) {
-			if err := attach(n, false); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
 // resourceGroup is the resources of one top-level module ("" = the root: a VCS branch's), with the template it comes from.
 type resourceGroup struct {
 	Module, Template, Ref string
@@ -673,36 +643,28 @@ func (s *Server) workspaceSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "execution mode is remote or local", http.StatusBadRequest)
 		return
 	}
+	set := storage.Settings{AutoApply: r.PostFormValue("auto_apply") != "", DriftDetection: r.PostFormValue("drift_detection") != "",
+		ExecutionMode: mode, Consumers: r.PostForm["remote_state_consumers"]}
+	if sharing := r.PostFormValue("remote_state"); sharing != "" { // General page only
+		set.Sharing, set.Global = true, sharing == "all"
+	}
 	if name := strings.TrimSpace(r.PostFormValue("name")); name != "" && name != ws.Name {
 		if !validWorkspaceName(name) {
 			http.Error(w, "a workspace name is "+workspaceNameRule, http.StatusBadRequest)
 			return
 		}
-		if err := s.Store.RenameWorkspace(r.Context(), ws.ID, name); errors.Is(err, storage.ErrNameTaken) {
-			http.Error(w, err.Error(), http.StatusConflict)
-			return
-		} else if err != nil {
-			s.internalError(w, "rename workspace", err)
-			return
-		}
-		s.Log.Info("workspace renamed", "from", ws.Name, "to", name, "user", auth.FromContext(r.Context()).Email)
-		ws.Name = name
+		set.Name = name
 	}
-	if err := s.Store.SetSettings(r.Context(), ws.ID, r.PostFormValue("auto_apply") != "", r.PostFormValue("drift_detection") != ""); err != nil {
+	if err := s.Store.SaveSettings(r.Context(), ws.ID, set); errors.Is(err, storage.ErrNameTaken) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	} else if err != nil {
 		s.internalError(w, "workspace settings", err)
 		return
 	}
-	if mode != "" {
-		if err := s.Store.SetExecutionMode(r.Context(), ws.ID, mode); err != nil {
-			s.internalError(w, "execution mode", err)
-			return
-		}
-	}
-	if mode := r.PostFormValue("remote_state"); mode != "" { // General page only
-		if err := s.Store.SetRemoteStateSharing(r.Context(), ws.ID, mode == "all", r.PostForm["remote_state_consumers"]); err != nil {
-			s.internalError(w, "remote state sharing", err)
-			return
-		}
+	if set.Name != "" {
+		s.Log.Info("workspace renamed", "from", ws.Name, "to", set.Name, "user", auth.FromContext(r.Context()).Email)
+		ws.Name = set.Name
 	}
 	back := "/workspaces/" + ws.Name + "/settings"
 	if r.PostFormValue("page") == "health" {

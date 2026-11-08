@@ -332,9 +332,7 @@ func (s *Server) attachVariableSet(w http.ResponseWriter, r *http.Request) {
 	}
 	r.ParseForm()
 	want := r.PostForm["workspace"]
-	err := s.syncSelection(r.Context(), set.Workspaces, want, s.Store.WorkspacesExist, func(ws string, on bool) error {
-		return s.Store.AttachVariableSet(r.Context(), set.ID, ws, on)
-	})
+	err := s.Store.Select(r.Context(), set.ID, storage.Pick{Selection: storage.SetWorkspaces, Names: want})
 	if errors.Is(err, sql.ErrNoRows) {
 		http.Error(w, "choose existing workspaces", http.StatusBadRequest)
 		return
@@ -354,9 +352,7 @@ func (s *Server) attachVariableSetProjects(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	want := r.PostForm["project"]
-	err := s.syncSelection(r.Context(), set.Projects, want, s.Store.ProjectsExist, func(p string, on bool) error {
-		return s.Store.AttachVariableSetProject(r.Context(), set.ID, p, on)
-	})
+	err := s.Store.Select(r.Context(), set.ID, storage.Pick{Selection: storage.SetProjects, Names: want})
 	if errors.Is(err, sql.ErrNoRows) {
 		http.Error(w, "choose existing projects", http.StatusBadRequest)
 		return

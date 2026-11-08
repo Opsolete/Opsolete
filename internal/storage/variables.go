@@ -201,6 +201,51 @@ func (s *Store) AttachVariableSetProject(ctx context.Context, setID, project str
 	return s.attachTo(ctx, "variable_set_projects", "set_id", setID, "project", project, attach)
 }
 
+// Selection is a join table from variable sets or VCS connections to workspaces or projects.
+type Selection struct{ table, col, kind string }
+
+var (
+	SetWorkspaces  = Selection{"variable_set_workspaces", "set_id", "workspace"}
+	SetProjects    = Selection{"variable_set_projects", "set_id", "project"}
+	ConnWorkspaces = Selection{"vcs_connection_workspaces", "connection_id", "workspace"}
+	ConnProjects   = Selection{"vcs_connection_projects", "connection_id", "project"}
+)
+
+// Pick is the names to select in a Selection, all others are deselected.
+type Pick struct {
+	Selection
+	Names []string
+}
+
+// Select makes each pick's selection of id exactly its names, all or (on an error) none of them.
+// sql.ErrNoRows: a name isn't a workspace or project.
+func (s *Store) Select(ctx context.Context, id string, picks ...Pick) error {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, p := range picks {
+		names := p.Names // nil works too: NULL selects no names
+		var ok bool
+		if err := tx.QueryRowContext(ctx, `SELECT NOT EXISTS (SELECT 1 FROM unnest($1::text[]) n
+			WHERE NOT EXISTS (SELECT 1 FROM `+p.kind+`s WHERE name = n))`, names).Scan(&ok); err != nil {
+			return err
+		} else if !ok {
+			return sql.ErrNoRows
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM `+p.table+` WHERE `+p.col+` = $1::uuid
+			AND `+p.kind+`_id NOT IN (SELECT id FROM `+p.kind+`s WHERE name = ANY($2))`, id, names); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO `+p.table+` (`+p.col+`, `+p.kind+`_id)
+			SELECT $1::uuid, id FROM `+p.kind+`s WHERE name = ANY($2) ON CONFLICT DO NOTHING`, id, names); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // attachTo adds or removes the (col = id, <kind>_id) row of table, a join table to workspaces or
 // projects (kind "workspace" or "project"; never input). sql.ErrNoRows: no such workspace or project.
 func (s *Store) attachTo(ctx context.Context, table, col, id, kind, name string, attach bool) error {

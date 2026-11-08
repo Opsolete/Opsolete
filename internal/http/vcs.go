@@ -215,21 +215,8 @@ func (s *Server) saveConnectionSettings(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if scope == "selected" { // else the hidden pickers' selection stays for later
-		// check the projects before the workspaces change, so a bad form changes nothing
-		var ok bool
-		if ok, err = s.Store.ProjectsExist(r.Context(), r.PostForm["project"]); err == nil && !ok {
-			err = sql.ErrNoRows
-		}
-		if err == nil {
-			err = s.syncSelection(r.Context(), sc.Workspaces, r.PostForm["workspace"], s.Store.WorkspacesExist, func(ws string, on bool) error {
-				return s.Store.AttachVCSWorkspace(r.Context(), sc.ID, ws, on)
-			})
-		}
-		if err == nil {
-			err = s.syncSelection(r.Context(), sc.Projects, r.PostForm["project"], s.Store.ProjectsExist, func(p string, on bool) error {
-				return s.Store.AttachVCSProject(r.Context(), sc.ID, p, on)
-			})
-		}
+		err = s.Store.Select(r.Context(), sc.ID, storage.Pick{Selection: storage.ConnWorkspaces, Names: r.PostForm["workspace"]},
+			storage.Pick{Selection: storage.ConnProjects, Names: r.PostForm["project"]})
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		http.Error(w, "choose existing workspaces and projects", http.StatusBadRequest)
@@ -275,6 +262,10 @@ func (s *Server) replaceToken(w http.ResponseWriter, r *http.Request) {
 	sealed, err := vcs.Seal(s.SecretKey, token, vcs.TokenAD(sc))
 	if err == nil {
 		err = s.Store.ResealVCSToken(r.Context(), sc.ID, sc.Token, sealed)
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		fail("the token was replaced or the connection deleted meanwhile: reload and try again")
+		return
 	}
 	if err != nil {
 		s.internalError(w, "replace vcs token", err)

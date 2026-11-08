@@ -31,10 +31,10 @@ func (c VCSConnection) Allows(workspace, project string) bool {
 		(workspace != "" && slices.Contains(c.Workspaces, workspace) || slices.Contains(c.Projects, project))
 }
 
-// ResealVCSToken replaces a connection's sealed token, unless it changed since it was read.
+// ResealVCSToken replaces a connection's sealed token, unless it changed since it was read
+// (sql.ErrNoRows, also for a deleted connection).
 func (s *Store) ResealVCSToken(ctx context.Context, id string, old, sealed []byte) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE vcs_connections SET token = $3 WHERE id = $1::uuid AND token = $2`, id, old, sealed)
-	return err
+	return affected(s.DB.ExecContext(ctx, `UPDATE vcs_connections SET token = $3 WHERE id = $1::uuid AND token = $2`, id, old, sealed))
 }
 
 // CreateVCSConnection returns the new connection's id.
@@ -95,18 +95,6 @@ func (s *Store) GetVCSConnection(ctx context.Context, id string) (VCSConnection,
 func (s *Store) SetVCSScope(ctx context.Context, id, workspaceScope string) error {
 	_, err := s.DB.ExecContext(ctx, `UPDATE vcs_connections SET workspace_scope = $2 WHERE id = ops_uuid($1)`, id, workspaceScope)
 	return err
-}
-
-// AttachVCSWorkspace selects the named workspace for a connection, or deselects it (attach=false).
-// It returns sql.ErrNoRows for an unknown workspace.
-func (s *Store) AttachVCSWorkspace(ctx context.Context, connID, workspace string, attach bool) error {
-	return s.attachTo(ctx, "vcs_connection_workspaces", "connection_id", connID, "workspace", workspace, attach)
-}
-
-// AttachVCSProject selects the named project for a connection, or deselects it (attach=false).
-// It returns sql.ErrNoRows for an unknown project.
-func (s *Store) AttachVCSProject(ctx context.Context, connID, project string, attach bool) error {
-	return s.attachTo(ctx, "vcs_connection_projects", "connection_id", connID, "project", project, attach)
 }
 
 // DeleteVCSConnection also unlinks its modules (their published versions stay). It returns

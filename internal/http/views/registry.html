@@ -31,7 +31,7 @@
       <button type="submit" class="danger small">Delete</button></form></td>{{end}}
 </tr>
 {{else}}
-<tr><td colspan="5" class="empty">No modules published yet.{{if or .VCS .Upload}} <a href="/registry/publish">Publish a module →</a>{{end}}</td></tr>
+<tr><td colspan="{{if and .Templates .Admin}}6{{else if or .Templates .Admin}}5{{else}}4{{end}}" class="empty">No modules published yet.{{if or .VCS .Upload}} <a href="/registry/publish">Publish a module →</a>{{end}}</td></tr>
 {{end}}
 </table>
 </div>

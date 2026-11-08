@@ -14,6 +14,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -738,7 +739,9 @@ func Reseal(ctx context.Context, st *storage.Store, key []byte) (int, error) {
 		if err != nil {
 			return n, err
 		}
-		if err := st.ResealVCSToken(ctx, c.ID, c.Token, sealed); err != nil {
+		if err := st.ResealVCSToken(ctx, c.ID, c.Token, sealed); errors.Is(err, sql.ErrNoRows) {
+			continue // another replica was faster, or the token was replaced
+		} else if err != nil {
 			return n, err
 		}
 		n++

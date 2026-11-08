@@ -616,7 +616,7 @@ var ansiCodes = regexp.MustCompile("\x1b\\[[0-9;]*m")
 // -no-color); the run page renders them. Otherwise like terraform-exec: SIGINT on cancel, stderr in
 // the error. With -detailed-exitcode, exit code 2 means "changes present", reported as true.
 func (r *Runner) tfRun(ctx context.Context, dir string, env []string, w io.Writer, args ...string) (bool, error) {
-	var stderr bytes.Buffer
+	stderr := headBuffer{max: 64 << 10} // the job's message keeps only the start of it
 	cmd := exec.CommandContext(ctx, r.Terraform, args...)
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = dir, env, w, io.MultiWriter(w, &stderr)
 	// After SIGINT, Terraform finishes in-flight operations and saves state before it exits.
@@ -632,6 +632,19 @@ func (r *Runner) tfRun(ctx context.Context, dir string, env []string, w io.Write
 		return false, fmt.Errorf("%w\n%s", err, ansiCodes.ReplaceAllString(stderr.String(), ""))
 	}
 	return false, nil
+}
+
+// headBuffer keeps the first max bytes written to it and drops the rest.
+type headBuffer struct {
+	bytes.Buffer
+	max int
+}
+
+func (h *headBuffer) Write(p []byte) (int, error) {
+	if room := h.max - h.Len(); room > 0 {
+		h.Buffer.Write(p[:min(len(p), room)])
+	}
+	return len(p), nil
 }
 
 func (r *Runner) finish(log *slog.Logger, job runnerapi.Job, res runnerapi.FinishRequest) {
@@ -657,8 +670,15 @@ func (r *Runner) finish(log *slog.Logger, job runnerapi.Job, res runnerapi.Finis
 	}
 }
 
+// transferTimeout bounds an artifact upload or download, so a stalled connection doesn't hold the
+// phase until the job timeout while heartbeats keep its lease.
+// shortcut: a limit on the whole transfer, not on stalls; at 256 MB it needs about 0.5 MB/s.
+const transferTimeout = 10 * time.Minute
+
 // upload stores a plan phase's artifact on the server.
 func (r *Runner) upload(ctx context.Context, job runnerapi.Job, name string, b []byte) error {
+	ctx, cancel := context.WithTimeout(ctx, transferTimeout)
+	defer cancel()
 	code, resp, err := r.call(ctx, "/jobs/"+job.RunID+"/artifacts/"+name, job.LeaseID, "application/octet-stream", b)
 	if err == nil && code != http.StatusNoContent {
 		err = fmt.Errorf("HTTP %d: %s", code, resp)
@@ -668,6 +688,8 @@ func (r *Runner) upload(ctx context.Context, job runnerapi.Job, name string, b [
 
 // download writes an artifact of the run's plan phase to path; a missing optional one is skipped.
 func (r *Runner) download(ctx context.Context, job runnerapi.Job, name, path string, required bool) error {
+	ctx, cancel := context.WithTimeout(ctx, transferTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.ServerURL.JoinPath(runnerapi.Prefix, "jobs", job.RunID, "artifacts", name).String(), nil)
 	if err != nil {
 		return err

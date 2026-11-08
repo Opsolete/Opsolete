@@ -569,3 +569,15 @@ func TestClaimLargeJob(t *testing.T) {
 		t.Fatalf("oversized claim: err = %v", err)
 	}
 }
+
+func TestHeadBuffer(t *testing.T) {
+	h := headBuffer{max: 5}
+	for _, s := range []string{"abc", "def", "ghi"} {
+		if n, err := h.Write([]byte(s)); n != len(s) || err != nil {
+			t.Fatalf("Write(%q) = %d, %v: must report all written, or MultiWriter stops", s, n, err)
+		}
+	}
+	if h.String() != "abcde" {
+		t.Fatalf("kept %q, want abcde", h.String())
+	}
+}
