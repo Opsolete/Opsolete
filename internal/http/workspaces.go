@@ -31,7 +31,7 @@ const (
 	fieldProject   = "ops-project"
 )
 
-func (s *Server) workspaceRoutes(mux *http.ServeMux) {
+func (s *Server) workspaceRoutes(mux routes) {
 	mux.HandleFunc("GET /templates/{id}", s.form)
 	mux.HandleFunc("POST /templates/{id}", s.createWorkspace)
 	mux.HandleFunc("GET /workspaces", s.workspaces)

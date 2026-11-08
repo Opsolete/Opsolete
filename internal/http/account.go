@@ -5,7 +5,7 @@ import "net/http"
 // Account settings: the signed-in user's profile and `terraform login`
 // tokens. Login is OIDC, so there are no passwords or second factors here; sessions are signed
 // cookies, so there is no session list either.
-func (s *Server) accountRoutes(mux *http.ServeMux) {
+func (s *Server) accountRoutes(mux routes) {
 	mux.Handle("GET /account", http.RedirectHandler("/account/profile", http.StatusFound))
 	mux.HandleFunc("GET /account/{page}", s.accountPage)
 	mux.HandleFunc("POST /account/tokens/{id}/revoke", s.revokeToken)

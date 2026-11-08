@@ -16,7 +16,7 @@ import (
 )
 
 // Terraform registry protocol (modules.v1): https://developer.hashicorp.com/terraform/internals/module-registry-protocol
-func (s *Server) registryRoutes(mux *http.ServeMux) {
+func (s *Server) registryRoutes(mux routes) {
 	mux.Handle("GET /v1/modules/{ns}/{name}/{system}/versions", s.requireToken(storage.ScopeRegistry, s.moduleVersions))
 	mux.Handle("GET /v1/modules/{ns}/{name}/{system}/{version}/download", s.requireToken(storage.ScopeRegistry, s.moduleDownload))
 	mux.HandleFunc("GET /v1/archives/{ns}/{name}/{system}/{file}", s.moduleArchive)

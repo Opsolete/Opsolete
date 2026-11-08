@@ -11,7 +11,7 @@ import (
 
 // Projects group workspaces. Admins create, rename and delete them and move workspaces (app decides);
 // the audit middleware records each of those requests.
-func (s *Server) projectRoutes(mux *http.ServeMux) {
+func (s *Server) projectRoutes(mux routes) {
 	mux.HandleFunc("GET /projects", s.projects)
 	mux.HandleFunc("POST /projects", s.createProject)
 	// the project's menu pages: one handler, project.html shows the part of the current tab

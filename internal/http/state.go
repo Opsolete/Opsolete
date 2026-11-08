@@ -20,7 +20,7 @@ import (
 // is planning or applying. A run of another workspace may read it (terraform_remote_state, its own
 // credentials) if the workspace shares its state with that one (app.StateRun). Errors are plain
 // text, as on the UI (uiError); 423 with the holder's LockInfo for a held lock.
-func (s *Server) stateRoutes(mux *http.ServeMux) {
+func (s *Server) stateRoutes(mux routes) {
 	p := runnerapi.StatePrefix + "/{id}"
 	mux.HandleFunc("GET "+p, s.stateAuth(s.getState))
 	mux.HandleFunc("POST "+p, s.stateAuth(s.putState))

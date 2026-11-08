@@ -37,6 +37,22 @@ type Server struct {
 	RunnerToken  string             // RUNNER_TOKEN: the runner API's bearer token; empty rejects every runner
 	pages        *template.Template // never executed: the base the per-request clones come from
 	clones       sync.Pool          // of executed clones of pages: html/template escapes a clone once, not per request
+	patterns     []string           // registered by Handler: access_test.go needs a matrix row for each
+}
+
+// routes is the server's mux; it records every pattern it registers in *patterns.
+type routes struct {
+	*http.ServeMux
+	patterns *[]string
+}
+
+func (m routes) Handle(pattern string, h http.Handler) {
+	*m.patterns = append(*m.patterns, pattern)
+	m.ServeMux.Handle(pattern, h)
+}
+
+func (m routes) HandleFunc(pattern string, h func(http.ResponseWriter, *http.Request)) {
+	m.Handle(pattern, http.HandlerFunc(h))
 }
 
 // Features are the components this instance serves; a disabled one has no routes at all.
@@ -64,7 +80,8 @@ func New(a *app.App, au *auth.Auth, f Features) *Server {
 }
 
 func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
+	s.patterns = nil
+	mux := routes{http.NewServeMux(), &s.patterns}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 	mux.HandleFunc("GET /readyz", s.ready)
 	s.Auth.Routes(mux)
@@ -81,7 +98,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /organization", s.admin(s.saveOrganization))
 	if !s.Features.Deployments {
 		mux.Handle("GET /{$}", http.RedirectHandler("/registry", http.StatusFound))
-		return instrument(mux, s.logRequests(s.audit(http.NewCrossOriginProtection().Handler(s.requireLogin(mux)))))
+		return instrument(mux.ServeMux, s.logRequests(s.audit(http.NewCrossOriginProtection().Handler(s.requireLogin(mux)))))
 	}
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("GET /templates/new", s.admin(s.editor(s.builder)))
@@ -105,7 +122,7 @@ func (s *Server) Handler() http.Handler {
 	s.projectRoutes(mux)
 	s.variableRoutes(mux)
 	// CrossOriginProtection rejects cross-site browser POSTs (CSRF); token clients send no Origin and pass.
-	return instrument(mux, s.logRequests(s.audit(http.NewCrossOriginProtection().Handler(s.requireLogin(mux)))))
+	return instrument(mux.ServeMux, s.logRequests(s.audit(http.NewCrossOriginProtection().Handler(s.requireLogin(mux)))))
 }
 
 // public paths authenticate themselves (API tokens, signed URLs) or must work without login.

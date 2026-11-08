@@ -193,7 +193,7 @@ func TestStateDiffAccess(t *testing.T) {
 	if list, err := ro.Versions(ctx, 10); err != nil || len(list) != 2 {
 		t.Errorf("a reader lists versions: %v %v", list, err)
 	}
-	if _, err := ro.Diff(ctx, vs[0].ID); !errors.Is(err, ErrNotFound) {
+	if _, err := ro.Diff(ctx, vs[0].ID); !errors.Is(err, ErrForbidden) {
 		t.Errorf("a reader diffs: %v", err)
 	}
 	if _, err := ro.File(ctx, vs[0].ID); !errors.Is(err, ErrForbidden) {

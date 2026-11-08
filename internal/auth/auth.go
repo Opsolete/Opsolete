@@ -125,8 +125,10 @@ type session struct {
 	AdminGroups []string `json:"admin_groups,omitempty"`
 }
 
-// Routes: GET /auth/login, GET /auth/callback, POST /auth/logout.
-func (a *Auth) Routes(mux *http.ServeMux) {
+// Routes: GET /auth/login, GET /auth/callback, POST /auth/logout, on an *http.ServeMux or a wrapper of one.
+func (a *Auth) Routes(mux interface {
+	HandleFunc(string, func(http.ResponseWriter, *http.Request))
+}) {
 	mux.HandleFunc("GET /auth/login", a.login)
 	mux.HandleFunc("GET /auth/callback", a.callback)
 	mux.HandleFunc("POST /auth/logout", func(w http.ResponseWriter, r *http.Request) {

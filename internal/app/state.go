@@ -37,7 +37,7 @@ var (
 	errNotShared       = reason{ErrForbidden, "this workspace does not share its state with yours (Settings > General > Remote state sharing)"}
 	errNotRunLocked    = reason{ErrStateConflict, "the state must be locked by this run"}
 	errAlreadyLocked   = reason{storage.ErrStateLocked, "the workspace is already locked"}
-	errOperatorsOnly   = reason{ErrNotFound, "state values are shown to operators only"}
+	errOperatorsOnly   = reason{ErrForbidden, "state values are shown to operators only"}
 )
 
 // saveState stores body as the workspace's new current state version, unless it's the same as the
@@ -325,8 +325,8 @@ type VersionDiff struct {
 }
 
 // Diff diffs a state version with the one before it and with the current one. The diff shows
-// attribute values, and the redaction misses unmarked secrets: like the files, operators only;
-// others get ErrNotFound, as for a version that doesn't exist.
+// attribute values, and the redaction misses unmarked secrets: like the files, operators only
+// (ErrForbidden: readers see the version list anyway).
 func (s State) Diff(ctx context.Context, version int64) (VersionDiff, error) {
 	var d VersionDiff
 	if s.Level < LevelOperate {

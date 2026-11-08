@@ -43,7 +43,7 @@ func (s *Server) discovery(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, d)
 }
 
-func (s *Server) cloudRoutes(mux *http.ServeMux) {
+func (s *Server) cloudRoutes(mux routes) {
 	mux.HandleFunc("GET /oauth/authorization", s.authorizePage)
 	mux.HandleFunc("POST /oauth/authorization", s.authorize)
 	mux.HandleFunc("POST /oauth/token", s.oauthToken)

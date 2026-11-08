@@ -929,7 +929,7 @@ func TestWorkspaceFlow(t *testing.T) {
 	if err := store.SetGrant(ctx, ws.ID, "grp-flow-readers", "read"); err != nil {
 		t.Fatal(err)
 	}
-	if code := get(reader, fmt.Sprintf("/workspaces/%s/states/%d", name, vs[1].ID)).Code; code != http.StatusNotFound {
+	if code := get(reader, fmt.Sprintf("/workspaces/%s/states/%d", name, vs[1].ID)).Code; code != http.StatusForbidden {
 		t.Fatalf("state values shown to read access: %d", code)
 	}
 	if code := rollback(vs[1].ID); code != http.StatusSeeOther {

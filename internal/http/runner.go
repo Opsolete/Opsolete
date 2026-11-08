@@ -21,7 +21,7 @@ const maxLogChunk = 256 << 10 // per request
 
 // Runner API: runners pull work over HTTPS with the shared RUNNER_TOKEN, so they need no
 // database access and no inbound connectivity. The protocol's rules are app's (jobs.go).
-func (s *Server) runnerRoutes(mux *http.ServeMux) {
+func (s *Server) runnerRoutes(mux routes) {
 	mux.Handle("POST "+runnerapi.Prefix+"/jobs/claim", s.requireRunner(s.claimJob))
 	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/logs", s.requireRunner(s.jobLogs))
 	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/heartbeat", s.requireRunner(s.jobHeartbeat))

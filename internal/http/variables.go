@@ -10,7 +10,7 @@ import (
 )
 
 // Variables: the workspace's own (operate access) and variable sets (admins); the rules are app's.
-func (s *Server) variableRoutes(mux *http.ServeMux) {
+func (s *Server) variableRoutes(mux routes) {
 	mux.HandleFunc("POST /workspaces/{name}/variables", s.setWorkspaceVariable)
 	mux.HandleFunc("POST /workspaces/{name}/variables/{id}/delete", s.deleteWorkspaceVariable)
 	mux.HandleFunc("GET /variable-sets", s.variableSets)
