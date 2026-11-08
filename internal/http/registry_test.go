@@ -49,7 +49,7 @@ func TestRegistry(t *testing.T) {
 	archive := registrytest.TarGz(t, map[string]string{"README.md": "# Storage <b>module</b>", "main.tf": `
 variable "name" {
   type        = string
-  description = "Account name"
+  description = "Account name: 3-24 lowercase letters"
 }
 variable "tags" {
   type = map(string)
@@ -152,6 +152,7 @@ data "terraform_remote_state" "net" {
 	rec = get(h, "/templates/new?module="+ns+"/storage/azurerm/1.2.0")
 	page = rec.Body.String()
 	if !strings.Contains(page, `value="ops.example.com/`+ns+`/storage/azurerm"`) || !strings.Contains(page, `value="Account name"`) ||
+		!strings.Contains(page, `name="in_help" value="3-24 lowercase letters"`) || // the description's "Title: help", split at import
 		!strings.Contains(page, "tags (map(string))") {
 		t.Fatalf("builder prefill: %d %s", rec.Code, page)
 	}

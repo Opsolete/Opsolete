@@ -206,12 +206,13 @@ for (const d of document.querySelectorAll('dialog[data-open]')) {
           return b;
         }));
       for (const b of chips.children) b.setAttribute('aria-pressed', picked.includes(b.dataset.v));
-      // the default suggests the values a dropdown or Yes / no field accepts
+      // a number's default is typed as a number; a dropdown's suggests its option values (Yes / no has its own select)
       const type = card.querySelector('.ftype').value, def = card.querySelector('[name=in_default]'), dl = def.nextElementSibling;
+      if (def.type !== (type === 'number' ? 'number' : 'text')) Object.assign(def, type === 'number' ? {type: 'number', step: 'any'} : {type: 'text'});
       dl.id = 'defaults-' + i;
       def.setAttribute('list', dl.id);
-      def.placeholder = {bool: 'false (true or false)', select: 'the first option'}[type] ?? 'none';
-      const vals = type === 'select' || type === 'bool' ? optionValues(card) : [];
+      def.placeholder = type === 'select' ? 'the first option' : 'none';
+      const vals = type === 'select' ? optionValues(card) : [];
       if (dl.options.length !== vals.length || vals.some((v, j) => dl.options[j].value !== v)) dl.replaceChildren(...vals.map(v => new Option(v, v)));
       const name = card.querySelector('[name=in_name]').value.trim();
       if (name && (type === 'select' || type === 'bool')) above.set(name, card);

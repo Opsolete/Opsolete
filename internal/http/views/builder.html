@@ -70,8 +70,10 @@
           <span class="fnum" aria-hidden="true"></span>
           <label class="f"><span class="f-head">Variable{{template "tip" "The Terraform variable this field sets: lowercase letters, digits and underscores. Clear it to remove the field."}}</span>
             <input name="in_name" value="{{.Name}}" class="mono" placeholder="admin_password" autocomplete="off" spellcheck="false"></label>
-          <label class="f grow"><span class="f-head">Label{{template "tip" "The question end users see. Leave empty to show the variable name. Text after the first ': ' is help shown under the field, and the error when the pattern doesn't match, e.g. VM name: 1-64 letters or digits."}}</span>
+          <label class="f grow"><span class="f-head">Label{{template "tip" "The question end users see. Leave empty to show the variable name."}}</span>
             <input name="in_label" value="{{.Label}}" placeholder="Admin password"></label>
+          <label class="f grow"><span class="f-head">Help{{template "tip" "Optional. Shown under the field, and as the hint when the pattern doesn't match, e.g. 1-64 letters or digits."}}</span>
+            <input name="in_help" value="{{.Help}}" placeholder="At least 12 characters"></label>
           <label class="f"><span class="f-head">Type{{template "tip" "Text, Number, a Yes / no checkbox, or a Dropdown of fixed options. Only dropdowns and Yes / no fields can show or hide other fields."}}</span>
             <select name="in_type" class="ftype">
               <option value="string">Text</option>
@@ -96,8 +98,15 @@
             </div>
             <button type="button" class="icon opt-add" data-act="opt-add" hidden>+ Add option</button>
           </div>
-          <label class="f"><span class="f-head">Default{{template "tip" "Filled in when the form opens. A dropdown's default is one of its option values; a Yes / no default is true or false."}}</span>
-            <input name="in_default" value="{{.Default}}" placeholder="none" autocomplete="off"><datalist></datalist></label>
+          <label class="f not-bool"><span class="f-head">Default{{template "tip" "Filled in when the form opens. A dropdown's default is one of its option values."}}</span>
+            <input name="in_default" value="{{if ne .Type "bool"}}{{.Default}}{{end}}"{{if eq .Type "number"}} type="number" step="any"{{end}} placeholder="none" autocomplete="off"><datalist></datalist></label>
+          <!-- every card posts one in_default and one in_bool_default; the type picks which counts -->
+          <label class="f only-bool"><span class="f-head">Default{{template "tip" "Whether the box is ticked when the form opens."}}</span>
+            <select name="in_bool_default">
+              <option value="">none (no)</option>
+              <option value="true"{{if and (eq .Type "bool") (eq .Default "true")}} selected{{end}}>yes (true)</option>
+              <option value="false"{{if and (eq .Type "bool") (eq .Default "false")}} selected{{end}}>no (false)</option>
+            </select></label>
           <label class="f only-string"><span class="f-head">Pattern{{template "tip" "A regular expression the whole value must match, for example [a-z0-9]{3,24}. Leave empty to accept any text."}}</span>
             <input name="in_pattern" value="{{.Pattern}}" class="mono" placeholder="[a-z0-9]{3,24}" spellcheck="false"></label>
           <div class="f checks">

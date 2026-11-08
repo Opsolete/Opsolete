@@ -209,6 +209,8 @@ label:is(:hover, :focus-within, :has(+ :focus)) > .tip-text { opacity: 1; }
 .chip[aria-pressed="true"]::before { content: "✓"; }
 /* settings a field's type doesn't use */
 .fcard:not(:has(.ftype [value="select"]:checked)) .only-select,
+.fcard:not(:has(.ftype [value="bool"]:checked)) .only-bool,
+.fcard:has(.ftype [value="bool"]:checked) .not-bool,
 .fcard:not(:has(.ftype [value="string"]:checked)) .only-string,
 .fcard:has(.ftype :is([value="bool"], [value="select"]):checked) .only-secret,
 .fcard:has(.ftype :is([value="bool"], [value="select"]):checked) .only-typed { display: none; }

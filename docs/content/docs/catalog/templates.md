@@ -3,13 +3,138 @@ title: Templates
 weight: 1
 ---
 
-Each template is a JSON file that describes one existing Terraform module pinned to an approved `ref`, plus its inputs (`string`, `number`, `bool`, `select`, with optional `required`, `pattern`, `options` and `default`, which must pass the input's own checks). See [`catalog/storage-account.json`](https://github.com/Opsolete/Opsolete/blob/master/catalog/storage-account.json).
+Each template is a JSON file that describes one existing Terraform module pinned to an approved `ref`, plus the inputs its form asks. This is the template file format 1.0:
+
+```json
+{
+  "$schema": "https://opsolete.github.io/Opsolete/schema/template-1.json",
+  "id": "storage-account",
+  "name": "Azure Storage Account",
+  "description": "A general-purpose v2 storage account with optional blob versioning.",
+  "module": {
+    "source": "git::https://dev.azure.com/your-org/infra/_git/terraform-modules//storage-account",
+    "ref": "v1.0.0"
+  },
+  "inputs": [
+    { "name": "name", "label": "Account name", "help": "3-24 lowercase letters or digits, unique in Azure.", "type": "string", "required": true, "pattern": "^[a-z0-9]{3,24}$", "key": true },
+    { "name": "location", "label": "Region", "type": "select", "options": ["westeurope", { "value": "northeurope", "label": "North Europe" }], "default": "westeurope" },
+    { "name": "retention_days", "label": "Soft-delete retention (days)", "type": "number", "default": 7 },
+    { "name": "enable_versioning", "label": "Enable blob versioning", "type": "bool", "default": true }
+  ]
+}
+```
+
+See also [`catalog/storage-account.json`](https://github.com/Opsolete/Opsolete/blob/master/catalog/storage-account.json).
+
+## Template format
+
+**Template** (the file):
+
+| Field | Type | | |
+|---|---|---|---|
+| `$schema` | string | optional | The JSON Schema URL; allowed and ignored by Opsolete. |
+| `id` | string | required | Lowercase letters, digits and dashes, at most 63 characters, not `new`. Unique in the catalog. The builder gives new templates a UUID. |
+| `name` | string | required | The title in the catalog. |
+| `description` | string | optional | One sentence, shown on the catalog card. |
+| `module` | object | required | `source`: a `git::` URL or a [registry]({{< relref "module-registry" >}}) module address; `ref`: the approved Git ref or registry version. Both required. |
+| `inputs` | array | optional | The form's fields, in order. |
+
+**Input:**
+
+| Field | Type | | |
+|---|---|---|---|
+| `name` | string | required | The Terraform variable it sets: `^[a-z_][a-z0-9_]*$`, not `source`, `version`, `providers`, `count`, `for_each`, `lifecycle`, `depends_on` or `locals`. Unique in the template. |
+| `type` | string | required | `string`, `number`, `bool` (a checkbox) or `select` (a dropdown). |
+| `label` | string | optional | The question the form asks. Empty: the form shows the name. |
+| `help` | string | optional | Shown under the field (and linked to it for screen readers), and the error message when a value doesn't match `pattern`, so say there what fits. Without help, the error shows the pattern. |
+| `required` | boolean | optional | The value can't be empty. Dropdowns and checkboxes always have a value. A hidden input is never required. |
+| `pattern` | string | optional | A Go (RE2) regular expression the whole value must match. The browser checks it too, as a JavaScript one. |
+| `options` | array | `select` only, required there | One entry per choice: a string (shorthand for `{"value": "<string>"}`) or `{"value": "...", "label": "..."}`: the form shows `label`, Terraform gets `value`. `value` is required and not empty. |
+| `default` | typed | optional | Filled in when the form opens. Typed by `type`: `string` and `select` a JSON string (a select's must be one of its option values), `number` a JSON number (`7`, `0.5`), `bool` a JSON boolean (`true`, `false`). It must pass the input's own checks (`pattern`). |
+| `sensitive` | boolean | optional | `string` and `number` only, no `default`; see below. |
+| `show_if` | object | optional | `{"input": "<name>", "equals": [...]}`; see [conditional inputs](#conditional-inputs). |
+| `key` | boolean | optional | At most one input, not `bool` or sensitive; see below. |
+
+**Strict parsing.** Every object accepts only the fields above: an unknown field (a typo such as `"lable"`) is an error, as is a value of the wrong JSON type. Any invalid file fails the whole catalog: from Git, the last good commit stays loaded and **Settings → Templates** shows the error; from `TEMPLATES_DIR`, the server doesn't start. The error names the file, template, input and field:
+
+```text
+storage-account.json: template storage-account, input retention_days: default must be a JSON number (7, not "7")
+storage-account.json: template storage-account, input name: unknown field "lable"
+```
+
+A catalog has at most 500 files of at most 256 KiB each, 8 MiB in total.
+
+**Editor support.** The format is published as a JSON Schema at <https://opsolete.github.io/Opsolete/schema/template-1.json>. With `"$schema"` in the file, as above, VS Code (and other editors with JSON Schema support) completes field names, shows each field's description, and marks unknown fields and wrongly typed defaults as you type; no extension or setting is needed. The builder writes `"$schema"` into every file it saves. Opsolete itself validates more than the schema can (for example that a `show_if` refers to an input above it), so a file the editor accepts can still fail to load with a clear error.
 
 Mark a `string` or `number` input `"sensitive": true` for passwords and keys. It is typed in a password field, stored encrypted with `SECRET_KEY`, shown as *(sensitive)*, left out of the audit log, and kept when left empty on reconfigure. It can't have a `default`. A module variable declared `sensitive` in Terraform becomes a sensitive input when the template lists it. Values saved before an input was marked sensitive are encrypted the next time the template is configured.
 
 Mark one input `"key": true` (not `bool` or sensitive) to name the template after its value when it's added to a workspace: a key `vm_name` of `Web-Prod 01` adds it as `module.web_prod_01_c8ad`: a random hex suffix, so the same key can be added twice. Without a key, the template's name is used. The name can't be typed in, and is fixed once added: changing the key's value later doesn't rename it, since that would destroy and recreate its resources.
 
-An input's `label` is the question the form asks. Text after its first `: ` is help, shown under the field: `VM name: 1-64 letters, digits or -.` asks *VM name*, with the rest as help. Labels generated from a registry module's variable descriptions follow the same rule, so write descriptions in that form. The help shows under the field, and is the error message when a value doesn't match the input's `pattern`, so say there what fits (without help, the error shows the pattern).
+Fields generated from a [registry]({{< relref "module-registry" >}}) module's variables take their label and help from the variable's `description`, split once at its first `: ` when the builder imports them: `VM name: 1-64 letters, digits or -.` becomes the label *VM name* and the help *1-64 letters, digits or -.*. So write descriptions in that form. A template's own `help` takes precedence over the module's.
+
+## Converting 0.x templates
+
+Opsolete 1.0 reads only the 1.0 format; there is no compatibility mode. Three things changed:
+
+1. **`default` and `show_if.equals` are typed** by the input's type: a number is a JSON number, a yes / no value a JSON boolean. Strings stay strings.
+2. **`help` is its own field.** A `label` is no longer split at `: `; a 0.x label like `"Account name: 3-24 lowercase letters"` would show whole as the label, so move the text after `: ` into `help`.
+3. **Unknown fields are errors.** Remove or fix any field not listed above. `"$schema"` is allowed; add it to get editor checks.
+
+Before (0.x):
+
+```json
+{
+  "id": "vm",
+  "name": "Virtual machine",
+  "module": { "source": "git::https://example.com/modules.git//vm", "ref": "v1.0.0" },
+  "inputs": [
+    { "name": "vm_name", "label": "VM name: 1-64 letters or digits", "type": "string", "required": true, "pattern": "^[A-Za-z0-9]{1,64}$" },
+    { "name": "disks", "label": "Data disks", "type": "number", "default": "2" },
+    { "name": "backups", "label": "Backups", "type": "bool", "default": "true" },
+    { "name": "retention", "label": "Backup retention (days)", "type": "number", "default": "7", "show_if": { "input": "backups", "equals": ["true"] } }
+  ]
+}
+```
+
+After (1.0):
+
+```json
+{
+  "$schema": "https://opsolete.github.io/Opsolete/schema/template-1.json",
+  "id": "vm",
+  "name": "Virtual machine",
+  "module": { "source": "git::https://example.com/modules.git//vm", "ref": "v1.0.0" },
+  "inputs": [
+    { "name": "vm_name", "label": "VM name", "help": "1-64 letters or digits", "type": "string", "required": true, "pattern": "^[A-Za-z0-9]{1,64}$" },
+    { "name": "disks", "label": "Data disks", "type": "number", "default": 2 },
+    { "name": "backups", "label": "Backups", "type": "bool", "default": true },
+    { "name": "retention", "label": "Backup retention (days)", "type": "number", "default": 7, "show_if": { "input": "backups", "equals": [true] } }
+  ]
+}
+```
+
+Loading the 0.x file fails at the first problem it finds, prefixed with the file name. For this file, fixing one after the other:
+
+```text
+vm.json: template vm, input disks: default must be a JSON number (2, not "2")
+vm.json: template vm, input backups: default must be a JSON boolean (true, not "true")
+vm.json: template vm, input retention: default must be a JSON number (7, not "7")
+vm.json: template vm, input retention: show_if.equals: each value must be a JSON boolean (true, not "true")
+```
+
+The other messages of the format, with `<…>` for your names and values:
+
+```text
+template <id>, input <name>: default must be a JSON string ("7", not 7)
+template <id>, input <name>: default must be a JSON boolean (true or false), not <value>
+template <id>, input <name>: show_if.equals: each value must be a JSON string ("true", not true)
+template <id>, input <name>: unknown field "lable"
+template <id>, input <name>: option: unknown field "text"
+template <id>: module: unknown field "version"
+template <id>: unknown field "tags"
+```
+
+A label with `: ` in it loads without an error, so search the files for `"label": "` values containing `: ` as well. Opening and saving a template in the [template builder]({{< relref "template-builder" >}}) also writes the 1.0 format, but only once the file loads.
 
 ## Writing modules for templates
 
@@ -27,9 +152,9 @@ A template's module is deployed by people who never write Terraform, so it has t
 
 ## Conditional inputs
 
-Add `"show_if": {"input": "<name>", "equals": ["<value>", ...]}` to an input to show it only while an earlier `select` input has one of the values, or an earlier `bool` input is `"true"` or `"false"` (e.g. `{"input": "backups", "equals": ["true"]}`). In the [template builder]({{< relref "template-builder" >}}) this is a field's **Show when … is …** row. Conditions can be chained (a hidden dropdown hides the inputs that depend on it). A hidden input isn't validated or sent to Terraform, so the module's own default applies. Switching a workspace away from a condition drops that input's stored value, sensitive ones included.
+Add `"show_if": {"input": "<name>", "equals": ["<value>", ...]}` to an input to show it only while an earlier `select` input has one of the values, or an earlier `bool` input is `true` or `false`. The values are typed like the input they refer to: strings for a `select` (its option values), JSON booleans for a `bool` (e.g. `{"input": "backups", "equals": [true]}`). At least one value is required. In the [template builder]({{< relref "template-builder" >}}) this is a field's **Show when … is …** row. Conditions can be chained (a hidden dropdown hides the inputs that depend on it). A hidden input isn't validated or sent to Terraform, so the module's own default applies. Switching a workspace away from a condition drops that input's stored value, sensitive ones included.
 
-A `select` option is either a string or an object `{"label": "...", "value": "..."}`: the form shows the label and Terraform gets the value.
+A `select` option is either a string or an object `{"value": "...", "label": "..."}`: the form shows the label and Terraform gets the value.
 
 ```json
 { "name": "os", "label": "Operating system", "type": "select", "options": [{ "label": "Windows", "value": "windows" }, { "label": "Linux", "value": "linux" }], "default": "linux" },

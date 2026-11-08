@@ -37,19 +37,21 @@ func TestTemplateBuilder(t *testing.T) {
 	h := newServer(t, dir, true, store)
 	form := url.Values{
 		"name": {"Virtual network"}, "module_source": {"git::x"}, "module_ref": {"v1"},
-		// three filled cards and the blank one, like the page submits; checkboxes post their card's index
-		"in_name":        {"cidr", "region", "zone", ""},
-		"in_label":       {"Address space", "", "", ""},
-		"in_type":        {"string", "select", "string", "string"},
-		"in_required":    {"0"},
-		"in_pattern":     {"", "", "", ""},
-		"in_opt_value_0": {"stale"},
-		"in_opt_value_1": {"westeurope", "northeurope", ""}, // the blank row posts too
-		"in_opt_label_1": {"", "North, Europe", ""},         // a comma in a label stays one option
-		"in_default":     {"10.0.0.0/16", "westeurope", "", ""},
-		"in_show_input":  {"", "", "region", ""},
-		"in_show_equals": {"", "", "northeurope", ""},
-		"key":            {"zone"},
+		// five filled cards and the blank one, like the page submits; checkboxes post their card's index
+		"in_name":         {"cidr", "region", "zone", "disks", "backup", ""},
+		"in_label":        {"Address space", "", "", "", "", ""},
+		"in_help":         {"A private range: 10.0.0.0/16", "", "", "", "", ""},
+		"in_type":         {"string", "select", "string", "number", "bool", "string"},
+		"in_required":     {"0"},
+		"in_pattern":      {"", "", "", ""},
+		"in_opt_value_0":  {"stale"},
+		"in_opt_value_1":  {"westeurope", "northeurope", ""}, // the blank row posts too
+		"in_opt_label_1":  {"", "North, Europe", ""},         // a comma in a label stays one option
+		"in_default":      {"10.0.0.0/16", "westeurope", "", "7", "", ""},
+		"in_bool_default": {"", "", "", "", "true", ""}, // a Yes / no card's default comes from its select
+		"in_show_input":   {"", "", "region", ""},
+		"in_show_equals":  {"", "", "northeurope", ""},
+		"key":             {"zone"},
 	}
 	// a preview renders the deploy form from the unsaved template, and saves nothing
 	preview := url.Values{}
@@ -74,11 +76,19 @@ func TestTemplateBuilder(t *testing.T) {
 	}
 	saved, _ := os.ReadFile(filepath.Join(dir, id+".json"))
 	if s := string(saved); !strings.Contains(s, `"show_if": {`) || strings.Contains(s, "stale") || !strings.Contains(s, `"required": true`) ||
-		!strings.Contains(s, `"label": "North, Europe"`) || strings.Count(s, `"key": true`) != 1 {
+		!strings.Contains(s, `"label": "North, Europe"`) || strings.Count(s, `"key": true`) != 1 ||
+		!strings.Contains(s, `"help": "A private range: 10.0.0.0/16"`) || !strings.Contains(s, `"default": 7`) || !strings.Contains(s, `"default": true`) {
 		t.Fatalf("saved template wrong:\n%s", s)
 	}
-	// the builder shows the condition and the option rows again
+	// the deploy form shows the help, described by it
+	if body := get(h, loc).Body.String(); !strings.Contains(body, `<p class="hint" id="cidr-help">A private range: 10.0.0.0/16</p>`) ||
+		!strings.Contains(body, `aria-describedby="cidr-help"`) {
+		t.Fatalf("deploy form lacks the help: %s", body)
+	}
+	// the builder shows the condition, the option rows, the help and the typed defaults again
 	if body := get(h, loc+"/edit").Body.String(); !strings.Contains(body, `<option value="region" selected>when region is</option>`) ||
+		!strings.Contains(body, `name="in_help" value="A private range: 10.0.0.0/16"`) ||
+		!strings.Contains(body, `value="7" type="number"`) || !strings.Contains(body, `<option value="true" selected>yes (true)</option>`) ||
 		!strings.Contains(body, `name="in_opt_label_1" value="North, Europe"`) || !strings.Contains(body, `<option value="zone" selected>zone</option>`) {
 		t.Fatalf("builder lost the condition or options: %s", body)
 	}
@@ -120,22 +130,24 @@ func TestTemplateBuilder(t *testing.T) {
 func TestBuilderRoundTrip(t *testing.T) {
 	tpl := templateFromForm(url.Values{
 		"name": {"VM"}, "module_source": {"git::https://x//vm"}, "module_ref": {"v1"}, "key": {"vm_name"},
-		"in_name":        {"vm_name", "disks", "backup", "size", "note"},
-		"in_label":       {"VM name", "Disks", "Backups", "Size", ""},
-		"in_type":        {"string", "number", "bool", "select", "string"},
-		"in_default":     {"vm1", "2", "true", "s", ""},
-		"in_required":    {"0"},
-		"in_opt_value_3": {"s", "l"},
-		"in_opt_label_3": {"Small", "l"},
-		"in_show_input":  {"", "", "", "", "backup"},
-		"in_show_equals": {"", "", "", "", "false"},
+		"in_name":         {"vm_name", "disks", "backup", "size", "note"},
+		"in_label":        {"VM name", "Disks", "Backups", "Size", ""},
+		"in_help":         {"1-64 letters or digits", "", "", "", "Free text"},
+		"in_type":         {"string", "number", "bool", "select", "string"},
+		"in_default":      {"vm1", "2", "", "s", ""},
+		"in_bool_default": {"", "", "true", "", ""},
+		"in_required":     {"0"},
+		"in_opt_value_3":  {"s", "l"},
+		"in_opt_label_3":  {"Small", "l"},
+		"in_show_input":   {"", "", "", "", "backup"},
+		"in_show_equals":  {"", "", "", "", "false"},
 	})
 	tpl.ID = "vm"
 	b, err := templates.Encode(tpl)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"default": 2`, `"default": true`} {
+	for _, want := range []string{`"default": 2`, `"default": true`, `"help": "Free text"`} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("encoded lacks %s:\n%s", want, b)
 		}
