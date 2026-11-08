@@ -638,16 +638,14 @@ func (s *Server) newRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// Only addresses of the current state: they become Terraform arguments.
-		res, err := s.Store.Resources(r.Context(), ws.ID)
+		a, unknown, err := s.Store.UnknownResource(r.Context(), ws.ID, replace)
 		if err != nil {
 			s.internalError(w, "workspace resources", err)
 			return
 		}
-		for _, a := range replace {
-			if !slices.ContainsFunc(res, func(x storage.Resource) bool { return x.Address == a }) {
-				http.Error(w, "not a resource of this workspace: "+a, http.StatusBadRequest)
-				return
-			}
+		if unknown {
+			http.Error(w, "not a resource of this workspace: "+a, http.StatusBadRequest)
+			return
 		}
 	}
 	run, err := s.Store.CreateRun(r.Context(), ws.ID, action, u.ID, replace)

@@ -643,6 +643,9 @@ func TestAccess(t *testing.T) {
 	if got, err := s.GetWorkspace(ctx, name+"-new"); err != nil || got.ID != w.ID {
 		t.Fatalf("renamed: %+v %v", got, err)
 	}
+	if err := s.RenameWorkspace(ctx, "00000000-0000-0000-0000-000000000000", name+"-gone"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("rename of an unknown workspace: %v", err)
+	}
 }
 
 func TestCancel(t *testing.T) {

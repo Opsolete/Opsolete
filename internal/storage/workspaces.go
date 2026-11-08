@@ -351,7 +351,7 @@ func (s *Store) WorkspacesExist(ctx context.Context, names []string) (bool, erro
 
 // RenameWorkspace changes a workspace's name; its state and runs are keyed by id and stay put.
 func (s *Store) RenameWorkspace(ctx context.Context, id, name string) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET name = $2, updated_at = now() WHERE id = ops_uuid($1)`, id, name)
+	err := affected(s.DB.ExecContext(ctx, `UPDATE workspaces SET name = $2, updated_at = now() WHERE id = ops_uuid($1)`, id, name))
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
 		return ErrNameTaken
 	}

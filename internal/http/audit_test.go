@@ -57,6 +57,24 @@ func TestAuditLogRecordsChanges(t *testing.T) {
 	}
 }
 
+// Audit runs before login: an anonymous POST can't make it parse or store much.
+func TestAuditCapsForms(t *testing.T) {
+	store := testStore(t)
+	h := newServerAs(t, "../../catalog", false, store, devAuth(t, store, "someone@example.com", false))
+	if rec := post(h, "/workspaces/new", url.Values{"x": {strings.Repeat("a", maxFormSize)}}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("oversized form: %d", rec.Code)
+	}
+	path := "/audit-cap-" + strings.ToLower(newID()[:8])
+	post(h, path, url.Values{"x": {strings.Repeat("a", 2*maxAuditValue)}})
+	var detail string
+	if err := store.DB.QueryRow(`SELECT detail::text FROM audit_log WHERE action = $1`, "POST "+path).Scan(&detail); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(detail, "(truncated)") || strings.Contains(detail, strings.Repeat("a", maxAuditValue+1)) {
+		t.Fatalf("value not truncated: %d bytes", len(detail))
+	}
+}
+
 func TestAuditRowSummary(t *testing.T) {
 	for _, k := range []string{"admin_password", "secret.x", "client_secret", "API_TOKEN"} {
 		if !secretName(k) {

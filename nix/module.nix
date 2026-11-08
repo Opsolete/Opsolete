@@ -268,7 +268,7 @@ in {
       jobTimeout = mkOption {
         type = types.str;
         default = "1h";
-        description = "OPS_JOB_TIMEOUT (Go duration, also valid as a systemd time span: e.g. 1h, 90m): hard limit per run phase. A stop waits for the current job up to this plus 5 minutes.";
+        description = "OPS_JOB_TIMEOUT (Go duration, also valid as a systemd time span: e.g. 1h, 90m): hard limit per run phase. A stop waits for the current job up to twice this plus 5 minutes.";
       };
       terraformPackage = mkOption {
         type = types.package;

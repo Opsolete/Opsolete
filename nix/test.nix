@@ -37,6 +37,6 @@ self: {
     machine.succeed("test $(stat -c %U /proc/$(systemctl show -p MainPID --value opsolete-runner)) = opsolete-runner")
     machine.fail("test -e /run/credentials/opsolete-runner.service")
     # a stop waits for the current job: its timeout plus time to save state
-    machine.succeed("systemctl show -p TimeoutStopUSec --value opsolete-runner | grep -x '1h 5min'")
+    machine.succeed("systemctl show -p TimeoutStopUSec --value opsolete-runner | grep -x '2h 5min'")
   '';
 }

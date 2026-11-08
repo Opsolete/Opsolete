@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"mime"
 	"net"
 	"net/http"
 	"slices"
@@ -27,6 +28,23 @@ func secretName(k string) bool {
 }
 
 const maxAuditError = 300 // bytes of a plain-text error response kept as the entry's error
+
+const (
+	maxFormSize   = 1 << 20 // urlencoded body; the largest real field is a 64 KB variable value
+	maxAuditValue = 1 << 10 // bytes of each form value kept in the entry
+)
+
+// truncate cuts each value to maxAuditValue: the log is append-only, refused requests included.
+func truncate(v []string) []string {
+	out := make([]string, len(v))
+	for i, s := range v {
+		if len(s) > maxAuditValue {
+			s = s[:maxAuditValue] + "…(truncated)"
+		}
+		out[i] = s
+	}
+	return out
+}
 
 type statusWriter struct {
 	http.ResponseWriter
@@ -67,8 +85,11 @@ func (s *Server) audit(next http.Handler) http.Handler {
 		mutating := r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions
 		h := next
 		if mutating {
-			// urlencoded bodies only (10 MB cap). Rejected here: the handlers' own ParseForm then returns
-			// nil and they'd act on an empty form.
+			// urlencoded bodies only; capped as this runs before login. Rejected here: the handlers' own
+			// ParseForm then returns nil and they'd act on an empty form.
+			if ct, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); ct == "application/x-www-form-urlencoded" {
+				r.Body = http.MaxBytesReader(w, r.Body, maxFormSize)
+			}
 			if err := r.ParseForm(); err != nil {
 				h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					http.Error(w, "invalid form: "+err.Error(), http.StatusBadRequest)
@@ -117,7 +138,7 @@ func (s *Server) audit(next http.Handler) http.Handler {
 				if secretFields[k] || strings.HasPrefix(k, secretPrefix) || secretName(k) {
 					form[k] = "(redacted)"
 				} else {
-					form[k] = v
+					form[k] = truncate(v)
 				}
 			}
 			detail["form"] = form

@@ -319,6 +319,21 @@ type Resource struct {
 
 // Resources lists the resources in a workspace's current state version.
 // shortcut: no paging, capped at 2000 rows; add paging when inventories get that large.
+// UnknownResource returns an address that isn't in the workspace's current state, and false if all
+// are. Unlike Resources it isn't capped.
+func (s *Store) UnknownResource(ctx context.Context, workspaceID string, addresses []string) (string, bool, error) {
+	var a string
+	err := s.DB.QueryRowContext(ctx, `
+		WITH cur AS (SELECT id FROM state_versions WHERE workspace_id = ops_uuid($1) ORDER BY id DESC LIMIT 1)
+		SELECT a FROM unnest($2::text[]) a
+		WHERE NOT EXISTS (SELECT 1 FROM cur JOIN state_version_resources r ON r.state_version_id = cur.id AND r.address = a)
+		LIMIT 1`, workspaceID, addresses).Scan(&a)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	return a, err == nil, err
+}
+
 func (s *Store) Resources(ctx context.Context, workspaceID string) ([]Resource, error) {
 	rows, err := s.DB.QueryContext(ctx, `
 		WITH cur AS (SELECT id, workspace_id, serial FROM state_versions
