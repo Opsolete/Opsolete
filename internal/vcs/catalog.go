@@ -3,11 +3,9 @@ package vcs
 import (
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"path"
 	"strings"
 
@@ -153,11 +151,7 @@ func (cl *Client) fetchCatalog(ctx context.Context, st *storage.Store, open Open
 	if err != nil || head == tc.Commit {
 		return head, nil, err
 	}
-	a, b, err := splitRepo(tc.Repo)
-	if err != nil {
-		return "", nil, err
-	}
-	files, err := c.download(ctx, a, b, head, "commit")
+	files, err := c.download(ctx, tc.Repo, head, "commit")
 	if err != nil {
 		return "", nil, err
 	}
@@ -273,74 +267,22 @@ func tokenHint(err error) error {
 	return fmt.Errorf("the provider refused the connection's token: it may be expired, revoked or lack write access. Replace it with Change access token in Settings → Templates, then try again. (%w)", err)
 }
 
-const zeroCommit = "0000000000000000000000000000000000000000"
-
+// createBranch creates branch at commit.
 func (c Conn) createBranch(ctx context.Context, repo, branch, commit string) error {
-	a, b, err := splitRepo(repo)
+	p, a, b, err := c.repo(repo)
 	if err != nil {
 		return err
 	}
-	switch c.Provider {
-	case GitHub:
-		return c.send(ctx, http.MethodPost, fmt.Sprintf("%s/repos/%s/%s/git/refs", c.BaseURL, a, b),
-			map[string]string{"ref": "refs/heads/" + branch, "sha": commit}, nil)
-	case AzureDevOps:
-		var res struct {
-			Value []struct {
-				Success      bool   `json:"success"`
-				UpdateStatus string `json:"updateStatus"`
-			} `json:"value"`
-		}
-		err := c.send(ctx, http.MethodPost, fmt.Sprintf("%s/%s/_apis/git/repositories/%s/refs?api-version=7.1", c.BaseURL, a, b),
-			[]map[string]string{{"name": "refs/heads/" + branch, "oldObjectId": zeroCommit, "newObjectId": commit}}, &res)
-		if err == nil && (len(res.Value) != 1 || !res.Value[0].Success) {
-			err = fmt.Errorf("azure-devops: branch not created: %+v", res.Value)
-		}
-		return err
-	}
-	return fmt.Errorf("unknown VCS provider %q", c.Provider)
+	return p.createBranch(ctx, c, a, b, branch, commit)
 }
 
 // commitFile commits one file to branch, whose current commit must be base. A nil body deletes the file.
 func (c Conn) commitFile(ctx context.Context, repo, branch, base, file string, body []byte, isNew bool, msg string) error {
-	a, b, err := splitRepo(repo)
+	p, a, b, err := c.repo(repo)
 	if err != nil {
 		return err
 	}
-	switch c.Provider {
-	case GitHub:
-		u := fmt.Sprintf("%s/repos/%s/%s/contents/%s", c.BaseURL, a, b, (&url.URL{Path: file}).EscapedPath())
-		req, method := map[string]string{"message": msg, "branch": branch}, http.MethodDelete
-		if body != nil {
-			req["content"], method = base64.StdEncoding.EncodeToString(body), http.MethodPut
-		}
-		if !isNew { // the file's blob at base: GitHub answers 409 if the branch has another version by now
-			var cur struct {
-				SHA string `json:"sha"`
-			}
-			if err := c.getJSON(ctx, u+"?ref="+url.QueryEscape(base), &cur, false); err != nil {
-				return err
-			}
-			req["sha"] = cur.SHA
-		}
-		return c.send(ctx, method, u, req, nil)
-	case AzureDevOps:
-		change := map[string]any{"changeType": "edit", "item": map[string]string{"path": "/" + file},
-			"newContent": map[string]string{"content": string(body), "contentType": "rawtext"}}
-		if isNew {
-			change["changeType"] = "add"
-		}
-		if body == nil {
-			change["changeType"] = "delete"
-			delete(change, "newContent")
-		}
-		// oldObjectId: Azure DevOps refuses the push (409) if the branch moved since base.
-		return c.send(ctx, http.MethodPost, fmt.Sprintf("%s/%s/_apis/git/repositories/%s/pushes?api-version=7.1", c.BaseURL, a, b), map[string]any{
-			"refUpdates": []map[string]string{{"name": "refs/heads/" + branch, "oldObjectId": base}},
-			"commits":    []map[string]any{{"comment": msg, "changes": []map[string]any{change}}},
-		}, nil)
-	}
-	return fmt.Errorf("unknown VCS provider %q", c.Provider)
+	return p.commitFile(ctx, c, a, b, branch, base, file, body, isNew, msg)
 }
 
 // templatePR finds the open pull request a save of template id opened: its opsolete/template-<id>-
@@ -360,31 +302,11 @@ func (c Conn) templatePR(ctx context.Context, tc storage.TemplateCatalog, id str
 	return PullRequest{}, false, nil
 }
 
-func azurePRURL(base, project, repo string, id int) string {
-	return fmt.Sprintf("%s/%s/_git/%s/pullrequest/%d", base, project, repo, id) // project, repo: escaped by splitRepo
-}
-
 // openPR opens a pull request of branch into target and returns its web URL.
 func (c Conn) openPR(ctx context.Context, repo, branch, target, title, body string) (string, error) {
-	a, b, err := splitRepo(repo)
+	p, a, b, err := c.repo(repo)
 	if err != nil {
 		return "", err
 	}
-	switch c.Provider {
-	case GitHub:
-		var pr struct {
-			HTMLURL string `json:"html_url"`
-		}
-		err := c.send(ctx, http.MethodPost, fmt.Sprintf("%s/repos/%s/%s/pulls", c.BaseURL, a, b),
-			map[string]string{"title": title, "head": branch, "base": target, "body": body}, &pr)
-		return pr.HTMLURL, err
-	case AzureDevOps:
-		var pr struct {
-			ID int `json:"pullRequestId"`
-		}
-		err := c.send(ctx, http.MethodPost, fmt.Sprintf("%s/%s/_apis/git/repositories/%s/pullrequests?api-version=7.1", c.BaseURL, a, b),
-			map[string]string{"sourceRefName": "refs/heads/" + branch, "targetRefName": "refs/heads/" + target, "title": title, "description": body}, &pr)
-		return azurePRURL(c.BaseURL, a, b, pr.ID), err
-	}
-	return "", fmt.Errorf("unknown VCS provider %q", c.Provider)
+	return p.openPR(ctx, c, a, b, branch, target, title, body)
 }
