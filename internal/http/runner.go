@@ -14,9 +14,6 @@ import (
 	"github.com/opsolete/opsolete/internal/runnerapi"
 )
 
-// claimWait is the long-poll window, below typical proxy idle timeouts (a var for tests).
-var claimWait = 20 * time.Second
-
 const maxLogChunk = 256 << 10 // per request
 
 // Runner API: runners pull work over HTTPS with the shared RUNNER_TOKEN, so they need no
@@ -49,7 +46,7 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 		writeErrors(w, http.StatusBadRequest, `body must be {"runner": "<name>"}`)
 		return
 	}
-	deadline := time.After(claimWait)
+	deadline := time.After(s.ClaimWait)
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()
 	for {

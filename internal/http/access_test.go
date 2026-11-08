@@ -65,19 +65,7 @@ type accessRow struct {
 func TestAccessMatrix(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-	claimWait = 10 * time.Millisecond
-	// Leftover runs from earlier tests would be claimed first.
-	store.Pool.Exec(ctx, `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE run_active(status)`)
 	sfx := strings.ToLower(newID()[:8])
-	t.Cleanup(func() {
-		ctx := context.Background()
-		store.Pool.Exec(ctx, `DELETE FROM workspaces WHERE name LIKE '%' || $1 || '%'`, sfx)
-		store.Pool.Exec(ctx, `DELETE FROM projects WHERE name LIKE '%' || $1 || '%'`, sfx)
-		store.Pool.Exec(ctx, `DELETE FROM variable_sets WHERE name LIKE '%' || $1 || '%'`, sfx)
-		store.Pool.Exec(ctx, `DELETE FROM modules WHERE namespace LIKE '%' || $1 || '%'`, sfx)
-		store.Pool.Exec(ctx, `DELETE FROM vcs_connections WHERE name LIKE '%' || $1 || '%'`, sfx)
-		store.Pool.Exec(ctx, `DELETE FROM api_tokens WHERE name = $1`, "acc-"+sfx)
-	})
 
 	tpls, err := templates.Open(t.TempDir())
 	if err != nil {
@@ -88,7 +76,7 @@ func TestAccessMatrix(t *testing.T) {
 	all := Features{Deployments: true, Registry: true, Editor: true, VCS: true}
 	server := func(au *auth.Auth) *Server {
 		s := New(a, au, all)
-		s.RunnerToken, s.Organization = testRunnerToken, "acc"
+		s.RunnerToken, s.Organization, s.ClaimWait = testRunnerToken, "acc", 10*time.Millisecond
 		return s
 	}
 	is := authtest.New(t)
@@ -129,7 +117,7 @@ func TestAccessMatrix(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	must := func(rec *httptest.ResponseRecorder, want int, what string) *httptest.ResponseRecorder {
+	must := func(t *testing.T, rec *httptest.ResponseRecorder, want int, what string) *httptest.ResponseRecorder {
 		t.Helper()
 		if rec.Code != want {
 			t.Fatalf("fixture %s: %d %s", what, rec.Code, rec.Body.String())
@@ -143,19 +131,19 @@ func TestAccessMatrix(t *testing.T) {
 		return do(anon, req)
 	}
 	n := 0
-	fixture := func() accessFixture {
+	fixture := func(t *testing.T) accessFixture {
 		t.Helper()
 		n++
 		s := fmt.Sprintf("%s-%d", sfx, n)
 		f := accessFixture{project: "acc-" + s, ws: "acc-ws-" + s, cws: "acc-cli-" + s, set: "acc-set-" + s, ns: "acc" + strings.ReplaceAll(s, "-", ""), conn: "acc-" + s}
-		must(post(admin, "/projects", url.Values{"name": {f.project}}), http.StatusSeeOther, "project")
+		must(t, post(admin, "/projects", url.Values{"name": {f.project}}), http.StatusSeeOther, "project")
 		for group, level := range map[string]string{readers: "read", operators: "operate"} {
-			must(post(admin, "/projects/"+f.project+"/access", url.Values{"group": {group}, "level": {level}}), http.StatusSeeOther, "grant")
+			must(t, post(admin, "/projects/"+f.project+"/access", url.Values{"group": {group}, "level": {level}}), http.StatusSeeOther, "grant")
 		}
-		rec := must(post(admin, "/templates/new", url.Values{"name": {"Acc " + s}, "module_source": {"git::https://x//m"}, "module_ref": {"v1"},
+		rec := must(t, post(admin, "/templates/new", url.Values{"name": {"Acc " + s}, "module_source": {"git::https://x//m"}, "module_ref": {"v1"},
 			"in_name": {"location"}, "in_type": {"string"}, "in_default": {"westeurope"}}), http.StatusSeeOther, "template")
 		f.tpl = strings.TrimPrefix(rec.Header().Get("Location"), "/templates/")
-		rec = must(post(admin, "/templates/"+f.tpl, url.Values{"ops-workspace": {f.ws}, fieldProject: {f.project}, "location": {"westeurope"}}),
+		rec = must(t, post(admin, "/templates/"+f.tpl, url.Values{"ops-workspace": {f.ws}, fieldProject: {f.project}, "location": {"westeurope"}}),
 			http.StatusSeeOther, "workspace")
 		f.run = strings.TrimPrefix(rec.Header().Get("Location"), "/workspaces/"+f.ws+"/runs/")
 
@@ -164,17 +152,17 @@ func TestAccessMatrix(t *testing.T) {
 			t.Fatal(err)
 		}
 		var obj struct{ Data struct{ ID string } }
-		rec = must(apiCall("POST", cloudPrefix+"/organizations/acc/workspaces",
+		rec = must(t, apiCall("POST", cloudPrefix+"/organizations/acc/workspaces",
 			fmt.Sprintf(`{"data":{"attributes":{"name":%q},"relationships":{"project":{"data":{"id":%q}}}}}`, f.cws, p.ID)), http.StatusCreated, "cli workspace")
 		json.Unmarshal(rec.Body.Bytes(), &obj)
 		f.cwsID = obj.Data.ID
-		must(apiCall("POST", cloudPrefix+"/workspaces/"+f.cwsID+"/actions/lock", ""), http.StatusOK, "cli lock")
+		must(t, apiCall("POST", cloudPrefix+"/workspaces/"+f.cwsID+"/actions/lock", ""), http.StatusOK, "cli lock")
 		st := base64.StdEncoding.EncodeToString([]byte(`{"version":4,"serial":1,"lineage":"acc","outputs":{},"resources":[]}`))
-		rec = must(apiCall("POST", cloudPrefix+"/workspaces/"+f.cwsID+"/state-versions", `{"data":{"attributes":{"state":"`+st+`"}}}`),
+		rec = must(t, apiCall("POST", cloudPrefix+"/workspaces/"+f.cwsID+"/state-versions", `{"data":{"attributes":{"state":"`+st+`"}}}`),
 			http.StatusCreated, "state version")
 		json.Unmarshal(rec.Body.Bytes(), &obj)
 		f.version = obj.Data.ID
-		must(apiCall("POST", cloudPrefix+"/workspaces/"+f.cwsID+"/actions/unlock", ""), http.StatusOK, "cli unlock")
+		must(t, apiCall("POST", cloudPrefix+"/workspaces/"+f.cwsID+"/actions/unlock", ""), http.StatusOK, "cli unlock")
 
 		ws, err := store.GetWorkspace(ctx, f.ws)
 		if err != nil {
@@ -186,14 +174,14 @@ func TestAccessMatrix(t *testing.T) {
 			t.Fatalf("workspace templates: %v %v", added, err)
 		}
 		f.module = added[0].Name
-		must(post(admin, "/workspaces/"+f.ws+"/variables", url.Values{"category": {"terraform"}, "key": {"k"}, "value": {"v"}}), http.StatusSeeOther, "variable")
+		must(t, post(admin, "/workspaces/"+f.ws+"/variables", url.Values{"category": {"terraform"}, "key": {"k"}, "value": {"v"}}), http.StatusSeeOther, "variable")
 		vars, err := store.Variables(ctx, storage.VarOwner{WorkspaceID: ws.ID})
 		if err != nil || len(vars) != 1 {
 			t.Fatalf("variable: %v %v", vars, err)
 		}
 		f.wsVar = vars[0].ID.String()
-		must(post(admin, "/variable-sets", url.Values{"name": {f.set}}), http.StatusSeeOther, "variable set")
-		must(post(admin, "/variable-sets/"+f.set+"/variables", url.Values{"category": {"env"}, "key": {"K"}, "value": {"v"}}), http.StatusSeeOther, "set variable")
+		must(t, post(admin, "/variable-sets", url.Values{"name": {f.set}}), http.StatusSeeOther, "variable set")
+		must(t, post(admin, "/variable-sets/"+f.set+"/variables", url.Values{"category": {"env"}, "key": {"K"}, "value": {"v"}}), http.StatusSeeOther, "set variable")
 		set, err := store.GetVariableSet(ctx, f.set)
 		if err != nil {
 			t.Fatal(err)
@@ -204,7 +192,7 @@ func TestAccessMatrix(t *testing.T) {
 		f.setVar = vars[0].ID.String()
 
 		archive := registrytest.TarGz(t, map[string]string{"main.tf": `variable "x" {}`})
-		must(upload(admin, map[string]string{"namespace": f.ns, "name": "net", "system": "azurerm", "version": "1.0.0"}, archive), http.StatusSeeOther, "module")
+		must(t, upload(admin, map[string]string{"namespace": f.ns, "name": "net", "system": "azurerm", "version": "1.0.0"}, archive), http.StatusSeeOther, "module")
 		conn := storage.VCSConnection{Name: f.conn, Provider: vcs.GitHub, BaseURL: "https://api.github.com"}
 		if conn.Token, err = vcs.Seal(a.SecretKey, "tok", vcs.TokenAD(conn)); err != nil {
 			t.Fatal(err)
@@ -216,7 +204,7 @@ func TestAccessMatrix(t *testing.T) {
 		f.conn = id.String()
 		return f
 	}
-	shared := fixture()
+	shared := fixture(t)
 
 	// The runner's job: the shared workspace's plan, the only queued run.
 	body, ok, err := a.ClaimJob(ctx, "acc")
@@ -260,53 +248,57 @@ func TestAccessMatrix(t *testing.T) {
 	rows := accessRows()
 
 	// Coverage: one row per registered pattern (all features on), and no row without one.
-	registered := anonSrv.patterns
-	var covered []string
-	for _, r := range rows {
-		if !slices.Contains(registered, r.pattern) {
-			t.Errorf("row %q: no such route", r.pattern)
+	t.Run("every route has one row", func(t *testing.T) {
+		registered := anonSrv.patterns
+		var covered []string
+		for _, r := range rows {
+			if !slices.Contains(registered, r.pattern) {
+				t.Errorf("row %q: no such route", r.pattern)
+			}
+			if slices.Contains(covered, r.pattern) {
+				t.Errorf("row %q: twice", r.pattern)
+			}
+			covered = append(covered, r.pattern)
 		}
-		if slices.Contains(covered, r.pattern) {
-			t.Errorf("row %q: twice", r.pattern)
+		for _, p := range registered {
+			if !slices.Contains(covered, p) {
+				t.Errorf("route %q has no access row", p)
+			}
 		}
-		covered = append(covered, r.pattern)
-	}
-	for _, p := range registered {
-		if !slices.Contains(covered, p) {
-			t.Errorf("route %q has no access row", p)
-		}
-	}
+	})
 
 	for _, r := range rows {
-		ps := principals[r.surface]
-		if len(r.want) != len(ps) {
-			t.Errorf("%s: %d statuses for %d principals", r.pattern, len(r.want), len(ps))
-			continue
-		}
-		method, _, _ := strings.Cut(r.pattern, " ")
-		f, dirty := shared, r.fresh
-		for i, p := range ps {
-			if dirty {
-				f, dirty = fixture(), false
+		t.Run(r.pattern, func(t *testing.T) {
+			ps := principals[r.surface]
+			if len(r.want) != len(ps) {
+				t.Errorf("%s: %d statuses for %d principals", r.pattern, len(r.want), len(ps))
+				return
 			}
-			req := httptest.NewRequest(method, f.path(r.path), strings.NewReader(f.path(r.body)))
-			if r.surface == onUI || r.surface == onPublic {
-				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-			} else if r.body != "" {
-				req.Header.Set("Content-Type", "application/json")
+			method, _, _ := strings.Cut(r.pattern, " ")
+			f, dirty := shared, r.fresh
+			for i, p := range ps {
+				if dirty {
+					f, dirty = fixture(t), false
+				}
+				req := httptest.NewRequest(method, f.path(r.path), strings.NewReader(f.path(r.body)))
+				if r.surface == onUI || r.surface == onPublic {
+					req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+				} else if r.body != "" {
+					req.Header.Set("Content-Type", "application/json")
+				}
+				if strings.HasSuffix(r.pattern, "/logs/stream") { // a run's stream lasts until it ends
+					c, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+					defer cancel()
+					req = req.WithContext(c)
+				}
+				p.auth(req)
+				rec := do(p.h, req)
+				dirty = r.fresh && rec.Code < 400
+				if rec.Code != r.want[i] {
+					t.Errorf("%s as %s: %d, want %d: %.200s", r.pattern, p.name, rec.Code, r.want[i], rec.Body.String())
+				}
 			}
-			if strings.HasSuffix(r.pattern, "/logs/stream") { // a run's stream lasts until it ends
-				c, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
-				defer cancel()
-				req = req.WithContext(c)
-			}
-			p.auth(req)
-			rec := do(p.h, req)
-			dirty = r.fresh && rec.Code < 400
-			if rec.Code != r.want[i] {
-				t.Errorf("%s as %s: %d, want %d: %.200s", r.pattern, p.name, rec.Code, r.want[i], rec.Body.String())
-			}
-		}
+		})
 	}
 }
 

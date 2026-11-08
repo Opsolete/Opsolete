@@ -1,7 +1,6 @@
 package httpserver
 
 import (
-	"context"
 	"crypto/md5"
 	"crypto/sha256"
 	"encoding/base64"
@@ -137,10 +136,6 @@ func TestCloudLoginAndState(t *testing.T) {
 		t.Fatal(err)
 	}
 	other, err := store.CreateEmptyWorkspace(t.Context(), storage.EmptyWorkspace{Name: "cli-other-" + newID()[:8], Project: otherPrj})
-	t.Cleanup(func() {
-		store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE id = $1`, other.ID)
-		store.Pool.Exec(context.Background(), `DELETE FROM projects WHERE name = $1`, otherPrj)
-	})
 	if err != nil {
 		t.Fatal(err)
 	}

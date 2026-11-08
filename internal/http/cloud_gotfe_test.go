@@ -62,7 +62,6 @@ func TestCloudGoTFE(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
-	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE id::text = $1`, ws.ID) })
 	if _, err := alice.Workspaces.UpdateByID(ctx, ws.ID, tfe.WorkspaceUpdateOptions{TerraformVersion: tfe.String("1.14.0")}); err != nil {
 		t.Fatalf("update workspace: %v", err)
 	}
@@ -120,10 +119,6 @@ func TestCloudGoTFE(t *testing.T) {
 	if err != nil || prj.Name != pname {
 		t.Fatalf("an admin creates the project: %+v %v", prj, err)
 	}
-	t.Cleanup(func() {
-		store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE project_id::text = $1`, prj.ID)
-		store.Pool.Exec(context.Background(), `DELETE FROM projects WHERE id::text = $1`, prj.ID)
-	})
 	if _, err := alice.Workspaces.Create(ctx, "acme", tfe.WorkspaceCreateOptions{Name: tfe.String(name + "-p"), Project: prj}); err == nil || !strings.Contains(err.Error(), "operate") {
 		t.Fatalf("a user without operate on the project creates a workspace in it: %v", err)
 	}

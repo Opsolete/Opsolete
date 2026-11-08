@@ -65,14 +65,6 @@ func TestFormsRerender(t *testing.T) {
 		Features{Deployments: true, Registry: true, Editor: true, VCS: true})
 	h := srv.Handler()
 	ws, proj, set, ns := "frm-ws-"+sfx, "frm-"+sfx, "frm-set-"+sfx, "frm"+sfx
-	t.Cleanup(func() {
-		ctx := context.Background()
-		store.Pool.Exec(ctx, `DELETE FROM workspaces WHERE name LIKE '%' || $1`, sfx)
-		store.Pool.Exec(ctx, `DELETE FROM projects WHERE name LIKE '%' || $1`, sfx)
-		store.Pool.Exec(ctx, `DELETE FROM variable_sets WHERE name LIKE '%' || $1`, sfx)
-		store.Pool.Exec(ctx, `DELETE FROM modules WHERE namespace = $1`, ns)
-		store.Pool.Exec(ctx, `DELETE FROM vcs_connections WHERE name = $1`, "frm-"+sfx)
-	})
 	must := func(rec *httptest.ResponseRecorder, what string) *httptest.ResponseRecorder {
 		t.Helper()
 		if rec.Code != http.StatusSeeOther {
@@ -212,7 +204,6 @@ func TestSettingsPagesSaveOwnFields(t *testing.T) {
 	if rec := post(h, "/workspaces/new", url.Values{fieldWorkspace: {name}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
 	}
-	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE name = $1`, name) })
 	general, health := get(h, "/workspaces/"+name+"/settings").Body.String(), get(h, "/workspaces/"+name+"/settings/health").Body.String()
 	if strings.Contains(general, `name="drift_detection"`) || strings.Contains(health, `name="auto_apply"`) || strings.Contains(health, `name="page"`) {
 		t.Fatal("a settings page posts another page's fields")

@@ -55,7 +55,6 @@ func TestVCSConnectionsAdminOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { a.Store.DeleteVCSConnection(context.Background(), id) })
 	if _, err := a.CreateVCSConnection(ctx, admin, in); !isValidation(err) {
 		t.Fatalf("a taken name: %v", err)
 	}
@@ -97,7 +96,6 @@ func testConnection(t *testing.T, a *App, base, scope string) uuid.UUID {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { a.Store.DeleteVCSConnection(context.Background(), id) })
 	if err := a.Store.SetVCSScope(ctx, id, scope); err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +150,6 @@ func TestLinkVCSDuringRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { a.Store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE id = $1`, ws.ID) })
 	if _, err := a.LinkVCS(ctx, admin, ws.Name, VCSLinkInput{ConnectionID: conn, Repo: "acme/infra"}); !IsConflict(err) || !errors.Is(err, storage.ErrRunActive) {
 		t.Fatalf("linking during an active run: %v", err)
 	}

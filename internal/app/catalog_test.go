@@ -78,11 +78,6 @@ func TestUploadModuleRefused(t *testing.T) {
 	}
 	a.Registry, a.RegistryEnabled = testRegistry, true
 	admin, someone := Actor{Email: "admin@example.com", Admin: true}, user(t, a)
-	was, err := a.Store.ModuleUploads(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { a.Store.SetModuleUploads(context.Background(), was) })
 	in := ModuleUpload{Namespace: "acme", Name: "bucket", System: "aws", Version: "1.0.0"}
 	if err := a.SetModuleUploads(ctx, someone, true); !errors.Is(err, ErrForbidden) {
 		t.Fatalf("a non-admin turns uploads on: %v", err)

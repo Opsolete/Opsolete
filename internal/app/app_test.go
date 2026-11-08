@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"os"
 	"strings"
 	"testing"
 
@@ -14,20 +13,17 @@ import (
 	"gocloud.dev/blob/memblob"
 
 	"github.com/opsolete/opsolete/internal/storage"
+	"github.com/opsolete/opsolete/internal/testdb"
 )
 
-// testApp returns an App on a migrated test database, or skips without TEST_DATABASE_URL.
+// testApp returns an App on a migrated database of t's own (testdb), or skips without TEST_DATABASE_URL.
 func testApp(t *testing.T) *App {
-	dbURL := os.Getenv("TEST_DATABASE_URL")
-	if dbURL == "" {
-		t.Skip("TEST_DATABASE_URL not set")
-	}
-	s, err := storage.Open(context.Background(), dbURL)
+	s, err := storage.Open(context.Background(), testdb.URL(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
-	s.AuditKey = []byte("test-audit-key") // the same in every test package: they share the log
+	t.Cleanup(s.Close)
+	s.AuditKey = []byte("test-audit-key")
 	if err := s.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +31,7 @@ func testApp(t *testing.T) *App {
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 }
 
-func uniq(prefix string) string { return prefix + strings.ToLower(rand.Text()[:10]) } // the test DB is reused
+func uniq(prefix string) string { return prefix + strings.ToLower(rand.Text()[:10]) } // several per test
 
 func user(t *testing.T, a *App, groups ...string) Actor {
 	email := uniq("u-") + "@example.com"
@@ -53,7 +49,6 @@ func emptyWorkspace(t *testing.T, a *App, by Actor) storage.Workspace {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { a.Store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE id = $1`, ws.ID) })
 	return ws
 }
 
@@ -130,7 +125,6 @@ func TestCreateEmptyWorkspaceAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { a.Store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE id = $1`, ws.ID) })
 	if ws.ExecutionMode != "local" {
 		t.Fatalf("mode: %q", ws.ExecutionMode)
 	}

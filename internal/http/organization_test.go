@@ -1,7 +1,6 @@
 package httpserver
 
 import (
-	"context"
 	"net/http"
 	"net/url"
 	"strings"
@@ -11,7 +10,6 @@ import (
 func TestOrganizationCurrency(t *testing.T) {
 	store := testStore(t)
 	h := newServer(t, "../../catalog", false, store)
-	t.Cleanup(func() { store.SetCurrency(context.Background(), "USD") })
 	if rec := post(h, "/organization", url.Values{"currency": {"GBP"}}); rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("bad currency: %d", rec.Code)
 	}

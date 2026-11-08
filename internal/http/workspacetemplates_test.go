@@ -23,10 +23,7 @@ import (
 func TestWorkspaceTemplates(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-	claimWait = 100 * time.Millisecond
-	store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE run_active(status)`)
 	ws := "wt-" + strings.ToLower(newID()[:8])
-	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE name = $1`, ws) })
 	h := newServer(t, "../../catalog", false, store)
 	runnerTok := testRunnerToken
 	claim := func() runnerapi.Job {
@@ -172,7 +169,6 @@ func TestDeleteWorkspace(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 	ws := "del-" + strings.ToLower(newID()[:8])
-	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE name = $1`, ws) })
 	app := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true})
 	h, url0 := app.Handler(), "/workspaces/"+ws
 	if rec := post(h, "/workspaces/new", url.Values{fieldWorkspace: {ws}}); rec.Code != http.StatusSeeOther {
@@ -227,13 +223,8 @@ func TestGroupResources(t *testing.T) {
 func TestSensitiveInputs(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-	claimWait = 100 * time.Millisecond
-	store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE run_active(status)`)
 	id := strings.ToLower(newID()[:8])
 	ws, root := "sens-"+id, "sensroot-"+id
-	t.Cleanup(func() {
-		store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE name IN ($1, $2)`, ws, root)
-	})
 	dir := t.TempDir()
 	tpl, _ := os.ReadFile("../../catalog/greeting.json")
 	tpl = []byte(strings.Replace(string(tpl), `"required": true, "pattern": "^[A-Za-z0-9 ]{1,40}$", "default": "world", "key": true`, `"required": true, "sensitive": true`, 1))

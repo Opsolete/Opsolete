@@ -13,7 +13,6 @@ func TestProjects(t *testing.T) {
 	group := uniq("grp-")
 	member, stranger := user(t, a, group), user(t, a)
 	name := uniq("prj-")
-	t.Cleanup(func() { a.Store.Pool.Exec(context.Background(), `DELETE FROM projects WHERE name = $1`, name) })
 	if _, err := a.CreateProject(ctx, member, name, ""); !errors.Is(err, ErrForbidden) {
 		t.Errorf("a user creates a project: %v", err)
 	}
@@ -96,7 +95,6 @@ func TestNewWorkspaceProject(t *testing.T) {
 	readers, operators := uniq("grp-"), uniq("grp-")
 	reader, operator := user(t, a, readers), user(t, a, operators)
 	name := uniq("prj-")
-	t.Cleanup(func() { a.Store.Pool.Exec(context.Background(), `DELETE FROM projects WHERE name = $1`, name) })
 	if _, err := a.CreateProject(ctx, admin, name, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +136,6 @@ func TestNewWorkspaceProject(t *testing.T) {
 	if err := a.SetProjectGrant(ctx, admin, def.Name, operators, "operate"); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { a.SetProjectGrant(context.Background(), admin, def.Name, operators, "") })
 	allowed("the default project with operate, unnamed", operator, "", def.Name)
 	allowed("the default project with operate, named", operator, def.Name, def.Name)
 	refused("the default project, someone else", reader, "")

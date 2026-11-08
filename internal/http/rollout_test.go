@@ -43,15 +43,10 @@ func TestStartRollout(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
 	h := newServer(t, "../../catalog", false, store)
-	store.Pool.Exec(context.Background(), `UPDATE template_rollouts SET status = 'stopped' WHERE template_id = 'greeting'`) // from earlier runs
 	p, err := store.CreateProject(ctx, "ro-"+strings.ToLower(rand.Text()[:8]), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		store.Pool.Exec(context.Background(), `DELETE FROM template_rollouts WHERE project_id = $1`, p.ID)
-		store.Pool.Exec(context.Background(), `DELETE FROM projects WHERE id = $1`, p.ID)
-	})
 	form := url.Values{"source": {"opsolete.localhost:8080/examples/greeting/terraform"}, "ref": {"1.0.0"}, "project": {p.Name}, "batch": {"2"}}
 	if rec := post(h, "/templates/greeting/rollout", form); rec.Code != http.StatusConflict {
 		t.Fatalf("stale version: %d %s", rec.Code, rec.Body)

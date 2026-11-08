@@ -69,7 +69,6 @@ func TestTickRollout(t *testing.T) {
 		t.Fatal(err)
 	}
 	tpl, _ := a.Templates.Get("greeting")
-	store.Pool.Exec(context.Background(), `UPDATE template_rollouts SET status = 'stopped' WHERE template_id = 'greeting'`) // from earlier runs
 	sfx := strings.ToLower(rand.Text()[:8])
 	p, err := store.CreateProject(ctx, "ro-"+sfx, "")
 	if err != nil {
@@ -87,12 +86,7 @@ func TestTickRollout(t *testing.T) {
 			t.Fatal(err)
 		}
 		ws[n] = w.ID
-		t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE id = $1`, w.ID) })
 	}
-	t.Cleanup(func() {
-		store.Pool.Exec(context.Background(), `DELETE FROM template_rollouts WHERE project_id = $1`, p.ID)
-		store.Pool.Exec(context.Background(), `DELETE FROM projects WHERE id = $1`, p.ID)
-	})
 	end := func(n, status string) { // ends the workspace's active run
 		t.Helper()
 		if _, err := store.Pool.Exec(context.Background(), `UPDATE runs SET status = $2, lease_id = NULL, lease_until = NULL, updated_at = now() WHERE workspace_id = $1

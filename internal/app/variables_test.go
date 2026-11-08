@@ -25,7 +25,6 @@ func TestWithWorkspaceVars(t *testing.T) {
 	}
 	a.Registry, a.Templates, a.RegistryEnabled = &registry.Registry{PublicURL: u, Key: []byte("test-key")}, tpls, true
 	ns := uniq("wv")
-	t.Cleanup(func() { a.Store.Pool.Exec(context.Background(), `DELETE FROM modules WHERE namespace = $1`, ns) })
 	decl := []registry.Variable{{Variable: tfconfig.Variable{Name: "greeting"}}, {Variable: tfconfig.Variable{Name: "name"}}}
 	if err := a.Store.CreateModule(ctx, storage.Module{Namespace: ns, Name: "m", System: "null", Version: "1.0.0", Variables: decl},
 		storage.ModuleDocs{}, []byte("x")); err != nil {
@@ -73,7 +72,6 @@ func TestVariableAccess(t *testing.T) {
 	}
 
 	set := uniq("set-")
-	t.Cleanup(func() { a.Store.Pool.Exec(context.Background(), `DELETE FROM variable_sets WHERE name = $1`, set) })
 	if err := a.CreateVariableSet(ctx, owner, NewVariableSet{Name: set}); !errors.Is(err, ErrForbidden) {
 		t.Errorf("an operator creates a set: %v", err)
 	}

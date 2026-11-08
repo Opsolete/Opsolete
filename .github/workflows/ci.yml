@@ -41,7 +41,7 @@ jobs:
           terraform_wrapper: false
       - run: test -z "$(gofmt -l .)" || { gofmt -l .; echo "::error::run gofmt -w ."; exit 1; }
       - run: go vet ./...
-      - run: go test -count=1 -p 1 ./... # -p 1: DB tests share one database and its job queue
+      - run: go test -count=1 ./... # each DB test creates its own database (internal/testdb): the service user is a superuser
       # Reports only vulnerabilities in code paths the binary actually calls.
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 

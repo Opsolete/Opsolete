@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"errors"
 	"maps"
-	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -14,38 +13,43 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/opsolete/opsolete/internal/runnerapi"
+	"github.com/opsolete/opsolete/internal/testdb"
 )
 
+// testStore returns a migrated store on a database of t's own (testdb), or skips without TEST_DATABASE_URL.
 func testStore(t *testing.T) *Store {
-	url := os.Getenv("TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("TEST_DATABASE_URL not set")
-	}
-	s, err := Open(context.Background(), url)
+	s, err := Open(context.Background(), testdb.URL(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
-	s.AuditKey = []byte("test-audit-key") // the same in every test package: they share the log
+	t.Cleanup(s.Close)
+	s.AuditKey = []byte("test-audit-key")
 	if err := s.Migrate(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	// Leftovers from earlier runs would be claimed first.
-	if _, err := s.Pool.Exec(context.Background(), `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL
-		WHERE run_active(status)`); err != nil {
 		t.Fatal(err)
 	}
 	return s
 }
 
+// step runs one step of a scenario test as a subtest; a failed step ends the scenario, a filtered
+// out one skips the rest: the steps after it need its state. (A copy of httpserver's.)
+func step(t *testing.T, name string, f func(t *testing.T)) {
+	t.Helper()
+	ran := false
+	if !t.Run(name, func(t *testing.T) { ran = true; f(t) }) {
+		t.Fatalf("step %q failed: the steps after it need its state", name)
+	}
+	if !ran {
+		t.Skipf("step %q was filtered out: the steps after it need its state", name)
+	}
+}
+
 func newWorkspace(t *testing.T, s *Store, autoApply bool) (Workspace, Run) {
 	ctx := context.Background()
-	name := "t-" + strings.ToLower(rand.Text()[:10]) // the test DB is reused
+	name := "t-" + strings.ToLower(rand.Text()[:10]) // several per test
 	w, run, err := s.CreateWorkspace(ctx, uuid.Nil, name, "", testTemplate(map[string]any{"n": 1.0}), autoApply, uuid.Nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE id=$1`, w.ID) })
 	return w, run
 }
 
@@ -421,62 +425,14 @@ func TestRunVariables(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		s.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE id IN ($1, $2)`, w.ID, other.ID)
-		s.Pool.Exec(context.Background(), `DELETE FROM variable_sets WHERE name LIKE $1`, name+"%")
-	})
-	set := func(o VarOwner, cat, key, val string) {
+	set := func(t *testing.T, o VarOwner, cat, key, val string) {
 		if err := s.SetVariable(ctx, o, Variable{Category: cat, Key: key, Value: []byte(val)}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	sets := map[string]uuid.UUID{}
-	for _, n := range []string{"a-global", "b-attached", "c-attached"} {
-		if err := s.CreateVariableSet(ctx, name+n, "", n == "a-global"); err != nil {
-			t.Fatal(err)
-		}
-		vs, err := s.GetVariableSet(ctx, name+n)
-		if err != nil {
-			t.Fatal(err)
-		}
-		sets[n] = vs.ID
-	}
-	if err := s.CreateVariableSet(ctx, name+"a-global", "", false); !errors.Is(err, ErrExists) {
-		t.Fatalf("duplicate set name: %v", err)
-	}
-	for _, n := range []string{"b-attached", "c-attached"} {
-		if err := s.AttachVariableSet(ctx, sets[n], w.Name, true); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := s.AttachVariableSet(ctx, sets["b-attached"], "no-such-workspace", true); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("attach to an unknown workspace: %v", err)
-	}
-	// Select makes the selection exactly its names; an unknown name changes nothing, not even the other picks.
-	attached := func() []string { vs, _ := s.GetVariableSet(ctx, name+"c-attached"); return vs.Workspaces }
-	if err := s.Select(ctx, sets["c-attached"], Pick{SetWorkspaces, nil}, Pick{SetProjects, []string{"no-such-project"}}); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("select an unknown project: %v", err)
-	}
-	if a := attached(); !slices.Equal(a, []string{w.Name}) {
-		t.Fatalf("a failed select changed the selection: %v", a)
-	}
-	if err := s.Select(ctx, sets["c-attached"], Pick{SetWorkspaces, nil}); err != nil || len(attached()) != 0 {
-		t.Fatalf("deselect all: %v %v", err, attached())
-	}
-	if err := s.Select(ctx, sets["c-attached"], Pick{SetWorkspaces, []string{w.Name}}); err != nil || !slices.Equal(attached(), []string{w.Name}) {
-		t.Fatalf("select: %v %v", err, attached())
-	}
 	k := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
-	set(VarOwner{SetID: sets["a-global"]}, "env", k+"_G", "global")
-	set(VarOwner{SetID: sets["a-global"]}, "env", k+"_X", "global")
-	set(VarOwner{SetID: sets["c-attached"]}, "env", k+"_X", "c")
-	set(VarOwner{SetID: sets["b-attached"]}, "env", k+"_X", "b")
-	set(VarOwner{SetID: sets["b-attached"]}, "env", k+"_W", "b")
-	set(VarOwner{WorkspaceID: w.ID}, "env", k+"_W", "old")
-	set(VarOwner{WorkspaceID: w.ID}, "env", k+"_W", "workspace") // replaces
-	set(VarOwner{WorkspaceID: w.ID}, "terraform", k+"_W", "tf")  // other category, no clash
-
-	got := func(id uuid.UUID) map[string]string {
+	got := func(t *testing.T, id uuid.UUID) map[string]string {
 		vars, err := s.RunVariables(ctx, id)
 		if err != nil {
 			t.Fatal(err)
@@ -489,73 +445,121 @@ func TestRunVariables(t *testing.T) {
 		}
 		return m
 	}
-	want := map[string]string{"env:" + k + "_G": "global", "env:" + k + "_X": "b", "env:" + k + "_W": "workspace", "terraform:" + k + "_W": "tf"}
-	if m := got(w.ID); !maps.Equal(m, want) {
-		t.Fatalf("got %v, want %v", m, want)
-	}
-	if m := got(other.ID); !maps.Equal(m, map[string]string{"env:" + k + "_G": "global", "env:" + k + "_X": "global"}) {
-		t.Fatalf("a workspace without attachments gets only global sets: %v", m)
-	}
-	if err := s.AttachVariableSet(ctx, sets["b-attached"], w.Name, false); err != nil {
-		t.Fatal(err)
-	}
-	if m := got(w.ID); m["env:"+k+"_X"] != "c" {
-		t.Fatalf("after detaching b, c must win: %v", m)
-	}
+	var ps VariableSet // the project's set
+	step(t, "variable sets attach to workspaces and select exactly their names", func(t *testing.T) {
+		for _, n := range []string{"a-global", "b-attached", "c-attached"} {
+			if err := s.CreateVariableSet(ctx, name+n, "", n == "a-global"); err != nil {
+				t.Fatal(err)
+			}
+			vs, err := s.GetVariableSet(ctx, name+n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sets[n] = vs.ID
+		}
+		if err := s.CreateVariableSet(ctx, name+"a-global", "", false); !errors.Is(err, ErrExists) {
+			t.Fatalf("duplicate set name: %v", err)
+		}
+		for _, n := range []string{"b-attached", "c-attached"} {
+			if err := s.AttachVariableSet(ctx, sets[n], w.Name, true); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := s.AttachVariableSet(ctx, sets["b-attached"], "no-such-workspace", true); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("attach to an unknown workspace: %v", err)
+		}
+		// Select makes the selection exactly its names; an unknown name changes nothing, not even the other picks.
+		attached := func() []string { vs, _ := s.GetVariableSet(ctx, name+"c-attached"); return vs.Workspaces }
+		if err := s.Select(ctx, sets["c-attached"], Pick{SetWorkspaces, nil}, Pick{SetProjects, []string{"no-such-project"}}); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("select an unknown project: %v", err)
+		}
+		if a := attached(); !slices.Equal(a, []string{w.Name}) {
+			t.Fatalf("a failed select changed the selection: %v", a)
+		}
+		if err := s.Select(ctx, sets["c-attached"], Pick{SetWorkspaces, nil}); err != nil || len(attached()) != 0 {
+			t.Fatalf("deselect all: %v %v", err, attached())
+		}
+		if err := s.Select(ctx, sets["c-attached"], Pick{SetWorkspaces, []string{w.Name}}); err != nil || !slices.Equal(attached(), []string{w.Name}) {
+			t.Fatalf("select: %v %v", err, attached())
+		}
+	})
+	step(t, "attached sets win over global ones, the workspace's own variables over both", func(t *testing.T) {
+		set(t, VarOwner{SetID: sets["a-global"]}, "env", k+"_G", "global")
+		set(t, VarOwner{SetID: sets["a-global"]}, "env", k+"_X", "global")
+		set(t, VarOwner{SetID: sets["c-attached"]}, "env", k+"_X", "c")
+		set(t, VarOwner{SetID: sets["b-attached"]}, "env", k+"_X", "b")
+		set(t, VarOwner{SetID: sets["b-attached"]}, "env", k+"_W", "b")
+		set(t, VarOwner{WorkspaceID: w.ID}, "env", k+"_W", "old")
+		set(t, VarOwner{WorkspaceID: w.ID}, "env", k+"_W", "workspace") // replaces
+		set(t, VarOwner{WorkspaceID: w.ID}, "terraform", k+"_W", "tf")  // other category, no clash
+
+		want := map[string]string{"env:" + k + "_G": "global", "env:" + k + "_X": "b", "env:" + k + "_W": "workspace", "terraform:" + k + "_W": "tf"}
+		if m := got(t, w.ID); !maps.Equal(m, want) {
+			t.Fatalf("got %v, want %v", m, want)
+		}
+		if m := got(t, other.ID); !maps.Equal(m, map[string]string{"env:" + k + "_G": "global", "env:" + k + "_X": "global"}) {
+			t.Fatalf("a workspace without attachments gets only global sets: %v", m)
+		}
+		if err := s.AttachVariableSet(ctx, sets["b-attached"], w.Name, false); err != nil {
+			t.Fatal(err)
+		}
+		if m := got(t, w.ID); m["env:"+k+"_X"] != "c" {
+			t.Fatalf("after detaching b, c must win: %v", m)
+		}
+	})
 
 	// Project sets rank between the workspace's attached sets and global ones, whatever their names:
 	// "a-project" sorts before every set but "a-global".
-	p, err := s.CreateProject(ctx, name, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { // before the workspaces' own cleanups: RESTRICT keeps a project with workspaces
-		s.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE project_id = $1`, p.ID)
-		s.Pool.Exec(context.Background(), `DELETE FROM projects WHERE id = $1`, p.ID)
+	step(t, "project sets rank between attached and global sets", func(t *testing.T) {
+		p, err := s.CreateProject(ctx, name, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.MoveWorkspace(ctx, w.ID, p.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.CreateVariableSet(ctx, name+"a-project", "", false); err != nil {
+			t.Fatal(err)
+		}
+		ps, _ = s.GetVariableSet(ctx, name+"a-project")
+		if err := s.AttachVariableSetProject(ctx, ps.ID, p.Name, true); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.AttachVariableSetProject(ctx, ps.ID, "no-such-project", true); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("attach to an unknown project: %v", err)
+		}
+		if ps, _ = s.GetVariableSet(ctx, ps.Name); !slices.Equal(ps.Projects, []string{p.Name}) {
+			t.Fatalf("set's projects: %v", ps.Projects)
+		}
+		for _, key := range []string{"_G", "_X", "_P", "_W"} {
+			set(t, VarOwner{SetID: ps.ID}, "env", k+key, "project")
+		}
+		want := map[string]string{"env:" + k + "_G": "project", "env:" + k + "_X": "c", "env:" + k + "_P": "project",
+			"env:" + k + "_W": "workspace", "terraform:" + k + "_W": "tf"}
+		if m := got(t, w.ID); !maps.Equal(m, want) {
+			t.Fatalf("with a project set: got %v, want %v", m, want)
+		}
+		if m := got(t, other.ID); m["env:"+k+"_P"] != "" {
+			t.Fatalf("a workspace of another project gets the set: %v", m)
+		}
 	})
-	if err := s.MoveWorkspace(ctx, w.ID, p.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.CreateVariableSet(ctx, name+"a-project", "", false); err != nil {
-		t.Fatal(err)
-	}
-	ps, _ := s.GetVariableSet(ctx, name+"a-project")
-	if err := s.AttachVariableSetProject(ctx, ps.ID, p.Name, true); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.AttachVariableSetProject(ctx, ps.ID, "no-such-project", true); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("attach to an unknown project: %v", err)
-	}
-	if ps, _ = s.GetVariableSet(ctx, ps.Name); !slices.Equal(ps.Projects, []string{p.Name}) {
-		t.Fatalf("set's projects: %v", ps.Projects)
-	}
-	for _, key := range []string{"_G", "_X", "_P", "_W"} {
-		set(VarOwner{SetID: ps.ID}, "env", k+key, "project")
-	}
-	want = map[string]string{"env:" + k + "_G": "project", "env:" + k + "_X": "c", "env:" + k + "_P": "project",
-		"env:" + k + "_W": "workspace", "terraform:" + k + "_W": "tf"}
-	if m := got(w.ID); !maps.Equal(m, want) {
-		t.Fatalf("with a project set: got %v, want %v", m, want)
-	}
-	if m := got(other.ID); m["env:"+k+"_P"] != "" {
-		t.Fatalf("a workspace of another project gets the set: %v", m)
-	}
 
 	// A VCS-linked workspace gets neither project nor global sets, only those attached to it.
-	if _, err := s.CreateVCSConnection(ctx, VCSConnection{Name: name, Provider: "github", Token: []byte("x")}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { s.Pool.Exec(context.Background(), `DELETE FROM vcs_connections WHERE name = $1`, name) })
-	if _, err := s.Pool.Exec(context.Background(), `INSERT INTO workspace_vcs (workspace_id, connection_id, repo, branch)
-		SELECT $1, id, 'acme/infra', 'main' FROM vcs_connections WHERE name = $2`, w.ID, name); err != nil {
-		t.Fatal(err)
-	}
-	if m := got(w.ID); m["env:"+k+"_P"] != "" || m["env:"+k+"_G"] != "" || m["env:"+k+"_X"] != "c" {
-		t.Fatalf("VCS-linked: %v", m)
-	}
-	if shown, _ := s.WorkspaceVariableSets(ctx, w.ID); slices.ContainsFunc(shown, func(vs VariableSet) bool { return vs.ID == ps.ID }) {
-		t.Fatal("a VCS-linked workspace lists the project set")
-	}
+	step(t, "a VCS-linked workspace gets only the sets attached to it", func(t *testing.T) {
+		if _, err := s.CreateVCSConnection(ctx, VCSConnection{Name: name, Provider: "github", Token: []byte("x")}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Pool.Exec(context.Background(), `INSERT INTO workspace_vcs (workspace_id, connection_id, repo, branch)
+			SELECT $1, id, 'acme/infra', 'main' FROM vcs_connections WHERE name = $2`, w.ID, name); err != nil {
+			t.Fatal(err)
+		}
+		if m := got(t, w.ID); m["env:"+k+"_P"] != "" || m["env:"+k+"_G"] != "" || m["env:"+k+"_X"] != "c" {
+			t.Fatalf("VCS-linked: %v", m)
+		}
+		if shown, _ := s.WorkspaceVariableSets(ctx, w.ID); slices.ContainsFunc(shown, func(vs VariableSet) bool { return vs.ID == ps.ID }) {
+			t.Fatal("a VCS-linked workspace lists the project set")
+		}
+	})
 }
 
 func TestAccess(t *testing.T) {
@@ -569,7 +573,6 @@ func TestAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE id=$1`, w.ID) })
 
 	sees := func(user uuid.UUID, admin bool) bool {
 		list, err := s.ListWorkspaces(ctx, Viewer{UserID: user, Admin: admin}, "")
@@ -615,10 +618,6 @@ func TestAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { // before the workspaces' own cleanups: RESTRICT keeps a project with workspaces
-		s.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE project_id = $1`, p.ID)
-		s.Pool.Exec(context.Background(), `DELETE FROM projects WHERE id = $1`, p.ID)
-	})
 	sibling, _ := newWorkspace(t, s, false)
 	for _, id := range []uuid.UUID{w.ID, sibling.ID} {
 		if err := s.MoveWorkspace(ctx, id, p.ID); err != nil {
@@ -764,11 +763,6 @@ func TestVCSWorkspaceVariableSets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		s.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE id = $1`, w.ID)
-		s.Pool.Exec(context.Background(), `DELETE FROM variable_sets WHERE name LIKE $1`, name+"%")
-		s.Pool.Exec(context.Background(), `DELETE FROM vcs_connections WHERE id = $1`, conn)
-	})
 	k := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
 	for _, n := range []string{"global", "attached"} {
 		if err := s.CreateVariableSet(ctx, name+n, "", n == "global"); err != nil {
@@ -848,10 +842,6 @@ func TestQueueVCSRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		s.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE id = $1`, w.ID)
-		s.Pool.Exec(context.Background(), `DELETE FROM vcs_connections WHERE id = $1`, conn)
-	})
 	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", "", "", true, true); err != nil {
 		t.Fatal(err)
 	}

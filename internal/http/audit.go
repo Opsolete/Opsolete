@@ -75,10 +75,6 @@ func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 // are recorded, and their progress is the run's status history.
 func (s *Server) audit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.App.Store == nil { // only the DB-less tests
-			next.ServeHTTP(w, r)
-			return
-		}
 		mutating := r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions
 		h := next
 		if mutating {

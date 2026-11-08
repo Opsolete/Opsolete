@@ -23,9 +23,6 @@ func TestAccountTokens(t *testing.T) {
 	if err != nil || me == uuid.Nil {
 		t.Fatalf("users: %q %v", me, err)
 	}
-	t.Cleanup(func() {
-		store.Pool.Exec(context.Background(), `DELETE FROM api_tokens WHERE user_id IN ($1, $2)`, me, them)
-	})
 	token := func(user uuid.UUID) string {
 		tok, err := store.CreateUserToken(ctx, user, "terraform login", time.Hour)
 		if err != nil {

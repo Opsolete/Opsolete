@@ -13,10 +13,6 @@ func TestStaleCatalogSync(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	name := "cat-stale-" + strings.ToLower(rand.Text()[:8])
-	t.Cleanup(func() {
-		s.Pool.Exec(context.Background(), `DELETE FROM template_catalog`)
-		s.Pool.Exec(context.Background(), `DELETE FROM vcs_connections WHERE name = $1`, name)
-	})
 	conn, err := s.CreateVCSConnection(ctx, VCSConnection{Name: name, Provider: "github", Token: []byte("x")})
 	if err != nil {
 		t.Fatal(err)
@@ -67,10 +63,6 @@ func TestFailedCatalogSyncKeepsSyncedAt(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	name := "cat-time-" + strings.ToLower(rand.Text()[:8])
-	t.Cleanup(func() {
-		s.Pool.Exec(context.Background(), `DELETE FROM template_catalog`)
-		s.Pool.Exec(context.Background(), `DELETE FROM vcs_connections WHERE name = $1`, name)
-	})
 	conn, err := s.CreateVCSConnection(ctx, VCSConnection{Name: name, Provider: "github", Token: []byte("x")})
 	if err != nil {
 		t.Fatal(err)

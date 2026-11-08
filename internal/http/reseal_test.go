@@ -37,7 +37,6 @@ func TestResealLegacyValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { store.DeleteVariableSet(ctx, set.ID); store.DeleteVCSConnection(ctx, connID) })
 	if n, err := vcs.Reseal(ctx, store, key); err != nil || n < 2 {
 		t.Fatalf("reseal: %d %v", n, err)
 	}

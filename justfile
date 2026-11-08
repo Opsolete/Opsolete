@@ -120,7 +120,7 @@ test: db-start
     sqlc diff || { echo "run: just sqlc" >&2; exit 1; }
     gofmt -l . | (! grep .) || { echo "run: gofmt -w ." >&2; exit 1; }
     go vet ./...
-    go test -count=1 -p 1 ./...  # -p 1: DB tests share one database and its job queue
+    go test -count=1 ./...  # every DB test gets its own database (internal/testdb), so packages run in parallel
 
 # fix flake.nix's vendorHash after go.mod/go.sum changes (no-op when it is current)
 vendorhash:

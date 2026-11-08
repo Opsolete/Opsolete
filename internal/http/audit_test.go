@@ -14,7 +14,6 @@ func TestAuditLogRecordsChanges(t *testing.T) {
 	store := testStore(t)
 	h := newServer(t, "../../catalog", false, store)
 	name := "audit-" + strings.ToLower(newID()[:8])
-	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE name = $1`, name) })
 	if rec := post(h, "/workspaces/new", url.Values{fieldWorkspace: {name}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
 	}

@@ -200,8 +200,5 @@ func (s *Server) canCreateWorkspaces(r *http.Request) (bool, error) {
 
 // creatableProjects lists the projects the user may create workspaces in, to pick one.
 func (s *Server) creatableProjects(r *http.Request) ([]storage.Project, error) {
-	if s.App.Store == nil { // only the DB-less tests
-		return nil, nil
-	}
 	return s.App.CreatableProjects(r.Context(), actor(r))
 }

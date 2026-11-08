@@ -196,12 +196,16 @@ for (const d of document.querySelectorAll('dialog[data-open]')) {
       if (sel.options.length !== names.length + 1 || names.some((n, j) => sel.options[j + 1].value !== n))
         sel.replaceChildren(new Option('always', ''), ...names.map(n => new Option('when ' + n + ' is', n, n === cur, n === cur)));
       const eq = card.querySelector('.show-equals'), picked = split(eq.value);
-      card.querySelector('.show-chips').replaceChildren(...(above.has(cur) ? optionValues(above.get(cur)) : []).map(v => {
-        const b = document.createElement('button');
-        b.type = 'button'; b.className = 'chip'; b.textContent = b.dataset.v = v;
-        b.setAttribute('aria-pressed', picked.includes(v));
-        return b;
-      }));
+      const chips = card.querySelector('.show-chips'), chipVals = above.has(cur) ? optionValues(above.get(cur)) : [];
+      // rebuilt only when the values change: the change event of the field just left (fired on the
+      // chip's mousedown) must not replace the chip before its click lands
+      if (chips.children.length !== chipVals.length || chipVals.some((v, j) => chips.children[j].dataset.v !== v))
+        chips.replaceChildren(...chipVals.map(v => {
+          const b = document.createElement('button');
+          b.type = 'button'; b.className = 'chip'; b.textContent = b.dataset.v = v;
+          return b;
+        }));
+      for (const b of chips.children) b.setAttribute('aria-pressed', picked.includes(b.dataset.v));
       // the default suggests the values a dropdown or Yes / no field accepts
       const type = card.querySelector('.ftype').value, def = card.querySelector('[name=in_default]'), dl = def.nextElementSibling;
       dl.id = 'defaults-' + i;

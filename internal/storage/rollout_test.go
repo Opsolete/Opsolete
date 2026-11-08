@@ -26,12 +26,10 @@ func TestUpgradeTemplates(t *testing.T) {
 		VALUES ($1, 'extra', 'job-test', 'git::x', 'v1', '{}')`, w.ID); err != nil {
 		t.Fatal(err)
 	}
-	s.Pool.Exec(context.Background(), `UPDATE template_rollouts SET status = 'stopped' WHERE template_id = 'job-test'`) // from earlier runs
 	ro, err := s.CreateRollout(ctx, Rollout{TemplateID: "job-test", ModuleSource: "git::x", ModuleRef: "v2"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Pool.Exec(context.Background(), `DELETE FROM template_rollouts WHERE id = $1`, ro.ID) })
 	if _, err := s.CreateRollout(ctx, Rollout{TemplateID: "job-test", ModuleSource: "git::x", ModuleRef: "v2"}); !errors.Is(err, ErrExists) {
 		t.Fatalf("second open rollout: %v", err)
 	}

@@ -19,7 +19,6 @@ import (
 func TestRotateKey(t *testing.T) {
 	a := testApp(t)
 	store, ctx := a.Store, context.Background()
-	store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE run_active(status)`)
 	oldKey, newKey := vcs.Key("rotate-old-"+uniq("")), vcs.Key("rotate-new-"+uniq(""))
 	seal := func(plain, ad string) []byte {
 		b, err := vcs.Seal(oldKey, plain, ad)
@@ -53,11 +52,6 @@ func TestRotateKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		store.DeleteVariableSet(ctx, set.ID)
-		store.DeleteVCSConnection(ctx, connID)
-		store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE id = $1::uuid`, ws.ID)
-	})
 
 	bucket := memblob.OpenBucket(nil)
 	(&App{Blobs: bucket, SecretKey: oldKey}).WriteBlob(ctx, "opsolete/x/1.tfstate", []byte("state"))

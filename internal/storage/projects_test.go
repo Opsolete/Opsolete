@@ -31,12 +31,11 @@ func TestProjects(t *testing.T) {
 		t.Fatalf("deleting the default project: %v", err)
 	}
 
-	name := "p-" + strings.ToLower(rand.Text()[:10]) // the test DB is reused
+	name := "p-" + strings.ToLower(rand.Text()[:10])
 	p, err := s.CreateProject(ctx, name, "d")
 	if err != nil || p.Name != name || p.Description != "d" || p.Default || p.Workspaces != 0 {
 		t.Fatalf("create: %+v %v", p, err)
 	}
-	t.Cleanup(func() { s.Pool.Exec(context.Background(), `DELETE FROM projects WHERE id = $1`, p.ID) })
 	if _, err := s.CreateProject(ctx, name, ""); !errors.Is(err, ErrProjectNameTaken) {
 		t.Fatalf("duplicate name: %v", err)
 	}

@@ -27,6 +27,7 @@ type Server struct {
 	// Organization is the one organization of the cloud API (Terraform's cloud block).
 	Organization string
 	RunnerToken  string             // RUNNER_TOKEN: the runner API's bearer token; empty rejects every runner
+	ClaimWait    time.Duration      // how long a runner's claim waits for a job: below typical proxy idle timeouts
 	pages        *template.Template // views/*.html, parsed once; render executes them
 	patterns     []string           // registered by Handler: access_test.go needs a matrix row for each
 }
@@ -63,7 +64,7 @@ func New(a *app.App, au *auth.Auth, f Features) *Server {
 		"duration": humanDuration, "ago": ago, "asset": asset,
 		"provider": func(p string) string { return strings.TrimPrefix(p, "registry.terraform.io/") },
 		"status":   func(s string) string { return strings.ReplaceAll(s, "_", " ") }}).Funcs(formFuncs).ParseFS(views, "views/*.html"))
-	return &Server{App: a, Auth: au, Features: f, pages: pages}
+	return &Server{App: a, Auth: au, Features: f, ClaimWait: 20 * time.Second, pages: pages}
 }
 
 func (s *Server) Handler() http.Handler {
