@@ -148,8 +148,8 @@ func (s *Server) registryPage(w http.ResponseWriter, r *http.Request) {
 }
 
 // renderUpload is the upload step of the add-module wizard.
-func (s *Server) renderUpload(w http.ResponseWriter, r *http.Request, status int, errMsg string, form map[string]string) {
-	s.render(w, r, status, "publish.html", publishPage{Type: "upload", Host: s.App.Registry.PublicURL.Host, Error: errMsg, Form: form})
+func (s *Server) renderUpload(w http.ResponseWriter, r *http.Request, status int, f *formState, form map[string]string) {
+	s.render(w, r, status, "publish.html", publishPage{Type: "upload", Host: s.App.Registry.PublicURL.Host, F: f, Form: form})
 }
 
 func (s *Server) uploadModule(w http.ResponseWriter, r *http.Request) {
@@ -157,31 +157,27 @@ func (s *Server) uploadModule(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "module uploads are off (Settings → Organization)", http.StatusForbidden)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, registry.MaxArchiveSize+1<<20)
-	if err := r.ParseMultipartForm(1 << 20); err != nil {
-		s.renderUpload(w, r, http.StatusRequestEntityTooLarge, fmt.Sprintf("upload too large or malformed (max %d MB)", registry.MaxArchiveSize>>20), map[string]string{})
+	f, tooLarge, ok := readMultipart(w, r, registry.MaxArchiveSize+1<<20)
+	if !ok {
+		return
+	}
+	form := trimmed(f, "namespace", "name", "system", "version")
+	if tooLarge {
+		s.renderUpload(w, r, http.StatusRequestEntityTooLarge, &formState{Name: "upload", Input: f,
+			Fields: map[string]string{"archive": fmt.Sprintf("archive larger than %d MB", registry.MaxArchiveSize>>20)}}, form)
 		return
 	}
 	defer r.MultipartForm.RemoveAll()
-	form := map[string]string{}
-	for _, k := range []string{"namespace", "name", "system", "version"} {
-		form[k] = strings.TrimSpace(r.FormValue(k))
-	}
 	in := app.ModuleUpload{Namespace: form["namespace"], Name: form["name"], System: form["system"], Version: form["version"]}
-	if f, _, err := r.FormFile("archive"); err == nil { // none chosen: app says so
-		defer f.Close()
-		if in.Archive, err = io.ReadAll(io.LimitReader(f, registry.MaxArchiveSize+1)); err != nil {
-			s.renderUpload(w, r, http.StatusUnprocessableEntity, "could not read upload", form)
+	if file, _, err := r.FormFile("archive"); err == nil { // none chosen: app says so
+		defer file.Close()
+		if in.Archive, err = io.ReadAll(io.LimitReader(file, registry.MaxArchiveSize+1)); err != nil {
+			s.renderUpload(w, r, http.StatusUnprocessableEntity, &formState{Name: "upload", Input: f, Fields: map[string]string{"archive": "could not read the upload"}}, form)
 			return
 		}
 	}
 	m, err := s.App.UploadModule(r.Context(), actor(r), in)
-	if isValidation(err) {
-		s.renderUpload(w, r, http.StatusUnprocessableEntity, err.Error(), form)
-		return
-	}
-	if err != nil {
-		s.uiError(w, r, err)
+	if s.failed(w, r, err, "upload", f, func(status int, fs *formState) { s.renderUpload(w, r, status, fs, form) }) {
 		return
 	}
 	http.Redirect(w, r, fmt.Sprintf("/registry/%s/%s/%s/%s", m.Namespace, m.Name, m.System, m.Version), http.StatusSeeOther)

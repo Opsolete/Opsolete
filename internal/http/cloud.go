@@ -464,7 +464,7 @@ func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{"error": code})
 	}
-	if err := r.ParseForm(); err != nil || r.PostForm.Get("grant_type") != "authorization_code" {
+	if err := parseForm(w, r); err != nil || r.PostForm.Get("grant_type") != "authorization_code" {
 		fail("unsupported_grant_type")
 		return
 	}

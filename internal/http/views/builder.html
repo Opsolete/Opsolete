@@ -28,7 +28,7 @@
 </form>
 {{end}}
 
-{{with .Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
+{{template "formerror" .F}}
 {{with .Warning}}<div class="alert warn" role="status">{{.}}</div>{{end}}
 <form method="post" id="builder">
   <input type="hidden" name="selected" value="{{.Selected}}">

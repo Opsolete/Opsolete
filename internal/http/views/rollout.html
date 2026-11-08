@@ -7,6 +7,7 @@
   </div>
 </div>
 
+{{template "formerror" .F}}
 {{with .Rollout}}
 <div class="alert{{if eq .Status "paused"}} warn{{end}}" role="status">
   {{if .Open}}Rollout to <code>{{.ModuleRef}}</code>{{else}}Last rollout, to <code>{{.ModuleRef}}</code>,{{end}}
@@ -39,10 +40,11 @@
   <input type="hidden" name="ref" value="{{.T.Module.Ref}}">
   <input type="hidden" name="project" value="{{.Project}}">
   <label for="batch">Workspaces at a time</label>
-  <input id="batch" name="batch" type="number" min="0" value="0" style="width:6rem" aria-describedby="batch-hint">
+  <input id="batch" name="batch" type="number" min="0" value="{{value .F "batch" 0}}" style="width:6rem"{{aria .F "batch" "batch-hint"}}>
   <button type="submit">Roll out to {{.Pending}} workspace{{if ne .Pending 1}}s{{end}}{{with .Project}} in {{.}}{{end}}</button>
   <small id="batch-hint" class="muted">0: all at once. Otherwise the next ones start as earlier plans are applied.</small>
 </form>
+{{template "fielderror" (dict "F" .F "N" "batch")}}
 {{end}}
 
 <div class="card flush">

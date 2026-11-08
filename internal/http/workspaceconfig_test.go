@@ -84,7 +84,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	if page := get(h, "/workspaces/new?type=vcs").Body.String(); strings.Contains(page, connName) {
 		t.Fatalf("a modules-only connection must not be offered: %s", page)
 	}
-	refused := url.Values{"name": {linked}, "vcs_connection": {connID}, "vcs_repo": {"acme/infra"}, "vcs_branch": {"main"}}
+	refused := url.Values{fieldWorkspace: {linked}, "vcs_connection": {connID}, "vcs_repo": {"acme/infra"}, "vcs_branch": {"main"}}
 	if rec := post(h, "/workspaces/new", refused); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "may not link") {
 		t.Fatalf("linking through a connection closed to workspaces: %d", rec.Code)
 	}
@@ -118,10 +118,10 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 		!strings.Contains(page, `name="vcs_repo" value="acme/infra"`) {
 		t.Fatalf("new workspace wizard settings step: %s", page)
 	}
-	if rec := post(h, "/workspaces/new", url.Values{"name": {"new"}}); rec.Code != http.StatusUnprocessableEntity {
+	if rec := post(h, "/workspaces/new", url.Values{fieldWorkspace: {"new"}}); rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf(`"new" is reserved: %d`, rec.Code)
 	}
-	if rec := post(h, "/workspaces/new", url.Values{"name": {blank}}); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/workspaces/"+blank {
+	if rec := post(h, "/workspaces/new", url.Values{fieldWorkspace: {blank}}); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/workspaces/"+blank {
 		t.Fatalf("create blank: %d %s", rec.Code, rec.Body.String())
 	}
 	if page := get(h, "/workspaces/"+blank).Body.String(); strings.Contains(page, "New run") {
@@ -132,7 +132,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	}
 
 	// VCS: the branch is checked on link; runs plan its head and apply the same commit.
-	form := url.Values{"name": {linked}, "vcs_connection": {connID}, "vcs_repo": {"acme/infra"}, "vcs_branch": {"nope"}}
+	form := url.Values{fieldWorkspace: {linked}, "vcs_connection": {connID}, "vcs_repo": {"acme/infra"}, "vcs_branch": {"nope"}}
 	if rec := post(h, "/workspaces/new", form); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "branch nope") {
 		t.Fatalf("unknown branch: %d", rec.Code)
 	}
@@ -245,7 +245,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	selected := func(ws ...string) int {
 		return post(h, "/vcs/"+connID+"/settings", url.Values{"workspaces": {"1"}, "workspace_scope": {"selected"}, "workspace": ws}).Code
 	}
-	if code := selected(linked, "no-such-ws"); code != http.StatusBadRequest {
+	if code := selected(linked, "no-such-ws"); code != http.StatusUnprocessableEntity {
 		t.Fatalf("select an unknown workspace: %d", code)
 	}
 	if c, _ := store.GetVCSConnection(ctx, uuid.MustParse(connID)); len(c.Workspaces) != 0 {
@@ -341,7 +341,7 @@ func TestVCSProjectScope(t *testing.T) {
 	operateDefault(t, store, group) // the member may create workspaces in the default project too, not link the connection there
 
 	scope := url.Values{"workspaces": {"1"}, "workspace_scope": {"selected"}, "project": {prj, "nope-" + id}}
-	if rec := post(h, "/vcs/"+connID+"/settings", scope); rec.Code != http.StatusBadRequest {
+	if rec := post(h, "/vcs/"+connID+"/settings", scope); rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("an unknown project: %d", rec.Code)
 	}
 	if c, _ := store.GetVCSConnection(t.Context(), uuid.MustParse(connID)); c.WorkspaceScope != "" || len(c.Projects) != 0 {
@@ -370,7 +370,7 @@ func TestVCSProjectScope(t *testing.T) {
 		t.Fatal("?project= of a project the user can't create in must not list its connections or their repos")
 	}
 	link := func(name, project string) *httptest.ResponseRecorder {
-		return post(member, "/workspaces/new", url.Values{"name": {name}, fieldProject: {project}, "vcs_connection": {connID},
+		return post(member, "/workspaces/new", url.Values{fieldWorkspace: {name}, fieldProject: {project}, "vcs_connection": {connID},
 			"vcs_repo": {"acme/infra"}, "vcs_branch": {"main"}})
 	}
 	if rec := link(outside, ""); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "may not link") {

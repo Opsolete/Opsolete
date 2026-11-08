@@ -24,25 +24,24 @@ type vcsForm struct {
 	Conns []storage.VCSConnection
 	Repos []string // of all connections, for the repo dropdown
 	Form  map[string]string
-	Error string
+	F     *formState // a refused submit
 }
 
 // loadVCSForm lists the connections the workspace (by name, "" = a new one) in project (by name) may
 // link and the repos of reposOf (a connection id, "" = none); with VCS off it's empty and the form hides the part.
-func (s *Server) loadVCSForm(r *http.Request, form map[string]string, errMsg, workspace, project, reposOf string) (vcsForm, error) {
-	f := vcsForm{Form: form, Error: errMsg}
+func (s *Server) loadVCSForm(r *http.Request, form map[string]string, fs *formState, workspace, project, reposOf string) (vcsForm, error) {
+	f := vcsForm{Form: form, F: fs}
 	id, _ := parseID(reposOf)
 	var err error
 	f.Conns, f.Repos, err = s.App.LinkableVCS(r.Context(), actor(r), workspace, project, id)
 	return f, err
 }
 
-func vcsFormValues(r *http.Request) map[string]string {
-	form := map[string]string{}
-	for _, k := range []string{"type", "name", "auto_apply", "vcs_connection", "vcs_repo", "vcs_branch", "vcs_trigger", "vcs_pull_requests",
-		"vcs_trigger_type", "vcs_tag_format", "vcs_tags_regex"} {
-		form[k] = strings.TrimSpace(r.PostFormValue(k))
-	}
+// vcsFormValues reads the new-workspace and link forms; "name" is the workspace name (fieldWorkspace).
+func vcsFormValues(f url.Values) map[string]string {
+	form := trimmed(f, "type", "auto_apply", "vcs_connection", "vcs_repo", "vcs_branch", "vcs_trigger", "vcs_pull_requests",
+		"vcs_trigger_type", "vcs_tag_format", "vcs_tags_regex")
+	form["name"], form["project"] = strings.TrimSpace(f.Get(fieldWorkspace)), f.Get(fieldProject)
 	return form
 }
 
@@ -87,10 +86,10 @@ func (s *Server) newWorkspacePage(w http.ResponseWriter, r *http.Request) {
 	if repo := form["vcs_repo"]; repo != "" {
 		form["name"] = strings.ToLower(path.Base(repo)) // a suggestion; the form checks it
 	}
-	s.renderNewWorkspace(w, r, http.StatusOK, form, "")
+	s.renderNewWorkspace(w, r, http.StatusOK, form, nil)
 }
 
-func (s *Server) renderNewWorkspace(w http.ResponseWriter, r *http.Request, status int, form map[string]string, errMsg string) {
+func (s *Server) renderNewWorkspace(w http.ResponseWriter, r *http.Request, status int, form map[string]string, fs *formState) {
 	reposOf := "" // only the repository step lists repositories, of its connection
 	if form["type"] == "vcs" && form["vcs_repo"] == "" {
 		reposOf = form["vcs_connection"]
@@ -101,7 +100,7 @@ func (s *Server) renderNewWorkspace(w http.ResponseWriter, r *http.Request, stat
 		return
 	}
 	if len(projects) == 0 { // the page says whom to ask
-		s.render(w, r, status, "newworkspace.html", map[string]any{"VCS": vcsForm{Form: form, Error: errMsg}})
+		s.render(w, r, status, "newworkspace.html", map[string]any{"VCS": vcsForm{Form: form, F: fs}, "F": fs})
 		return
 	}
 	// ?project= is a URL parameter: one the user can't create in falls back to the one the picker
@@ -113,12 +112,12 @@ func (s *Server) renderNewWorkspace(w http.ResponseWriter, r *http.Request, stat
 	if project == "" {
 		project = projects[max(0, slices.IndexFunc(projects, func(p storage.Project) bool { return p.Default }))].Name
 	}
-	f, err := s.loadVCSForm(r, form, errMsg, "", project, reposOf)
+	f, err := s.loadVCSForm(r, form, fs, "", project, reposOf)
 	if err != nil {
 		s.uiError(w, r, err)
 		return
 	}
-	data := map[string]any{"Templates": s.App.Templates.List(), "VCS": f, "Providers": vcs.Providers, "Projects": projects, "Project": form["project"]}
+	data := map[string]any{"Templates": s.App.Templates.List(), "VCS": f, "Providers": vcs.Providers, "Projects": projects, "Project": form["project"], "F": fs}
 	for _, c := range f.Conns {
 		if c.ID.String() == form["vcs_connection"] {
 			data["Conn"] = c
@@ -130,30 +129,22 @@ func (s *Server) renderNewWorkspace(w http.ResponseWriter, r *http.Request, stat
 // createEmptyWorkspace creates a workspace without a template, optionally linked to a branch.
 // It queues no run: the next step is usually variables or a branch.
 func (s *Server) createEmptyWorkspace(w http.ResponseWriter, r *http.Request) {
-	form := vcsFormValues(r)
+	f, ok := readForm(w, r)
+	if !ok {
+		return
+	}
+	form := vcsFormValues(f)
 	if form["type"] == "" { // re-render a failed form at the right step
 		form["type"] = map[bool]string{true: "vcs", false: "cli"}[form["vcs_connection"] != ""]
-	}
-	form["project"] = r.PostFormValue(fieldProject)
-	// first: a project the user can't pick is a bad request (the picker only offers the others), not a form error
-	p, err := s.App.NewWorkspaceProject(r.Context(), actor(r), form["project"], uuid.Nil)
-	if err != nil {
-		s.uiError(w, r, err)
-		return
 	}
 	link, ok := vcsLinkInput(form)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
-	ws, err := s.App.CreateEmptyWorkspace(r.Context(), actor(r), app.EmptyWorkspace{Name: form["name"], Project: p.Name,
+	ws, err := s.App.CreateEmptyWorkspace(r.Context(), actor(r), app.EmptyWorkspace{Name: form["name"], Project: form["project"],
 		AutoApply: form["auto_apply"] != "", VCS: link})
-	if isValidation(err) {
-		s.renderNewWorkspace(w, r, http.StatusUnprocessableEntity, form, err.Error())
-		return
-	}
-	if err != nil {
-		s.uiError(w, r, err)
+	if s.failed(w, r, err, "workspace", f, func(status int, fs *formState) { s.renderNewWorkspace(w, r, status, form, fs) }) {
 		return
 	}
 	http.Redirect(w, r, "/workspaces/"+ws.Name, http.StatusSeeOther)
@@ -183,16 +174,16 @@ func (s *Server) workspaceVCSPage(w http.ResponseWriter, r *http.Request) {
 		form["type"], form["vcs_connection"], form["vcs_repo"] = q.Get("type"), q.Get("conn"), q.Get("repo")
 		form["edit"] = "1"
 	}
-	s.renderWorkspaceVCS(w, r, http.StatusOK, ws, form, "")
+	s.renderWorkspaceVCS(w, r, http.StatusOK, ws, form, nil)
 }
 
-func (s *Server) renderWorkspaceVCS(w http.ResponseWriter, r *http.Request, status int, ws storage.Workspace, form map[string]string, errMsg string) {
+func (s *Server) renderWorkspaceVCS(w http.ResponseWriter, r *http.Request, status int, ws storage.Workspace, form map[string]string, fs *formState) {
 	edit := form["edit"] != "" || form["type"] != ""
 	reposOf := "" // only the wizard's repository step lists repositories, of its connection
 	if edit && form["type"] == "vcs" && form["vcs_repo"] == "" {
 		reposOf = form["vcs_connection"]
 	}
-	f, err := s.loadVCSForm(r, form, errMsg, ws.Name, ws.ProjectName, reposOf)
+	f, err := s.loadVCSForm(r, form, fs, ws.Name, ws.ProjectName, reposOf)
 	if err != nil {
 		s.uiError(w, r, err)
 		return
@@ -215,23 +206,21 @@ func (s *Server) renderWorkspaceVCS(w http.ResponseWriter, r *http.Request, stat
 // linkWorkspaceVCS links, relinks or unlinks the workspace's repository (app.LinkVCS); a refused link
 // (or one during an active run, 409) re-renders the form.
 func (s *Server) linkWorkspaceVCS(w http.ResponseWriter, r *http.Request) {
-	form := vcsFormValues(r)
+	f, ok := readForm(w, r)
+	if !ok {
+		return
+	}
+	form := vcsFormValues(f)
 	in, ok := vcsLinkInput(form)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
 	ws, err := s.App.LinkVCS(r.Context(), actor(r), r.PathValue("name"), in)
-	switch {
-	case isValidation(err):
-		s.renderWorkspaceVCS(w, r, http.StatusUnprocessableEntity, ws, form, err.Error())
-	case app.IsConflict(err):
-		s.renderWorkspaceVCS(w, r, http.StatusConflict, ws, form, err.Error())
-	case err != nil:
-		s.uiError(w, r, err)
-	default:
-		http.Redirect(w, r, "/workspaces/"+ws.Name, http.StatusSeeOther)
+	if s.failed(w, r, err, "vcs", f, func(status int, fs *formState) { s.renderWorkspaceVCS(w, r, status, ws, form, fs) }) {
+		return
 	}
+	http.Redirect(w, r, "/workspaces/"+ws.Name, http.StatusSeeOther)
 }
 
 // vcsArchive serves a run's pinned commit to the runner (app.VCSArchive).

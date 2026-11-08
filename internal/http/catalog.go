@@ -3,7 +3,6 @@ package httpserver
 import (
 	"net/http"
 	"slices"
-	"strings"
 
 	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/storage"
@@ -19,7 +18,7 @@ type catalogPage struct {
 	ListErr bool     // listing them failed: type the repository instead
 	Form    map[string]string
 	Count   int
-	Error   string
+	F       *formState // a refused save
 	Saved   bool
 }
 
@@ -37,11 +36,11 @@ func (s *Server) catalogPage(w http.ResponseWriter, r *http.Request) {
 	if c := r.URL.Query().Get("connection"); c != "" && c != form["connection"] {
 		form = map[string]string{"connection": c, "mode": form["mode"]}
 	}
-	s.renderCatalog(w, r, http.StatusOK, form, "")
+	s.renderCatalog(w, r, http.StatusOK, form, nil)
 }
 
-func (s *Server) renderCatalog(w http.ResponseWriter, r *http.Request, status int, form map[string]string, errMsg string) {
-	p := catalogPage{Form: form, Error: errMsg, Count: len(s.App.Templates.List()), Saved: r.URL.Query().Has("saved")}
+func (s *Server) renderCatalog(w http.ResponseWriter, r *http.Request, status int, form map[string]string, f *formState) {
+	p := catalogPage{Form: form, F: f, Count: len(s.App.Templates.List()), Saved: r.URL.Query().Has("saved")}
 	var err error
 	if p.Catalog, err = s.App.TemplateCatalog(r.Context(), actor(r)); err == nil {
 		p.Conns, err = s.App.VCSConnections(r.Context(), actor(r))
@@ -67,19 +66,15 @@ func (s *Server) renderCatalog(w http.ResponseWriter, r *http.Request, status in
 }
 
 func (s *Server) saveCatalog(w http.ResponseWriter, r *http.Request) {
-	form := map[string]string{}
-	for _, k := range []string{"connection", "repo", "branch", "dir", "mode"} {
-		form[k] = strings.TrimSpace(r.PostFormValue(k))
+	f, ok := readForm(w, r)
+	if !ok {
+		return
 	}
+	form := trimmed(f, "connection", "repo", "branch", "dir", "mode")
 	connID, _ := parseID(form["connection"]) // not an id: no connection, as for an unknown one
 	err := s.App.SetTemplateCatalog(r.Context(), actor(r), app.CatalogSettings{ConnectionID: connID, Repo: form["repo"], Branch: form["branch"],
 		Dir: form["dir"], Mode: form["mode"]})
-	if isValidation(err) {
-		s.renderCatalog(w, r, http.StatusUnprocessableEntity, form, err.Error())
-		return
-	}
-	if err != nil {
-		s.uiError(w, r, err)
+	if s.failed(w, r, err, "catalog", f, func(status int, fs *formState) { s.renderCatalog(w, r, status, form, fs) }) {
 		return
 	}
 	http.Redirect(w, r, "/catalog?saved", http.StatusSeeOther)

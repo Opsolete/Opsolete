@@ -1,6 +1,7 @@
 {{template "top" .}}
 {{$w := .W}}{{$tab := tab}}{{$p := .Page}}
 <nav class="back" aria-label="breadcrumb">{{template "wscrumb" $w}} / {{if eq $tab "runs"}}Runs{{else if eq $tab "states"}}{{if .State}}<a href="/workspaces/{{$w.Name}}/states">States</a> / v{{.State.Serial}}{{else}}States{{end}}{{else if eq $tab "variables"}}Variables{{else if eq $tab "deploy"}}Deploy{{else if eq $tab "settings"}}<a href="/workspaces/{{$w.Name}}/settings">Settings</a> / {{if eq $p "health"}}Health{{else if eq $p "lock"}}Locking{{else if eq $p "access"}}Team access{{else if eq $p "deletion"}}Destruction and deletion{{else}}General{{end}}{{else}}Overview{{end}}</nav>
+{{template "formerror" .F}}
 {{if ne $tab "settings"}}
 <div class="page-head">
   <div>
@@ -101,6 +102,7 @@
   </table>
 </details>
 {{end}}
+{{template "fielderror" (dict "F" (formOf $.F "run") "N" "replace")}}
 {{if $replace}}<div class="actions"><button type="submit" class="secondary">Plan recreating selected</button></div>
 <p class="hint">Recreate destroys the selected resources and creates them again with the same configuration, e.g. a broken VM. You review the plan first. To remove resources for good, remove their template or change its inputs.</p>{{end}}
 </form>
@@ -254,35 +256,42 @@
 <div class="field">ID</div>
 <p class="id"><code>{{$w.ID}}</code>
   <button type="button" class="copy" aria-label="Copy ID" title="Copy ID" onclick="navigator.clipboard.writeText('{{$w.ID}}')">⧉</button></p>
+{{$pf := formOf .F "project"}}{{$gf := formOf .F "general"}}
 {{if .Projects}}
 <form method="post" action="/workspaces/{{$w.Name}}/project" class="inline">
   <label for="project">Project</label>
-  <select id="project" name="project">{{range .Projects}}<option value="{{.Name}}"{{if eq .ID $w.ProjectID}} selected{{end}}>{{.Name}}</option>{{end}}</select>
+  {{$sel := value $pf "project" $w.ProjectName}}
+  <select id="project" name="project"{{aria $pf "project"}}>{{range .Projects}}<option value="{{.Name}}"{{if eq .Name $sel}} selected{{end}}>{{.Name}}</option>{{end}}</select>
   <button type="submit" class="secondary">Move to project</button>
 </form>
+{{template "fielderror" (dict "F" $pf "N" "project")}}
 <p class="hint">The workspace gets the new project's team access and variable sets; a run under way gets them from its next phase.</p>
 {{else}}
 <div class="field">Project</div><p><a href="/projects/{{$w.ProjectName}}">{{$w.ProjectName}}</a></p>
 {{end}}
 <form method="post" action="/workspaces/{{$w.Name}}/settings">
-  <!-- one settings endpoint: keep the Health page's value -->
-  {{if $w.DriftDetection}}<input type="hidden" name="drift_detection" value="on">{{end}}
   <label for="name">Name</label>
-  <input id="name" name="name" value="{{$w.Name}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}">
+  <input id="name" name="name" value="{{value $gf "name" $w.Name}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}"{{aria $gf "name"}}>
+  {{template "fielderror" (dict "F" $gf "N" "name")}}
+  {{$mode := value $gf "execution_mode" $w.ExecutionMode}}
   <fieldset>
     <legend>Execution mode</legend>
     <p class="hint">Changing the execution mode doesn't stop a run or a CLI lock already under way; it only refuses new ones.</p>
-    <label class="check"><input type="radio" name="execution_mode" value="remote"{{if ne $w.ExecutionMode "local"}} checked{{end}}>
+    <label class="check"><input type="radio" name="execution_mode" value="remote"{{if ne $mode "local"}} checked{{end}}{{aria $gf "execution_mode"}}>
       <span>Remote<small>Your plans and applies run on Opsolete's runners, and your team can review and collaborate on runs directly in the app.</small></span></label>
-    <label class="check"><input type="radio" name="execution_mode" value="local"{{if eq $w.ExecutionMode "local"}} checked{{end}}>
+    <label class="check"><input type="radio" name="execution_mode" value="local"{{if eq $mode "local"}} checked{{end}}{{aria $gf "execution_mode"}}>
       <span>Local<small>Your plans and applies run on your own machines with Terraform's cloud block. Opsolete only stores and synchronizes state.</small></span></label>
+    {{template "fielderror" (dict "F" $gf "N" "execution_mode")}}
   </fieldset>
   <fieldset>
     <legend>Auto-apply</legend>
     <p class="hint">Sets this workspace to automatically apply changes for successful runs. If disabled, runs require operator approval.</p>
-    <label class="check"><input type="checkbox" name="auto_apply"{{if $w.AutoApply}} checked{{end}}>
+    <label class="check"><input type="checkbox" name="auto_apply"{{if checked $gf "auto_apply" $w.AutoApply}} checked{{end}}>
       <span>Auto-apply runs<small>Automatically apply changes when a plan is successful. Destroy and refresh-only runs always ask for confirmation.</small></span></label>
   </fieldset>
+  <div class="actions"><button type="submit">Save settings</button></div>
+</form>
+<form method="post" action="/workspaces/{{$w.Name}}/settings/remote-state">
   <fieldset>
     <legend>Remote state sharing</legend>
     <p class="hint">Choose whether this workspace should share state with all workspaces, or only with specific approved workspaces.
@@ -301,16 +310,14 @@
   }
 }</code></pre>
   </fieldset>
-  <div class="actions"><button type="submit">Save settings</button></div>
+  <div class="actions"><button type="submit">Save sharing</button></div>
 </form>
 </div>
 
 {{else if eq $p "health"}}
 <h1>Health</h1>
 <p class="muted">Drift detection: whether the infrastructure still matches the state.</p>
-<form method="post" action="/workspaces/{{$w.Name}}/settings" class="card">
-  <input type="hidden" name="page" value="health">
-  {{if $w.AutoApply}}<input type="hidden" name="auto_apply" value="on">{{end}}
+<form method="post" action="/workspaces/{{$w.Name}}/settings/health" class="card">
   <label style="margin:0;font-weight:normal"><input type="checkbox" name="drift_detection"{{if $w.DriftDetection}} checked{{end}}>
     Drift detection: check daily for changes made outside Terraform (a refresh-only plan, never applied)</label>
   <div class="actions" style="margin-top:1rem"><button type="submit" class="secondary">Save</button></div>
@@ -334,14 +341,16 @@
 {{else}}
 <p>The <strong>{{$w.Name}}</strong> workspace is not currently locked. All operations can proceed normally. You can manually lock this workspace to prevent Terraform runs.</p>
 <button type="button" onclick="document.getElementById('lock-workspace').showModal()">Lock workspace</button>
-<dialog id="lock-workspace" aria-labelledby="lock-workspace-title">
+{{$lf := formOf .F "lock"}}
+<dialog id="lock-workspace" aria-labelledby="lock-workspace-title"{{if $lf}} open{{end}}>
   <form method="post" action="/workspaces/{{$w.Name}}/lock"><input type="hidden" name="action" value="lock">
     <header><h3 id="lock-workspace-title">Lock workspace</h3>
       <button type="button" class="secondary small" aria-label="close" onclick="this.closest('dialog').close()">✕</button></header>
     <fieldset>
       <label for="lock-reason">Reason <span class="muted">(Optional)</span></label>
-      <textarea id="lock-reason" name="reason" rows="4" maxlength="300" placeholder="Why is this being locked?" aria-describedby="lock-reason-hint"></textarea>
+      <textarea id="lock-reason" name="reason" rows="4" maxlength="300" placeholder="Why is this being locked?"{{aria $lf "reason" "lock-reason-hint"}}>{{value $lf "reason" ""}}</textarea>
       <p class="hint" id="lock-reason-hint">300 characters allowed</p>
+      {{template "fielderror" (dict "F" $lf "N" "reason")}}
     </fieldset>
     <footer><button type="submit">Lock workspace</button>
       <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancel</button></footer>
@@ -366,15 +375,7 @@
   {{end}}
   {{with .ProjectGrants}}<p class="hint">Through the project {{if $.Admin}}<a href="/projects/{{$w.ProjectName}}/settings/access">{{$w.ProjectName}}</a>{{else}}<a href="/projects/{{$w.ProjectName}}">{{$w.ProjectName}}</a>{{end}}:
     {{range $i, $g := .}}{{if $i}}, {{end}}<code>{{$g.Group}}</code> {{$g.Level}}{{end}}</p>{{end}}
-  {{if .Admin}}
-  <form method="post" action="/workspaces/{{$w.Name}}/access" class="inline" style="margin-top:1rem">
-    <!-- datalist, not select: a group may be granted before any of its members has logged in -->
-    <input name="group" list="known-groups" aria-label="group" placeholder="IdP group (e.g. Entra group object id)" required>
-    <datalist id="known-groups">{{range .Groups}}<option value="{{.}}">{{end}}</datalist>
-    <select name="level" aria-label="access level" style="flex:0 0 9rem"><option>read</option><option>operate</option></select>
-    <button type="submit" class="secondary">Grant</button>
-  </form>
-  {{end}}
+  {{if .Admin}}{{template "grantform" dict "Action" (print "/workspaces/" $w.Name "/access") "Groups" .Groups "F" (formOf .F "access")}}{{end}}
 </div>
 
 {{else}}

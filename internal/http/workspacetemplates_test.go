@@ -43,7 +43,7 @@ func TestWorkspaceTemplates(t *testing.T) {
 	}
 	base := "/workspaces/" + ws + "/templates/"
 
-	if rec := post(h, "/workspaces/new", url.Values{"name": {ws}}); rec.Code != http.StatusSeeOther {
+	if rec := post(h, "/workspaces/new", url.Values{fieldWorkspace: {ws}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
 	}
 	if page := get(h, base+"new?template=greeting").Body.String(); strings.Contains(page, `name="ops-module"`) { // the name comes from the key input only
@@ -175,7 +175,7 @@ func TestDeleteWorkspace(t *testing.T) {
 	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE name = $1`, ws) })
 	app := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true})
 	h, url0 := app.Handler(), "/workspaces/"+ws
-	if rec := post(h, "/workspaces/new", url.Values{"name": {ws}}); rec.Code != http.StatusSeeOther {
+	if rec := post(h, "/workspaces/new", url.Values{fieldWorkspace: {ws}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
 	}
 	w, err := store.GetWorkspace(ctx, ws)
@@ -258,7 +258,7 @@ func TestSensitiveInputs(t *testing.T) {
 		}
 	}
 	base := "/workspaces/" + ws + "/templates/"
-	if rec := post(h, "/workspaces/new", url.Values{"name": {ws}}); rec.Code != http.StatusSeeOther {
+	if rec := post(h, "/workspaces/new", url.Values{fieldWorkspace: {ws}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
 	}
 	if page := get(h, base+"new?template=greeting").Body.String(); !strings.Contains(page, `name="secret.name" type="password"`) {

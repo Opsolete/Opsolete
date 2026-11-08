@@ -26,21 +26,18 @@
 </div>
 {{if .Preview}}<div class="alert" role="status">Preview: the form end users get with this template, as it is in the builder. It can't be submitted; close this tab to go back to the builder.</div>{{end}}
 {{end}}
-{{with $.Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
-{{if .Errors}}<div class="alert error" role="alert"><strong>Fix {{len .Errors}} field{{if ne (len .Errors) 1}}s{{end}}:</strong>
-  <ul>{{with index .Errors "ops-workspace"}}<li><a href="#ops-workspace">Workspace name</a>: {{.}}</li>{{end}}
-  {{range .T.Inputs}}{{$in := .}}{{with index $.Errors .Name}}<li><a href="#{{$in.Name}}">{{$in.Title}}</a>: {{.}}</li>{{end}}{{end}}</ul></div>{{end}}
+{{template "formerror" .F}}
 <form method="post" class="card form-rows" id="template-form">
-{{$v := .Values}}{{$e := .Errors}}
+{{$v := .Values}}
 {{if not .Configure}}
   <div class="rows-head"><h2>Workspace</h2><p class="hint"><span class="req" aria-hidden="true">*</span> Required</p></div>
   <div class="rows">
-    <div class="row{{if index $e "ops-workspace"}} invalid{{end}}">
+    <div class="row{{if fieldError .F "ops-workspace"}} invalid{{end}}">
       <label for="ops-workspace">Workspace name <span class="req" aria-hidden="true">*</span></label>
       <input id="ops-workspace" name="ops-workspace" value="{{.Workspace}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}"
-        placeholder="{{.NamePlaceholder}}" autocomplete="off" spellcheck="false" aria-describedby="ops-workspace-hint"{{if index $e "ops-workspace"}} aria-invalid="true"{{end}}>
+        placeholder="{{.NamePlaceholder}}" autocomplete="off" spellcheck="false"{{aria .F "ops-workspace" "ops-workspace-hint"}}>
       <p class="hint" id="ops-workspace-hint">Lowercase letters, digits and dashes. It holds this deployment's state and runs.</p>
-      {{with index $e "ops-workspace"}}<p class="err">{{.}}</p>{{end}}
+      {{template "fielderror" (dict "F" .F "N" "ops-workspace")}}
     </div>
     {{if .Projects}}<div class="row">{{template "projectpick" .}}</div>{{end}}
     <div class="row">
@@ -53,28 +50,28 @@
 {{if .T.Inputs}}
   <div class="rows-head"><h2>Settings</h2>{{if .Configure}}<p class="hint"><span class="req" aria-hidden="true">*</span> Required</p>{{end}}</div>
   <div class="rows">
-{{range .T.Inputs}}{{$err := index $e .Name}}
+{{range .T.Inputs}}{{$err := fieldError $.F .Name}}{{$help := and .Help (print .Name "-help")}}
   <!-- a fieldset per row: disabling it keeps a hidden show_if field from being posted -->
   <fieldset class="row{{if .ShowIf}} show-if{{end}}{{if $err}} invalid{{end}}"{{with .ShowIf}} data-show-if="{{json .}}"{{if not ($.T.Match . $v)}} hidden disabled{{end}}{{end}}>
     <label for="{{.Name}}">{{.Title}}{{if .Required}} <span class="req" aria-hidden="true">*</span>{{end}}</label>
   {{if eq .Type "bool"}}
-    <input type="checkbox" id="{{.Name}}" name="{{.Name}}"{{if eq (index $v .Name) "on" "true"}} checked{{end}}{{if .Help}} aria-describedby="{{.Name}}-help"{{end}}>
+    <input type="checkbox" id="{{.Name}}" name="{{.Name}}"{{if eq (index $v .Name) "on" "true"}} checked{{end}}{{aria $.F .Name $help}}>
   {{else if eq .Type "select"}}
-    <select id="{{.Name}}" name="{{.Name}}"{{if .Help}} aria-describedby="{{.Name}}-help"{{end}}{{if $err}} aria-invalid="true"{{end}}>
+    <select id="{{.Name}}" name="{{.Name}}"{{aria $.F .Name $help}}>
       {{$cur := index $v .Name}}
       {{range .Options}}<option value="{{.Value}}"{{if eq .Value $cur}} selected{{end}}>{{.Text}}</option>{{end}}
     </select>
   {{else if .Sensitive}}{{$set := index $.Set .Name}}
     <!-- never filled in: the stored value is sealed; left empty, it's kept -->
     <input id="{{.Name}}" name="secret.{{.Name}}" type="password" autocomplete="new-password"
-      {{if .Pattern}} pattern="{{.Pattern}}"{{with .Help}} title="{{.}}"{{end}}{{end}}{{if and .Required (not $set)}} required{{end}} aria-describedby="{{.Name}}-hint{{if .Help}} {{.Name}}-help{{end}}"{{if $err}} aria-invalid="true"{{end}}>
+      {{if .Pattern}} pattern="{{.Pattern}}"{{with .Help}} title="{{.}}"{{end}}{{end}}{{if and .Required (not $set)}} required{{end}}{{aria $.F .Name (print .Name "-hint") $help}}>
     <p class="hint" id="{{.Name}}-hint">Sensitive: stored encrypted and never shown.{{if $set}} A value is set; leave empty to keep it.{{end}}</p>
   {{else}}
     <input id="{{.Name}}" name="{{.Name}}" value="{{index $v .Name}}" autocomplete="off" spellcheck="false"
-      {{if eq .Type "number"}}type="number" step="any" inputmode="decimal"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{with .Help}} title="{{.}}"{{end}}{{end}}{{if .Required}} required{{end}}{{if .Help}} aria-describedby="{{.Name}}-help"{{end}}{{if $err}} aria-invalid="true"{{end}}>
+      {{if eq .Type "number"}}type="number" step="any" inputmode="decimal"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{with .Help}} title="{{.}}"{{end}}{{end}}{{if .Required}} required{{end}}{{aria $.F .Name $help}}>
   {{end}}
     {{if .Help}}<p class="hint" id="{{.Name}}-help">{{.Help}}</p>{{end}}
-    {{with $err}}<p class="err">{{.}}</p>{{end}}
+    {{template "fielderror" (dict "F" $.F "N" .Name)}}
   </fieldset>
 {{end}}
   </div>

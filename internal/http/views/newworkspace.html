@@ -9,7 +9,7 @@
     <p class="muted">A workspace holds one Terraform state, its variables and its runs.</p>
   </div>
 </div>
-{{with .VCS.Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
+{{template "formerror" .F}}
 
 {{if not .Projects}}
 {{template "nocreate"}}
@@ -97,7 +97,7 @@
   <input type="hidden" name="vcs_connection" value="{{$conn.ID}}">
   <input type="hidden" name="vcs_repo" value="{{index $f "vcs_repo"}}">
   <p>Repository: <code>{{index $f "vcs_repo"}}</code> via {{$conn.Name}}</p>
-  {{template "wsname" $f}}
+  {{template "wsname" .VCS}}
   {{template "projectpick" $}}
   {{template "vcsbranch" .VCS}}
   <div class="actions"><a href="?type=vcs&conn={{$conn.ID}}{{with $pq}}&project={{.}}{{end}}">‹ Previous</a><button type="submit">Create workspace</button><a class="btn secondary" href="/workspaces">Cancel</a></div>
@@ -119,7 +119,7 @@
 <h2>Configure settings</h2>
 <form method="post" class="settings">
   <input type="hidden" name="type" value="cli">
-  {{template "wsname" $f}}
+  {{template "wsname" .VCS}}
   {{template "projectpick" $}}
   <p class="hint">Point Terraform's cloud block at this workspace, or link a repository later under its settings.</p>
   <div class="actions"><a href="/workspaces/new{{with $pq}}?project={{.}}{{end}}">‹ Previous</a><button type="submit">Create workspace</button><a class="btn secondary" href="/workspaces">Cancel</a></div>
@@ -128,10 +128,11 @@
 {{end}}
 {{template "bottom"}}
 
-{{define "wsname"}}
-<label for="name">Workspace name <span class="req" aria-hidden="true">*</span></label>
-<input id="name" name="name" value="{{index . "name"}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}" placeholder="network-prod">
-<p class="hint">Lowercase letters, digits and dashes.</p>
-<label class="check"><input type="checkbox" id="auto_apply" name="auto_apply"{{if index . "auto_apply"}} checked{{end}}>
+{{define "wsname"}}<!-- the new workspace's name and auto-apply: a vcsForm -->
+<label for="ops-workspace">Workspace name <span class="req" aria-hidden="true">*</span></label>
+<input id="ops-workspace" name="ops-workspace" value="{{index .Form "name"}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}" placeholder="network-prod"{{aria .F "ops-workspace" "ops-workspace-hint"}}>
+<p class="hint" id="ops-workspace-hint">Lowercase letters, digits and dashes.</p>
+{{template "fielderror" (dict "F" .F "N" "ops-workspace")}}
+<label class="check"><input type="checkbox" id="auto_apply" name="auto_apply"{{if index .Form "auto_apply"}} checked{{end}}>
   <span>Auto-apply<small>Apply plans without asking for confirmation.</small></span></label>
 {{end}}

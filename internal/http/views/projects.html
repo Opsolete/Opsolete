@@ -7,6 +7,7 @@
   {{if (user).Admin}}<button type="button" onclick="document.getElementById('new-project').showModal()">+ New project</button>{{end}}
 </div>
 
+{{template "formerror" .F}}
 <div class="inline" style="margin-bottom:1rem">
   <input type="search" id="project-search" placeholder="Search by project name" aria-label="Search by project name" aria-describedby="project-search-hint"
     autocomplete="off" oninput="filterProjects(this.value)" style="max-width:24rem">
@@ -32,18 +33,21 @@
 </div>
 
 {{if (user).Admin}}
-<dialog id="new-project" aria-labelledby="new-project-title">
+{{$f := .F}}
+<dialog id="new-project" aria-labelledby="new-project-title"{{if $f}} open{{end}}>
   <form method="post" action="/projects">
     <header><h3 id="new-project-title">Create a new project</h3>
       <button type="button" class="secondary small" aria-label="close" onclick="this.closest('dialog').close()">✕</button></header>
     <fieldset>
       <p class="muted" style="margin-top:0">Projects are groups of workspaces, letting you manage team access and variable sets in bulk.</p>
       <label for="name">Project name <span class="req" aria-hidden="true">*</span></label>
-      <input id="name" name="name" required pattern="[a-z0-9][a-z0-9\-]{1,62}" placeholder="networking" aria-describedby="name-hint">
+      <input id="name" name="name" required pattern="[a-z0-9][a-z0-9\-]{1,62}" placeholder="networking" value="{{value $f "name" ""}}"{{aria $f "name" "name-hint"}}>
       <p class="hint" id="name-hint">Must be unique: 2–63 lowercase letters, digits and dashes.</p>
+      {{template "fielderror" (dict "F" $f "N" "name")}}
       <label for="description">Project description <span class="muted">(optional)</span></label>
-      <textarea id="description" name="description" rows="3" maxlength="1000" aria-describedby="description-hint"></textarea>
+      <textarea id="description" name="description" rows="3" maxlength="1000"{{aria $f "description" "description-hint"}}>{{value $f "description" ""}}</textarea>
       <p class="hint" id="description-hint">1000 characters allowed</p>
+      {{template "fielderror" (dict "F" $f "N" "description")}}
     </fieldset>
     <footer><button type="submit">Create</button>
       <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancel</button></footer>

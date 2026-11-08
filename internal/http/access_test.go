@@ -5,8 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -86,7 +84,7 @@ func TestAccessMatrix(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &app.App{Store: store, Blobs: memblob.OpenBucket(nil), SecretKey: vcs.Key("test-secret-key"), Templates: tpls, Registry: testReg,
-		Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+		Log: testLog(t)}
 	all := Features{Deployments: true, Registry: true, Editor: true, VCS: true}
 	server := func(au *auth.Auth) *Server {
 		s := New(a, au, all)
@@ -379,7 +377,7 @@ func accessRows() []accessRow {
 		{"GET /account/{page}", "/account/tokens", "", onUI, []int{302, 200, 200, 200, 200}, false},
 		{"POST /account/tokens/{id}/revoke", "/account/tokens/00000000-0000-0000-0000-000000000000/revoke", "", onUI, []int{401, 303, 303, 303, 303}, false},
 		{"GET /organization", "/organization", "", onUI, []int{302, 403, 403, 403, 200}, false},
-		{"POST /organization", "/organization", "currency=", onUI, []int{401, 403, 403, 403, 400}, false},
+		{"POST /organization", "/organization", "currency=", onUI, []int{401, 403, 403, 403, 422}, false},
 		{"GET /audit", "/audit", "", onUI, []int{302, 403, 403, 403, 200}, false},
 		{"GET /{$}", "/", "", onUI, []int{302, 200, 200, 200, 200}, false},
 
@@ -388,7 +386,7 @@ func accessRows() []accessRow {
 		{"GET " + mod + "/{version}", m + "/1.0.0", "", onUI, []int{302, 200, 200, 200, 200}, false},
 		{"GET " + mod + "/{version}/docs.md", m + "/1.0.0/docs.md", "", onUI, []int{302, 200, 200, 200, 200}, false},
 		{"GET /registry/publish", "/registry/publish", "", onUI, []int{302, 403, 403, 403, 200}, false},
-		{"POST /registry", "/registry", "", onUI, []int{401, 403, 403, 403, 413}, false},
+		{"POST /registry", "/registry", "", onUI, []int{401, 403, 403, 403, 400}, false}, // not multipart
 		{"POST /registry/publish", "/registry/publish", "", onUI, []int{401, 403, 403, 403, 404}, false},
 		{"POST " + mod + "/sync", m + "/sync", "", onUI, []int{401, 403, 403, 403, 404}, false},
 		{"POST " + mod + "/unlink", m + "/unlink", "", onUI, []int{401, 403, 403, 403, 404}, false},
@@ -409,7 +407,7 @@ func accessRows() []accessRow {
 
 		// UI: templates, the builder and rollouts.
 		{"GET /templates/{id}", "/templates/{tpl}", "", onUI, []int{302, 200, 200, 200, 200}, false},
-		{"POST /templates/{id}", "/templates/{tpl}", "ops-workspace={ws}-new&ops-project={proj}&location=westeurope", onUI, []int{401, 400, 400, 303, 303}, true},
+		{"POST /templates/{id}", "/templates/{tpl}", "ops-workspace={ws}-new&ops-project={proj}&location=westeurope", onUI, []int{401, 422, 422, 303, 303}, true},
 		{"GET /templates/new", "/templates/new", "", onUI, []int{302, 403, 403, 403, 200}, false},
 		{"POST /templates/new", "/templates/new", "name=x&preview=1", onUI, []int{401, 403, 403, 403, 422}, false},
 		{"GET /templates/{id}/edit", "/templates/{tpl}/edit", "", onUI, []int{302, 403, 403, 403, 200}, false},
@@ -432,11 +430,11 @@ func accessRows() []accessRow {
 		{"POST /projects/{project}/delete", "/projects/{proj}/delete", "", onUI, []int{401, 403, 403, 403, 409}, true},
 
 		// UI: workspaces. 409 for operators: past the access check, the fixture's queued run is in the way.
-		// A project the user can't create in is a bad request (400), not a not-found: the operator has
+		// A project the user can't create in is a field error (422), not a not-found: the operator has
 		// operate on the fixture's project, the reader only read. Settings pages need operate.
 		{"GET /workspaces", "/workspaces", "", onUI, []int{302, 200, 200, 200, 200}, false},
 		{"GET /workspaces/new", "/workspaces/new", "", onUI, []int{302, 200, 200, 200, 200}, false},
-		{"POST /workspaces/new", "/workspaces/new", "type=cli&name={ws}-new&ops-project={proj}", onUI, []int{401, 400, 400, 303, 303}, true},
+		{"POST /workspaces/new", "/workspaces/new", "type=cli&ops-workspace={ws}-new&ops-project={proj}", onUI, []int{401, 422, 422, 303, 303}, true},
 		{"GET " + w, ws, "", onUI, []int{302, 404, 200, 200, 200}, false},
 		{"GET " + w + "/runs", ws + "/runs", "", onUI, []int{302, 404, 200, 200, 200}, false},
 		{"GET " + w + "/states", "/workspaces/{cws}/states", "", onUI, []int{302, 404, 200, 200, 200}, false},
@@ -456,6 +454,8 @@ func accessRows() []accessRow {
 		{"POST " + w + "/variables", ws + "/variables", "category=terraform&key=k2&value=v", onUI, []int{401, 404, 403, 303, 303}, true},
 		{"POST " + w + "/variables/{id}/delete", ws + "/variables/{var}/delete", "", onUI, []int{401, 404, 403, 303, 303}, true},
 		{"POST " + w + "/settings", ws + "/settings", "name={ws}&execution_mode=remote", onUI, []int{401, 404, 403, 303, 303}, true},
+		{"POST " + w + "/settings/health", ws + "/settings/health", "drift_detection=on", onUI, []int{401, 404, 403, 303, 303}, false},
+		{"POST " + w + "/settings/remote-state", ws + "/settings/remote-state", "remote_state=specific", onUI, []int{401, 404, 403, 303, 303}, false},
 		{"POST " + w + "/access", ws + "/access", "group=acc-other&level=read", onUI, []int{401, 403, 403, 403, 303}, false},
 		{"POST " + w + "/lock", ws + "/lock", "action=lock", onUI, []int{401, 404, 403, 303, 303}, true},
 		{"POST " + w + "/project", ws + "/project", "project={proj}", onUI, []int{401, 403, 403, 403, 303}, false},

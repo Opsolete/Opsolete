@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"maps"
 	"mime/multipart"
@@ -56,9 +55,36 @@ func newApp(t *testing.T, dir string, store *storage.Store, a *auth.Auth, f Feat
 		t.Fatal(err)
 	}
 	srv := New(&app.App{Store: store, Blobs: memblob.OpenBucket(nil), SecretKey: vcs.Key("test-secret-key"), Templates: tpls, Registry: testReg,
-		Log: slog.New(slog.NewTextHandler(io.Discard, nil))}, a, f)
+		Log: testLog(t)}, a, f)
 	srv.RunnerToken = testRunnerToken
 	return srv
+}
+
+// testLog discards the log, but fails the test on errNotShown: a form that doesn't re-render its
+// ValidationError.
+func testLog(t *testing.T) *slog.Logger {
+	return slog.New(notShown{slog.DiscardHandler, t})
+}
+
+type notShown struct {
+	slog.Handler
+	t *testing.T
+}
+
+func (h notShown) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h notShown) Handle(_ context.Context, r slog.Record) error {
+	if r.Message == errNotShown {
+		var path string
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == "path" {
+				path = a.Value.String()
+			}
+			return true
+		})
+		h.t.Errorf("%s: %s", errNotShown, path)
+	}
+	return nil
 }
 
 func devAuth(t *testing.T, store *storage.Store, email string, admin bool, groups ...string) *auth.Auth {
@@ -241,8 +267,8 @@ func TestFeatureSwitches(t *testing.T) {
 
 func TestInvalidSubmitRerendersForm(t *testing.T) {
 	rec := post(newServer(t, "../../catalog", false, testStore(t)), "/templates/storage-account", url.Values{"name": {"NO"}, "location": {"westeurope"}})
-	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), `<p class="err">3-24 lowercase letters or digits, unique in Azure.</p>`) || // the label's help says what fits
-		!strings.Contains(rec.Body.String(), `<a href="#name">Account name</a>`) || // the error summary links the field
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), `<p class="err" id="name-error">3-24 lowercase letters or digits, unique in Azure.</p>`) || // the label's help says what fits
+		!strings.Contains(rec.Body.String(), `<a href="#name-error">Account name: `) || // the error summary links the field's error
 		!strings.Contains(rec.Body.String(), `placeholder="azure-storage-account-prod"`) {
 		t.Fatalf("got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -795,10 +821,10 @@ func TestWorkspaceFlow(t *testing.T) {
 	}
 
 	// Replace: only addresses of the workspace's state reach the runner.
-	if rec := post(h, "/workspaces/"+name+"/runs", url.Values{"action": {"apply"}, "replace": {"-destroy"}}); rec.Code != http.StatusBadRequest {
+	if rec := post(h, "/workspaces/"+name+"/runs", url.Values{"action": {"apply"}, "replace": {"-destroy"}}); rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("replace of an unknown address: %d", rec.Code)
 	}
-	if rec := post(h, "/workspaces/"+name+"/runs", url.Values{"action": {"refresh"}, "replace": {"azurerm_storage_account.this"}}); rec.Code != http.StatusBadRequest {
+	if rec := post(h, "/workspaces/"+name+"/runs", url.Values{"action": {"refresh"}, "replace": {"azurerm_storage_account.this"}}); rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("replace in a refresh-only run: %d", rec.Code)
 	}
 	rec = post(h, "/workspaces/"+name+"/runs", url.Values{"action": {"apply"}, "replace": {"azurerm_storage_account.this"}})
@@ -820,7 +846,7 @@ func TestWorkspaceFlow(t *testing.T) {
 	}
 
 	// Drift check: queued by the schedule once drift detection is on, never applied, kept out of the runs list.
-	if rec := post(h, "/workspaces/"+name+"/settings", url.Values{"drift_detection": {"on"}}); rec.Code != http.StatusSeeOther {
+	if rec := post(h, "/workspaces/"+name+"/settings/health", url.Values{"drift_detection": {"on"}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("settings: %d", rec.Code)
 	}
 	if n, err := store.QueueAssessments(ctx, time.Hour); err != nil || n < 1 {
@@ -845,7 +871,7 @@ func TestWorkspaceFlow(t *testing.T) {
 	if runs, _ := store.Runs(ctx, ws.ID, 25); runs[0].Action == "assess" {
 		t.Fatal("assessments must not be listed as runs")
 	}
-	post(h, "/workspaces/"+name+"/settings", url.Values{"drift_detection": {}})
+	post(h, "/workspaces/"+name+"/settings/health", url.Values{"drift_detection": {}})
 
 	// Destroy: a plan that always asks; discarding it frees the workspace; confirming destroys.
 	if strings.Contains(get(h, "/workspaces/"+name).Body.String(), "Destroy…") || !strings.Contains(get(h, "/workspaces/"+name+"/settings/deletion").Body.String(), "Queue destroy plan") {
@@ -871,7 +897,7 @@ func TestWorkspaceFlow(t *testing.T) {
 	if rec := post(other, "/workspaces/"+name+"/runs", url.Values{"action": {"destroy"}}); rec.Code != http.StatusNotFound {
 		t.Fatalf("destroy by a user without access: %d", rec.Code)
 	}
-	if rec := post(h, "/workspaces/"+name+"/settings", url.Values{"auto_apply": {"on"}}); rec.Code != http.StatusSeeOther {
+	if rec := post(h, "/workspaces/"+name+"/settings", url.Values{"name": {name}, "execution_mode": {"remote"}, "auto_apply": {"on"}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("settings: %d", rec.Code)
 	}
 	destroyRun := func() {
@@ -1050,7 +1076,7 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 		{"category": {"env"}, "key": {"ops_debug"}, "value": {"1"}}, // the runner reads OPS_DEBUG only
 		{"category": {"nope"}, "key": {"A"}},
 	} {
-		if rec := post(operator, wsURL+"/variables", v); rec.Code != http.StatusBadRequest {
+		if rec := post(operator, wsURL+"/variables", v); rec.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("%v must be rejected: %d", v, rec.Code)
 		}
 	}
@@ -1074,7 +1100,7 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 	}
 	// A second set entry with the workspace's key: the workspace's own variable wins.
 	post(admin, "/variable-sets/"+setName+"/variables", url.Values{"category": {"env"}, "key": {"ARM_CLIENT_ID"}, "value": {"client-set"}})
-	if rec := post(admin, "/variable-sets/"+setName+"/workspaces", url.Values{"workspace": {"no-such-ws"}}); rec.Code != http.StatusBadRequest {
+	if rec := post(admin, "/variable-sets/"+setName+"/workspaces", url.Values{"workspace": {"no-such-ws"}}); rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("attach to an unknown workspace: %d", rec.Code)
 	}
 	page := get(reader, wsURL+"/variables").Body.String()
@@ -1139,13 +1165,13 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 	}
 
 	// Rename: same workspace, new URL; the old one is gone; grants and runs stay.
-	if rec := post(reader, wsURL+"/settings", url.Values{"name": {name + "-renamed"}}); rec.Code != http.StatusForbidden {
+	if rec := post(reader, wsURL+"/settings", url.Values{"name": {name + "-renamed"}, "execution_mode": {"remote"}}); rec.Code != http.StatusForbidden {
 		t.Fatalf("a reader must not rename: %d", rec.Code)
 	}
-	if rec := post(operator, wsURL+"/settings", url.Values{"name": {"Not Valid"}}); rec.Code != http.StatusBadRequest {
+	if rec := post(operator, wsURL+"/settings", url.Values{"name": {"Not Valid"}, "execution_mode": {"remote"}}); rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("invalid name: %d", rec.Code)
 	}
-	if rec := post(operator, wsURL+"/settings", url.Values{"name": {name + "-renamed"}}); rec.Code != http.StatusSeeOther ||
+	if rec := post(operator, wsURL+"/settings", url.Values{"name": {name + "-renamed"}, "execution_mode": {"remote"}}); rec.Code != http.StatusSeeOther ||
 		rec.Header().Get("Location") != wsURL+"-renamed/settings" {
 		t.Fatalf("rename: %d %q", rec.Code, rec.Header().Get("Location"))
 	}
@@ -1214,7 +1240,7 @@ func TestRemoteStateSharing(t *testing.T) {
 	}
 	share := func(mode string, consumers ...string) {
 		t.Helper()
-		if rec := post(h, "/workspaces/"+src.Name+"/settings", url.Values{"remote_state": {mode}, "remote_state_consumers": consumers}); rec.Code != http.StatusSeeOther {
+		if rec := post(h, "/workspaces/"+src.Name+"/settings/remote-state", url.Values{"remote_state": {mode}, "remote_state_consumers": consumers}); rec.Code != http.StatusSeeOther {
 			t.Fatalf("share %s: %d %s", mode, rec.Code, rec.Body.String())
 		}
 	}
@@ -1243,11 +1269,12 @@ func TestRemoteStateSharing(t *testing.T) {
 	if c := state("GET", token); c != http.StatusForbidden {
 		t.Fatalf("sharing turned off: %d", c)
 	}
-	// the Health page's form leaves sharing alone
+	// the other settings forms leave sharing alone
 	share("all")
-	post(h, "/workspaces/"+src.Name+"/settings", url.Values{"page": {"health"}})
+	post(h, "/workspaces/"+src.Name+"/settings/health", nil)
+	post(h, "/workspaces/"+src.Name+"/settings", url.Values{"name": {src.Name}, "execution_mode": {"remote"}})
 	if c := state("GET", token); c != http.StatusNoContent {
-		t.Fatalf("Health save changed sharing: %d", c)
+		t.Fatalf("General or Health save changed sharing: %d", c)
 	}
 	// a pull request's speculative plan runs unreviewed code: no shared state, even when shared with all
 	if _, err := store.Pool.Exec(context.Background(), `UPDATE runs SET action = 'plan', vcs_pull_request = 7 WHERE id = $1`, run.ID); err != nil {
@@ -1274,7 +1301,7 @@ func TestWorkspaceLock(t *testing.T) {
 	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE id = $1`, ws.ID) })
 	u := "/workspaces/" + ws.Name
 
-	if rec := post(alice, u+"/lock", url.Values{"action": {"lock"}, "reason": {strings.Repeat("x", 301)}}); rec.Code != http.StatusBadRequest {
+	if rec := post(alice, u+"/lock", url.Values{"action": {"lock"}, "reason": {strings.Repeat("x", 301)}}); rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("a reason over 300 characters: %d", rec.Code)
 	}
 	if rec := post(alice, u+"/lock", url.Values{"action": {"lock"}, "reason": {"migrating state"}}); rec.Code != http.StatusSeeOther {

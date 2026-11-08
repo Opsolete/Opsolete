@@ -55,7 +55,7 @@ func TestStateRunCredential(t *testing.T) {
 	if _, err := foreign.Read(ctx); !errors.Is(err, ErrForbidden) {
 		t.Errorf("read a state not shared: %v", err)
 	}
-	if _, err := a.SaveSettings(ctx, admin, other.Name, storage.Settings{Sharing: true, Global: true}); err != nil {
+	if err := a.ShareState(ctx, admin, other.Name, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := foreign.Read(ctx); err != nil {

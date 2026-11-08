@@ -15,7 +15,7 @@ func TestAuditLogRecordsChanges(t *testing.T) {
 	h := newServer(t, "../../catalog", false, store)
 	name := "audit-" + strings.ToLower(newID()[:8])
 	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE name = $1`, name) })
-	if rec := post(h, "/workspaces/new", url.Values{"name": {name}}); rec.Code != http.StatusSeeOther {
+	if rec := post(h, "/workspaces/new", url.Values{fieldWorkspace: {name}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
 	}
 	if rec := post(h, "/workspaces/"+name+"/variables", url.Values{"category": {"env"}, "key": {"ARM_CLIENT_SECRET"},
@@ -62,7 +62,7 @@ func TestAuditLogRecordsChanges(t *testing.T) {
 func TestAuditCapsForms(t *testing.T) {
 	store := testStore(t)
 	h := newServerAs(t, "../../catalog", false, store, devAuth(t, store, "someone@example.com", false))
-	if rec := post(h, "/workspaces/new", url.Values{"x": {strings.Repeat("a", maxFormSize)}}); rec.Code != http.StatusBadRequest {
+	if rec := post(h, "/workspaces/new", url.Values{"x": {strings.Repeat("a", maxFormSize)}}); rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized form: %d", rec.Code)
 	}
 	path := "/audit-cap-" + strings.ToLower(newID()[:8])

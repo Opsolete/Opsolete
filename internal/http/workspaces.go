@@ -2,7 +2,6 @@ package httpserver
 
 import (
 	"cmp"
-	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -50,7 +49,9 @@ func (s *Server) workspaceRoutes(mux routes) {
 	mux.HandleFunc("GET /workspaces/{name}/settings/{page}", s.workspace)
 	mux.HandleFunc("GET /workspaces/{name}/states/{version}", s.workspace)
 	mux.HandleFunc("POST /workspaces/{name}/runs", s.newRun)
-	mux.HandleFunc("POST /workspaces/{name}/settings", s.workspaceSettings)
+	mux.HandleFunc("POST /workspaces/{name}/settings", s.saveGeneral)
+	mux.HandleFunc("POST /workspaces/{name}/settings/health", s.saveHealth)
+	mux.HandleFunc("POST /workspaces/{name}/settings/remote-state", s.shareState)
 	mux.HandleFunc("POST /workspaces/{name}/lock", s.lockWorkspace)
 	mux.HandleFunc("POST /workspaces/{name}/delete", s.deleteWorkspace)
 	mux.HandleFunc("GET /workspaces/{name}/templates/new", s.workspaceTemplateForm)
@@ -72,7 +73,7 @@ type formPage struct {
 	Editor    bool
 	Preview   bool // the builder's unsaved template: shown, never submitted
 	Values    map[string]string
-	Errors    map[string]string
+	F         *formState // a refused submit
 	Workspace string
 	AutoApply bool
 	Project   string             // the project picked for the new workspace; "" is the default
@@ -81,8 +82,7 @@ type formPage struct {
 	Module    string             // with Configure: the added template to change (or add, with Adding)
 	Adding    bool
 	Cur       templates.Module // with Configure: the module version it runs now
-	Error     string
-	Set       map[string]bool // sensitive inputs with a stored value: left empty, it's kept
+	Set       map[string]bool  // sensitive inputs with a stored value: left empty, it's kept
 }
 
 var nonNameChars = regexp.MustCompile(`[^a-z0-9]+`)
@@ -117,34 +117,22 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 		s.uiError(w, r, err)
 		return
 	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad form", http.StatusBadRequest)
+	f, ok := readForm(w, r)
+	if !ok {
 		return
 	}
-	in := app.NewWorkspace{Name: strings.TrimSpace(r.PostForm.Get(fieldWorkspace)), Project: r.PostForm.Get(fieldProject),
-		AutoApply: r.PostForm.Get(fieldAutoApply) != "", TemplateID: t.ID, Inputs: formValues(r, t)}
-	// a project the user can't pick (the default one too) is a bad request, not a form error (the picker only offers the others)
-	if _, err := s.App.NewWorkspaceProject(r.Context(), actor(r), in.Project, uuid.Nil); err != nil {
-		s.uiError(w, r, err)
-		return
-	}
+	in := app.NewWorkspace{Name: strings.TrimSpace(f.Get(fieldWorkspace)), Project: f.Get(fieldProject),
+		AutoApply: f.Get(fieldAutoApply) != "", TemplateID: t.ID, Inputs: formValues(f, t)}
 	ws, run, err := s.App.CreateWorkspace(r.Context(), actor(r), in)
-	if ve, ok := errors.AsType[*app.ValidationError](err); ok {
-		page := formPage{T: t, Editor: s.canEditTemplates(r), Values: in.Inputs, Errors: ve.Fields, Workspace: in.Name,
-			AutoApply: in.AutoApply, Project: in.Project}
-		if msg, ok := ve.Fields[app.FieldName]; ok {
-			page.Errors[fieldWorkspace] = msg
-			delete(page.Errors, app.FieldName)
-		}
+	if s.failed(w, r, err, "workspace", f, func(status int, fs *formState) {
+		fs.Labels = inputLabels(t)
+		page := formPage{T: t, Editor: s.canEditTemplates(r), Values: in.Inputs, F: fs, Workspace: in.Name, AutoApply: in.AutoApply, Project: in.Project}
 		if page.Projects, err = s.creatableProjects(r); err != nil {
 			s.internalError(w, "list projects", err)
 			return
 		}
-		s.render(w, r, http.StatusUnprocessableEntity, "form.html", page)
-		return
-	}
-	if err != nil {
-		s.uiError(w, r, err)
+		s.render(w, r, status, "form.html", page)
+	}) {
 		return
 	}
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID.String(), http.StatusSeeOther)
@@ -195,6 +183,19 @@ func (s *Server) loadRun(w http.ResponseWriter, r *http.Request, need app.Level)
 }
 
 func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
+	s.workspacePage(w, r, http.StatusOK, nil)
+}
+
+// onWorkspacePage re-renders a refused form on the {name} workspace's page at sub (e.g.
+// "/settings/lock") and settings sub-page page.
+func (s *Server) onWorkspacePage(w http.ResponseWriter, r *http.Request, sub, page string) func(int, *formState) {
+	return func(status int, f *formState) {
+		s.workspacePage(w, at(r, "/workspaces/"+r.PathValue("name")+sub, "page", page), status, f)
+	}
+}
+
+// workspacePage renders the workspace's side-menu page of the request's path; f: a refused form on it.
+func (s *Server) workspacePage(w http.ResponseWriter, r *http.Request, status int, f *formState) {
 	// settings sub-pages; "" is General
 	page := r.PathValue("page")
 	if !slices.Contains([]string{"", "health", "lock", "access", "deletion"}, page) {
@@ -260,7 +261,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 	}
 	data := map[string]any{"W": ws, "Lock": lock, "Me": auth.FromContext(ctx).ID.String(), "Runs": runs, "Active": active, "Current": current, "Page": page,
 		"Resources": res, "Versions": versions, "Outputs": outputs, "Destroyed": destroyed,
-		"Assessment": assessment, "CanOperate": level == app.LevelOperate, "Admin": auth.FromContext(ctx).Admin()}
+		"Assessment": assessment, "CanOperate": level == app.LevelOperate, "Admin": auth.FromContext(ctx).Admin(), "F": f}
 
 	switch tab {
 	case "overview":
@@ -343,7 +344,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 			s.uiError(w, r, err)
 			return
 		}
-		vars := varsBlock{Base: "/workspaces/" + ws.Name, Vars: wv.Own, CanEdit: level == app.LevelOperate}
+		vars := varsBlock{Base: "/workspaces/" + ws.Name, Vars: wv.Own, CanEdit: level == app.LevelOperate, F: formOf(f, "variable")}
 		var setVars []setView
 		for _, set := range wv.Sets {
 			setVars = append(setVars, setView{set.VariableSet, varsBlock{Vars: set.Vars}})
@@ -397,7 +398,7 @@ func (s *Server) workspace(w http.ResponseWriter, r *http.Request) {
 		maps.Copy(data, map[string]any{"Grants": acc.Grants, "Groups": acc.Groups, "StateConsumers": stateConsumers, "Projects": projects,
 			"StateAddress": s.App.Registry.PublicURL.JoinPath(runnerapi.StatePrefix, ws.ID.String()).String()})
 	}
-	s.render(w, r, http.StatusOK, "workspace.html", data)
+	s.render(w, r, status, "workspace.html", data)
 }
 
 // picker is a searchable multi-select of workspaces: the "picker" template in layout.html.
@@ -480,55 +481,83 @@ func groupResources(res []storage.Resource, added []storage.WorkspaceTemplate, n
 // number of times plans replacing those resources), destroy, refresh (refresh-only), assess
 // (check for drift now) or plan (plan only: a speculative plan, never applied).
 func (s *Server) newRun(w http.ResponseWriter, r *http.Request) {
-	r.ParseForm()
-	ws, run, err := s.App.StartRun(r.Context(), actor(r), r.PathValue("name"), app.NewRun{Action: r.PostForm.Get("action"), Replace: r.PostForm["replace"]})
-	if err != nil {
-		s.uiError(w, r, err)
+	f, ok := readForm(w, r)
+	if !ok {
+		return
+	}
+	ws, run, err := s.App.StartRun(r.Context(), actor(r), r.PathValue("name"), app.NewRun{Action: f.Get("action"), Replace: f["replace"]})
+	if s.failed(w, r, err, "run", f, s.onWorkspacePage(w, r, "", "")) {
 		return
 	}
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID.String(), http.StatusSeeOther)
 }
 
-// workspaceSettings saves the General (name, execution mode, auto-apply, remote state sharing) and Health pages.
-func (s *Server) workspaceSettings(w http.ResponseWriter, r *http.Request) {
-	set := storage.Settings{Name: r.PostFormValue("name"), AutoApply: r.PostFormValue("auto_apply") != "",
-		DriftDetection: r.PostFormValue("drift_detection") != "", ExecutionMode: r.PostFormValue("execution_mode")} // name, mode: General page only
-	for _, v := range r.PostForm["remote_state_consumers"] {
+// saveGeneral saves the General page's name, execution mode and auto-apply (app.SaveGeneralSettings).
+func (s *Server) saveGeneral(w http.ResponseWriter, r *http.Request) {
+	f, ok := readForm(w, r)
+	if !ok {
+		return
+	}
+	ws, err := s.App.SaveGeneralSettings(r.Context(), actor(r), r.PathValue("name"), app.GeneralSettings{Name: f.Get("name"),
+		ExecutionMode: f.Get("execution_mode"), AutoApply: f.Get("auto_apply") != ""})
+	if s.failed(w, r, err, "general", f, s.onWorkspacePage(w, r, "/settings", "")) {
+		return
+	}
+	http.Redirect(w, r, "/workspaces/"+ws.Name+"/settings", http.StatusSeeOther)
+}
+
+// shareState saves the General page's remote state sharing: remote_state=all shares with all
+// workspaces, else with the remote_state_consumers (ids) (app.ShareState).
+func (s *Server) shareState(w http.ResponseWriter, r *http.Request) {
+	f, ok := readForm(w, r)
+	if !ok {
+		return
+	}
+	var ids []uuid.UUID
+	for _, v := range f["remote_state_consumers"] {
 		if id, ok := parseID(v); ok { // not an id: ignored, as unknown ids are
-			set.Consumers = append(set.Consumers, id)
+			ids = append(ids, id)
 		}
 	}
-	if sharing := r.PostFormValue("remote_state"); sharing != "" { // General page only
-		set.Sharing, set.Global = true, sharing == "all"
-	}
-	ws, err := s.App.SaveSettings(r.Context(), actor(r), r.PathValue("name"), set)
-	if err != nil {
+	if err := s.App.ShareState(r.Context(), actor(r), r.PathValue("name"), f.Get("remote_state") == "all", ids); err != nil {
 		s.uiError(w, r, err)
 		return
 	}
-	back := "/workspaces/" + ws.Name + "/settings"
-	if r.PostFormValue("page") == "health" {
-		back += "/health"
+	http.Redirect(w, r, "/workspaces/"+r.PathValue("name")+"/settings", http.StatusSeeOther)
+}
+
+// saveHealth saves the Health page: drift detection (app.SaveHealthSettings).
+func (s *Server) saveHealth(w http.ResponseWriter, r *http.Request) {
+	f, ok := readForm(w, r)
+	if !ok {
+		return
 	}
-	http.Redirect(w, r, back, http.StatusSeeOther)
+	if err := s.App.SaveHealthSettings(r.Context(), actor(r), r.PathValue("name"), f.Get("drift_detection") != ""); err != nil {
+		s.uiError(w, r, err)
+		return
+	}
+	http.Redirect(w, r, "/workspaces/"+r.PathValue("name")+"/settings/health", http.StatusSeeOther)
 }
 
 // lockWorkspace locks (action=lock, with an optional reason), unlocks or force-unlocks a workspace,
 // from its Locking page (app.State.Lock, Unlock).
 func (s *Server) lockWorkspace(w http.ResponseWriter, r *http.Request) {
-	ctx, action := r.Context(), r.PostFormValue("action")
-	if action != "lock" && action != "unlock" && action != "force-unlock" {
+	f, ok := readForm(w, r)
+	if !ok {
+		return
+	}
+	ctx, action := r.Context(), f.Get("action")
+	if action != "lock" && action != "unlock" && action != "force-unlock" { // the page's buttons: not user input
 		http.Error(w, "action is lock, unlock or force-unlock", http.StatusBadRequest)
 		return
 	}
 	st, err := s.App.State(ctx, actor(r), r.PathValue("name"), app.LevelOperate)
 	if err == nil && action == "lock" {
-		err = st.Lock(ctx, strings.TrimSpace(r.PostFormValue("reason")))
+		err = st.Lock(ctx, strings.TrimSpace(f.Get("reason")))
 	} else if err == nil {
 		err = st.Unlock(ctx, action == "force-unlock")
 	}
-	if err != nil {
-		s.uiError(w, r, err)
+	if s.failed(w, r, err, "lock", f, s.onWorkspacePage(w, r, "/settings/lock", "lock")) {
 		return
 	}
 	http.Redirect(w, r, "/workspaces/"+st.Workspace.Name+"/settings/lock", http.StatusSeeOther)
@@ -537,7 +566,11 @@ func (s *Server) lockWorkspace(w http.ResponseWriter, r *http.Request) {
 // deleteWorkspace deletes a workspace that manages no resources, with its state files; force=1
 // deletes it anyway, leaving any real resources unmanaged.
 func (s *Server) deleteWorkspace(w http.ResponseWriter, r *http.Request) {
-	if err := s.App.DeleteWorkspace(r.Context(), actor(r), r.PathValue("name"), r.PostFormValue("force") != ""); err != nil {
+	f, ok := readForm(w, r)
+	if !ok {
+		return
+	}
+	if err := s.App.DeleteWorkspace(r.Context(), actor(r), r.PathValue("name"), f.Get("force") != ""); err != nil {
 		s.uiError(w, r, err)
 		return
 	}
@@ -546,8 +579,12 @@ func (s *Server) deleteWorkspace(w http.ResponseWriter, r *http.Request) {
 
 // workspaceAccess grants an IdP group read or operate access to a workspace (level "" revokes). Admins only.
 func (s *Server) workspaceAccess(w http.ResponseWriter, r *http.Request) {
-	if err := s.App.SetGrant(r.Context(), actor(r), r.PathValue("name"), r.PostFormValue("group"), r.PostFormValue("level")); err != nil {
-		s.uiError(w, r, err)
+	f, ok := readForm(w, r)
+	if !ok {
+		return
+	}
+	err := s.App.SetGrant(r.Context(), actor(r), r.PathValue("name"), f.Get("group"), f.Get("level"))
+	if s.failed(w, r, err, "access", f, s.onWorkspacePage(w, r, "/settings/access", "access")) {
 		return
 	}
 	http.Redirect(w, r, "/workspaces/"+r.PathValue("name")+"/settings/access", http.StatusSeeOther)
@@ -681,8 +718,12 @@ func runPhases(r storage.Run, hist []storage.StatusEntry) (plan, apply phase) {
 // cancelRun cancels a queued run, asks a running one to stop (Terraform still saves state), or with
 // force=1 cuts off a runner that doesn't react.
 func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request) {
+	f, ok := readForm(w, r)
+	if !ok {
+		return
+	}
 	id, _ := pathID(r, "run") // not an id: not found
-	if _, err := s.App.CancelRun(r.Context(), actor(r), r.PathValue("name"), id, r.PostFormValue("force") != ""); err != nil {
+	if _, err := s.App.CancelRun(r.Context(), actor(r), r.PathValue("name"), id, f.Get("force") != ""); err != nil {
 		s.uiError(w, r, err)
 		return
 	}

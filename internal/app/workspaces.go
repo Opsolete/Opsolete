@@ -139,31 +139,58 @@ func (a *App) CreateEmptyWorkspace(ctx context.Context, actor Actor, in EmptyWor
 	return ws, nil
 }
 
-// SaveSettings saves a workspace's General or Health page (see storage.Settings), all or nothing, and
-// returns the workspace as saved. A new name (set.Name; "" or the current one keeps it) changes the URL;
-// state, runs and grants stay (keyed by id). ErrNameTaken: the new name is in use.
-func (a *App) SaveSettings(ctx context.Context, actor Actor, workspace string, set storage.Settings) (storage.Workspace, error) {
+// GeneralSettings are a workspace's General page.
+type GeneralSettings struct {
+	Name          string // a new name changes the URL; state, runs and grants stay (keyed by id)
+	ExecutionMode string // remote or local
+	AutoApply     bool
+}
+
+// SaveGeneralSettings saves the General page, and only its fields, and returns the workspace as
+// saved. ValidationError: name (also when taken), execution mode.
+func (a *App) SaveGeneralSettings(ctx context.Context, actor Actor, workspace string, in GeneralSettings) (storage.Workspace, error) {
 	ws, _, err := a.Workspace(ctx, actor, workspace, LevelOperate)
 	if err != nil {
 		return ws, err
 	}
-	if !slices.Contains([]string{"", "remote", "local"}, set.ExecutionMode) {
-		return ws, invalid("execution_mode", "execution mode is remote or local")
-	}
-	if set.Name = strings.TrimSpace(set.Name); set.Name == ws.Name {
-		set.Name = ""
-	}
-	if set.Name != "" && !ValidName(set.Name) {
+	in.Name = strings.TrimSpace(in.Name)
+	if !ValidName(in.Name) {
 		return ws, invalid("name", "a workspace name is "+NameRule)
 	}
-	if err := a.Store.SaveSettings(ctx, ws.ID, set); err != nil {
+	if in.ExecutionMode != "remote" && in.ExecutionMode != "local" {
+		return ws, invalid("execution_mode", "execution mode is remote or local")
+	}
+	err = a.Store.SaveGeneral(ctx, ws.ID, storage.General{Name: in.Name, ExecutionMode: in.ExecutionMode, AutoApply: in.AutoApply})
+	if errors.Is(err, storage.ErrNameTaken) {
+		return ws, invalid("name", err.Error())
+	}
+	if err != nil {
 		return ws, err
 	}
-	if set.Name != "" {
-		a.Log.Info("workspace renamed", "from", ws.Name, "to", set.Name, "user", actor.Email)
-		ws.Name = set.Name
+	if in.Name != ws.Name {
+		a.Log.Info("workspace renamed", "from", ws.Name, "to", in.Name, "user", actor.Email)
 	}
+	ws.Name, ws.ExecutionMode, ws.AutoApply = in.Name, in.ExecutionMode, in.AutoApply
 	return ws, nil
+}
+
+// SaveHealthSettings turns the workspace's daily drift check on or off (the Health page).
+func (a *App) SaveHealthSettings(ctx context.Context, actor Actor, workspace string, driftDetection bool) error {
+	ws, _, err := a.Workspace(ctx, actor, workspace, LevelOperate)
+	if err != nil {
+		return err
+	}
+	return a.Store.SetDriftDetection(ctx, ws.ID, driftDetection)
+}
+
+// ShareState sets whom the workspace's state is shared with (remote state sharing, on the General
+// page): all workspaces (global), else the consumers (workspace ids; unknown ones are ignored).
+func (a *App) ShareState(ctx context.Context, actor Actor, workspace string, global bool, consumers []uuid.UUID) error {
+	ws, _, err := a.Workspace(ctx, actor, workspace, LevelOperate)
+	if err != nil {
+		return err
+	}
+	return a.Store.ShareState(ctx, ws.ID, global, consumers)
 }
 
 // DeleteWorkspace deletes a workspace that manages no resources, then its state files; force deletes
@@ -190,8 +217,11 @@ func (a *App) DeleteWorkspace(ctx context.Context, actor Actor, workspace string
 // ParseGrant checks a group grant as a form or API gives it; level "" (LevelNone) revokes.
 func ParseGrant(group, level string) (string, Level, error) {
 	l, ok := ParseLevel(level)
-	if group = strings.TrimSpace(group); group == "" || len(group) > 256 || !ok {
-		return "", LevelNone, &ValidationError{Message: "group is required, and level must be read, operate or empty (revoke)"}
+	if !ok {
+		return "", LevelNone, invalid("level", "level is read, operate or empty (revoke)")
+	}
+	if group = strings.TrimSpace(group); group == "" || len(group) > 256 {
+		return "", LevelNone, invalid("group", "a group is 1 to 256 characters")
 	}
 	return group, l, nil
 }

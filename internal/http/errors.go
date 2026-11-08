@@ -20,9 +20,9 @@ func (s *Server) internalError(w http.ResponseWriter, what string, err error) {
 }
 
 // uiError answers an app error on the UI: not found 404, forbidden 403, conflict 409 and a
-// validation error 400, each with its message; anything else 500. Handlers whose form shows a
-// ValidationError re-render it before calling this. The Terraform http state backend answers in the
-// same plain-text shape.
+// validation error 400, each with its message; anything else 500. A form shows its ValidationError
+// itself (failed, in forms.go): one that gets here from a UI POST is a missing re-render, logged as
+// errNotShown. The Terraform http state backend answers in the same plain-text shape.
 func (s *Server) uiError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, app.ErrNotFound):
@@ -32,11 +32,17 @@ func (s *Server) uiError(w http.ResponseWriter, r *http.Request, err error) {
 	case app.IsConflict(err):
 		http.Error(w, err.Error(), http.StatusConflict)
 	case isValidation(err):
+		if r.Method == http.MethodPost && !public(r.URL.Path) { // a UI form, not the state backend
+			s.App.Log.Error(errNotShown, "path", r.URL.Path, "err", err)
+		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:
 		s.internalError(w, r.Method+" "+r.URL.Path, err)
 	}
 }
+
+// errNotShown is logged for a ValidationError of a POST that no form re-rendered (tests fail on it).
+const errNotShown = "validation error not shown on its form"
 
 // apiError answers an app error on the cloud API as JSON:API errors: 404, 403, 409, 422 (Terraform
 // shows a 422's message), else 500.

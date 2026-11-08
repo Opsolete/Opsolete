@@ -575,10 +575,11 @@
 <p class="muted">Ask an admin to create a workspace, or for operate access to a project.</p>{{end}}
 {{define "projectpick"}}<!-- the project of a new workspace: .Projects to pick from, .Project the picked name ("" = the default) -->
 <label for="ops-project">Project</label>
-<select id="ops-project" name="ops-project" aria-describedby="ops-project-hint">
+<select id="ops-project" name="ops-project"{{aria .F "ops-project" "ops-project-hint"}}>
   {{$sel := .Project}}{{range .Projects}}<option value="{{.Name}}"{{if or (eq .Name $sel) (and (not $sel) .Default)}} selected{{end}}>{{.Name}}{{if .Default}} (default){{end}}</option>{{end}}
 </select>
 <p class="hint" id="ops-project-hint">The project's grants and variable sets apply to the workspace.</p>
+{{template "fielderror" (dict "F" .F "N" "ops-project")}}
 {{end}}
 {{define "picker"}}<!-- searchable multi-select (a picker value from Go): checkboxes in a dropdown; closed <details> still submit their boxes -->
 <details class="menu picker">
@@ -596,6 +597,24 @@
   </div>
 </details>
 {{end}}
+{{define "grantform"}}<!-- grant a group access: posts to .Action; .Groups known ones, .F a refused grant -->
+<form method="post" action="{{.Action}}" class="inline" style="margin-top:1rem">
+  <!-- datalist, not select: a group may be granted before any of its members has logged in -->
+  <input name="group" list="known-groups" aria-label="group" placeholder="IdP group (e.g. Entra group object id)" required value="{{value .F "group" ""}}"{{aria .F "group"}}>
+  <datalist id="known-groups">{{range .Groups}}<option value="{{.}}">{{end}}</datalist>
+  {{$l := value .F "level" "read"}}
+  <select name="level" aria-label="access level" style="flex:0 0 9rem"{{aria .F "level"}}><option{{if eq $l "read"}} selected{{end}}>read</option><option{{if eq $l "operate"}} selected{{end}}>operate</option></select>
+  <button type="submit" class="secondary">Grant</button>
+</form>
+{{template "fielderror" (dict "F" .F "N" "group")}}{{template "fielderror" (dict "F" .F "N" "level")}}
+{{end}}
+{{define "formerror"}}<!-- a refused form's errors at the top of its page (a *formState; nil: none): its message, then each field's, linked -->
+{{with .}}<div class="alert error" role="alert">{{.Message}}
+  {{with .List}}{{if not $.Message}}<strong>Fix {{len .}} field{{if ne (len .) 1}}s{{end}}:</strong>{{end}}
+  <ul>{{range .}}<li><a href="#{{.Name}}-error">{{with .Label}}{{.}}: {{end}}{{.Msg}}</a></li>{{end}}</ul>{{end}}</div>{{end}}
+{{end}}
+{{define "fielderror"}}<!-- next to input .N: what is wrong with it in form .F; the input gets aria .F .N -->
+{{with fieldError .F .N}}<p class="err" id="{{$.N}}-error">{{.}}</p>{{end}}{{end}}
 {{define "vcsconns"}}<!-- connections grouped by provider (.Conns, .Providers), each a link to .Path with its id: ?connection= if .Module, else ?type=vcs&conn= (and .Project) -->
 {{range $p := .Providers}}
 {{$has := false}}{{range $.Conns}}{{if eq .Provider $p.ID}}{{$has = true}}{{end}}{{end}}

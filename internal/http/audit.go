@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"mime"
 	"net"
 	"net/http"
 	"slices"
@@ -30,10 +29,7 @@ func secretName(k string) bool {
 
 const maxAuditError = 300 // bytes of a plain-text error response kept as the entry's error
 
-const (
-	maxFormSize   = 1 << 20 // urlencoded body; the largest real field is a 64 KB variable value
-	maxAuditValue = 1 << 10 // bytes of each form value kept in the entry
-)
+const maxAuditValue = 1 << 10 // bytes of each form value kept in the entry
 
 // truncate cuts each value to maxAuditValue: the log is append-only, refused requests included.
 func truncate(v []string) []string {
@@ -86,15 +82,10 @@ func (s *Server) audit(next http.Handler) http.Handler {
 		mutating := r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions
 		h := next
 		if mutating {
-			// urlencoded bodies only; capped as this runs before login. Rejected here: the handlers' own
-			// ParseForm then returns nil and they'd act on an empty form.
-			if ct, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); ct == "application/x-www-form-urlencoded" {
-				r.Body = http.MaxBytesReader(w, r.Body, maxFormSize)
-			}
-			if err := r.ParseForm(); err != nil {
-				h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					http.Error(w, "invalid form: "+err.Error(), http.StatusBadRequest)
-				})
+			// the handlers' own parse (readForm), done first: capped as this runs before login. Answered
+			// here when it fails: readForm then finds the form parsed and would act on an empty one.
+			if err := parseForm(w, r); err != nil {
+				h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { badBody(w, err) })
 			}
 		}
 		p := &auth.Principal{Type: "anonymous"}

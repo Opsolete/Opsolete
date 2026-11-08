@@ -29,9 +29,9 @@ func TestProjectPages(t *testing.T) {
 	}
 
 	want(post(user, "/projects", url.Values{"name": {proj}}), http.StatusForbidden, "a user creates a project")
-	want(post(h, "/projects", url.Values{"name": {"new"}}), http.StatusBadRequest, "reserved name")
+	want(post(h, "/projects", url.Values{"name": {"new"}}), http.StatusUnprocessableEntity, "reserved name")
 	want(post(h, "/projects", url.Values{"name": {proj}, "description": {"d"}}), http.StatusSeeOther, "create")
-	want(post(h, "/projects", url.Values{"name": {proj}}), http.StatusBadRequest, "duplicate: a taken name is a field error")
+	want(post(h, "/projects", url.Values{"name": {proj}}), http.StatusUnprocessableEntity, "duplicate: a taken name is a field error")
 	want(get(user, "/projects/"+proj), http.StatusNotFound, "a user without a workspace in it")
 	if body := get(user, "/projects").Body.String(); strings.Contains(body, proj) || !strings.Contains(body, "default") {
 		t.Fatal("a user lists only the default project")
@@ -45,8 +45,8 @@ func TestProjectPages(t *testing.T) {
 	}
 
 	// a user can't put a workspace into a project they can't see; an admin can
-	want(post(user, "/workspaces/new", url.Values{"name": {ws}, "ops-project": {proj}}), http.StatusBadRequest, "user picks a hidden project")
-	want(post(h, "/workspaces/new", url.Values{"name": {ws}, "ops-project": {proj}}), http.StatusSeeOther, "create in project")
+	want(post(user, "/workspaces/new", url.Values{fieldWorkspace: {ws}, "ops-project": {proj}}), http.StatusUnprocessableEntity, "user picks a hidden project")
+	want(post(h, "/workspaces/new", url.Values{fieldWorkspace: {ws}, "ops-project": {proj}}), http.StatusSeeOther, "create in project")
 	if body := get(h, "/workspaces?project="+proj).Body.String(); !strings.Contains(body, ws) {
 		t.Fatal("the filtered list shows the project's workspace")
 	}
@@ -76,15 +76,15 @@ func TestProjectPages(t *testing.T) {
 	member := newServerAs(t, "../../catalog", false, store, devAuth(t, store, "proj-member@example.com", false, group))
 	want(get(member, "/workspaces/"+ws), http.StatusNotFound, "no access")
 	want(post(user, "/projects/"+proj+"/access", url.Values{"group": {group}, "level": {"read"}}), http.StatusForbidden, "a user grants")
-	want(post(h, "/projects/"+proj+"/access", url.Values{"group": {group}, "level": {"admin"}}), http.StatusBadRequest, "bad level")
+	want(post(h, "/projects/"+proj+"/access", url.Values{"group": {group}, "level": {"admin"}}), http.StatusUnprocessableEntity, "bad level")
 	want(post(h, "/projects/"+proj+"/access", url.Values{"group": {group}, "level": {"read"}}), http.StatusSeeOther, "grant read")
 	want(get(member, "/workspaces/"+ws), http.StatusOK, "read through the project")
 	want(get(member, "/projects/"+proj), http.StatusOK, "the granted project")
-	want(post(member, "/workspaces/"+ws+"/settings", url.Values{"auto_apply": {"on"}}), http.StatusForbidden, "read can't operate")
+	want(post(member, "/workspaces/"+ws+"/settings/health", url.Values{"drift_detection": {"on"}}), http.StatusForbidden, "read can't operate")
 	// creating a workspace in a project hands it the project's variable sets: read isn't enough
 	ws2 := "prj-ws2-" + sfx
 	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM workspaces WHERE name = $1`, ws2) })
-	want(post(member, "/workspaces/new", url.Values{"name": {ws2}, "ops-project": {proj}}), http.StatusBadRequest, "create with read")
+	want(post(member, "/workspaces/new", url.Values{fieldWorkspace: {ws2}, "ops-project": {proj}}), http.StatusUnprocessableEntity, "create with read")
 	if strings.Contains(get(member, "/projects/"+proj).Body.String(), "+ New workspace") {
 		t.Fatal("read access offers creating a workspace in the project")
 	}
@@ -92,8 +92,8 @@ func TestProjectPages(t *testing.T) {
 		t.Fatal("the workspace's Team access page shows the project grant")
 	}
 	want(post(h, "/projects/"+proj+"/access", url.Values{"group": {group}, "level": {"operate"}}), http.StatusSeeOther, "grant operate")
-	want(post(member, "/workspaces/"+ws+"/settings", url.Values{"auto_apply": {"on"}}), http.StatusSeeOther, "operate through the project")
-	want(post(member, "/workspaces/new", url.Values{"name": {ws2}, "ops-project": {proj}}), http.StatusSeeOther, "create with operate")
+	want(post(member, "/workspaces/"+ws+"/settings/health", url.Values{"drift_detection": {"on"}}), http.StatusSeeOther, "operate through the project")
+	want(post(member, "/workspaces/new", url.Values{fieldWorkspace: {ws2}, "ops-project": {proj}}), http.StatusSeeOther, "create with operate")
 	want(post(h, "/workspaces/"+ws2+"/project", url.Values{"project": {"default"}}), http.StatusSeeOther, "move it out again")
 	want(post(h, "/projects/"+proj+"/access", url.Values{"group": {group}}), http.StatusSeeOther, "revoke")
 	want(get(member, "/workspaces/"+ws), http.StatusNotFound, "revoked")
@@ -103,7 +103,7 @@ func TestProjectPages(t *testing.T) {
 	t.Cleanup(func() { store.Pool.Exec(context.Background(), `DELETE FROM variable_sets WHERE name = $1`, set) })
 	want(post(h, "/variable-sets", url.Values{"name": {set}}), http.StatusSeeOther, "create set")
 	want(post(user, "/variable-sets/"+set+"/projects", url.Values{"project": {proj}}), http.StatusForbidden, "a user attaches a set")
-	want(post(h, "/variable-sets/"+set+"/projects", url.Values{"project": {proj, "nope-" + sfx}}), http.StatusBadRequest, "unknown project")
+	want(post(h, "/variable-sets/"+set+"/projects", url.Values{"project": {proj, "nope-" + sfx}}), http.StatusUnprocessableEntity, "unknown project")
 	want(post(h, "/variable-sets/"+set+"/projects", url.Values{"project": {proj}}), http.StatusSeeOther, "attach to project")
 	if body := get(h, "/variable-sets/"+set).Body.String(); !strings.Contains(body, `value="`+proj+`" checked>`) {
 		t.Fatal("the set's page shows the project attached")
@@ -122,7 +122,7 @@ func TestProjectPages(t *testing.T) {
 		store.Pool.Exec(context.Background(), `DELETE FROM variable_sets WHERE name IN ($1, $2)`, pset, wset)
 	})
 	want(post(user, "/variable-sets", url.Values{"name": {pset}, "project": {proj}}), http.StatusForbidden, "a user creates a set")
-	want(post(h, "/variable-sets", url.Values{"name": {pset}, "project": {"nope-" + sfx}}), http.StatusBadRequest, "unknown project")
+	want(post(h, "/variable-sets", url.Values{"name": {pset}, "project": {"nope-" + sfx}}), http.StatusUnprocessableEntity, "unknown project")
 	want(post(h, "/variable-sets", url.Values{"name": {pset}, "project": {proj}}), http.StatusSeeOther, "create for project")
 	want(post(h, "/variable-sets", url.Values{"name": {wset}, "workspace": {ws}}), http.StatusSeeOther, "create for workspace")
 	if body := get(h, "/projects/"+proj+"/settings/variable-sets").Body.String(); !strings.Contains(body, `href="/variable-sets/`+pset+`"`) {
@@ -143,7 +143,7 @@ func TestProjectPages(t *testing.T) {
 		t.Fatal("the workspace's settings show its renamed project")
 	}
 	want(post(user, "/workspaces/"+ws+"/project", url.Values{"project": {"default"}}), http.StatusForbidden, "a user moves a workspace")
-	want(post(h, "/workspaces/"+ws+"/project", url.Values{"project": {"nope-" + sfx}}), http.StatusBadRequest, "move to an unknown project")
+	want(post(h, "/workspaces/"+ws+"/project", url.Values{"project": {"nope-" + sfx}}), http.StatusUnprocessableEntity, "move to an unknown project")
 	want(post(h, "/workspaces/"+ws+"/project", url.Values{"project": {"default"}}), http.StatusSeeOther, "move")
 	want(post(h, "/projects/"+proj+"-x/delete", nil), http.StatusSeeOther, "delete the emptied project")
 	want(get(h, "/projects/"+proj+"-x"), http.StatusNotFound, "deleted project")

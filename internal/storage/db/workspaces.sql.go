@@ -572,6 +572,23 @@ func (q *Queries) SetConfirmedBy(ctx context.Context, arg SetConfirmedByParams) 
 	return err
 }
 
+const setDriftDetection = `-- name: SetDriftDetection :execrows
+UPDATE workspaces SET drift_detection = $1::boolean, updated_at = now() WHERE id = $2::uuid
+`
+
+type SetDriftDetectionParams struct {
+	DriftDetection bool
+	ID             uuid.UUID
+}
+
+func (q *Queries) SetDriftDetection(ctx context.Context, arg SetDriftDetectionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setDriftDetection, arg.DriftDetection, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setExecutionMode = `-- name: SetExecutionMode :exec
 UPDATE workspaces SET execution_mode = $1::text, updated_at = now() WHERE id = $2::uuid
 `
@@ -584,6 +601,23 @@ type SetExecutionModeParams struct {
 func (q *Queries) SetExecutionMode(ctx context.Context, arg SetExecutionModeParams) error {
 	_, err := q.db.Exec(ctx, setExecutionMode, arg.Mode, arg.ID)
 	return err
+}
+
+const setGlobalRemoteState = `-- name: SetGlobalRemoteState :execrows
+UPDATE workspaces SET global_remote_state = $1::boolean, updated_at = now() WHERE id = $2::uuid
+`
+
+type SetGlobalRemoteStateParams struct {
+	Global bool
+	ID     uuid.UUID
+}
+
+func (q *Queries) SetGlobalRemoteState(ctx context.Context, arg SetGlobalRemoteStateParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setGlobalRemoteState, arg.Global, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setWorkspaceGrant = `-- name: SetWorkspaceGrant :exec
@@ -629,32 +663,24 @@ func (q *Queries) TouchWorkspace(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
-const updateWorkspaceSettings = `-- name: UpdateWorkspaceSettings :execrows
-UPDATE workspaces SET name = COALESCE(NULLIF($1::text, ''), name), auto_apply = $2::boolean,
-    drift_detection = $3::boolean, execution_mode = COALESCE(NULLIF($4::text, ''), execution_mode),
-    global_remote_state = CASE WHEN $5::boolean THEN $6::boolean ELSE global_remote_state END, updated_at = now()
-WHERE id = $7::uuid
+const updateGeneralSettings = `-- name: UpdateGeneralSettings :execrows
+UPDATE workspaces SET name = $1::text, execution_mode = $2::text,
+    auto_apply = $3::boolean, updated_at = now()
+WHERE id = $4::uuid
 `
 
-type UpdateWorkspaceSettingsParams struct {
-	Name           string
-	AutoApply      bool
-	DriftDetection bool
-	ExecutionMode  string
-	Sharing        bool
-	Global         bool
-	ID             uuid.UUID
+type UpdateGeneralSettingsParams struct {
+	Name          string
+	ExecutionMode string
+	AutoApply     bool
+	ID            uuid.UUID
 }
 
-// name and execution_mode: ” keeps them; global_remote_state only changes with sharing.
-func (q *Queries) UpdateWorkspaceSettings(ctx context.Context, arg UpdateWorkspaceSettingsParams) (int64, error) {
-	result, err := q.db.Exec(ctx, updateWorkspaceSettings,
+func (q *Queries) UpdateGeneralSettings(ctx context.Context, arg UpdateGeneralSettingsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateGeneralSettings,
 		arg.Name,
-		arg.AutoApply,
-		arg.DriftDetection,
 		arg.ExecutionMode,
-		arg.Sharing,
-		arg.Global,
+		arg.AutoApply,
 		arg.ID,
 	)
 	if err != nil {

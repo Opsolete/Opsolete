@@ -1,7 +1,6 @@
 package httpserver
 
 import (
-	"errors"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -42,24 +41,16 @@ func (s *Server) saveWorkspaceTemplate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad form", http.StatusBadRequest)
+	f, ok := readForm(w, r)
+	if !ok {
 		return
 	}
-	page.Values = formValues(r, page.T)
+	page.Values = formValues(f, page.T)
 	_, run, err := s.App.SaveTemplate(r.Context(), actor(r), r.PathValue("name"), r.PathValue("module"), page.T.ID, page.Values)
-	if ve, ok := errors.AsType[*app.ValidationError](err); ok {
-		page.Errors, page.Error = ve.Fields, ve.Message
-		s.render(w, r, http.StatusUnprocessableEntity, "form.html", page)
-		return
-	}
-	if app.IsConflict(err) {
-		page.Error = err.Error()
-		s.render(w, r, http.StatusConflict, "form.html", page)
-		return
-	}
-	if err != nil {
-		s.uiError(w, r, err)
+	if s.failed(w, r, err, "template", f, func(status int, fs *formState) {
+		fs.Labels, page.F = inputLabels(page.T), fs
+		s.render(w, r, status, "form.html", page)
+	}) {
 		return
 	}
 	http.Redirect(w, r, "/workspaces/"+page.Configure.Name+"/runs/"+run.ID.String(), http.StatusSeeOther)

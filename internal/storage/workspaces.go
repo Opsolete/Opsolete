@@ -405,33 +405,39 @@ func (s *Store) PinVCSCommit(ctx context.Context, runID uuid.UUID, commit string
 	return commit, notFound(err)
 }
 
-// Settings are a workspace's settings pages: General (all fields) and Health (only the booleans).
-type Settings struct {
-	Name                      string // "" keeps it; a rename keeps state, runs and grants (keyed by id)
-	AutoApply, DriftDetection bool   // apply plans without confirmation; check drift daily
-	ExecutionMode             string // "remote" or "local"; "" keeps it
-	// remote state sharing, only if Sharing: with all workspaces (Global) or with the Consumers
-	// (workspace ids; unknown ids and the workspace itself are ignored)
-	Sharing, Global bool
-	Consumers       []uuid.UUID
+// General are a workspace's General settings: name (a rename keeps state, runs and grants, keyed
+// by id), execution mode ("remote" or "local") and auto-apply.
+type General struct {
+	Name, ExecutionMode string
+	AutoApply           bool
 }
 
-// SaveSettings saves all of them or, on an error, none. ErrNameTaken: the new name is in use;
+// SaveGeneral saves the General settings, and only those. ErrNameTaken: the new name is in use;
 // ErrNotFound: no such workspace.
-func (s *Store) SaveSettings(ctx context.Context, id uuid.UUID, set Settings) error {
+func (s *Store) SaveGeneral(ctx context.Context, id uuid.UUID, g General) error {
+	err := affected(s.q.UpdateGeneralSettings(ctx, db.UpdateGeneralSettingsParams{ID: id, Name: g.Name, ExecutionMode: g.ExecutionMode, AutoApply: g.AutoApply}))
+	if isUnique(err) {
+		return ErrNameTaken
+	}
+	return err
+}
+
+// SetDriftDetection turns the daily drift check on or off (the Health page). ErrNotFound: no such workspace.
+func (s *Store) SetDriftDetection(ctx context.Context, id uuid.UUID, on bool) error {
+	return affected(s.q.SetDriftDetection(ctx, db.SetDriftDetectionParams{ID: id, DriftDetection: on}))
+}
+
+// ShareState sets whom the workspace's state is shared with: all workspaces (global), else the
+// consumers (workspace ids; unknown ids and the workspace itself are ignored). All or nothing.
+func (s *Store) ShareState(ctx context.Context, id uuid.UUID, global bool, consumers []uuid.UUID) error {
 	return s.tx(ctx, func(q *db.Queries) error {
-		err := affected(q.UpdateWorkspaceSettings(ctx, db.UpdateWorkspaceSettingsParams{ID: id, Name: set.Name, AutoApply: set.AutoApply,
-			DriftDetection: set.DriftDetection, ExecutionMode: set.ExecutionMode, Sharing: set.Sharing, Global: set.Global}))
-		if isUnique(err) {
-			return ErrNameTaken
-		}
-		if err != nil || !set.Sharing {
+		if err := affected(q.SetGlobalRemoteState(ctx, db.SetGlobalRemoteStateParams{ID: id, Global: global})); err != nil {
 			return err
 		}
 		if err := q.ClearRemoteStateConsumers(ctx, id); err != nil {
 			return err
 		}
-		return q.AddRemoteStateConsumers(ctx, db.AddRemoteStateConsumersParams{WorkspaceID: id, Consumers: set.Consumers})
+		return q.AddRemoteStateConsumers(ctx, db.AddRemoteStateConsumersParams{WorkspaceID: id, Consumers: consumers})
 	})
 }
 

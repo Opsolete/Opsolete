@@ -11,10 +11,12 @@
     <button type="submit" class="danger">Delete</button></form>
 </div>
 
+{{template "formerror" .F}}
+{{$sf := formOf .F "set"}}
 <form method="post" action="/variable-sets/{{$v.Name}}" class="card">
   <label for="description">Description</label>
-  <input id="description" name="description" value="{{$v.Description}}" class="wide" maxlength="500">
-  <label for="global"><input type="checkbox" id="global" name="global"{{if $v.Global}} checked{{end}}> Global: apply to every workspace not linked to a repository</label>
+  <input id="description" name="description" value="{{value $sf "description" $v.Description}}" class="wide" maxlength="500">
+  <label for="global"><input type="checkbox" id="global" name="global"{{if checked $sf "global" $v.Global}} checked{{end}}> Global: apply to every workspace not linked to a repository</label>
   <div class="actions"><button type="submit" class="secondary">Save</button></div>
 </form>
 
@@ -31,6 +33,7 @@
   {{range .Projects}}<label class="check"><input type="checkbox" name="project" value="{{.Value}}"{{if .Selected}} checked{{end}}><span>{{.Name}}</span></label>
   {{else}}<p class="hint">There are no projects.</p>{{end}}
   </div>
+  {{template "fielderror" (dict "F" (formOf .F "projects") "N" "project")}}
   <div class="actions"><button type="submit" class="secondary">Save</button></div>
 </form>
 
@@ -38,6 +41,7 @@
 <form method="post" action="/variable-sets/{{$v.Name}}/workspaces" class="card">
   <p class="muted">The set applies to the selected workspaces. None selected: it applies to none.</p>
   {{template "picker" .Picker}}
+  {{template "fielderror" (dict "F" (formOf .F "workspaces") "N" "workspace")}}
   <div class="actions"><button type="submit" class="secondary">Save</button></div>
 </form>
 {{end}}

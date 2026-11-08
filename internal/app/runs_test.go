@@ -65,13 +65,13 @@ func TestStartRun(t *testing.T) {
 			t.Errorf("%+v: %v", in, err)
 		}
 	}
-	if _, err := a.SaveSettings(ctx, admin, ws.Name, storage.Settings{ExecutionMode: "local"}); err != nil {
+	if _, err := a.SaveGeneralSettings(ctx, admin, ws.Name, GeneralSettings{Name: ws.Name, ExecutionMode: "local"}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := a.StartRun(ctx, admin, ws.Name, NewRun{Action: "apply"}); !IsConflict(err) || !errors.Is(err, storage.ErrLocalExecution) {
 		t.Errorf("local execution: %v", err)
 	}
-	if _, err := a.SaveSettings(ctx, admin, ws.Name, storage.Settings{ExecutionMode: "remote"}); err != nil {
+	if _, err := a.SaveGeneralSettings(ctx, admin, ws.Name, GeneralSettings{Name: ws.Name, ExecutionMode: "remote"}); err != nil {
 		t.Fatal(err)
 	}
 	_, run, err := a.StartRun(ctx, admin, ws.Name, NewRun{Action: "apply"})

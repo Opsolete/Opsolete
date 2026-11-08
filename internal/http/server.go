@@ -73,7 +73,7 @@ func New(a *app.App, au *auth.Auth, f Features) *Server {
 		"workspace": func() string { return "" }, "project": func() string { return "" }, "tab": func() string { return "" },
 		"features": func() Features { return f }, "duration": humanDuration, "ago": ago,
 		"provider": func(p string) string { return strings.TrimPrefix(p, "registry.terraform.io/") },
-		"status":   func(s string) string { return strings.ReplaceAll(s, "_", " ") }}).ParseFS(views, "views/*.html"))
+		"status":   func(s string) string { return strings.ReplaceAll(s, "_", " ") }}).Funcs(formFuncs).ParseFS(views, "views/*.html"))
 	s := &Server{App: a, Auth: au, Features: f, pages: pages}
 	s.clones.New = func() any { return template.Must(s.pages.Clone()) }
 	return s
@@ -246,7 +246,7 @@ type builderPage struct {
 	T           templates.Template
 	Rows        []templates.Input // existing inputs plus blank rows to fill in
 	Editing     bool
-	Error       string
+	F           *formState // a refused save
 	Warning     string
 	Modules     []storage.Module // registry modules to start from
 	Selected    string           // ns/name/system/version picked from the registry
@@ -326,18 +326,18 @@ func (s *Server) builder(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) saveTemplate(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad form", http.StatusBadRequest)
+	f, ok := readForm(w, r)
+	if !ok {
 		return
 	}
-	t := templateFromForm(r)
-	t.ID = r.PostForm.Get("id") // posted by this page's earlier save
+	t := templateFromForm(f)
+	t.ID = f.Get("id") // posted by this page's earlier save
 	editing := r.PathValue("id") != ""
 	if editing {
 		t.ID = r.PathValue("id")
 	}
-	page := builderPage{Editing: editing, Selected: r.PostForm.Get("selected")}
-	if r.PostForm.Has("preview") { // the deploy form as end users get it, without saving
+	page := builderPage{Editing: editing, Selected: f.Get("selected")}
+	if f.Has("preview") { // the deploy form as end users get it, without saving
 		rt, err := s.App.PreviewTemplate(r.Context(), actor(r), t, editing)
 		if err != nil {
 			page.T = rt
@@ -362,18 +362,21 @@ func (s *Server) saveTemplate(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/templates/"+t.ID, http.StatusSeeOther)
 }
 
-// builderError shows a refused save on the builder form: invalid templates, and the directory's or
-// the Git provider's refusal (as these say). Not found and forbidden are answered as such.
+// builderError shows a refused save on the builder form: invalid templates (422), conflicts (409),
+// and the directory's or the Git provider's refusal (422, as these say). Not found and forbidden are
+// answered as such.
 func (s *Server) builderError(w http.ResponseWriter, r *http.Request, p builderPage, err error) {
 	if errors.Is(err, app.ErrNotFound) || errors.Is(err, app.ErrForbidden) {
 		s.uiError(w, r, err)
 		return
 	}
-	if !isValidation(err) {
+	f, status, ok := refused("template", r.PostForm, err)
+	if !ok {
 		s.App.Log.Warn("save template", "id", p.T.ID, "err", err)
+		f, status = &formState{Name: "template", Message: err.Error()}, http.StatusUnprocessableEntity
 	}
-	p.Error = err.Error()
-	s.renderBuilder(w, r, http.StatusUnprocessableEntity, p)
+	p.F = f
+	s.renderBuilder(w, r, status, p)
 }
 
 // deleteTemplate removes a template from the catalog (app.DeleteCatalogTemplate).
@@ -420,8 +423,7 @@ func toJSON(v any) string {
 // templateFromForm reads the builder form. Field cards are parallel in_* lists, rows without a name are
 // dropped; the in_required/in_sensitive checkboxes post their card's index, since unchecked ones post nothing.
 // The key select posts the key input's name.
-func templateFromForm(r *http.Request) templates.Template {
-	f := r.PostForm
+func templateFromForm(f url.Values) templates.Template {
 	get := func(key string) string { return strings.TrimSpace(f.Get(key)) }
 	t := templates.Template{
 		Name: get("name"), Description: get("description"),

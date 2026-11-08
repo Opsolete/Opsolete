@@ -2,6 +2,7 @@
 {{$p := .P}}{{$tab := tab}}{{$pg := .Page}}
 <nav class="back" aria-label="breadcrumb"><a href="/projects">Projects</a> / <a href="/projects/{{$p.Name}}">{{$p.Name}}</a> / {{if eq $tab "workspaces"}}Workspaces{{else if eq $tab "settings"}}<a href="/projects/{{$p.Name}}/settings">Settings</a> / {{if eq $pg "access"}}Team access{{else if eq $pg "variable-sets"}}Variable sets{{else}}General{{end}}{{else}}Overview{{end}}</nav>
 
+{{template "formerror" .F}}
 {{if ne $tab "settings"}}
 <div class="page-head">
   <div>
@@ -42,16 +43,19 @@
 <div class="field">ID</div>
 <p class="id"><code>{{$p.ID}}</code>
   <button type="button" class="copy" aria-label="Copy ID" title="Copy ID" onclick="navigator.clipboard.writeText('{{$p.ID}}')">⧉</button></p>
+{{$gf := formOf .F "general"}}
 <form method="post" action="/projects/{{$p.Name}}/settings"
   onsubmit="return !this.elements.default.checked || this.elements.default.disabled || opsConfirm(event, 'Make {{$p.Name}} the default? New workspaces then go there unless another project is picked: they get its variable sets and may link the VCS connections selected for it.')">
   <label for="name">Project name <span class="req" aria-hidden="true">*</span></label>
-  <input id="name" name="name" value="{{$p.Name}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}" aria-describedby="name-hint">
+  <input id="name" name="name" value="{{value $gf "name" $p.Name}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}"{{aria $gf "name" "name-hint"}}>
   <p class="hint" id="name-hint">Lowercase letters, digits and dashes. Renaming changes the project's URL; its workspaces keep theirs.</p>
+  {{template "fielderror" (dict "F" $gf "N" "name")}}
   <label for="description">Project description <span class="muted">(optional)</span></label>
-  <textarea id="description" name="description" maxlength="1000" rows="3">{{$p.Description}}</textarea>
+  <textarea id="description" name="description" maxlength="1000" rows="3"{{aria $gf "description"}}>{{value $gf "description" $p.Description}}</textarea>
+  {{template "fielderror" (dict "F" $gf "N" "description")}}
   <fieldset>
     <legend>Default project</legend>
-    <label class="check"><input type="checkbox" name="default"{{if $p.Default}} checked disabled{{end}}>
+    <label class="check"><input type="checkbox" name="default"{{if $p.Default}} checked disabled{{else if checked $gf "default" false}} checked{{end}}>
       <span>New workspaces go here<small>unless another project is picked. To change it, make another project the default.
         Only admins and groups with operate on it create workspaces in it, as in any project: they get its variable sets and may link the VCS connections selected for it.</small></span></label>
   </fieldset>
@@ -81,13 +85,7 @@
   </table>
   {{else}}<p class="muted" style="margin:0">No groups have access through the project.</p>
   {{end}}
-  <form method="post" action="/projects/{{$p.Name}}/access" class="inline" style="margin-top:1rem">
-    <!-- datalist, not select: a group may be granted before any of its members has logged in -->
-    <input name="group" list="known-groups" aria-label="group" placeholder="IdP group (e.g. Entra group object id)" required>
-    <datalist id="known-groups">{{range .Groups}}<option value="{{.}}">{{end}}</datalist>
-    <select name="level" aria-label="access level" style="flex:0 0 9rem"><option>read</option><option>operate</option></select>
-    <button type="submit" class="secondary">Grant</button>
-  </form>
+  {{template "grantform" dict "Action" (print "/projects/" $p.Name "/access") "Groups" .Groups "F" (formOf .F "access")}}
 </div>
 
 {{else}}

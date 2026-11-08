@@ -653,19 +653,19 @@ func TestAccess(t *testing.T) {
 	}
 
 	other, _ := newWorkspace(t, s, false)
-	if err := s.SaveSettings(ctx, w.ID, Settings{Name: other.Name, AutoApply: true, ExecutionMode: "local"}); !errors.Is(err, ErrNameTaken) {
+	if err := s.SaveGeneral(ctx, w.ID, General{Name: other.Name, AutoApply: true, ExecutionMode: "local"}); !errors.Is(err, ErrNameTaken) {
 		t.Fatalf("rename onto a taken name: %v", err)
 	}
 	if got, _ := s.GetWorkspaceByID(ctx, w.ID); got.AutoApply || got.ExecutionMode != "remote" {
 		t.Fatalf("a failed save changed settings: %+v", got)
 	}
-	if err := s.SaveSettings(ctx, w.ID, Settings{Name: name + "-new"}); err != nil {
+	if err := s.SaveGeneral(ctx, w.ID, General{Name: name + "-new", ExecutionMode: "remote"}); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.GetWorkspace(ctx, name+"-new"); err != nil || got.ID != w.ID {
 		t.Fatalf("renamed: %+v %v", got, err)
 	}
-	if err := s.SaveSettings(ctx, uuid.New(), Settings{Name: name + "-gone"}); !errors.Is(err, ErrNotFound) {
+	if err := s.SaveGeneral(ctx, uuid.New(), General{Name: name + "-gone", ExecutionMode: "remote"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("rename of an unknown workspace: %v", err)
 	}
 }

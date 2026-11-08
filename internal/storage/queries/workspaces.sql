@@ -99,12 +99,16 @@ SELECT * FROM workspace_list WHERE (vcs_trigger OR vcs_pull_requests) AND execut
 -- name: PinVCSCommit :one
 UPDATE runs SET vcs_commit = COALESCE(vcs_commit, sqlc.arg(commit)::text) WHERE id = sqlc.arg(id)::uuid RETURNING vcs_commit::text;
 
--- name: UpdateWorkspaceSettings :execrows
--- name and execution_mode: '' keeps them; global_remote_state only changes with sharing.
-UPDATE workspaces SET name = COALESCE(NULLIF(sqlc.arg(name)::text, ''), name), auto_apply = sqlc.arg(auto_apply)::boolean,
-    drift_detection = sqlc.arg(drift_detection)::boolean, execution_mode = COALESCE(NULLIF(sqlc.arg(execution_mode)::text, ''), execution_mode),
-    global_remote_state = CASE WHEN sqlc.arg(sharing)::boolean THEN sqlc.arg(global)::boolean ELSE global_remote_state END, updated_at = now()
+-- name: UpdateGeneralSettings :execrows
+UPDATE workspaces SET name = sqlc.arg(name)::text, execution_mode = sqlc.arg(execution_mode)::text,
+    auto_apply = sqlc.arg(auto_apply)::boolean, updated_at = now()
 WHERE id = sqlc.arg(id)::uuid;
+
+-- name: SetDriftDetection :execrows
+UPDATE workspaces SET drift_detection = sqlc.arg(drift_detection)::boolean, updated_at = now() WHERE id = sqlc.arg(id)::uuid;
+
+-- name: SetGlobalRemoteState :execrows
+UPDATE workspaces SET global_remote_state = sqlc.arg(global)::boolean, updated_at = now() WHERE id = sqlc.arg(id)::uuid;
 
 -- name: ClearRemoteStateConsumers :exec
 DELETE FROM remote_state_consumers WHERE workspace_id = sqlc.arg(workspace_id)::uuid;
