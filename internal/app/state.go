@@ -468,7 +468,9 @@ func (s State) SaveCLIState(ctx context.Context, state, jsonState []byte) (stora
 // serial one above the current one, older versions kept, the copy's resource index the old one's.
 // It holds a rollback lock throughout and refuses while a run is active, so no run writes state or
 // applies a plan made against the replaced state meanwhile. The lock is released at the end, whatever
-// happened, or after STALE_LOCK_TIMEOUT by ReleaseOrphanedLocks if this server dies meanwhile.
+// happened, or after STALE_LOCK_TIMEOUT by ReleaseOrphanedLocks if this server dies meanwhile. It
+// records only while it still holds that lock (storage.ErrLockLost otherwise, nothing changed): a
+// rollback outliving STALE_LOCK_TIMEOUT, or force-unlocked, can't write over whoever locked next.
 // Needs operate. Conflicts: the state is locked, a run is active, the version is the current one or
 // of another lineage; ErrNotFound: no such version.
 func (s State) Rollback(ctx context.Context, from int64) error {
@@ -524,7 +526,7 @@ func (s State) Rollback(ctx context.Context, from int64) error {
 	}
 	// The version and its index are recorded in one transaction. Not atomic: the file is written
 	// before; a failed record deletes it again, only a crash in between leaves an unreferenced file.
-	if err := a.saveState(ctx, id, body, func(v storage.StateVersion) error { return a.Store.AddRollbackVersion(ctx, id, from, v) }); err != nil {
+	if err := a.saveState(ctx, id, body, func(v storage.StateVersion) error { return a.Store.AddRollbackVersion(ctx, id, from, lockID, v) }); err != nil {
 		return err
 	}
 	a.Log.Info("state rolled back", "workspace", s.Workspace.Name, "version", from, "user", s.actor.Email)

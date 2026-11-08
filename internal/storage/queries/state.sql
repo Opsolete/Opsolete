@@ -16,15 +16,18 @@ FROM state_versions v WHERE v.workspace_id = sqlc.arg(workspace_id)::uuid AND v.
 ORDER BY v.id DESC LIMIT sqlc.arg(lim)::integer;
 
 -- name: AddStateVersion :execrows
--- Only while run_id (if set) applies with a lease and cloud_user (if set) holds the cloud lock.
--- FOR SHARE keeps both true until commit: a force-cancel or force-unlock waits for the insert.
+-- Only while its writer still may write: run_id (if set) applies with a lease, cloud_user (if set)
+-- holds the cloud lock, rollback_lock (if set) is still the workspace's lock, taken by no run.
+-- FOR SHARE keeps that true until commit: a force-cancel, force-unlock or stale-lock release waits.
 INSERT INTO state_versions (workspace_id, serial, lineage, blob_key, md5, size, outputs, run_id)
 SELECT sqlc.arg(workspace_id)::uuid, sqlc.arg(serial)::bigint, sqlc.arg(lineage)::text, sqlc.arg(blob_key)::text, sqlc.arg(md5)::text,
     sqlc.arg(size)::bigint, sqlc.narg(outputs)::jsonb, sqlc.narg(run_id)::uuid
 WHERE (sqlc.narg(run_id)::uuid IS NULL OR EXISTS (SELECT 1 FROM runs
         WHERE id = sqlc.narg(run_id)::uuid AND status = 'applying' AND lease_id IS NOT NULL FOR SHARE))
     AND (sqlc.arg(cloud_user)::text = '' OR EXISTS (SELECT 1 FROM workspaces WHERE id = sqlc.arg(workspace_id)::uuid
-        AND starts_with(state_lock->>'ID', sqlc.arg(cloud_prefix)::text) AND state_lock->>'UserID' = sqlc.arg(cloud_user)::text FOR SHARE));
+        AND starts_with(state_lock->>'ID', sqlc.arg(cloud_prefix)::text) AND state_lock->>'UserID' = sqlc.arg(cloud_user)::text FOR SHARE))
+    AND (sqlc.arg(rollback_lock)::text = '' OR EXISTS (SELECT 1 FROM workspaces WHERE id = sqlc.arg(workspace_id)::uuid
+        AND state_lock->>'ID' = sqlc.arg(rollback_lock)::text AND state_lock->>'OpsoleteRun' IS NULL FOR SHARE));
 
 -- name: DropIntermediateStates :many
 DELETE FROM state_versions WHERE run_id = sqlc.arg(run_id)::uuid

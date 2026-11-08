@@ -48,7 +48,7 @@ func (r reason) Unwrap() error { return r.kind }
 var conflicts = []error{storage.ErrRunActive, storage.ErrNotConfirmable, storage.ErrNotCancelable,
 	storage.ErrHasResources, storage.ErrStateLocked, storage.ErrLocalExecution, storage.ErrExists,
 	storage.ErrProjectNotEmpty, storage.ErrDefaultProject, storage.ErrInUse,
-	storage.ErrLeaseLost, storage.ErrNotCloudLocked, storage.ErrRolloutClosed, ErrNoConfig, ErrStateConflict, ErrRemoteExecution, ErrChanged}
+	storage.ErrLeaseLost, storage.ErrNotCloudLocked, storage.ErrLockLost, storage.ErrRolloutClosed, ErrNoConfig, ErrStateConflict, ErrRemoteExecution, ErrChanged}
 
 // IsConflict reports whether err is a conflict (HTTP 409); its message says why.
 func IsConflict(err error) bool {

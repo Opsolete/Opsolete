@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -911,5 +912,50 @@ func TestConcurrentTriggers(t *testing.T) {
 	wg.Wait()
 	if won != 1 {
 		t.Fatalf("%d runs created, want 1", won)
+	}
+}
+
+// A rollback is recorded only while its own lock is still the workspace's: one released under it
+// (STALE_LOCK_TIMEOUT, force-unlock) and maybe taken by someone else changes nothing.
+func TestRollbackWriteFenced(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	w, _ := newWorkspace(t, s, false)
+	v := StateVersion{Serial: 1, Lineage: "lin", BlobKey: "base/" + w.ID.String(), MD5: "m0", Size: 1}
+	if err := s.AddStateVersion(ctx, w.ID, uuid.Nil, "", v); err != nil {
+		t.Fatal(err)
+	}
+	vs, _ := s.StateVersions(ctx, w.ID, 1)
+	lock := func(id string) {
+		t.Helper()
+		if _, ok, err := s.LockState(ctx, w.ID, id, uuid.Nil, []byte(`{"ID":"`+id+`"}`)); !ok || err != nil {
+			t.Fatalf("lock %s: %v %v", id, ok, err)
+		}
+	}
+	copyOf := func(n int64) StateVersion {
+		return StateVersion{Serial: n, Lineage: "lin", BlobKey: fmt.Sprintf("rb%d/%s", n, w.ID), MD5: "m", Size: 1}
+	}
+
+	lock("rollback-1")
+	// The orphaned-lock release ran meanwhile (timeout 0: every rollback lock is stale).
+	if _, err := s.ReleaseOrphanedLocks(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddRollbackVersion(ctx, w.ID, vs[0].ID, "rollback-1", copyOf(2)); !errors.Is(err, ErrLockLost) {
+		t.Fatalf("a rollback whose lock was released: %v", err)
+	}
+	lock("someone-else")
+	if err := s.AddRollbackVersion(ctx, w.ID, vs[0].ID, "rollback-1", copyOf(2)); !errors.Is(err, ErrLockLost) {
+		t.Fatalf("a rollback whose lock someone else holds now: %v", err)
+	}
+	if err := s.UnlockState(ctx, w.ID, "someone-else", uuid.Nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.StateVersions(ctx, w.ID, 10); len(got) != 1 {
+		t.Fatalf("a fenced-off rollback recorded a version: %d versions", len(got))
+	}
+	lock("rollback-2")
+	if err := s.AddRollbackVersion(ctx, w.ID, vs[0].ID, "rollback-2", copyOf(2)); err != nil {
+		t.Fatalf("a rollback holding its lock: %v", err)
 	}
 }

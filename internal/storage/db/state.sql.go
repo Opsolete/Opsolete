@@ -20,23 +20,27 @@ WHERE ($8::uuid IS NULL OR EXISTS (SELECT 1 FROM runs
         WHERE id = $8::uuid AND status = 'applying' AND lease_id IS NOT NULL FOR SHARE))
     AND ($9::text = '' OR EXISTS (SELECT 1 FROM workspaces WHERE id = $1::uuid
         AND starts_with(state_lock->>'ID', $10::text) AND state_lock->>'UserID' = $9::text FOR SHARE))
+    AND ($11::text = '' OR EXISTS (SELECT 1 FROM workspaces WHERE id = $1::uuid
+        AND state_lock->>'ID' = $11::text AND state_lock->>'OpsoleteRun' IS NULL FOR SHARE))
 `
 
 type AddStateVersionParams struct {
-	WorkspaceID uuid.UUID
-	Serial      int64
-	Lineage     string
-	BlobKey     string
-	Md5         string
-	Size        int64
-	Outputs     []byte
-	RunID       uuid.NullUUID
-	CloudUser   string
-	CloudPrefix string
+	WorkspaceID  uuid.UUID
+	Serial       int64
+	Lineage      string
+	BlobKey      string
+	Md5          string
+	Size         int64
+	Outputs      []byte
+	RunID        uuid.NullUUID
+	CloudUser    string
+	CloudPrefix  string
+	RollbackLock string
 }
 
-// Only while run_id (if set) applies with a lease and cloud_user (if set) holds the cloud lock.
-// FOR SHARE keeps both true until commit: a force-cancel or force-unlock waits for the insert.
+// Only while its writer still may write: run_id (if set) applies with a lease, cloud_user (if set)
+// holds the cloud lock, rollback_lock (if set) is still the workspace's lock, taken by no run.
+// FOR SHARE keeps that true until commit: a force-cancel, force-unlock or stale-lock release waits.
 func (q *Queries) AddStateVersion(ctx context.Context, arg AddStateVersionParams) (int64, error) {
 	result, err := q.db.Exec(ctx, addStateVersion,
 		arg.WorkspaceID,
@@ -49,6 +53,7 @@ func (q *Queries) AddStateVersion(ctx context.Context, arg AddStateVersionParams
 		arg.RunID,
 		arg.CloudUser,
 		arg.CloudPrefix,
+		arg.RollbackLock,
 	)
 	if err != nil {
 		return 0, err
