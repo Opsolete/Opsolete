@@ -445,7 +445,7 @@ func (q *Queries) UnknownResource(ctx context.Context, arg UnknownResourceParams
 	return a, err
 }
 
-const unlockCloudState = `-- name: UnlockCloudState :exec
+const unlockCloudState = `-- name: UnlockCloudState :execrows
 UPDATE workspaces SET state_lock = NULL, state_locked_at = NULL WHERE id = $1::uuid
     AND starts_with(state_lock->>'ID', $2::text) AND ($3::text = '' OR state_lock->>'UserID' = $3::text)
     AND state_lock->>'OpsoleteRun' IS NULL
@@ -458,12 +458,15 @@ type UnlockCloudStateParams struct {
 }
 
 // by user (or anyone: user ”); a run's Terraform picks its own lock ID: it can't make it a cloud one
-func (q *Queries) UnlockCloudState(ctx context.Context, arg UnlockCloudStateParams) error {
-	_, err := q.db.Exec(ctx, unlockCloudState, arg.ID, arg.CloudPrefix, arg.UserID)
-	return err
+func (q *Queries) UnlockCloudState(ctx context.Context, arg UnlockCloudStateParams) (int64, error) {
+	result, err := q.db.Exec(ctx, unlockCloudState, arg.ID, arg.CloudPrefix, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const unlockState = `-- name: UnlockState :exec
+const unlockState = `-- name: UnlockState :execrows
 UPDATE workspaces SET state_lock = NULL, state_locked_at = NULL
 WHERE id = $1::uuid AND state_lock->>'ID' = $2::text
     AND state_lock->>'OpsoleteRun' IS NOT DISTINCT FROM $3::uuid::text
@@ -475,9 +478,12 @@ type UnlockStateParams struct {
 	RunID  uuid.NullUUID
 }
 
-func (q *Queries) UnlockState(ctx context.Context, arg UnlockStateParams) error {
-	_, err := q.db.Exec(ctx, unlockState, arg.ID, arg.LockID, arg.RunID)
-	return err
+func (q *Queries) UnlockState(ctx context.Context, arg UnlockStateParams) (int64, error) {
+	result, err := q.db.Exec(ctx, unlockState, arg.ID, arg.LockID, arg.RunID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const workingRun = `-- name: WorkingRun :one

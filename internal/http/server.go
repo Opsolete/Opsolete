@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -30,6 +31,10 @@ type Server struct {
 	ClaimWait    time.Duration      // how long a runner's claim waits for a job: below typical proxy idle timeouts
 	pages        *template.Template // views/*.html, parsed once; render executes them
 	patterns     []string           // registered by Handler: access_test.go needs a matrix row for each
+	streams      struct {           // open log streams per user (logStream)
+		sync.Mutex
+		n map[uuid.UUID]int
+	}
 }
 
 // routes is the server's mux; it records every pattern it registers in *patterns.

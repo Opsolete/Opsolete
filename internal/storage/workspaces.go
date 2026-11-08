@@ -197,6 +197,9 @@ func createRun(ctx context.Context, q *db.Queries, workspaceID uuid.UUID, action
 	r, err := q.QueueRun(ctx, db.QueueRunParams{WorkspaceID: workspaceID, Action: action, CreatedBy: optID(createdBy),
 		Message: action + " plan queued, waiting for a runner"})
 	if err == nil {
+		if err := notifyJobs(ctx, q); err != nil {
+			return Run{}, err
+		}
 		return Run{ID: r.ID, WorkspaceID: r.WorkspaceID, Action: r.Action, Status: PlanQueued, CreatedAt: r.CreatedAt}, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
@@ -389,6 +392,9 @@ func (s *Store) QueueVCSRun(ctx context.Context, workspaceID uuid.UUID, commit s
 		if err != nil {
 			return err
 		}
+		if err := notifyJobs(ctx, q); err != nil {
+			return err
+		}
 		entry, err := s.audit(ctx, q, "vcs", "queue run", map[string]any{"principal": map[string]any{"type": "system"},
 			"run": r.ID, "workspace_id": workspaceID, "action": action, "commit": commit, "pull_request": pullRequest})
 		e = &entry
@@ -470,8 +476,15 @@ func (s *Store) SharesState(ctx context.Context, workspaceID, consumerID uuid.UU
 // workspace with drift detection whose current state manages resources and that wasn't assessed
 // within every. Workspaces with an active run are skipped; they get their turn at a later call.
 func (s *Store) QueueAssessments(ctx context.Context, every time.Duration) (int, error) {
-	runs, err := s.q.QueueAssessments(ctx, every.Seconds())
-	return len(runs), err
+	var n int
+	err := s.tx(ctx, func(q *db.Queries) error {
+		runs, err := q.QueueAssessments(ctx, every.Seconds())
+		if n = len(runs); err != nil || n == 0 {
+			return err
+		}
+		return notifyJobs(ctx, q)
+	})
+	return n, err
 }
 
 // Runs lists a workspace's runs, newest first; assessments (drift checks) are not listed.

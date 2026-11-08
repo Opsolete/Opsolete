@@ -75,7 +75,7 @@ WITH stale AS (
 UPDATE workspaces SET state_lock = NULL, state_locked_at = NULL FROM stale WHERE workspaces.id = stale.id
 RETURNING workspaces.id, stale.state_lock::text AS info;
 
--- name: UnlockState :exec
+-- name: UnlockState :execrows
 UPDATE workspaces SET state_lock = NULL, state_locked_at = NULL
 WHERE id = sqlc.arg(id)::uuid AND state_lock->>'ID' = sqlc.arg(lock_id)::text
     AND state_lock->>'OpsoleteRun' IS NOT DISTINCT FROM sqlc.narg(run_id)::uuid::text;
@@ -90,7 +90,7 @@ SELECT COALESCE(state_lock->>'ID', '')::text FROM workspaces WHERE id = sqlc.arg
 -- name: GetStateLock :one
 SELECT state_lock FROM workspaces WHERE id = sqlc.arg(id)::uuid;
 
--- name: UnlockCloudState :exec
+-- name: UnlockCloudState :execrows
 -- by user (or anyone: user ''); a run's Terraform picks its own lock ID: it can't make it a cloud one
 UPDATE workspaces SET state_lock = NULL, state_locked_at = NULL WHERE id = sqlc.arg(id)::uuid
     AND starts_with(state_lock->>'ID', sqlc.arg(cloud_prefix)::text) AND (sqlc.arg(user_id)::text = '' OR state_lock->>'UserID' = sqlc.arg(user_id)::text)

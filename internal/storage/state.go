@@ -146,7 +146,12 @@ func (s *Store) LockState(ctx context.Context, id uuid.UUID, lockID string, runI
 // Cloud API and UI locks (CloudLockPrefix) are never touched: they are deliberate, and
 // force-unlock releases them.
 func (s *Store) ReleaseOrphanedLocks(ctx context.Context, timeout time.Duration) (map[uuid.UUID]string, error) {
-	rows, err := s.q.ReleaseOrphanedLocks(ctx, db.ReleaseOrphanedLocksParams{CloudPrefix: CloudLockPrefix, TimeoutSecs: timeout.Seconds()})
+	var rows []db.ReleaseOrphanedLocksRow
+	err := s.tx(ctx, func(q *db.Queries) error {
+		var err error
+		rows, err = q.ReleaseOrphanedLocks(ctx, db.ReleaseOrphanedLocksParams{CloudPrefix: CloudLockPrefix, TimeoutSecs: timeout.Seconds()})
+		return locksReleased(ctx, q, int64(len(rows)), err)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +164,10 @@ func (s *Store) ReleaseOrphanedLocks(ctx context.Context, timeout time.Duration)
 
 // UnlockState releases the lock if lockID holds it and runID (uuid.Nil none) took it.
 func (s *Store) UnlockState(ctx context.Context, id uuid.UUID, lockID string, runID uuid.UUID) error {
-	return s.q.UnlockState(ctx, db.UnlockStateParams{ID: id, LockID: lockID, RunID: optID(runID)})
+	return s.tx(ctx, func(q *db.Queries) error {
+		n, err := q.UnlockState(ctx, db.UnlockStateParams{ID: id, LockID: lockID, RunID: optID(runID)})
+		return locksReleased(ctx, q, n, err)
+	})
 }
 
 // StateLockedBy reports whether lockID holds the workspace's state lock, taken by runID (uuid.Nil none).
@@ -203,7 +211,10 @@ const CloudLockPrefix = "cloud-"
 // UnlockCloudState releases a lock taken through the cloud API by userID, or by anyone if userID
 // is "" (force unlock). Locks of runs and rollbacks are never released here.
 func (s *Store) UnlockCloudState(ctx context.Context, id uuid.UUID, userID string) error {
-	return s.q.UnlockCloudState(ctx, db.UnlockCloudStateParams{ID: id, UserID: userID, CloudPrefix: CloudLockPrefix})
+	return s.tx(ctx, func(q *db.Queries) error {
+		n, err := q.UnlockCloudState(ctx, db.UnlockCloudStateParams{ID: id, UserID: userID, CloudPrefix: CloudLockPrefix})
+		return locksReleased(ctx, q, n, err)
+	})
 }
 
 // CloudLocked reports whether userID holds the workspace's state lock through the cloud API.

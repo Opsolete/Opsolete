@@ -51,9 +51,18 @@ func newApp(t *testing.T, dir string, store *storage.Store, a *auth.Auth, f Feat
 		t.Fatal(err)
 	}
 	srv := New(&app.App{Store: store, Blobs: memblob.OpenBucket(nil), SecretKey: vcs.Key("test-secret-key"), Templates: tpls, Registry: testReg,
-		Log: testLog(t)}, a, f)
+		Notify: startNotifier(t, store), Log: testLog(t)}, a, f)
 	srv.RunnerToken, srv.ClaimWait = testRunnerToken, 100*time.Millisecond
 	return srv
+}
+
+// startNotifier listens until t ends, as main.go does on every replica.
+func startNotifier(t *testing.T, store *storage.Store) *app.Notifier {
+	n := &app.Notifier{DB: store.Pool.Config().ConnConfig, Log: testLog(t)}
+	ctx, cancel := context.WithCancel(context.Background())
+	wait := n.Start(ctx)
+	t.Cleanup(func() { cancel(); wait() })
+	return n
 }
 
 // testLog discards the log, but fails the test on errNotShown (a form that doesn't re-render its

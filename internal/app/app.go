@@ -31,6 +31,7 @@ type App struct {
 	TemplateEditor bool
 	// RunLogRetention (RUN_LOG_RETENTION_DAYS): run logs are deleted this long after the run ended; 0 keeps them.
 	RunLogRetention time.Duration
+	Notify          *Notifier // wakes runner claims and log streams; nil: they look every NotifyFallback
 	Log             *slog.Logger
 }
 

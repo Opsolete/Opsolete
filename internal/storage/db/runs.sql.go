@@ -209,6 +209,21 @@ func (q *Queries) LockWorkspaceTemplate(ctx context.Context, arg LockWorkspaceTe
 	return column_1, err
 }
 
+const notify = `-- name: Notify :exec
+SELECT pg_notify($1::text, $2::text)
+`
+
+type NotifyParams struct {
+	Channel string
+	Payload string
+}
+
+// Inside a transaction Postgres delivers it on commit, and never for one rolled back (notify in runs.go).
+func (q *Queries) Notify(ctx context.Context, arg NotifyParams) error {
+	_, err := q.db.Exec(ctx, notify, arg.Channel, arg.Payload)
+	return err
+}
+
 const pruneRunLogs = `-- name: PruneRunLogs :many
 
 WITH r AS (
@@ -448,7 +463,7 @@ func (q *Queries) QueueVCSRun(ctx context.Context, arg QueueVCSRunParams) (Queue
 	return i, err
 }
 
-const releaseRunStateLock = `-- name: ReleaseRunStateLock :exec
+const releaseRunStateLock = `-- name: ReleaseRunStateLock :execrows
 UPDATE workspaces SET state_lock = NULL, state_locked_at = NULL
 WHERE id = $1::uuid AND state_lock->>'OpsoleteRun' = $2::uuid::text
 `
@@ -459,9 +474,12 @@ type ReleaseRunStateLockParams struct {
 }
 
 // only the lock the run's own Terraform took, never a rollback's or CLI's
-func (q *Queries) ReleaseRunStateLock(ctx context.Context, arg ReleaseRunStateLockParams) error {
-	_, err := q.db.Exec(ctx, releaseRunStateLock, arg.WorkspaceID, arg.RunID)
-	return err
+func (q *Queries) ReleaseRunStateLock(ctx context.Context, arg ReleaseRunStateLockParams) (int64, error) {
+	result, err := q.db.Exec(ctx, releaseRunStateLock, arg.WorkspaceID, arg.RunID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const removeRestoredTemplate = `-- name: RemoveRestoredTemplate :exec

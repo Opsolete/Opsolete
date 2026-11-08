@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -8,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/runnerapi"
@@ -46,9 +46,10 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 		writeErrors(w, http.StatusBadRequest, `body must be {"runner": "<name>"}`)
 		return
 	}
-	deadline := time.After(s.ClaimWait)
-	tick := time.NewTicker(time.Second)
-	defer tick.Stop()
+	wait, cancel := context.WithTimeout(r.Context(), s.ClaimWait)
+	defer cancel()
+	jobs := s.App.Notify.Jobs() // before the first try: a job queued during it still wakes us
+	defer jobs.Close()
 	for {
 		body, ok, err := s.App.ClaimJob(r.Context(), req.Runner)
 		if err != nil {
@@ -60,13 +61,11 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 			w.Write(body)
 			return
 		}
-		select {
-		case <-r.Context().Done():
+		if !jobs.Wait(wait) {
+			if r.Context().Err() == nil { // ClaimWait is over, the runner is still there
+				w.WriteHeader(http.StatusNoContent)
+			}
 			return
-		case <-deadline:
-			w.WriteHeader(http.StatusNoContent)
-			return
-		case <-tick.C:
 		}
 	}
 }

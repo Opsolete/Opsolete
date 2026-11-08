@@ -219,7 +219,8 @@ func serve(log *slog.Logger) error {
 
 	vcsOn := cfg.Registry || cfg.Deployments // modules for the registry, workspaces and the catalog for deployments
 	ops := &app.App{Store: store, Blobs: state, SecretKey: vcs.Key(cfg.SecretKey), Templates: tpls, Registry: reg, Log: log,
-		RunLogRetention: time.Duration(cfg.RunLogRetentionDays) * 24 * time.Hour}
+		RunLogRetention: time.Duration(cfg.RunLogRetentionDays) * 24 * time.Hour,
+		Notify:          &app.Notifier{DB: store.Pool.Config().ConnConfig, Log: log}}
 	server := httpserver.New(ops, authn, httpserver.Features{
 		Deployments: cfg.Deployments, Registry: cfg.Registry, Editor: cfg.TemplateEditor, VCS: vcsOn})
 	server.Organization = cfg.Organization
@@ -251,7 +252,8 @@ func serve(log *slog.Logger) error {
 			}
 			httpserver.SchedulerLeader.Set(v)
 		}}
-	defer sched.Start(ctx)() // runs before store.Close: jobs stop first
+	defer sched.Start(ctx)()      // runs before store.Close: jobs stop first
+	defer ops.Notify.Start(ctx)() // every replica: its runner claims and log streams wait on it
 
 	if cfg.MetricsAddr != "" { // its own listener, so /metrics isn't reachable through the public ingress
 		ln, err := net.Listen("tcp", cfg.MetricsAddr)

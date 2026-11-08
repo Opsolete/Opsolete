@@ -300,7 +300,11 @@ func TestWorkspaceFlow(t *testing.T) {
 		if rec := get(h, runURL+"/logs"); rec.Body.String() != "line one\nline two\n\nend\n" {
 			t.Fatalf("raw log: %q", rec.Body.String())
 		}
+		start := time.Now()
 		rec := get(h, runURL+"/logs/stream")
+		if d := time.Since(start); d > time.Second { // an ended run is never signalled: its stream must not wait
+			t.Errorf("the stream of an ended run took %s to end", d)
+		}
 		stream := rec.Body.String()
 		if rec.Header().Get("Content-Type") != "text/event-stream" || !strings.Contains(stream, "data: line \x1b[1mtwo\x1b[0m\ndata: \ndata: end\n") ||
 			!strings.HasSuffix(stream, "event: done\ndata: applied\n\n") {

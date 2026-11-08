@@ -117,7 +117,10 @@ func (s *Store) AppendLog(ctx context.Context, runID uuid.UUID, lease, chunk str
 		default:
 			return nil
 		}
-		return q.InsertLog(ctx, db.InsertLogParams{RunID: runID, Chunk: chunk})
+		if err := q.InsertLog(ctx, db.InsertLogParams{RunID: runID, Chunk: chunk}); err != nil {
+			return err
+		}
+		return notifyRun(ctx, q, runID)
 	})
 	if err != nil {
 		return false, err

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/opsolete/opsolete/internal/app"
 )
 
@@ -60,14 +62,21 @@ var ansiCodes = regexp.MustCompile("\x1b\\[[0-9;]*m")
 
 // logStream follows a run's log as Server-Sent Events. Event ids are log sequence numbers, so a
 // reconnecting EventSource resumes via Last-Event-ID. Ends with a "done" event (data: the run's
-// status) once no runner works on the run any more: finished, or waiting for confirmation.
-// shortcut: polls Postgres every second; switch to LISTEN/NOTIFY if many viewers make that costly.
+// status) once no runner works on the run any more: finished, or waiting for confirmation. It reads
+// when the run is signalled (app.Notifier), or after the fallback interval.
 func (s *Server) logStream(w http.ResponseWriter, r *http.Request) {
 	l, ok := s.runLog(w, r)
 	if !ok {
 		return
 	}
+	if !s.openStream(actor(r).UserID) {
+		http.Error(w, fmt.Sprintf("Too many open log streams: at most %d per user. Close some run pages.", maxLogStreams), http.StatusTooManyRequests)
+		return
+	}
+	defer s.closeStream(actor(r).UserID)
 	ctx := r.Context()
+	changed := s.App.Notify.Run(l.ID) // before the first read: a change during it still wakes us
+	defer changed.Close()
 	cursor, _ := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64)
 	rc := http.NewResponseController(w)
 	rc.SetWriteDeadline(time.Time{}) // long-lived response
@@ -83,9 +92,7 @@ func (s *Server) logStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tick := time.NewTicker(time.Second)
-	defer tick.Stop()
-	idle, ended, sent := 0, false, ""
+	keepalive, ended, sent := time.Now(), false, ""
 	for {
 		chunks, err := l.Chunks(ctx, cursor, 200)
 		if err != nil {
@@ -105,22 +112,26 @@ func (s *Server) logStream(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return
 			}
-			if cur.Working() && cur.Status != sent { // lets the page re-render its steps, e.g. queued → applying
-				fmt.Fprintf(w, "event: status\ndata: %s\n\n", cur.Status)
-				sent = cur.Status
-			}
-			if len(chunks) == 0 {
-				if !cur.Working() {
-					if !ended { // its last lines may have landed after the Logs query: read once more
-						ended = true
-						continue
-					}
+			if !cur.Working() { // nothing will signal it anymore: never wait
+				if ended && len(chunks) == 0 {
 					fmt.Fprintf(w, "event: done\ndata: %s\n\n", cur.Status)
 					rc.Flush()
 					return
 				}
-				if idle++; idle%15 == 0 {
+				ended = true // its last lines may have landed after the Logs query: read once more
+				if err := rc.Flush(); err != nil {
+					return
+				}
+				continue
+			}
+			if cur.Status != sent { // lets the page re-render its steps, e.g. queued → applying
+				fmt.Fprintf(w, "event: status\ndata: %s\n\n", cur.Status)
+				sent = cur.Status
+			}
+			if len(chunks) == 0 {
+				if time.Since(keepalive) >= 15*time.Second {
 					io.WriteString(w, ": keepalive\n\n")
+					keepalive = time.Now()
 				}
 			}
 		}
@@ -130,10 +141,34 @@ func (s *Server) logStream(w http.ResponseWriter, r *http.Request) {
 		if len(chunks) == 200 {
 			continue // more backlog, don't wait
 		}
-		select {
-		case <-ctx.Done():
+		if !changed.Wait(ctx) {
 			return
-		case <-tick.C:
 		}
+	}
+}
+
+// maxLogStreams caps one user's concurrent log streams on a replica: each holds a connection and
+// reads on every change, so one user's open tabs (or a script) can't tie up the server.
+const maxLogStreams = 8
+
+// openStream takes one of user's log stream slots; false if all are taken.
+func (s *Server) openStream(user uuid.UUID) bool {
+	s.streams.Lock()
+	defer s.streams.Unlock()
+	if s.streams.n == nil {
+		s.streams.n = map[uuid.UUID]int{}
+	}
+	if s.streams.n[user] >= maxLogStreams {
+		return false
+	}
+	s.streams.n[user]++
+	return true
+}
+
+func (s *Server) closeStream(user uuid.UUID) {
+	s.streams.Lock()
+	defer s.streams.Unlock()
+	if s.streams.n[user]--; s.streams.n[user] == 0 {
+		delete(s.streams.n, user)
 	}
 }

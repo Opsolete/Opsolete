@@ -92,7 +92,7 @@ WHERE id = sqlc.arg(id)::uuid;
 -- name: AddRunHistory :exec
 INSERT INTO run_status_history (run_id, status, message) VALUES (sqlc.arg(run_id)::uuid, sqlc.arg(status)::text, NULLIF(sqlc.arg(message)::text, ''));
 
--- name: ReleaseRunStateLock :exec
+-- name: ReleaseRunStateLock :execrows
 -- only the lock the run's own Terraform took, never a rollback's or CLI's
 UPDATE workspaces SET state_lock = NULL, state_locked_at = NULL
 WHERE id = sqlc.arg(workspace_id)::uuid AND state_lock->>'OpsoleteRun' = sqlc.arg(run_id)::uuid::text;
@@ -177,3 +177,7 @@ DELETE FROM runs WHERE id IN (
                 AND p.action = 'plan' AND p.vcs_pull_request = r.vcs_pull_request AND p.created_at > r.created_at) END
     LIMIT sqlc.arg(lim)::integer FOR UPDATE OF r SKIP LOCKED
 );
+
+-- name: Notify :exec
+-- Inside a transaction Postgres delivers it on commit, and never for one rolled back (notify in runs.go).
+SELECT pg_notify(sqlc.arg(channel)::text, sqlc.arg(payload)::text);

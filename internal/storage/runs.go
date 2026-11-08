@@ -120,8 +120,17 @@ func setStatus(ctx context.Context, q *db.Queries, runID uuid.UUID, to, message 
 	if err := addHistory(ctx, q, runID, to, message); err != nil {
 		return from, err
 	}
+	if err := notifyRun(ctx, q, runID); err != nil {
+		return from, err
+	}
+	if to == PlanQueued || to == ApplyQueued {
+		if err := notifyJobs(ctx, q); err != nil {
+			return from, err
+		}
+	}
 	if !leased {
-		if err := q.ReleaseRunStateLock(ctx, db.ReleaseRunStateLockParams{WorkspaceID: run.WorkspaceID, RunID: runID}); err != nil {
+		n, err := q.ReleaseRunStateLock(ctx, db.ReleaseRunStateLockParams{WorkspaceID: run.WorkspaceID, RunID: runID})
+		if err := locksReleased(ctx, q, n, err); err != nil {
 			return from, err
 		}
 	}
@@ -136,6 +145,33 @@ func setStatus(ctx context.Context, q *db.Queries, runID uuid.UUID, to, message 
 		}
 	}
 	return from, nil
+}
+
+// Notification channels, listened to by app.Notifier. They are sent inside the transaction of the
+// change, so Postgres delivers them on commit (never for a rollback); payloads are ids only.
+const (
+	JobsChannel = "opsolete_jobs" // a job may have become claimable (no payload)
+	RunsChannel = "opsolete_runs" // a run's log or status changed (payload: the run id)
+)
+
+// notifyJobs: a run was queued (createRun, QueueVCSRun, QueueAssessments, setStatus) or a state
+// lock released (locksReleased).
+func notifyJobs(ctx context.Context, q *db.Queries) error {
+	return q.Notify(ctx, db.NotifyParams{Channel: JobsChannel})
+}
+
+// notifyRun: run id's status changed (setStatus) or its log grew (AppendLog).
+func notifyRun(ctx context.Context, q *db.Queries, id uuid.UUID) error {
+	return q.Notify(ctx, db.NotifyParams{Channel: RunsChannel, Payload: id.String()})
+}
+
+// locksReleased takes the result of a state-lock release query: n released locks may make runs of
+// their workspaces claimable (ClaimableRun skips locked workspaces).
+func locksReleased(ctx context.Context, q *db.Queries, n int64, err error) error {
+	if err != nil || n == 0 {
+		return err
+	}
+	return notifyJobs(ctx, q)
 }
 
 // addHistory records an entry in a run's status history: a transition (setStatus), or a note on
