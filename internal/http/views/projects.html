@@ -4,13 +4,13 @@
     <h1>Projects</h1>
     <p class="muted">Projects in the {{.Org}} organization. Create or select a project to get started.</p>
   </div>
-  {{if $.User.Admin}}<button type="button" onclick="document.getElementById('new-project').showModal()">+ New project</button>{{end}}
+  {{if $.User.Admin}}<button type="button" data-show-dialog="new-project">+ New project</button>{{end}}
 </div>
 
 {{template "formerror" .F}}
-<div class="inline" style="margin-bottom:1rem">
+<div class="inline mb-1">
   <input type="search" id="project-search" placeholder="Search by project name" aria-label="Search by project name" aria-describedby="project-search-hint"
-    autocomplete="off" oninput="filterProjects(this.value)" style="max-width:24rem">
+    autocomplete="off" class="mw-24" data-filter-projects>
   <span id="project-search-hint" class="sr-hint">This table updates as you type a name.</span>
 </div>
 <div class="card flush">
@@ -34,12 +34,12 @@
 
 {{if $.User.Admin}}
 {{$f := .F}}
-<dialog id="new-project" aria-labelledby="new-project-title"{{if $f}} open{{end}}>
+<dialog id="new-project" aria-labelledby="new-project-title"{{if $f}} data-open{{end}}>
   <form method="post" action="/projects">
     <header><h3 id="new-project-title">Create a new project</h3>
-      <button type="button" class="secondary small" aria-label="close" onclick="this.closest('dialog').close()">✕</button></header>
+      <button type="button" class="secondary small" aria-label="close" data-close-dialog>✕</button></header>
     <fieldset>
-      <p class="muted" style="margin-top:0">Projects are groups of workspaces, letting you manage team access and variable sets in bulk.</p>
+      <p class="muted mt-0">Projects are groups of workspaces, letting you manage team access and variable sets in bulk.</p>
       <label for="name">Project name <span class="req" aria-hidden="true">*</span></label>
       <input id="name" name="name" required pattern="[a-z0-9][a-z0-9\-]{1,62}" placeholder="networking" value="{{value $f "name" ""}}"{{aria $f "name" "name-hint"}}>
       <p class="hint" id="name-hint">Must be unique: 2–63 lowercase letters, digits and dashes.</p>
@@ -50,20 +50,8 @@
       {{template "fielderror" (dict "F" $f "N" "description")}}
     </fieldset>
     <footer><button type="submit">Create</button>
-      <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancel</button></footer>
+      <button type="button" class="secondary" data-close-dialog>Cancel</button></footer>
   </form>
 </dialog>
 {{end}}
-<script>
-  // shows the projects whose name contains the search text
-  function filterProjects(q) {
-    q = q.trim().toLowerCase();
-    let n = 0;
-    for (const tr of document.querySelectorAll('tr[data-name]')) {
-      tr.hidden = !tr.dataset.name.includes(q);
-      n += !tr.hidden;
-    }
-    document.getElementById('no-projects').hidden = n > 0;
-  }
-</script>
 {{template "bottom"}}

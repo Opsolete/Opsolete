@@ -6,7 +6,7 @@
   </div>
   {{if .CanCreate}}<a class="btn" href="/workspaces/new">+ New workspace</a>{{else}}{{template "nocreate"}}{{end}}
 </div>
-<form method="get" class="inline" style="margin-bottom:1rem">
+<form method="get" class="inline mb-1">
   <label for="project-filter">Project</label>
   <select id="project-filter" name="project">
     <option value="">All projects</option>

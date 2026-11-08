@@ -124,7 +124,7 @@
   <button type="submit">Continue</button>
 </form>
 {{with .VCS.Repos}}
-<div class="runlist" style="margin-top:1rem">
+<div class="runlist mt-1">
   {{range .}}<a class="runrow" href="{{$base}}/edit?type=vcs&conn={{$conn.ID}}&repo={{.}}">{{.}}</a>{{end}}
 </div>
 {{end}}

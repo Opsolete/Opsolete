@@ -13,7 +13,7 @@
     {{if $r.CancelRequested}}
     <span class="muted">Cancel requested…</span>
     <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/cancel"
-      onsubmit="return opsConfirm(event, 'Force cancel cuts the runner off at once. Terraform may not save resources it is creating right now. Only use this if the run does not stop.')">
+      data-confirm="Force cancel cuts the runner off at once. Terraform may not save resources it is creating right now. Only use this if the run does not stop.">
       <input type="hidden" name="force" value="1"><button type="submit" class="danger">Force cancel</button></form>
     {{else}}
     <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/cancel"><button type="submit" class="secondary">Cancel run</button></form>
@@ -21,7 +21,7 @@
   </div>
   {{else if and $.CanOperate (not $r.Active) $w.HasConfig (ne $r.Action "plan")}}
   <form method="post" action="/workspaces/{{$w.Name}}/runs"{{if eq $r.Action "destroy"}}
-    onsubmit="return opsConfirm(event, 'Start a new destroy run for {{$w.Name}}?')"{{end}}>
+    data-confirm="Start a new destroy run for {{$w.Name}}?"{{end}}>
     <input type="hidden" name="action" value="{{$r.Action}}">{{range $r.Replace}}<input type="hidden" name="replace" value="{{.}}">{{end}}
     <button type="submit" class="secondary">Re-run {{if eq $r.Action "destroy"}}destroy{{else if eq $r.Action "assess"}}drift check{{else}}plan{{end}}</button></form>
   {{end}}
@@ -29,7 +29,7 @@
 
 <div class="run-title">
   <h2>{{template "runtitle" $r.Action}}{{with $r.VCSPullRequest}} · pull request #{{.}}{{end}}</h2>
-  <span class="status {{$r.Status}}" id="status">{{status $r.Status}}</span>
+  <span class="status {{$r.Status}}" id="status" data-run-status="{{$r.Status}}" data-run-working="{{$r.Working}}">{{status $r.Status}}</span>
 </div>
 
 <dl class="stats">
@@ -51,7 +51,7 @@
       {{with $r.ConfirmedBy}}<dt>Confirmed by</dt><dd>{{.}}</dd>{{end}}
       {{with $r.Runner}}<dt>Runner</dt><dd>{{.}}</dd>{{end}}
     </dl>
-    <h3 style="margin-top:1.25rem">History</h3>
+    <h3 class="mt-125">History</h3>
     <table>
     <tr><th>Time</th><th>Status</th><th>Message</th></tr>
     {{range .History}}
@@ -80,7 +80,7 @@
     {{end}}
     {{with .Changes}}
     <table class="changes">
-    {{range .}}<tr><td class="nowrap" style="width:6rem"><span class="change {{.Action}}">{{.Action}}</span></td><td><code>{{.Address}}</code></td></tr>{{end}}
+    {{range .}}<tr><td class="nowrap w-6"><span class="change {{.Action}}">{{.Action}}</span></td><td><code>{{.Address}}</code></td></tr>{{end}}
     </table>
     {{else}}<p class="muted">Only output values change.</p>{{end}}
     {{else}}{{if eq $r.Status "no_changes"}}<p>No changes: {{if or (eq $r.Action "refresh") (eq $r.Action "assess")}}no drift, the state matches the infrastructure{{else}}the infrastructure matches the configuration{{if eq $r.Action "destroy"}} (nothing to destroy){{end}}{{end}}.</p>{{end}}
@@ -99,7 +99,7 @@
     {{if not .Start.IsZero}}<p class="steps"><strong>Started</strong> {{.Start.Format "15:04:05"}}{{if not .End.IsZero}} › <strong>{{if eq .State "finished"}}Finished{{else}}{{status .State}}{{end}}</strong> {{.End.Format "15:04:05"}}{{end}}</p>{{end}}
     {{if and (eq $r.Status "needs_confirmation") $.CanOperate}}
     <p>{{if eq $r.Action "destroy"}}Confirm to destroy the resources above.{{else}}Review the plan above, then confirm to apply it.{{end}}</p>
-    <div class="actions" style="margin-top:0">
+    <div class="actions mt-0">
       <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/confirm">
         <button type="submit"{{if eq $r.Action "destroy"}} class="danger"{{end}}>Confirm &amp; {{if eq $r.Action "destroy"}}destroy{{else}}apply{{end}}</button></form>
       <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/discard">
@@ -128,45 +128,12 @@
 </div>
 {{end}}
 
-<script>
-  // Follow the log live; reload once a runner is done with the run (finished, or waiting for confirmation).
-  const log = document.getElementById("log"), wasWorking = {{$r.Working}};
-  const es = new EventSource(location.pathname + "/logs/stream");
-  // Terraform's own colors: the log carries its ANSI color codes (SGR), rendered as ansi-* classes.
-  const attrs = { 1: "b", 2: "dim", 4: "u" }, style = new Set();
-  let fg = "", first = true, rest = "";
-  const render = (text) => text.split(/\x1b\[([\d;]*)m/).forEach((t, i) => {
-    if (i % 2) { // a code list, e.g. "0" or "1;32"; "" is a reset
-      for (const c of t.split(";").map(Number)) {
-        if (c === 0) { style.clear(); fg = ""; }
-        else if (attrs[c]) style.add(attrs[c]);
-        else if (c === 22) { style.delete("b"); style.delete("dim"); }
-        else if (c === 24) style.delete("u");
-        else if (c === 39) fg = "";
-        else if ((c >= 30 && c <= 37) || (c >= 90 && c <= 97)) fg = "c" + c;
-      }
-    } else if (t) {
-      const cls = [...style, fg].filter(Boolean).map((c) => "ansi-" + c).join(" ");
-      log.append(cls ? Object.assign(document.createElement("span"), { className: cls, textContent: t }) : t);
-    }
-  });
-  es.onmessage = (e) => {
-    if (first) { log.textContent = ""; first = false; }
-    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
-    const text = rest + e.data, cut = text.search(/\x1b(\[[\d;]*)?$/); // a code split over two chunks
-    rest = cut < 0 ? "" : text.slice(cut);
-    render(cut < 0 ? text : text.slice(0, cut)); // nodes: += would re-render the whole log
-    if (atBottom) log.scrollTop = log.scrollHeight;
-  };
-  es.addEventListener("status", (e) => { if (e.data !== {{$r.Status}}) location.reload(); });
-  es.addEventListener("done", () => { es.close(); if (wasWorking) location.reload(); });
-</script>
 {{template "bottom"}}
 
 {{define "runlog"}}
 <div class="log-bar"><a class="btn secondary small" href="/workspaces/{{.W.Name}}/runs/{{.R.ID}}/logs">View raw log</a>
-  <button type="button" class="secondary small" onclick="log.scrollTop=0">Top</button>
-  <button type="button" class="secondary small" onclick="log.scrollTop=log.scrollHeight">Bottom</button>
-  <button type="button" class="secondary small" onclick="log.requestFullscreen()">Full screen</button></div>
+  <button type="button" class="secondary small" data-log="top">Top</button>
+  <button type="button" class="secondary small" data-log="bottom">Bottom</button>
+  <button type="button" class="secondary small" data-log="fullscreen">Full screen</button></div>
 <pre id="log" class="log" aria-live="polite">{{if eq .R.Status "plan_queued" "apply_queued"}}Waiting for a runner…{{end}}</pre>
 {{end}}

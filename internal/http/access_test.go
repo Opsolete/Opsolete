@@ -343,6 +343,7 @@ func accessRows() []accessRow {
 		// Public: health, discovery, login, the OAuth token exchange.
 		{"GET /healthz", "/healthz", "", onPublic, []int{200}, false},
 		{"GET /readyz", "/readyz", "", onPublic, []int{200}, false},
+		{"GET /static/{file}", assetURLs["app.css"], "", onPublic, []int{200}, false},
 		{"GET /.well-known/terraform.json", "/.well-known/terraform.json", "", onPublic, []int{200}, false},
 		{"GET /auth/login", "/auth/login", "", onPublic, []int{302}, false},
 		{"GET /auth/callback", "/auth/callback?state=x&code=y", "", onPublic, []int{400}, false},

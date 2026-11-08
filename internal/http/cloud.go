@@ -436,10 +436,14 @@ func parseAuthz(q url.Values) (authzRequest, error) {
 }
 
 func (s *Server) authorizePage(w http.ResponseWriter, r *http.Request) {
-	if _, err := parseAuthz(r.URL.Query()); err != nil {
+	req, err := parseAuthz(r.URL.Query())
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// the form's POST redirects to Terraform's local callback: browsers check that redirect against form-action
+	ru, _ := url.Parse(req.RedirectURI)
+	w.Header().Set("Content-Security-Policy", csp("'self' "+ru.Scheme+"://"+ru.Host))
 	s.render(w, r, http.StatusOK, "authorize.html", &authorizePage{Page{Section: "oauth"}, auth.FromContext(r.Context()).Email,
 		int(app.UserTokenTTL.Hours() / 24)})
 }

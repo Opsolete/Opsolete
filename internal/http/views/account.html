@@ -21,7 +21,7 @@
     <p class="muted"><code>terraform login {{.Host}}</code> creates a token that acts as you for 30 days: for Terraform's cloud block and the module registry.
       Revoke one you no longer trust, e.g. from a lost laptop; Terraform then needs a new <code>terraform login</code>.</p>
   </div>
-  {{if .Tokens}}<form method="post" action="/account/tokens/revoke" onsubmit="return opsConfirm(event, 'Revoke all your tokens? Every Terraform logged in as you must log in again.')">
+  {{if .Tokens}}<form method="post" action="/account/tokens/revoke" data-confirm="Revoke all your tokens? Every Terraform logged in as you must log in again.">
     <button type="submit" class="danger">Revoke all</button></form>{{end}}
 </div>
 <div class="card flush">
@@ -32,7 +32,7 @@
   <td>{{.Name}}</td>
   <td class="nowrap" title="{{.CreatedAt.Format "2006-01-02 15:04"}}">{{ago .CreatedAt}}</td>
   <td class="nowrap">{{.ExpiresAt.Format "2006-01-02 15:04"}}</td>
-  <td class="nowrap"><form method="post" action="/account/tokens/{{.ID}}/revoke" onsubmit="return opsConfirm(event, 'Revoke this token?')">
+  <td class="nowrap"><form method="post" action="/account/tokens/{{.ID}}/revoke" data-confirm="Revoke this token?">
     <button type="submit" class="secondary small">Revoke</button></form></td>
 </tr>
 {{else}}

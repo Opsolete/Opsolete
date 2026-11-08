@@ -17,14 +17,14 @@
   {{if .Open}}{{$.OpenRuns}} plan(s) open.
   <form method="post" action="/templates/{{$.T.ID}}/rollout/{{if eq .Status "paused"}}resume{{else}}pause{{end}}" class="inline">
     <button type="submit" class="secondary">{{if eq .Status "paused"}}Resume{{else}}Pause{{end}}</button></form>
-  <form method="post" action="/templates/{{$.T.ID}}/rollout/stop" class="inline" onsubmit="return opsConfirm(event, 'Stop this rollout? Plans it already queued stay.')">
+  <form method="post" action="/templates/{{$.T.ID}}/rollout/stop" class="inline" data-confirm="Stop this rollout? Plans it already queued stay.">
     <button type="submit" class="danger">Stop</button></form>
   {{end}}
   <small class="muted">Started by {{or .CreatedByEmail "a deleted user"}}, {{ago .CreatedAt}}.</small>
 </div>
 {{end}}
 
-<form method="get" class="inline" style="margin-bottom:1rem">
+<form method="get" class="inline mb-1">
   <label for="project-filter">Project</label>
   <select id="project-filter" name="project">
     <option value="">All projects</option>
@@ -34,13 +34,13 @@
 </form>
 
 {{if and .Pending (not (and .Rollout .Rollout.Open))}}
-<form method="post" class="inline" style="margin-bottom:1rem"
-  onsubmit="return opsConfirm(event, 'Roll out {{.T.Module.Ref}} to {{.Pending}} workspace(s){{with .Project}} in project {{.}}{{end}}?')">
+<form method="post" class="inline mb-1"
+  data-confirm="Roll out {{.T.Module.Ref}} to {{.Pending}} workspace(s){{with .Project}} in project {{.}}{{end}}?">
   <input type="hidden" name="source" value="{{.T.Module.Source}}">
   <input type="hidden" name="ref" value="{{.T.Module.Ref}}">
   <input type="hidden" name="project" value="{{.Project}}">
   <label for="batch">Workspaces at a time</label>
-  <input id="batch" name="batch" type="number" min="0" value="{{value .F "batch" 0}}" style="width:6rem"{{aria .F "batch" "batch-hint"}}>
+  <input id="batch" name="batch" type="number" min="0" value="{{value .F "batch" 0}}" class="w-6"{{aria .F "batch" "batch-hint"}}>
   <button type="submit">Roll out to {{.Pending}} workspace{{if ne .Pending 1}}s{{end}}{{with .Project}} in {{.}}{{end}}</button>
   <small id="batch-hint" class="muted">0: all at once. Otherwise the next ones start as earlier plans are applied.</small>
 </form>

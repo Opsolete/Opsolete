@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -125,6 +126,7 @@ func TestPageModels(t *testing.T) {
 				if w.Code != 200 {
 					t.Errorf("%s model %d, user %q: status %d", name, i, u.Email, w.Code)
 				}
+				strictHTML(t, fmt.Sprintf("%s model %d, user %q", name, i, u.Email), w.Body.String())
 			}
 		}
 	}

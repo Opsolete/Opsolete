@@ -89,7 +89,7 @@
   <button type="submit">Next</button>
 </form>
 {{with .Repos}}
-<div class="runlist" style="margin-top:1rem">
+<div class="runlist mt-1">
   {{range .}}<a class="runrow" href="?connection={{$conn.ID}}&repo={{.}}">{{.}}</a>{{end}}
 </div>
 {{end}}

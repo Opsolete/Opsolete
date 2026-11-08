@@ -84,7 +84,7 @@
   <button type="submit">Continue</button>
 </form>
 {{with .VCS.Repos}}
-<div class="runlist" style="margin-top:1rem">
+<div class="runlist mt-1">
   {{range .}}<a class="runrow" href="?type=vcs&conn={{$conn.ID}}&repo={{.}}{{with $pq}}&project={{.}}{{end}}">{{.}}</a>{{end}}
 </div>
 {{end}}

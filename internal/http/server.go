@@ -60,7 +60,7 @@ type Features struct {
 func New(a *app.App, au *auth.Auth, f Features) *Server {
 	a.RegistryEnabled, a.VCSEnabled, a.TemplateEditor = f.Registry, f.VCS, f.Editor
 	pages := template.Must(template.New("").Funcs(template.FuncMap{"join": strings.Join, "json": toJSON, "dict": dict,
-		"duration": humanDuration, "ago": ago,
+		"duration": humanDuration, "ago": ago, "asset": asset,
 		"provider": func(p string) string { return strings.TrimPrefix(p, "registry.terraform.io/") },
 		"status":   func(s string) string { return strings.ReplaceAll(s, "_", " ") }}).Funcs(formFuncs).ParseFS(views, "views/*.html"))
 	return &Server{App: a, Auth: au, Features: f, pages: pages}
@@ -71,6 +71,7 @@ func (s *Server) Handler() http.Handler {
 	mux := routes{http.NewServeMux(), &s.patterns}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 	mux.HandleFunc("GET /readyz", s.ready)
+	mux.HandleFunc("GET /static/{file}", static)
 	s.Auth.Routes(mux)
 	mux.HandleFunc("GET /audit", s.admin(s.auditPage))
 	mux.HandleFunc("GET /.well-known/terraform.json", s.discovery)
@@ -114,7 +115,7 @@ func (s *Server) Handler() http.Handler {
 
 // public paths authenticate themselves (API tokens, signed URLs) or must work without login.
 func public(path string) bool {
-	return path == "/healthz" || path == "/readyz" || path == "/.well-known/terraform.json" ||
+	return path == "/healthz" || path == "/readyz" || path == "/.well-known/terraform.json" || strings.HasPrefix(path, "/static/") ||
 		strings.HasPrefix(path, "/v1/") || strings.HasPrefix(path, runnerapi.Prefix+"/") ||
 		strings.HasPrefix(path, runnerapi.StatePrefix+"/") || strings.HasPrefix(path, "/auth/") ||
 		strings.HasPrefix(path, cloudPrefix+"/") || path == "/oauth/token"
@@ -183,11 +184,19 @@ func (s *Server) logRequests(next http.Handler) http.Handler {
 		start := time.Now()
 		// no framing by other sites: confirm, destroy and authorize are one click (clickjacking)
 		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
+		w.Header().Set("Content-Security-Policy", csp("'self'"))
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Referrer-Policy", "same-origin")
 		next.ServeHTTP(w, r)
 		s.App.Log.Info("request", "method", r.Method, "path", r.URL.Path, "duration", time.Since(start))
 	})
+}
+
+// csp is the Content-Security-Policy of every response: scripts and styles only from /static
+// (no inline ones), forms posting to formAction (a POST's redirect counts too).
+func csp(formAction string) string {
+	return "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; " +
+		"form-action " + formAction + "; frame-ancestors 'none'; base-uri 'none'"
 }
 
 // parseID parses an id from a request (path, form or JSON body). An input that isn't an id is

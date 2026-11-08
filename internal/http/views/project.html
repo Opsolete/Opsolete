@@ -8,7 +8,7 @@
   <div>
     <h1>{{$p.Name}}{{if $p.Default}} <span class="tag" title="new workspaces go here unless another project is picked">default</span>{{end}}</h1>
     <p class="id">ID <code>{{$p.ID}}</code>
-      <button type="button" class="copy" aria-label="Copy ID" title="Copy ID" onclick="navigator.clipboard.writeText('{{$p.ID}}')">⧉</button></p>
+      <button type="button" class="copy" aria-label="Copy ID" title="Copy ID" data-copy="{{$p.ID}}">⧉</button></p>
     {{with $p.Description}}<p class="muted">{{.}}</p>{{else}}{{if $.User.Admin}}<p><a href="/projects/{{$p.Name}}/settings">Add project description</a></p>{{end}}{{end}}
     <p class="meta"><span>{{if $.User.Admin}}<a href="/projects/{{$p.Name}}/settings/access">Teams {{$p.Grants}}</a>{{else}}Teams {{$p.Grants}}{{end}}</span><span><a href="/projects/{{$p.Name}}/workspaces">Workspaces {{$p.Workspaces}}</a></span></p>
   </div>
@@ -42,10 +42,10 @@
 <div class="settings">
 <div class="field">ID</div>
 <p class="id"><code>{{$p.ID}}</code>
-  <button type="button" class="copy" aria-label="Copy ID" title="Copy ID" onclick="navigator.clipboard.writeText('{{$p.ID}}')">⧉</button></p>
+  <button type="button" class="copy" aria-label="Copy ID" title="Copy ID" data-copy="{{$p.ID}}">⧉</button></p>
 {{$gf := formOf .F "general"}}
 <form method="post" action="/projects/{{$p.Name}}/settings"
-  onsubmit="return !this.elements.default.checked || this.elements.default.disabled || opsConfirm(event, 'Make {{$p.Name}} the default? New workspaces then go there unless another project is picked: they get its variable sets and may link the VCS connections selected for it.')">
+  data-confirm-when="default" data-confirm="Make {{$p.Name}} the default? New workspaces then go there unless another project is picked: they get its variable sets and may link the VCS connections selected for it.">
   <label for="name">Project name <span class="req" aria-hidden="true">*</span></label>
   <input id="name" name="name" value="{{value $gf "name" $p.Name}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}"{{aria $gf "name" "name-hint"}}>
   <p class="hint" id="name-hint">Lowercase letters, digits and dashes. Renaming changes the project's URL; its workspaces keep theirs.</p>
@@ -66,7 +66,7 @@
 <p class="muted">Permanently delete an empty project, with its team access and variable set attachments.</p>
 {{if $p.Default}}<p class="muted">This project is the default. The default can't be deleted.</p>{{end}}
 {{if $p.Workspaces}}<p class="muted">This project isn't empty: {{$p.Name}} contains {{$p.Workspaces}} workspace{{if ne $p.Workspaces 1}}s{{end}}. Move or delete them first.</p>{{end}}
-<form method="post" action="/projects/{{$p.Name}}/delete" onsubmit="return opsConfirm(event, 'Delete the project {{$p.Name}}?')">
+<form method="post" action="/projects/{{$p.Name}}/delete" data-confirm="Delete the project {{$p.Name}}?">
   <button type="submit" class="danger"{{if or $p.Default $p.Workspaces}} disabled{{end}}>Delete project</button>
 </form>
 </div>
@@ -83,7 +83,7 @@
     <td><form method="post" action="/projects/{{$p.Name}}/access"><input type="hidden" name="group" value="{{.Group}}">
       <button type="submit" class="secondary small">Revoke</button></form></td></tr>{{end}}
   </table>
-  {{else}}<p class="muted" style="margin:0">No groups have access through the project.</p>
+  {{else}}<p class="muted m-0">No groups have access through the project.</p>
   {{end}}
   {{template "grantform" dict "Action" (print "/projects/" $p.Name "/access") "Groups" .Groups "F" (formOf .F "access")}}
 </div>

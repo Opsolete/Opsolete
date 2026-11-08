@@ -90,35 +90,4 @@
     </div>
   </div>
 </form>
-<script>
-  // show_if: hide and disable the fields whose dropdown above doesn't have one of their values (disabled
-  // ones aren't posted); the server applies the same rules. Document order puts each dropdown first.
-  (() => {
-    const form = document.getElementById("template-form");
-    const update = () => {
-      for (const el of form.querySelectorAll("[data-show-if]")) {
-        const c = JSON.parse(el.dataset.showIf), src = form.elements[c.input];
-        const v = src?.type === "checkbox" ? String(src.checked) : src?.value;
-        el.hidden = el.disabled = !src || src.matches(":disabled") || !c.equals.includes(v);
-      }
-    };
-    form.addEventListener("change", update);
-    update(); // the browser may have restored other values
-    // Browsers compile pattern with the v flag, which rejects e.g. [a-z0-9-] and then skip the check:
-    // check those with the u flag instead. Go-only syntax fails both; the server still checks it.
-    for (const el of form.querySelectorAll("input[pattern]")) {
-      const p = el.getAttribute("pattern");
-      try { new RegExp(p, "v"); continue; } catch {}
-      let re;
-      try { re = new RegExp("^(?:" + p + ")$", "u"); } catch { continue; }
-      const check = () => el.setCustomValidity(el.value && !re.test(el.value) ? el.title || "Doesn't have the expected format: " + p : "");
-      el.addEventListener("input", check);
-      check();
-    }
-    // one click, one plan: lock the button while the request runs; unlock when Back restores the page
-    const btn = form.querySelector("button[type=submit]"), text = btn?.textContent; // none: the user may create no workspace
-    form.addEventListener("submit", () => { btn.disabled = true; btn.textContent = "Starting plan…"; });
-    addEventListener("pageshow", () => { if (btn) { btn.disabled = false; btn.textContent = text; } });
-  })();
-</script>
 {{template "bottom"}}
