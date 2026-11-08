@@ -27,7 +27,7 @@
   <td class="nowrap">{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
   {{if $editor}}<td class="nowrap"><a href="/templates/new?module={{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}">Create template</a></td>{{end}}
   {{if $admin}}<td class="nowrap"><form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/delete" style="display:inline"
-      onsubmit="return confirm('Delete {{.Namespace}}/{{.Name}}/{{.System}} and all its versions? Workspaces using it can no longer download it.')">
+      onsubmit="return opsConfirm(event, 'Delete {{.Namespace}}/{{.Name}}/{{.System}} and all its versions? Workspaces using it can no longer download it.')">
       <button type="submit" class="danger small">Delete</button></form></td>{{end}}
 </tr>
 {{else}}
@@ -49,7 +49,7 @@
     {{with .SyncError}}<p class="err">{{.}}</p>{{end}}</td>
   <td class="nowrap"><form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/sync" style="display:inline"><button type="submit" class="secondary small">Sync now</button></form>
     <form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/unlink" style="display:inline"
-      onsubmit="return confirm('Unlink this module from its repository? New tags are no longer published; published versions stay.')">
+      onsubmit="return opsConfirm(event, 'Unlink this module from its repository? New tags are no longer published; published versions stay.')">
       <button type="submit" class="danger small">Unlink</button></form></td>
 </tr>
 {{end}}

@@ -7,7 +7,7 @@
     {{with $v.Description}}<p class="muted">{{.}}</p>{{end}}
   </div>
   <form method="post" action="/variable-sets/{{$v.Name}}/delete"
-    onsubmit="return confirm('Delete this variable set and its variables? Runs of its workspaces no longer get them.')">
+    onsubmit="return opsConfirm(event, 'Delete this variable set and its variables? Runs of its workspaces no longer get them.')">
     <button type="submit" class="danger">Delete</button></form>
 </div>
 

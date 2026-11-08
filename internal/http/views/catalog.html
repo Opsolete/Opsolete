@@ -16,7 +16,7 @@
   {{with .SyncError}}<div class="alert error" role="alert">Last sync failed: {{.}}</div>{{end}}
   <form method="post" action="/catalog/sync" style="display:inline"><button type="submit" class="secondary small">Sync now</button></form>
   <form method="post" action="/catalog/delete" style="display:inline"
-    onsubmit="return confirm('Disconnect the repository? The templates come from TEMPLATES_DIR again.')">
+    onsubmit="return opsConfirm(event, 'Disconnect the repository? The templates come from TEMPLATES_DIR again.')">
     <button type="submit" class="danger small">Disconnect</button></form>
   <a class="btn secondary small" href="/vcs/{{.ConnectionID}}/settings#token">Change access token</a>
 </div>

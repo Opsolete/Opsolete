@@ -44,7 +44,7 @@
   <button type="button" class="copy" aria-label="Copy ID" title="Copy ID" onclick="navigator.clipboard.writeText('{{$p.ID}}')">⧉</button></p>
 {{if (user).Admin}}
 <form method="post" action="/projects/{{$p.Name}}/settings"
-  onsubmit="return !this.elements.default.checked || this.elements.default.disabled || confirm('Make {{$p.Name}} the default? Every user may then create workspaces in it, and those get its variable sets and may link the VCS connections selected for it.')">
+  onsubmit="return !this.elements.default.checked || this.elements.default.disabled || opsConfirm(event, 'Make {{$p.Name}} the default? Every user may then create workspaces in it, and those get its variable sets and may link the VCS connections selected for it.')">
   <label for="name">Project name <span class="req" aria-hidden="true">*</span></label>
   <input id="name" name="name" value="{{$p.Name}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}" aria-describedby="name-hint">
   <p class="hint" id="name-hint">Lowercase letters, digits and dashes. Renaming changes the project's URL; its workspaces keep theirs.</p>
@@ -63,7 +63,7 @@
 <p class="muted">Permanently delete an empty project, with its team access and variable set attachments.</p>
 {{if $p.Default}}<p class="muted">This project is the default. The default can't be deleted.</p>{{end}}
 {{if $p.Workspaces}}<p class="muted">This project isn't empty: {{$p.Name}} contains {{$p.Workspaces}} workspace{{if ne $p.Workspaces 1}}s{{end}}. Move or delete them first.</p>{{end}}
-<form method="post" action="/projects/{{$p.Name}}/delete" onsubmit="return confirm('Delete the project {{$p.Name}}?')">
+<form method="post" action="/projects/{{$p.Name}}/delete" onsubmit="return opsConfirm(event, 'Delete the project {{$p.Name}}?')">
   <button type="submit" class="danger"{{if or $p.Default $p.Workspaces}} disabled{{end}}>Delete project</button>
 </form>
 {{else}}

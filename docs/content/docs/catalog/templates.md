@@ -42,7 +42,6 @@ Things to know:
 - **Module variables need a default.** Every variable behind a conditional input needs one (e.g. `default = null`). Without it, Terraform fails with a missing variable whenever that input is hidden.
 - **Registry modules drop unknown inputs.** For a template on a [registry]({{< relref "module-registry" >}}) module, the form follows the module's variables, and JSON inputs the module doesn't declare are dropped. If the dropdown or yes / no input a `show_if` refers to (such as `os`) isn't a module variable, every input that depends on it stays hidden. Add it to the module as a variable.
 - **A dropdown without a value counts as its first option**, the one the browser shows selected.
-- **Without JavaScript, the form doesn't update while you type.** It shows the fields that fit the values it was loaded with. After you change a value and submit, the page reloads with the fields and errors for the new value.
 
 ## Where templates live
 

@@ -466,6 +466,8 @@
   pre.log { background: #0c0c0e; color: #dedfe3; border-radius: var(--radius); padding: 1rem 1.2rem; max-height: 34rem;
     white-space: pre-wrap; font-size: .8rem; line-height: 1.55; border: 1px solid #3b3d45; }
 </style>
+<!-- JavaScript is required: e.g. confirmations (opsConfirm) would be skipped without it -->
+<noscript><style>main { display: none; }</style></noscript>
 </head>
 <body>
 <header class="topbar">
@@ -560,6 +562,7 @@
   {{end}}
   {{end}}{{end}}
 </aside>
+<noscript><div class="wrap"><p class="alert error" role="alert">Opsolete requires JavaScript. Turn it on in your browser and reload the page.</p></div></noscript>
 <main class="wrap">
 {{end}}
 {{define "wscrumb"}}<!-- a workspace's breadcrumb: its project first -->
@@ -588,7 +591,39 @@
 </details>
 {{end}}
 {{define "bottom"}}</main>
+<dialog id="confirm-dialog" aria-labelledby="confirm-title">
+  <form method="dialog">
+    <header><h3 id="confirm-title"></h3>
+      <button type="button" class="secondary small" aria-label="close" onclick="this.closest('dialog').close()">✕</button></header>
+    <fieldset>
+      <p id="confirm-msg" style="margin-top:0;white-space:pre-line"></p>
+      <div id="confirm-typed"><label for="confirm-input"></label><input id="confirm-input" autocomplete="off"></div>
+    </fieldset>
+    <footer><button type="submit" id="confirm-ok"></button>
+      <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancel</button></footer>
+  </form>
+</dialog>
 <script>
+  // Opsolete's own confirm(), for onsubmit="return opsConfirm(event, 'message')": it stops the
+  // submit, asks in #confirm-dialog and submits again (with the same button) once confirmed.
+  // word: the user must type it, like when deleting a workspace.
+  function opsConfirm(e, msg, word) {
+    const f = e.target, by = e.submitter;
+    if (f.dataset.confirmed) { delete f.dataset.confirmed; return true; }
+    e.preventDefault();
+    const d = document.getElementById('confirm-dialog'), $ = id => document.getElementById(id);
+    const label = (by?.textContent || 'Confirm').trim().replace(/…$/, ''), danger = word || by?.classList.contains('danger');
+    d.className = danger ? 'danger-dialog' : '';
+    $('confirm-title').textContent = (danger ? '⚠ ' : '') + label;
+    $('confirm-msg').textContent = msg;
+    $('confirm-typed').hidden = !word;
+    Object.assign($('confirm-input'), {value: '', required: !!word, pattern: word || '.*'});
+    $('confirm-typed').querySelector('label').textContent = `To confirm, type "${word}"`;
+    Object.assign($('confirm-ok'), {textContent: label, className: danger ? 'danger' : ''});
+    d.querySelector('form').onsubmit = () => { f.dataset.confirmed = 1; f.requestSubmit(by); };
+    d.showModal();
+    return false;
+  }
   // filters a picker by the search text and "Show selected", and shows the count in its summary
   function filterPicker(el) {
     const d = el.closest('details'), q = d.querySelector('input[type=search]').value.toLowerCase();

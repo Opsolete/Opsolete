@@ -13,7 +13,7 @@ Each workspace has exactly one Terraform state. Opsolete is the state backend: r
 
 ## Rollback
 
-On a workspace page, *Roll back* next to an older state version saves a copy of it as the new current version (serial one above the current, marked "rollback to vN"), with its outputs and resource index; newer versions are kept. It changes no infrastructure: review the next plan, since resources created or deleted after that version no longer match the state. It takes the state lock and refuses while a run is active.
+On a workspace page, *Roll back* next to an older state version saves a copy of it as the new current version (serial one above the current, marked "rollback to vN"), with its outputs and resource index; newer versions are kept. It changes no infrastructure, and no run starts: start a *Plan only* run to review the result, since resources created or deleted after that version no longer match the state. To revert infrastructure, revert the configuration. You confirm by typing "rollback". It takes the state lock and refuses while a run is active.
 
 ## Locking
 

@@ -6,7 +6,7 @@
     {{if .Editing}}<p class="muted">ID <code>{{.T.ID}}</code></p>{{else}}<p class="muted">A template turns a Terraform module into a simple form: pick the module, then design the fields end users fill in.</p>{{end}}
   </div>
   {{if .Editing}}<form method="post" action="/templates/{{.T.ID}}/delete"
-    onsubmit="return confirm('Delete this template? Workspaces using it keep their module, but can no longer be configured from it.')">
+    onsubmit="return opsConfirm(event, 'Delete this template? Workspaces using it keep their module, but can no longer be configured from it.')">
     <button type="submit" class="danger">Delete</button></form>{{end}}
 </div>
 {{with .PullRequest}}<p class="alert" role="status">Pull request: <a href="{{.}}" target="_blank" rel="noopener">{{.}}</a>. The catalog changes once it's merged; saving again while it's open adds a commit to it.</p>{{end}}
@@ -216,7 +216,7 @@
     // confirm before its variables replace the fields
     const pick = document.getElementById("from-module"), builder = document.getElementById("builder");
     pick?.addEventListener("submit", e => {
-      if (cards().some(nameOf) && !confirm("Replace the form fields below with the module's variables? Unsaved field changes are lost.")) return e.preventDefault();
+      if (cards().some(nameOf) && !opsConfirm(e, "Replace the form fields below with the module's variables? Unsaved field changes are lost.")) return e.preventDefault();
       for (const n of ["name", "description"])
         (pick.elements[n] ?? pick.appendChild(Object.assign(document.createElement("input"), {type: "hidden", name: n}))).value = builder.elements[n].value;
     });

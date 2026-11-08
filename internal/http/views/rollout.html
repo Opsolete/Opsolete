@@ -16,7 +16,7 @@
   {{if .Open}}{{$.OpenRuns}} plan(s) open.
   <form method="post" action="/templates/{{$.T.ID}}/rollout/{{if eq .Status "paused"}}resume{{else}}pause{{end}}" class="inline">
     <button type="submit" class="secondary">{{if eq .Status "paused"}}Resume{{else}}Pause{{end}}</button></form>
-  <form method="post" action="/templates/{{$.T.ID}}/rollout/stop" class="inline" onsubmit="return confirm('Stop this rollout? Plans it already queued stay.')">
+  <form method="post" action="/templates/{{$.T.ID}}/rollout/stop" class="inline" onsubmit="return opsConfirm(event, 'Stop this rollout? Plans it already queued stay.')">
     <button type="submit" class="danger">Stop</button></form>
   {{end}}
   <small class="muted">Started by {{or .CreatedByEmail "a deleted user"}}, {{ago .CreatedAt}}.</small>
@@ -34,7 +34,7 @@
 
 {{if and .Pending (not (and .Rollout .Rollout.Open))}}
 <form method="post" class="inline" style="margin-bottom:1rem"
-  onsubmit="return confirm('Roll out {{.T.Module.Ref}} to {{.Pending}} workspace(s){{with .Project}} in project {{.}}{{end}}?')">
+  onsubmit="return opsConfirm(event, 'Roll out {{.T.Module.Ref}} to {{.Pending}} workspace(s){{with .Project}} in project {{.}}{{end}}?')">
   <input type="hidden" name="source" value="{{.T.Module.Source}}">
   <input type="hidden" name="ref" value="{{.T.Module.Ref}}">
   <input type="hidden" name="project" value="{{.Project}}">

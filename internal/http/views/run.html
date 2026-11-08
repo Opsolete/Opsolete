@@ -12,7 +12,7 @@
     {{if $r.CancelRequested}}
     <span class="muted">Cancel requested…</span>
     <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/cancel"
-      onsubmit="return confirm('Force cancel cuts the runner off at once. Terraform may not save resources it is creating right now. Only use this if the run does not stop.')">
+      onsubmit="return opsConfirm(event, 'Force cancel cuts the runner off at once. Terraform may not save resources it is creating right now. Only use this if the run does not stop.')">
       <input type="hidden" name="force" value="1"><button type="submit" class="danger">Force cancel</button></form>
     {{else}}
     <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/cancel"><button type="submit" class="secondary">Cancel run</button></form>
@@ -20,7 +20,7 @@
   </div>
   {{else if and $.CanOperate (not $r.Active) $w.HasConfig (ne $r.Action "plan")}}
   <form method="post" action="/workspaces/{{$w.Name}}/runs"{{if eq $r.Action "destroy"}}
-    onsubmit="return confirm('Start a new destroy run for {{$w.Name}}?')"{{end}}>
+    onsubmit="return opsConfirm(event, 'Start a new destroy run for {{$w.Name}}?')"{{end}}>
     <input type="hidden" name="action" value="{{$r.Action}}">{{range $r.Replace}}<input type="hidden" name="replace" value="{{.}}">{{end}}
     <button type="submit" class="secondary">Re-run {{if eq $r.Action "destroy"}}destroy{{else if eq $r.Action "assess"}}drift check{{else}}plan{{end}}</button></form>
   {{end}}
