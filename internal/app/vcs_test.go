@@ -18,8 +18,8 @@ import (
 	"github.com/opsolete/opsolete/internal/vcs"
 )
 
-// fakeGitHub serves acme/infra with branch main to token "pat" and returns its API root.
-func fakeGitHub(t *testing.T) string {
+// fakeGitHub serves acme/infra with branch main to token "pat", points a's VCS client at it and returns its API root.
+func fakeGitHub(t *testing.T, a *App) string {
 	gh := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Header.Get("Authorization") != "Bearer pat":
@@ -33,15 +33,13 @@ func fakeGitHub(t *testing.T) string {
 		}
 	}))
 	t.Cleanup(gh.Close)
-	old := vcs.HTTPClient
-	vcs.HTTPClient = gh.Client()
-	t.Cleanup(func() { vcs.HTTPClient = old })
+	a.VCS = vcs.NewClient(gh.Client())
 	return gh.URL
 }
 
 func TestVCSConnectionsAdminOnly(t *testing.T) {
 	a, ctx := testApp(t), context.Background()
-	base := fakeGitHub(t)
+	base := fakeGitHub(t, a)
 	a.VCSEnabled = true
 	admin, someone := Actor{Email: "admin@example.com", Admin: true}, user(t, a)
 	in := NewVCSConnection{Name: uniq("gh-"), Provider: vcs.GitHub, BaseURL: base, Token: "pat"}
@@ -104,7 +102,7 @@ func testConnection(t *testing.T, a *App, base, scope string) uuid.UUID {
 
 func TestLinkVCSScope(t *testing.T) {
 	a, ctx := testApp(t), context.Background()
-	base := fakeGitHub(t)
+	base := fakeGitHub(t, a)
 	a.VCSEnabled = true
 	admin := Actor{Email: "admin@example.com", Admin: true}
 	closed := testConnection(t, a, base, "") // modules only
@@ -141,7 +139,7 @@ func TestLinkVCSScope(t *testing.T) {
 
 func TestLinkVCSDuringRun(t *testing.T) {
 	a, ctx := testApp(t), context.Background()
-	base := fakeGitHub(t)
+	base := fakeGitHub(t, a)
 	a.VCSEnabled = true
 	admin := Actor{Email: "admin@example.com", Admin: true}
 	conn := testConnection(t, a, base, "all")

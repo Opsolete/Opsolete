@@ -23,6 +23,7 @@ import (
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
 	"github.com/opsolete/opsolete/internal/testdb"
+	"github.com/opsolete/opsolete/internal/vcs"
 )
 
 var testReg = func() *registry.Registry {
@@ -51,7 +52,7 @@ func newApp(t *testing.T, dir string, store *storage.Store, a *auth.Auth, f Feat
 		t.Fatal(err)
 	}
 	srv := New(&app.App{Store: store, Blobs: memblob.OpenBucket(nil), Secrets: testKeys, Templates: tpls, Registry: testReg,
-		Notify: startNotifier(t, store), Log: testLog(t)}, a, f)
+		VCS: vcs.NewClient(nil), Notify: startNotifier(t, store), Log: testLog(t)}, a, f)
 	srv.RunnerToken, srv.ClaimWait = testRunnerToken, 100*time.Millisecond
 	return srv
 }

@@ -38,7 +38,7 @@ type Workspace struct {
 	VCSConnectionID   uuid.UUID // uuid.Nil if not linked to a repository
 	VCSRepo           string
 	VCSBranch         string
-	VCSTrigger        bool   // a new commit on the branch queues an apply run (see vcs.TriggerRuns)
+	VCSTrigger        bool   // a new commit on the branch queues an apply run (see vcs.Client.TriggerRuns)
 	VCSPullRequests   bool   // open pull requests into the branch get speculative plans
 	VCSTagsRegex      string // tag-based: new tags matching it queue runs instead of branch commits; "" branch-based
 	VCSTagBaseline    string // commit of the newest matching tag when tag triggers were set: never queued

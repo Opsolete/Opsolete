@@ -16,8 +16,8 @@ import (
 )
 
 // VCS providers: an admin connects GitHub or Azure DevOps with an access token. A connection is a
-// credential that workspaces (within its workspace scope), registry modules (see vcs.Poll) and the
-// template catalog (see vcs.SyncCatalog) use.
+// credential that workspaces (within its workspace scope), registry modules (see vcs.Client.Poll) and the
+// template catalog (see vcs.Client.SyncCatalog) use.
 func (s *Server) vcsRoutes(mux routes) {
 	mux.HandleFunc("GET /vcs", s.admin(s.vcsPage))
 	mux.HandleFunc("GET /vcs/new", s.admin(s.newConnectionPage))

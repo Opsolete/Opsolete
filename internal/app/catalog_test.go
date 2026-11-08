@@ -132,7 +132,7 @@ func TestRevokeOwnTokensOnly(t *testing.T) {
 
 func TestDeleteVCSConnectionDuringRun(t *testing.T) {
 	a, ctx := testApp(t), context.Background()
-	base := fakeGitHub(t)
+	base := fakeGitHub(t, a)
 	a.VCSEnabled = true
 	admin := Actor{Email: "admin@example.com", Admin: true}
 	conn := testConnection(t, a, base, "all")
@@ -164,9 +164,7 @@ func TestReplaceVCSTokenRace(t *testing.T) {
 		w.Write([]byte(`[]`))
 	}))
 	t.Cleanup(gh.Close)
-	old := vcs.HTTPClient
-	vcs.HTTPClient = gh.Client()
-	t.Cleanup(func() { vcs.HTTPClient = old })
+	a.VCS = vcs.NewClient(gh.Client())
 	conn.ID = testConnection(t, a, gh.URL, "")
 	if _, err := a.ReplaceVCSToken(ctx, admin, conn.ID, "new"); !IsConflict(err) || !errors.Is(err, ErrChanged) {
 		t.Fatalf("a token replaced meanwhile: %v", err)

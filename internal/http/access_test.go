@@ -72,7 +72,7 @@ func TestAccessMatrix(t *testing.T) {
 		t.Fatal(err)
 	}
 	a := &app.App{Store: store, Blobs: memblob.OpenBucket(nil), Secrets: testKeys, Templates: tpls, Registry: testReg,
-		Log: testLog(t)}
+		VCS: vcs.NewClient(nil), Log: testLog(t)}
 	all := Features{Deployments: true, Registry: true, Editor: true, VCS: true}
 	server := func(au *auth.Auth) *Server {
 		s := New(a, au, all)

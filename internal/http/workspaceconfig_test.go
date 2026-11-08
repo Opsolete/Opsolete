@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/opsolete/opsolete/internal/auth"
 	"github.com/opsolete/opsolete/internal/registry/registrytest"
 	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage"
@@ -53,11 +54,9 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 		}
 	}))
 	defer gh.Close()
-	old := vcs.HTTPClient
-	vcs.HTTPClient = gh.Client()
-	t.Cleanup(func() { vcs.HTTPClient = old })
 
 	app := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true, Registry: true, VCS: true})
+	app.App.VCS = vcs.NewClient(gh.Client())
 	h := app.Handler()
 	runnerTok := testRunnerToken
 	var (
@@ -76,7 +75,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	}
 	claimVCS := func(t *testing.T, wantAction, wantTar string) {
 		t.Helper()
-		if err := vcs.TriggerRuns(ctx, store, app.App.OpenToken, []storage.Workspace{lw}); err != nil {
+		if err := app.App.VCS.TriggerRuns(ctx, store, app.App.OpenToken, []storage.Workspace{lw}); err != nil {
 			t.Fatal(err)
 		}
 		mu.Lock()
@@ -240,7 +239,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 			!strings.Contains(page, `name="vcs_tag_format" value="semantic" checked`) {
 			t.Fatalf("the page must show the tag format: %s", page)
 		}
-		if err := vcs.TriggerRuns(ctx, store, app.App.OpenToken, []storage.Workspace{lw}); err != nil {
+		if err := app.App.VCS.TriggerRuns(ctx, store, app.App.OpenToken, []storage.Workspace{lw}); err != nil {
 			t.Fatal(err)
 		}
 		if runs, _ := store.Runs(ctx, lw.ID, 1); runs[0].Active() {
@@ -336,13 +335,15 @@ func TestVCSProjectScope(t *testing.T) {
 		}
 	}))
 	defer gh.Close()
-	old := vcs.HTTPClient
-	vcs.HTTPClient = gh.Client()
-	t.Cleanup(func() { vcs.HTTPClient = old })
 
 	f := Features{Deployments: true, Registry: true, VCS: true}
-	h := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), f).Handler()
-	member := newApp(t, "../../catalog", store, devAuth(t, store, "vp-member-"+id+"@example.com", false, group), f).Handler()
+	handler := func(a *auth.Auth) http.Handler {
+		s := newApp(t, "../../catalog", store, a, f)
+		s.App.VCS = vcs.NewClient(gh.Client())
+		return s.Handler()
+	}
+	h := handler(devAuth(t, store, "admin@example.com", true))
+	member := handler(devAuth(t, store, "vp-member-"+id+"@example.com", false, group))
 	rec := post(h, "/vcs", url.Values{"name": {connName}, "provider": {"github"}, "base_url": {gh.URL}, "token": {"pat"}})
 	connID := strings.TrimSuffix(strings.TrimPrefix(rec.Header().Get("Location"), "/vcs/new?connection="), "&return=")
 	for _, p := range []string{prj, other} {
@@ -377,7 +378,7 @@ func TestVCSProjectScope(t *testing.T) {
 	if page := get(member, "/workspaces/new?type=vcs").Body.String(); strings.Contains(page, connName) {
 		t.Fatal("the wizard offers the connection in the default project")
 	}
-	outsider := newApp(t, "../../catalog", store, devAuth(t, store, "vp-outsider-"+id+"@example.com", false), f).Handler()
+	outsider := handler(devAuth(t, store, "vp-outsider-"+id+"@example.com", false))
 	if page := get(outsider, "/workspaces/new?type=vcs&conn="+connID+"&project="+prj).Body.String(); strings.Contains(page, connName) ||
 		strings.Contains(page, "acme/infra") {
 		t.Fatal("?project= of a project the user can't create in must not list its connections or their repos")

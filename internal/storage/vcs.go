@@ -10,7 +10,7 @@ import (
 	"github.com/opsolete/opsolete/internal/storage/db"
 )
 
-// VCSConnection is a VCS provider account; Token is sealed (see internal/vcs).
+// VCSConnection is a VCS provider account; Token is sealed (see internal/app/sealing.go).
 type VCSConnection struct {
 	ID                      uuid.UUID
 	Name, Provider, BaseURL string

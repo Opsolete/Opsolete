@@ -160,11 +160,9 @@ func TestTemplateCatalogInGit(t *testing.T) {
 	g.commit("main", map[string]string{"catalog/web.json": tplJSON("web-"+id, "Web"), "README.md": "not a template"})
 	gh := httptest.NewTLSServer(g.handler(t))
 	defer gh.Close()
-	old := vcs.HTTPClient
-	vcs.HTTPClient = gh.Client()
-	t.Cleanup(func() { vcs.HTTPClient = old })
 
 	app := newApp(t, t.TempDir(), store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true, Registry: true, VCS: true})
+	app.App.VCS = vcs.NewClient(gh.Client())
 	h := app.Handler()
 	var (
 		connID string
@@ -248,6 +246,7 @@ func TestTemplateCatalogInGit(t *testing.T) {
 		}
 		// Another instance: starts from the snapshot in Postgres, without the provider.
 		other = newApp(t, t.TempDir(), store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true, Registry: true, VCS: true})
+		other.App.VCS = vcs.NewClient(gh.Client()) // another replica: its own client
 		if err := vcs.LoadCatalog(ctx, store, other.App.Templates); err != nil {
 			t.Fatal(err)
 		}
@@ -288,13 +287,13 @@ func TestTemplateCatalogInGit(t *testing.T) {
 		g.held, g.release = held, release
 		g.mu.Unlock()
 		slow := make(chan error)
-		go func() { slow <- vcs.SyncCatalog(ctx, store, app.App.OpenToken, app.App.Templates) }()
+		go func() { slow <- app.App.VCS.SyncCatalog(ctx, store, app.App.OpenToken, app.App.Templates) }()
 		older := <-held
 		g.mu.Lock()
 		g.commit("main", map[string]string{"catalog/web.json": tplJSON("web-"+id, "Newer")})
 		newer := g.branches["main"]
 		g.mu.Unlock()
-		if err := vcs.SyncCatalog(ctx, store, other.App.OpenToken, other.App.Templates); err != nil {
+		if err := other.App.VCS.SyncCatalog(ctx, store, other.App.OpenToken, other.App.Templates); err != nil {
 			t.Fatal(err)
 		}
 		close(release)
@@ -312,7 +311,7 @@ func TestTemplateCatalogInGit(t *testing.T) {
 		g.mu.Lock()
 		g.commit("main", map[string]string{"catalog/web.json": tplJSON("web-"+id, "From the leader")})
 		g.mu.Unlock()
-		if err := vcs.SyncCatalog(ctx, store, app.App.OpenToken, app.App.Templates); err != nil {
+		if err := app.App.VCS.SyncCatalog(ctx, store, app.App.OpenToken, app.App.Templates); err != nil {
 			t.Fatal(err)
 		}
 		if tpl, _ := other.App.Templates.Get("web-" + id); tpl.Name == "From the leader" {

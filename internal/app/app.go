@@ -15,6 +15,7 @@ import (
 	"github.com/opsolete/opsolete/internal/secrets"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
+	"github.com/opsolete/opsolete/internal/vcs"
 )
 
 type App struct {
@@ -32,7 +33,8 @@ type App struct {
 	TemplateEditor bool
 	// RunLogRetention (RUN_LOG_RETENTION_DAYS): run logs are deleted this long after the run ended; 0 keeps them.
 	RunLogRetention time.Duration
-	Notify          *Notifier // wakes runner claims and log streams; nil: they look every NotifyFallback
+	VCS             *vcs.Client // talks to GitHub and Azure DevOps; its caches live on this replica
+	Notify          *Notifier   // wakes runner claims and log streams; nil: they look every NotifyFallback
 	Log             *slog.Logger
 }
 

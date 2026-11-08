@@ -55,9 +55,7 @@ func (rc *recorder) server(t *testing.T) *httptest.Server {
 		w.WriteHeader(code)
 		w.Write([]byte(res[1]))
 	}))
-	old := HTTPClient
-	HTTPClient = ts.Client()
-	t.Cleanup(func() { HTTPClient = old; ts.Close() })
+	t.Cleanup(ts.Close)
 	return ts
 }
 
@@ -70,7 +68,7 @@ func TestGitHubWrites(t *testing.T) {
 		"POST /repos/acme/cat/pulls":                    {"201", `{"html_url":"https://github.com/acme/cat/pull/7"}`},
 	}}
 	ts := rc.server(t)
-	c := Conn{GitHub, ts.URL, "tok"}
+	c := NewClient(ts.Client()).Conn(GitHub, ts.URL, "tok")
 	ctx := context.Background()
 	if err := c.createBranch(ctx, "acme/cat", "opsolete/x", "base1"); err != nil {
 		t.Fatal(err)
@@ -105,7 +103,7 @@ func TestTokenHint(t *testing.T) {
 		"POST /repos/acme/cat/git/refs":               {"401", `{"message":"Bad credentials"}`},
 	}}
 	ts := rc.server(t)
-	c := Conn{GitHub, ts.URL, "bad"}
+	c := NewClient(ts.Client()).Conn(GitHub, ts.URL, "bad")
 	ctx := context.Background()
 	for _, err := range []error{
 		c.commitFile(ctx, "acme/cat", "main", "base1", "catalog/a.json", nil, false, "Remove"),
@@ -128,7 +126,7 @@ func TestAzureDevOpsWrites(t *testing.T) {
 		"POST " + repo + "/pullrequests": {"201", `{"pullRequestId":12}`},
 	}}
 	ts := rc.server(t)
-	c := Conn{AzureDevOps, ts.URL + "/org", "pat"}
+	c := NewClient(ts.Client()).Conn(AzureDevOps, ts.URL+"/org", "pat")
 	ctx := context.Background()
 	if err := c.createBranch(ctx, "Platform Team/cat", "opsolete/x", "base1"); err != nil {
 		t.Fatal(err)

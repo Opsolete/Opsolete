@@ -8,7 +8,7 @@ import (
 	"github.com/opsolete/opsolete/internal/storage"
 )
 
-// Settings → Templates: the template catalog's Git repository (see vcs.SyncCatalog). Without one
+// Settings → Templates: the template catalog's Git repository (see vcs.Client.SyncCatalog). Without one
 // the templates come from TEMPLATES_DIR.
 
 type catalogPage struct {

@@ -229,6 +229,7 @@ func serve(log *slog.Logger) error {
 		return err
 	}
 	ops := &app.App{Store: store, Blobs: state, Secrets: keys, Templates: tpls, Registry: reg, Log: log,
+		VCS:             vcs.NewClient(nil),
 		RunLogRetention: time.Duration(cfg.RunLogRetentionDays) * 24 * time.Hour,
 		Notify:          &app.Notifier{DB: store.Pool.Config().ConnConfig, Log: log}}
 	server := httpserver.New(ops, authn, httpserver.Features{
@@ -294,7 +295,7 @@ func jobs(cfg config.Config, a *app.App) []app.Job {
 	var js []app.Job
 	if cfg.Registry {
 		js = append(js, app.Job{Name: "vcs modules", Every: 5 * time.Minute,
-			Run: func(ctx context.Context) error { return vcs.Poll(ctx, a.Store, a.OpenToken, a.Log) }})
+			Run: func(ctx context.Context) error { return a.VCS.Poll(ctx, a.Store, a.OpenToken, a.Log) }})
 	}
 	if !cfg.Deployments {
 		return js
@@ -312,9 +313,9 @@ func jobs(cfg config.Config, a *app.App) []app.Job {
 		app.Job{Name: "retention", Every: time.Hour,
 			Run: func(ctx context.Context) error { _, err := a.Retention(ctx); return err }},
 		app.Job{Name: "vcs runs", Every: time.Minute,
-			Run: func(ctx context.Context) error { return vcs.PollRuns(ctx, a.Store, a.OpenToken, a.Log) }},
+			Run: func(ctx context.Context) error { return a.VCS.PollRuns(ctx, a.Store, a.OpenToken, a.Log) }},
 		app.Job{Name: "catalog sync", Every: time.Minute,
-			Run: func(ctx context.Context) error { return vcs.SyncCatalog(ctx, a.Store, a.OpenToken, a.Templates) }},
+			Run: func(ctx context.Context) error { return a.VCS.SyncCatalog(ctx, a.Store, a.OpenToken, a.Templates) }},
 		// every replica serves templates from memory: reload them when the leader (or an edit) changed the snapshot
 		app.Job{Name: "catalog reload", Every: 10 * time.Second, Local: true,
 			Run: func(ctx context.Context) error { return vcs.ReloadCatalog(ctx, a.Store, a.Templates) }},

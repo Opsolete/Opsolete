@@ -45,12 +45,33 @@ var Providers = []struct{ ID, Label, DefaultURL, Placeholder string }{
 	{AzureDevOps, "Azure DevOps", "", "https://dev.azure.com/<organization>"},
 }
 
-// HTTPClient talks to the providers; tests swap in a TLS test server's client.
-var HTTPClient = &http.Client{Timeout: 2 * time.Minute}
+// Client talks to the providers and keeps what polling learns between rounds: cached responses,
+// rate-limit pauses and tags without a module's folder. App owns one; tests build their own.
+type Client struct {
+	http     *http.Client
+	mu       sync.Mutex
+	cache    map[string]cachedResponse
+	pauses   map[string]time.Time        // token hash + API root -> when the provider wants polling to resume
+	noFolder map[string]map[string]error // module (connection, repo, folder) -> tag commit -> the ErrNoFolder Archive gave there
+}
 
-// Conn is a usable connection: provider, API root and plain token.
+// NewClient returns a client sending through hc; nil uses a client with a 2 minute timeout.
+func NewClient(hc *http.Client) *Client {
+	if hc == nil {
+		hc = &http.Client{Timeout: 2 * time.Minute}
+	}
+	return &Client{http: hc, cache: map[string]cachedResponse{}, pauses: map[string]time.Time{}, noFolder: map[string]map[string]error{}}
+}
+
+// Conn is a usable connection: provider, API root and plain token, sending through its client.
 type Conn struct {
 	Provider, BaseURL, Token string
+	client                   *Client
+}
+
+// Conn returns a connection sending through cl.
+func (cl *Client) Conn(provider, baseURL, token string) Conn {
+	return Conn{Provider: provider, BaseURL: baseURL, Token: token, client: cl}
 }
 
 // NormalizeURL validates an API root (https, no query) and fills in the provider default.
@@ -96,21 +117,15 @@ type cachedResponse struct {
 	body []byte
 }
 
-var (
-	cacheMu sync.Mutex
-	cache   = map[string]cachedResponse{}
-	pauses  = map[string]time.Time{} // token hash + API root -> when the provider wants polling to resume
-	// connection, repo, module folder, tag commit -> the ErrNoFolder Archive gave there, so Sync skips the download.
-	// shortcut: never pruned (one small entry per such tag); prune with the module links if that grows.
-	noFolderSeen = map[string]error{}
-)
-
 // pausedUntil is when the provider asked this connection's token to wait until; zero if it didn't.
 // Keyed by token, not host: GitHub's rate limits are per token.
 func (c Conn) pausedUntil() time.Time {
-	cacheMu.Lock()
-	defer cacheMu.Unlock()
-	if t := pauses[c.pauseKey()]; time.Now().Before(t) {
+	if c.client == nil {
+		return time.Time{} // get and send report the missing client
+	}
+	c.client.mu.Lock()
+	defer c.client.mu.Unlock()
+	if t := c.client.pauses[c.pauseKey()]; time.Now().Before(t) {
 		return t
 	}
 	return time.Time{}
@@ -142,9 +157,15 @@ func (c Conn) notePause(resp *http.Response) {
 		}
 	}
 	if !until.IsZero() {
-		cacheMu.Lock()
-		pauses[c.pauseKey()] = later(pauses[c.pauseKey()], until)
-		cacheMu.Unlock()
+		cl := c.client
+		cl.mu.Lock()
+		for k, t := range cl.pauses { // over: forget it, so tokens replaced long ago don't pile up
+			if time.Now().After(t) {
+				delete(cl.pauses, k)
+			}
+		}
+		cl.pauses[c.pauseKey()] = later(cl.pauses[c.pauseKey()], until)
+		cl.mu.Unlock()
 	}
 }
 
@@ -156,7 +177,13 @@ func later(a, b time.Time) time.Time {
 }
 
 // get fetches u; conditional (GitHub only, see cache) makes it a conditional request.
+// errNoClient: a Conn built as a literal, not by Client.Conn or Client.ConnFor (a bug).
+var errNoClient = errors.New("vcs: connection without a client (build it with Client.Conn)")
+
 func (c Conn) get(ctx context.Context, u string, limit int64, conditional bool) ([]byte, error) {
+	if c.client == nil {
+		return nil, errNoClient
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -165,15 +192,16 @@ func (c Conn) get(ctx context.Context, u string, limit int64, conditional bool) 
 	key := fmt.Sprintf("%x %s", sha256.Sum256([]byte(c.Token)), u) // another token may see other data
 	var cached cachedResponse
 	c.authorize(req)
+	cl := c.client
 	if conditional {
-		cacheMu.Lock()
-		cached = cache[key]
-		cacheMu.Unlock()
+		cl.mu.Lock()
+		cached = cl.cache[key]
+		cl.mu.Unlock()
 		if cached.etag != "" {
 			req.Header.Set("If-None-Match", cached.etag)
 		}
 	}
-	resp, err := HTTPClient.Do(req) // Go drops Authorization on redirects to other hosts (GitHub's codeload is pre-signed)
+	resp, err := cl.http.Do(req) // Go drops Authorization on redirects to other hosts (GitHub's codeload is pre-signed)
 	if err != nil {
 		return nil, err
 	}
@@ -192,15 +220,15 @@ func (c Conn) get(ctx context.Context, u string, limit int64, conditional bool) 
 		err = fmt.Errorf("%s %s: response larger than %d MB", c.Provider, req.URL.Path, limit>>20)
 	}
 	if etag := resp.Header.Get("ETag"); err == nil && conditional && etag != "" && len(b) <= maxCachedSize {
-		cacheMu.Lock()
-		for k := range cache { // full: drop one entry (whichever map order gives), not every 304 at once
-			if len(cache) < maxCached {
+		cl.mu.Lock()
+		for k := range cl.cache { // full: drop one entry (whichever map order gives), not every 304 at once
+			if len(cl.cache) < maxCached {
 				break
 			}
-			delete(cache, k)
+			delete(cl.cache, k)
 		}
-		cache[key] = cachedResponse{etag, b}
-		cacheMu.Unlock()
+		cl.cache[key] = cachedResponse{etag, b}
+		cl.mu.Unlock()
 	}
 	return b, err
 }
@@ -226,6 +254,9 @@ func (e *StatusError) Error() string { return e.Msg }
 
 // send makes a JSON write request and decodes the answer into out (if not nil).
 func (c Conn) send(ctx context.Context, method, u string, body, out any) error {
+	if c.client == nil {
+		return errNoClient
+	}
 	b, err := json.Marshal(body)
 	if err != nil {
 		return err
@@ -236,7 +267,7 @@ func (c Conn) send(ctx context.Context, method, u string, body, out any) error {
 	}
 	c.authorize(req)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := HTTPClient.Do(req)
+	resp, err := c.client.http.Do(req)
 	if err != nil {
 		return err
 	}
@@ -637,16 +668,16 @@ func writeTarGz(files []file) ([]byte, error) {
 type OpenToken func(storage.VCSConnection) (string, error)
 
 // ConnFor opens a stored connection's token.
-func ConnFor(open OpenToken, c storage.VCSConnection) (Conn, error) {
+func (cl *Client) ConnFor(open OpenToken, c storage.VCSConnection) (Conn, error) {
 	token, err := open(c)
-	return Conn{Provider: c.Provider, BaseURL: c.BaseURL, Token: token}, err
+	return cl.Conn(c.Provider, c.BaseURL, token), err
 }
 
 // Sync publishes every semver tag of a linked repo that isn't a module version yet, and records
 // the outcome. A bad tag doesn't stop the others. It returns the versions it added.
 // shortcut: a tag that fails to publish is retried on every sync; fine for the odd broken tag.
-func Sync(ctx context.Context, st *storage.Store, open OpenToken, m storage.VCSModule) ([]string, error) {
-	added, err := syncModule(ctx, st, open, m)
+func (cl *Client) Sync(ctx context.Context, st *storage.Store, open OpenToken, m storage.VCSModule) ([]string, error) {
+	added, err := cl.syncModule(ctx, st, open, m)
 	msg := ""
 	if err != nil {
 		msg = err.Error()
@@ -657,12 +688,12 @@ func Sync(ctx context.Context, st *storage.Store, open OpenToken, m storage.VCSM
 	return added, err
 }
 
-func syncModule(ctx context.Context, st *storage.Store, open OpenToken, m storage.VCSModule) ([]string, error) {
+func (cl *Client) syncModule(ctx context.Context, st *storage.Store, open OpenToken, m storage.VCSModule) ([]string, error) {
 	sc, err := st.GetVCSConnection(ctx, m.ConnectionID)
 	if err != nil {
 		return nil, err
 	}
-	c, err := ConnFor(open, sc)
+	c, err := cl.ConnFor(open, sc)
 	if err != nil {
 		return nil, err
 	}
@@ -681,6 +712,13 @@ func syncModule(ctx context.Context, st *storage.Store, open OpenToken, m storag
 	for _, v := range existing {
 		have[v] = true
 	}
+	// a commit's tree never changes: once without the folder, always without it, so Sync skips the download.
+	// Only unpublished tags still listed are kept: the cache is pruned on every sync.
+	mod := noFolderKey(m)
+	cl.mu.Lock()
+	seen := cl.noFolder[mod]
+	cl.mu.Unlock()
+	kept := map[string]error{}
 	var added []string
 	var errs, noFolder []error
 	for _, t := range tags {
@@ -690,21 +728,15 @@ func syncModule(ctx context.Context, st *storage.Store, open OpenToken, m storag
 			continue // not a release tag, or already published (v1.0.0 and 1.0.0 are one version)
 		}
 		have[ver] = true
-		// a commit's tree never changes: once without the folder, always without it
-		seen := m.ConnectionID.String() + "\x00" + m.Repo + "\x00" + m.Dir + "\x00" + t.Commit
-		cacheMu.Lock()
-		known := noFolderSeen[seen]
-		cacheMu.Unlock()
-		if known != nil {
+		if known := seen[t.Commit]; known != nil && t.Commit != "" {
+			kept[t.Commit] = known
 			noFolder = append(noFolder, fmt.Errorf("tag %s: %w", tag, known))
 			continue
 		}
 		archive, err := c.Archive(ctx, m.Repo, tag, "tag", m.Dir)
 		if errors.Is(err, ErrNoFolder) {
 			if t.Commit != "" {
-				cacheMu.Lock()
-				noFolderSeen[seen] = err
-				cacheMu.Unlock()
+				kept[t.Commit] = err
 			}
 			noFolder = append(noFolder, fmt.Errorf("tag %s: %w", tag, err))
 			continue
@@ -729,6 +761,13 @@ func syncModule(ctx context.Context, st *storage.Store, open OpenToken, m storag
 		}
 		added = append(added, ver)
 	}
+	cl.mu.Lock()
+	if len(kept) > 0 {
+		cl.noFolder[mod] = kept
+	} else {
+		delete(cl.noFolder, mod)
+	}
+	cl.mu.Unlock()
 	// in a monorepo, tags from before the module's folder existed aren't its versions; only a folder no tag has is an error
 	if len(existing) == 0 && len(added) == 0 {
 		errs = append(errs, noFolder...)
@@ -738,13 +777,24 @@ func syncModule(ctx context.Context, st *storage.Store, open OpenToken, m storag
 
 // Poll syncs every linked module once (a scheduler job). It needs no inbound webhooks, so Opsolete
 // can stay private. A module's error is logged and doesn't stop the others.
-func Poll(ctx context.Context, st *storage.Store, open OpenToken, log *slog.Logger) error {
+func (cl *Client) Poll(ctx context.Context, st *storage.Store, open OpenToken, log *slog.Logger) error {
 	mods, err := st.VCSModules(ctx)
 	if err != nil {
 		return fmt.Errorf("list vcs modules: %w", err)
 	}
+	linked := map[string]bool{}
 	for _, m := range mods {
-		added, err := Sync(ctx, st, open, m)
+		linked[noFolderKey(m)] = true
+	}
+	cl.mu.Lock()
+	for k := range cl.noFolder { // unlinked (or relinked to another folder) since
+		if !linked[k] {
+			delete(cl.noFolder, k)
+		}
+	}
+	cl.mu.Unlock()
+	for _, m := range mods {
+		added, err := cl.Sync(ctx, st, open, m)
 		if err != nil && ctx.Err() == nil {
 			log.Warn("vcs sync", "module", m.Namespace+"/"+m.Name+"/"+m.System, "repo", m.Repo, "err", err)
 		}
@@ -755,12 +805,16 @@ func Poll(ctx context.Context, st *storage.Store, open OpenToken, log *slog.Logg
 	return nil
 }
 
+func noFolderKey(m storage.VCSModule) string {
+	return m.ConnectionID.String() + "\x00" + m.Repo + "\x00" + m.Dir
+}
+
 // PollRuns queues the runs VCS events call for, once (a scheduler job): an apply run for a new
 // commit on a workspace's branch, a speculative plan for each new commit of a pull request into it.
 // Polling, like Poll, needs no inbound webhooks, so Opsolete can stay internal. Each repository
 // branch is polled once per round however many workspaces link it, and on GitHub with conditional
 // requests, so an unchanged branch costs no rate limit.
-func PollRuns(ctx context.Context, st *storage.Store, open OpenToken, log *slog.Logger) error {
+func (cl *Client) PollRuns(ctx context.Context, st *storage.Store, open OpenToken, log *slog.Logger) error {
 	wss, err := st.VCSTriggered(ctx)
 	if err != nil {
 		return fmt.Errorf("list vcs-triggered workspaces: %w", err)
@@ -771,7 +825,7 @@ func PollRuns(ctx context.Context, st *storage.Store, open OpenToken, log *slog.
 		groups[k] = append(groups[k], ws)
 	}
 	for _, g := range groups {
-		if err := TriggerRuns(ctx, st, open, g); err != nil && ctx.Err() == nil {
+		if err := cl.TriggerRuns(ctx, st, open, g); err != nil && ctx.Err() == nil {
 			log.Warn("vcs trigger", "repo", g[0].VCSRepo, "branch", g[0].VCSBranch, "workspaces", len(g), "err", err)
 		}
 	}
@@ -782,13 +836,13 @@ func PollRuns(ctx context.Context, st *storage.Store, open OpenToken, log *slog.
 // workspaces of group, which all link the same connection, repository and branch. A workspace with
 // an active run gets them at a later round, one at a time. One workspace's error (or a failed list
 // of tags, head or pull requests) doesn't keep the others from their runs; all are returned.
-func TriggerRuns(ctx context.Context, st *storage.Store, open OpenToken, group []storage.Workspace) error {
+func (cl *Client) TriggerRuns(ctx context.Context, st *storage.Store, open OpenToken, group []storage.Workspace) error {
 	ws := group[0]
 	sc, err := st.GetVCSConnection(ctx, ws.VCSConnectionID)
 	if err != nil {
 		return err
 	}
-	c, err := ConnFor(open, sc)
+	c, err := cl.ConnFor(open, sc)
 	if err != nil {
 		return err
 	}

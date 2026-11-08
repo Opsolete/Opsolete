@@ -15,6 +15,7 @@ import (
 	"github.com/opsolete/opsolete/internal/secrets"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/testdb"
+	"github.com/opsolete/opsolete/internal/vcs"
 )
 
 // testApp returns an App on a migrated database of t's own (testdb), or skips without TEST_DATABASE_URL.
@@ -28,7 +29,7 @@ func testApp(t *testing.T) *App {
 	if err := s.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	return &App{Store: s, Blobs: memblob.OpenBucket(nil), Secrets: keys("test-secret-key", ""),
+	return &App{Store: s, Blobs: memblob.OpenBucket(nil), Secrets: keys("test-secret-key", ""), VCS: vcs.NewClient(nil),
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 }
 

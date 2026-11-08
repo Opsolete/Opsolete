@@ -11,11 +11,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/opsolete/opsolete/internal/storage"
-	"github.com/opsolete/opsolete/internal/vcs"
 )
 
-// Registry modules can publish from a repository: its semver tags become versions (vcs.Sync), now
-// when linked or asked, and every few minutes by the poller (vcs.Poll). Linking, syncing and
+// Registry modules can publish from a repository: its semver tags become versions (vcs.Client.Sync), now
+// when linked or asked, and every few minutes by the poller (vcs.Client.Poll). Linking, syncing and
 // unlinking are admins only; a sync error is recorded on the module and shown with it.
 
 var dirRe = regexp.MustCompile(`^[A-Za-z0-9._/-]{0,255}$`)
@@ -108,7 +107,7 @@ func (a *App) SyncVCSModule(ctx context.Context, actor Actor, namespace, name, s
 }
 
 func (a *App) syncVCSModule(ctx context.Context, m storage.VCSModule) []string {
-	added, err := vcs.Sync(ctx, a.Store, a.OpenToken, m)
+	added, err := a.VCS.Sync(ctx, a.Store, a.OpenToken, m)
 	if err != nil {
 		a.Log.Warn("vcs sync", "module", m.Namespace+"/"+m.Name+"/"+m.System, "err", err)
 	}

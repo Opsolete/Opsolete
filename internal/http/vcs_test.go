@@ -59,9 +59,6 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 		}
 	}))
 	defer gh.Close()
-	old := vcs.HTTPClient
-	vcs.HTTPClient = gh.Client()
-	t.Cleanup(func() { vcs.HTTPClient = old })
 
 	source := "ops.example.com/" + ns + "/rds/aws"
 	dir := t.TempDir()
@@ -70,6 +67,7 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 	b, _ := json.Marshal(tpl)
 	os.WriteFile(filepath.Join(dir, tplID+".json"), b, 0o644)
 	app := newApp(t, dir, store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true, Registry: true, VCS: true})
+	app.App.VCS = vcs.NewClient(gh.Client())
 	h := app.Handler()
 	var connID string
 

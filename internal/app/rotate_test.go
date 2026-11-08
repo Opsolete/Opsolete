@@ -80,7 +80,7 @@ func TestRotateKey(t *testing.T) {
 		t.Fatalf("variable: %q %v", got, err)
 	}
 	c, _ := store.GetVCSConnection(ctx, connID)
-	if cf, err := vcs.ConnFor((&App{Secrets: newKey}).OpenToken, c); err != nil || cf.Token != "tok" {
+	if cf, err := vcs.NewClient(nil).ConnFor((&App{Secrets: newKey}).OpenToken, c); err != nil || cf.Token != "tok" {
 		t.Fatalf("token: %v", err)
 	}
 	uses, _ := store.WorkspaceTemplates(ctx, ws.ID)

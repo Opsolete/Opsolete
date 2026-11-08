@@ -143,7 +143,7 @@ func (a *App) LinkableVCS(ctx context.Context, actor Actor, workspace, project s
 		if sc.ID != reposOf {
 			continue
 		}
-		c, err := vcs.ConnFor(a.OpenToken, sc)
+		c, err := a.VCS.ConnFor(a.OpenToken, sc)
 		if err == nil {
 			repos, err = c.Repos(ctx)
 		}
@@ -174,7 +174,7 @@ func (a *App) VCSHealth(ctx context.Context, actor Actor, workspace string) (*st
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	c, err := vcs.ConnFor(a.OpenToken, sc)
+	c, err := a.VCS.ConnFor(a.OpenToken, sc)
 	if err == nil && ws.VCSTagsRegex != "" {
 		_, err = c.Tags(ctx, ws.VCSRepo)
 	} else if err == nil {

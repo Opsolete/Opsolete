@@ -45,10 +45,10 @@ type NewVCSConnection struct {
 }
 
 // checkToken is the connection check: the provider lists repositories with the token.
-func checkToken(ctx context.Context, provider, baseURL, token string) error {
+func (a *App) checkToken(ctx context.Context, provider, baseURL, token string) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	if _, err := (vcs.Conn{Provider: provider, BaseURL: baseURL, Token: token}).Repos(ctx); err != nil {
+	if _, err := a.VCS.Conn(provider, baseURL, token).Repos(ctx); err != nil {
 		return invalid("token", "connection check failed: "+err.Error())
 	}
 	return nil
@@ -69,7 +69,7 @@ func (a *App) CreateVCSConnection(ctx context.Context, actor Actor, in NewVCSCon
 	if err != nil {
 		return uuid.Nil, invalid("base_url", err.Error())
 	}
-	if err := checkToken(ctx, in.Provider, baseURL, in.Token); err != nil {
+	if err := a.checkToken(ctx, in.Provider, baseURL, in.Token); err != nil {
 		return uuid.Nil, err
 	}
 	conn := storage.VCSConnection{Name: in.Name, Provider: in.Provider, BaseURL: baseURL}
@@ -99,7 +99,7 @@ func (a *App) ReplaceVCSToken(ctx context.Context, actor Actor, id uuid.UUID, to
 	if token = strings.TrimSpace(token); token == "" {
 		return sc, invalid("token", "paste the new access token")
 	}
-	if err := checkToken(ctx, sc.Provider, sc.BaseURL, token); err != nil {
+	if err := a.checkToken(ctx, sc.Provider, sc.BaseURL, token); err != nil {
 		return sc, err
 	}
 	sealed, err := a.Secrets.Seal(token, TokenAD(sc))
@@ -191,7 +191,7 @@ func (a *App) VCSRepos(ctx context.Context, actor Actor, id uuid.UUID) ([]string
 	if err != nil {
 		return nil, err
 	}
-	c, err := vcs.ConnFor(a.OpenToken, sc)
+	c, err := a.VCS.ConnFor(a.OpenToken, sc)
 	if err != nil {
 		return nil, err
 	}
