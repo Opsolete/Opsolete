@@ -34,8 +34,8 @@ func TestRemoteStateSharing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// as if a runner claimed it: the consumer's run is working, so its state credentials are valid
-	if _, err := store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'planning', lease_id = 'l', lease_until = now() + interval '1 hour' WHERE id = $1`, run.ID); err != nil {
+	// as if a runner claimed and acknowledged it: the consumer's run is working, so its state credentials are valid
+	if _, err := store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'planning', lease_id = 'l', lease_until = now() + interval '1 hour', lease_acked_at = now() WHERE id = $1`, run.ID); err != nil {
 		t.Fatal(err)
 	}
 	state := func(method, token string) int {

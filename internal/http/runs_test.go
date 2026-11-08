@@ -43,11 +43,28 @@ func TestWorkspaceFlow(t *testing.T) {
 		req.Header.Set(runnerapi.LeaseHeader, lease)
 		return do(h, req)
 	}
+	stateCall := func(method, query, token, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, runnerapi.StatePrefix+"/"+ws.ID.String()+query, strings.NewReader(body))
+		if token != "" {
+			req.SetBasicAuth(ws.ID.String(), token)
+		}
+		return do(h, req)
+	}
 	claimJob := func(t *testing.T, phase string) {
 		t.Helper()
 		rec := call("POST", runnerTok, "/jobs/claim", "", `{"runner":"r1"}`)
 		if json.Unmarshal(rec.Body.Bytes(), &job); rec.Code != 200 || job.RunID != runID || job.WorkspaceID != ws.ID.String() || job.Phase != phase {
 			t.Fatalf("claim %s: %d %s", phase, rec.Code, rec.Body.String())
+		}
+		// the runner acknowledges the job before anything else: until then its lease is refused
+		if rec := call("POST", runnerTok, "/jobs/"+job.RunID+"/logs", job.LeaseID, "too early\n"); rec.Code != http.StatusConflict {
+			t.Fatalf("log before the ack: %d, want 409", rec.Code)
+		}
+		if rec := stateCall("GET", "", job.StateToken, ""); rec.Code != http.StatusForbidden {
+			t.Fatalf("state before the ack: %d, want 403", rec.Code)
+		}
+		if rec := call("POST", runnerTok, "/jobs/"+job.RunID+"/ack", job.LeaseID, ""); rec.Code != http.StatusNoContent {
+			t.Fatalf("ack %s: %d %s", phase, rec.Code, rec.Body.String())
 		}
 	}
 	noJob := func(t *testing.T, why string) {
@@ -55,13 +72,6 @@ func TestWorkspaceFlow(t *testing.T) {
 		if rec := call("POST", runnerTok, "/jobs/claim", "", `{"runner":"r2"}`); rec.Code != http.StatusNoContent {
 			t.Fatalf("%s: claim got %d", why, rec.Code)
 		}
-	}
-	stateCall := func(method, query, token, body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(method, runnerapi.StatePrefix+"/"+ws.ID.String()+query, strings.NewReader(body))
-		if token != "" {
-			req.SetBasicAuth(ws.ID.String(), token)
-		}
-		return do(h, req)
 	}
 	state := func(serial int, lineage, resource string) string {
 		return fmt.Sprintf(`{"version":4,"serial":%d,"lineage":%q,"resources":[%s]}`, serial, lineage, resource)

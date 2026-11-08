@@ -20,6 +20,7 @@ const maxLogChunk = 256 << 10 // per request
 // database access and no inbound connectivity. The protocol's rules are app's (jobs.go).
 func (s *Server) runnerRoutes(mux routes) {
 	mux.Handle("POST "+runnerapi.Prefix+"/jobs/claim", s.requireRunner(s.claimJob))
+	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/ack", s.requireRunner(s.jobAck))
 	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/logs", s.requireRunner(s.jobLogs))
 	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/heartbeat", s.requireRunner(s.jobHeartbeat))
 	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/finish", s.requireRunner(s.jobFinish))
@@ -68,6 +69,15 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+func (s *Server) jobAck(w http.ResponseWriter, r *http.Request) {
+	id, _ := pathID(r, "id") // not an id: no such lease, as for an unknown run
+	if err := s.App.AckJob(r.Context(), id, r.Header.Get(runnerapi.LeaseHeader)); err != nil {
+		s.runnerError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) jobLogs(w http.ResponseWriter, r *http.Request) {

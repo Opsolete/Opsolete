@@ -6,7 +6,7 @@
 
 -- name: WorkingRun :one
 SELECT id, status, (vcs_pull_request IS NOT NULL)::boolean AS pull_request FROM runs
-WHERE workspace_id = sqlc.arg(workspace_id)::uuid AND run_working(status) AND lease_id IS NOT NULL;
+WHERE workspace_id = sqlc.arg(workspace_id)::uuid AND run_working(status) AND lease_acked_at IS NOT NULL;
 
 -- name: StateVersions :many
 SELECT v.id, v.serial, v.lineage, v.blob_key, v.md5, v.size, v.indexed,

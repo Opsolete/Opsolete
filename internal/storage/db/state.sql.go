@@ -489,7 +489,7 @@ func (q *Queries) UnlockState(ctx context.Context, arg UnlockStateParams) (int64
 const workingRun = `-- name: WorkingRun :one
 
 SELECT id, status, (vcs_pull_request IS NOT NULL)::boolean AS pull_request FROM runs
-WHERE workspace_id = $1::uuid AND run_working(status) AND lease_id IS NOT NULL
+WHERE workspace_id = $1::uuid AND run_working(status) AND lease_acked_at IS NOT NULL
 `
 
 type WorkingRunRow struct {

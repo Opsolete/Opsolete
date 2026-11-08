@@ -26,6 +26,7 @@ import (
 
 const (
 	LeaseTTL        = 2 * time.Minute  // runners heartbeat well within this
+	AckWindow       = 30 * time.Second // a claim's lease until acknowledged: enough for a slow network, short against LeaseTTL
 	MaxLogBytes     = 10 << 20         // per run
 	MaxArtifactSize = 256 << 20        // saved plans embed the configuration; generous
 	runnerSrcTTL    = 15 * time.Minute // signed archive URL handed to the runner; it downloads right away
@@ -44,12 +45,13 @@ func (a *App) StateToken(workspaceID, runID uuid.UUID) string {
 }
 
 // ClaimJob hands runner the next queued job, JSON-encoded (at most runnerapi.MaxJobSize), or
-// ok=false if there is none. A claimed job that can't be assembled (variables that don't open, no
+// ok=false if there is none. The runner must acknowledge it (AckJob) within AckWindow, or
+// ReapLeases queues it again: the response may never have reached the runner. A claimed job that can't be assembled (variables that don't open, no
 // configuration, VCS unreachable, too big) fails at once rather than waiting for the lease reaper,
 // and the next one is tried.
 func (a *App) ClaimJob(ctx context.Context, runner string) (body []byte, ok bool, err error) {
 	for {
-		j, ok, err := a.Store.ClaimJob(ctx, runner, LeaseTTL)
+		j, ok, err := a.Store.ClaimJob(ctx, runner, AckWindow)
 		if err != nil || !ok {
 			return nil, false, err
 		}
@@ -59,8 +61,14 @@ func (a *App) ClaimJob(ctx context.Context, runner string) (body []byte, ok bool
 			return body, true, nil
 		}
 		a.Log.Error("job variables", "run", j.RunID, "err", err)
-		// not canceled with the long poll: the job is claimed, it must end
-		if _, ferr := a.Store.FinishJob(context.WithoutCancel(ctx), j.RunID, j.LeaseID, "failed", err.Error(), nil, nil, nil); ferr != nil {
+		// not canceled with the long poll: the job is claimed, it must end. The server acknowledges it
+		// itself (no runner will), as FinishJob needs.
+		fctx := context.WithoutCancel(ctx)
+		ferr := a.Store.AckJob(fctx, j.RunID, j.LeaseID, LeaseTTL)
+		if ferr == nil {
+			_, ferr = a.Store.FinishJob(fctx, j.RunID, j.LeaseID, "failed", err.Error(), nil, nil, nil)
+		}
+		if ferr != nil {
 			a.Log.Error("fail job", "run", j.RunID, "err", ferr)
 		} else {
 			a.runEnded(ctx, j.RunID) // "failed" always ends it
@@ -118,6 +126,12 @@ func (a *App) jobSource(ctx context.Context, j storage.Job) (string, error) {
 		return "", nil
 	}
 	return "", errors.New("the workspace has no configuration: add a template or link a repository")
+}
+
+// AckJob: the runner holding lease received the job and starts it; its lease becomes LeaseTTL.
+// Every other job call needs this first. storage.ErrLeaseLost: the lease is gone (unclaimed, canceled).
+func (a *App) AckJob(ctx context.Context, runID uuid.UUID, lease string) error {
+	return a.Store.AckJob(ctx, runID, lease, LeaseTTL)
 }
 
 // Heartbeat extends a job's lease; cancel asks the runner to stop gracefully (it keeps its lease,
@@ -205,9 +219,18 @@ func (a *App) Artifact(ctx context.Context, runID uuid.UUID, lease, name string)
 	return b, err
 }
 
-// ReapLeases fails running jobs whose runner stopped heartbeating (crash, node loss) and cleans up
-// after them. For a background loop: errors are logged.
+// ReapLeases queues again claimed jobs their runner never acknowledged (storage.UnclaimJobs), and
+// fails acknowledged jobs whose runner stopped heartbeating (crash, node loss) and cleans up after
+// them. For a background loop: errors are logged.
 func (a *App) ReapLeases(ctx context.Context) {
+	unclaimed, err := a.Store.UnclaimJobs(ctx)
+	if err != nil {
+		a.Log.Error("unclaim jobs", "err", err)
+	}
+	for _, u := range unclaimed {
+		// a runner whose claims keep showing up here never acknowledges: an old or broken runner
+		a.Log.Warn("job not acknowledged by its runner, queued again", "run", u.RunID, "runner", u.Runner)
+	}
 	ids, err := a.Store.ReapExpiredLeases(ctx)
 	if err != nil {
 		a.Log.Error("reap expired leases", "err", err)

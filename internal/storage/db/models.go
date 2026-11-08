@@ -106,6 +106,7 @@ type Run struct {
 	Runner          *string
 	LeaseID         *string
 	LeaseUntil      *time.Time
+	LeaseAckedAt    *time.Time
 	CancelRequested bool
 	LogBytes        int64
 	LogRemovedAt    *time.Time

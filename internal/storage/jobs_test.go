@@ -65,7 +65,16 @@ func claim(t *testing.T, s *Store, phase string) Job {
 	if err != nil || !ok || j.Phase != phase {
 		t.Fatalf("claim %s: %+v %v %v", phase, j, ok, err)
 	}
+	ack(t, s, j)
 	return j
+}
+
+// ack acknowledges a claimed job, as its runner does before anything else.
+func ack(t *testing.T, s *Store, j Job) {
+	t.Helper()
+	if err := s.AckJob(context.Background(), j.RunID, j.LeaseID, time.Minute); err != nil {
+		t.Fatalf("ack %s: %v", j.RunID, err)
+	}
 }
 
 func status(t *testing.T, s *Store, runID uuid.UUID) string {
@@ -107,6 +116,17 @@ func TestRunLifecycle(t *testing.T) {
 		t.Fatalf("claims: %+v", won)
 	}
 	plan := won[0]
+	if _, err := s.Heartbeat(ctx, run.ID, plan.LeaseID, time.Minute); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("a heartbeat before the ack must be refused, got %v", err)
+	}
+	if _, err := s.FinishJob(ctx, run.ID, plan.LeaseID, "failed", "", nil, nil, nil); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("a finish before the ack must be refused, got %v", err)
+	}
+	if _, _, _, err := s.WorkingRun(ctx, w.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("state credentials before the ack: %v", err)
+	}
+	ack(t, s, plan)
+	ack(t, s, plan) // a retried ack is harmless
 	if working, _, _, err := s.WorkingRun(ctx, w.ID); err != nil || working != run.ID {
 		t.Fatalf("the planning run must hold the workspace's state: %q %v", working, err)
 	}
@@ -240,6 +260,7 @@ func TestFinishKeepsForeignStateLock(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("claim: %v %v", ok, err)
 	}
+	ack(t, s, j)
 	if _, ok, err := s.LockState(ctx, w.ID, "rb", uuid.Nil, []byte(`{"ID":"rb","OpsoleteRun":"`+run.ID.String()+`"}`)); !ok || err != nil {
 		t.Fatalf("lock: %v %v", ok, err)
 	}
@@ -387,14 +408,20 @@ func TestExpiredLeaseIsErrored(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	w, run := newWorkspace(t, s, false)
-	j, ok, err := s.ClaimJob(ctx, "r", 10*time.Millisecond)
+	j, ok, err := s.ClaimJob(ctx, "r", time.Minute)
 	if err != nil || !ok {
 		t.Fatalf("claim: %v %v", ok, err)
+	}
+	if err := s.AckJob(ctx, run.ID, j.LeaseID, 10*time.Millisecond); err != nil {
+		t.Fatal(err)
 	}
 	if _, ok, err := s.LockState(ctx, w.ID, "l1", run.ID, []byte(`{"ID":"l1"}`)); !ok || err != nil {
 		t.Fatalf("lock: %v %v", ok, err)
 	}
 	time.Sleep(50 * time.Millisecond)
+	if u, err := s.UnclaimJobs(ctx); err != nil || len(u) != 0 {
+		t.Fatalf("an acknowledged job must never be unclaimed: %v %v", u, err)
+	}
 	ids, err := s.ReapExpiredLeases(ctx)
 	if err != nil || len(ids) != 1 || ids[0] != run.ID {
 		t.Fatalf("reap: %v %v", ids, err)
@@ -409,6 +436,79 @@ func TestExpiredLeaseIsErrored(t *testing.T) {
 	}
 	if st := status(t, s, run.ID); st != Errored {
 		t.Fatalf("status %s", st)
+	}
+}
+
+// A claim not acknowledged within its lease (the ack window) goes back to the queue, plan and apply
+// phase alike, and the late runner is fenced off; an acknowledged one stays.
+func TestUnclaim(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	_, run := newWorkspace(t, s, false)
+	unclaim := func(want ...uuid.UUID) {
+		t.Helper()
+		time.Sleep(50 * time.Millisecond)
+		u, err := s.UnclaimJobs(ctx)
+		if err != nil || len(u) != len(want) {
+			t.Fatalf("unclaim: %+v %v, want %v", u, err, want)
+		}
+		for i := range want {
+			if u[i].RunID != want[i] || u[i].Runner != "lost" {
+				t.Fatalf("unclaimed %+v, want %v", u[i], want[i])
+			}
+		}
+	}
+	listen, err := s.Pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listen.Release()
+	if _, err := listen.Exec(ctx, "LISTEN "+JobsChannel); err != nil {
+		t.Fatal(err)
+	}
+
+	j, ok, err := s.ClaimJob(ctx, "lost", 10*time.Millisecond)
+	if err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	unclaim(run.ID)
+	if st := status(t, s, run.ID); st != PlanQueued {
+		t.Fatalf("status %s, want plan_queued", st)
+	}
+	if r, hist, _ := s.GetRun(ctx, run.ID); r.Runner != nil || !strings.Contains(*hist[len(hist)-1].Message, "not acknowledged by runner lost") {
+		t.Fatalf("runner %v, history %+v", r.Runner, hist[len(hist)-1])
+	}
+	wait, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if _, err := listen.Conn().WaitForNotification(wait); err != nil {
+		t.Fatalf("unclaim must wake claimers: %v", err)
+	}
+	if err := s.AckJob(ctx, run.ID, j.LeaseID, time.Minute); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("a late ack must find the lease gone: %v", err)
+	}
+
+	// another runner takes it; the plan needs confirmation, then its apply phase is lost the same way
+	plan := claim(t, s, "plan")
+	if _, err := s.FinishJob(ctx, run.ID, plan.LeaseID, "succeeded", "", nil, &runnerapi.Plan{Add: 1}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ConfirmRun(ctx, run.ID, uuid.Nil, "a@b.c"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := s.ClaimJob(ctx, "lost", 10*time.Millisecond); err != nil || !ok {
+		t.Fatalf("claim apply: %v %v", ok, err)
+	}
+	unclaim(run.ID)
+	if st := status(t, s, run.ID); st != ApplyQueued {
+		t.Fatalf("status %s, want apply_queued", st)
+	}
+	apply := claim(t, s, "apply")
+	if err := s.AckJob(ctx, run.ID, apply.LeaseID, 10*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	unclaim()
+	if st := status(t, s, run.ID); st != Applying {
+		t.Fatalf("an acknowledged job was unclaimed: %s", st)
 	}
 }
 

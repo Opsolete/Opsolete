@@ -150,6 +150,12 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 		if json.Unmarshal(rec.Body.Bytes(), &job); rec.Code != 200 || !strings.HasSuffix(runURL, job.RunID) {
 			t.Fatalf("claim: %d %s", rec.Code, rec.Body.String())
 		}
+		req = httptest.NewRequest("POST", runnerapi.Prefix+"/jobs/"+job.RunID+"/ack", nil)
+		req.Header.Set("Authorization", "Bearer "+runnerTok)
+		req.Header.Set(runnerapi.LeaseHeader, job.LeaseID)
+		if rec := do(admin, req); rec.Code != http.StatusNoContent {
+			t.Fatalf("ack: %d", rec.Code)
+		}
 		if job.Env["ARM_CLIENT_SECRET"] != "s3cret-ws" || job.Env["ARM_CLIENT_ID"] != "client-ws" || job.Env["ARM_TENANT_ID"] != "tenant-set" ||
 			job.Env["OPS_DEBUG"] != "1" || job.Vars["tags"] != "from-ws" || len(job.Modules) != 1 || job.Modules[0].Inputs["location"] != "westeurope" {
 			t.Fatalf("job variables: env %v vars %v modules %+v", job.Env, job.Vars, job.Modules)

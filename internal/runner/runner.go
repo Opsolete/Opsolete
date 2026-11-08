@@ -46,8 +46,9 @@ func New(c config.Runner, log *slog.Logger) *Runner {
 }
 
 // Run claims and executes jobs one at a time until ctx is cancelled. Cancelling ctx stops
-// claiming but lets the current job finish; cancelling hard interrupts terraform (SIGINT,
-// so it can release its state lock).
+// claiming but lets a claim in flight and the current job finish (a claim the server committed
+// is a job: dropping it would strand it); cancelling hard interrupts terraform (SIGINT, so it can
+// release its state lock) and a claim in flight.
 func (r *Runner) Run(ctx, hard context.Context) error {
 	if err := hardenProcess(); err != nil {
 		return fmt.Errorf("harden runner process: %w", err)
@@ -58,27 +59,35 @@ func (r *Runner) Run(ctx, hard context.Context) error {
 	}
 	backoff := time.Second
 	for ctx.Err() == nil {
-		job, ok, err := r.claim(ctx)
+		job, ok, err := r.claim(hard)
 		if errors.Is(err, errUnauthorized) {
 			return err
 		}
 		if err != nil {
-			if ctx.Err() != nil {
+			if hard.Err() != nil {
 				break
 			}
-			r.Log.Warn("claim failed, retrying", "err", err, "in", backoff)
+			logf := r.Log.Warn
+			if errors.Is(err, errUnreadableJob) {
+				logf = r.Log.Error
+			}
+			logf("claim failed, retrying", "err", err, "in", backoff)
 			sleep(ctx, backoff)
 			backoff = min(backoff*2, 30*time.Second)
 			continue
 		}
 		backoff = time.Second
-		if ok {
+		if ok && r.ack(hard, job) {
 			r.Execute(hard, job)
 		}
 	}
 	r.Log.Info("runner stopped")
 	return nil
 }
+
+// errUnreadableJob: the server claimed a job for this runner but its response didn't decode. The
+// job isn't acknowledged, so the server queues it again once the ack window passes.
+var errUnreadableJob = errors.New("claimed job unreadable, not acknowledged: the server queues it again")
 
 func (r *Runner) claim(ctx context.Context) (runnerapi.Job, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second) // server long-polls ~20s
@@ -91,13 +100,35 @@ func (r *Runner) claim(ctx context.Context) (runnerapi.Job, bool, error) {
 	switch code {
 	case http.StatusOK:
 		var j runnerapi.Job
-		return j, true, json.Unmarshal(resp, &j)
+		if err := json.Unmarshal(resp, &j); err != nil {
+			return runnerapi.Job{}, false, fmt.Errorf("%w: %v", errUnreadableJob, err)
+		}
+		return j, true, nil
 	case http.StatusNoContent:
 		return runnerapi.Job{}, false, nil
 	case http.StatusUnauthorized:
 		return runnerapi.Job{}, false, errUnauthorized
 	default:
 		return runnerapi.Job{}, false, fmt.Errorf("claim: HTTP %d: %s", code, resp)
+	}
+}
+
+// ack acknowledges a claimed job before any work on it, retrying within the server's ack window
+// (30 s); false: drop the job (the lease is gone, or the server queues it again unacknowledged).
+func (r *Runner) ack(ctx context.Context, job runnerapi.Job) bool {
+	log := r.Log.With("run", job.RunID, "phase", job.Phase)
+	for attempt := 1; ; attempt++ {
+		actx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		code, resp, err := r.call(actx, "/jobs/"+job.RunID+"/ack", job.LeaseID, "application/json", nil)
+		cancel()
+		if err == nil && code == http.StatusNoContent {
+			return true
+		}
+		if (err == nil && code < 500) || attempt == 3 || ctx.Err() != nil {
+			log.Error("acknowledging the job failed; dropped (the server queues it again)", "err", err, "code", code, "body", string(resp))
+			return false
+		}
+		sleep(ctx, time.Duration(attempt)*time.Second)
 	}
 }
 

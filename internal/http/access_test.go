@@ -321,6 +321,7 @@ func accessRows() []accessRow {
 	return []accessRow{
 		// Runner API and state backend first: the claimed job is the only one in the queue.
 		{"POST " + runnerapi.Prefix + "/jobs/claim", runnerapi.Prefix + "/jobs/claim", `{"runner":"acc"}`, onRunner, []int{401, 401, 204}, false},
+		{"POST " + job + "/ack", run + "/ack", "", onRunner, []int{401, 401, 204}, false}, // before any other call for the job
 		{"POST " + job + "/heartbeat", run + "/heartbeat", "", onRunner, []int{401, 401, 204}, false},
 		{"POST " + job + "/logs", run + "/logs", "line\n", onRunner, []int{401, 401, 204}, false},
 		{"POST " + job + "/artifacts/{name}", run + "/artifacts/" + runnerapi.ArtifactPlan, "plan", onRunner, []int{401, 401, 204}, false},

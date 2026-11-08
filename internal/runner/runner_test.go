@@ -38,6 +38,8 @@ type fakeServer struct {
 	stateToken    string            // the state password of the job being executed
 	planning      bool              // the job is a plan phase: like the server, refuse state writes
 	cancelAfter   string            // answer log posts with 202 (user canceled) once the log contains this
+	claim         http.HandlerFunc  // answers POST /jobs/claim
+	calls         []string          // job calls in order: ack, logs, heartbeat, finish
 }
 
 // artifact stores and serves plan artifacts, like the server, only for the job's lease.
@@ -115,8 +117,15 @@ func (f *fakeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.artifact(w, r)
 		return
 	}
+	if r.URL.Path == runnerapi.Prefix+"/jobs/claim" {
+		f.claim(w, r)
+		return
+	}
 	if r.Method == http.MethodGet {
-		if b, ok := f.modules[r.URL.Path]; ok {
+		f.mu.Lock()
+		b, ok := f.modules[r.URL.Path]
+		f.mu.Unlock()
+		if ok {
 			w.Write(b)
 			return
 		}
@@ -130,6 +139,7 @@ func (f *fakeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	body, _ := io.ReadAll(r.Body)
+	f.calls = append(f.calls, r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:])
 	switch {
 	case strings.HasSuffix(r.URL.Path, "/logs"):
 		f.logs.Write(body)
@@ -167,6 +177,8 @@ func testRunner(t *testing.T, srv *httptest.Server) *Runner {
 // server would send ("/..." is resolved against the runner's server URL).
 func (f *fakeServer) module(t *testing.T, tf string) string {
 	path := "/v1/archives/" + strings.ReplaceAll(t.Name(), "/", "_") + ".tar.gz"
+	f.mu.Lock() // the server may be serving the previous job's archive
+	defer f.mu.Unlock()
 	if f.modules == nil {
 		f.modules = map[string][]byte{}
 	}
@@ -572,6 +584,71 @@ func TestClaimLargeJob(t *testing.T) {
 	body = []byte(`{"vars":{"v":"` + strings.Repeat("x", runnerapi.MaxJobSize) + `"}}`)
 	if _, _, err := r.claim(context.Background()); err == nil || !strings.Contains(err.Error(), "over") {
 		t.Fatalf("oversized claim: err = %v", err)
+	}
+}
+
+// A drain while a claim is in flight lets the claim complete: the job it returns is acknowledged
+// before anything else and run to the end, then the runner stops.
+func TestDrainKeepsClaimedJob(t *testing.T) {
+	f := &fakeServer{}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	r := testRunner(t, srv)
+	drain, stop := context.WithCancel(context.Background())
+	defer stop()
+	claims := 0
+	j := job("run-drain", "plan", "apply", f.module(t, helloModule), map[string]any{"greeting": "hi"})
+	f.stateToken, f.planning = j.StateToken, true
+	f.claim = func(w http.ResponseWriter, _ *http.Request) {
+		if claims++; claims > 1 {
+			t.Error("claimed again after the drain")
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		stop() // the drain arrives while the server answers this claim
+		json.NewEncoder(w).Encode(j)
+	}
+	done := make(chan error)
+	go func() { done <- r.Run(drain, context.Background()) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Minute):
+		t.Fatal("runner didn't stop")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.calls) == 0 || f.calls[0] != "ack" || f.calls[len(f.calls)-1] != "finish" || f.finish == nil || f.finish.Status != "succeeded" {
+		t.Fatalf("calls %v, result %+v\n%s", f.calls, f.finish, f.logs.String())
+	}
+}
+
+// A claim response that doesn't decode isn't acknowledged (the server queues the job again); the
+// runner goes on claiming.
+func TestUnreadableClaim(t *testing.T) {
+	f := &fakeServer{}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	r := New(config.Runner{ServerURL: u, Token: "tok", Name: "test"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	drain, stop := context.WithCancel(context.Background())
+	defer stop()
+	claims := 0
+	f.claim = func(w http.ResponseWriter, _ *http.Request) {
+		if claims++; claims == 1 {
+			w.Write([]byte(`{"run_id": "r1", "lease_id": `)) // cut off
+			return
+		}
+		stop()
+		w.WriteHeader(http.StatusNoContent)
+	}
+	if err := r.Run(drain, context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if claims != 2 || len(f.calls) != 0 {
+		t.Fatalf("claims %d, job calls %v: want a second claim and no ack", claims, f.calls)
 	}
 }
 

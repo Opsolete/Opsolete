@@ -83,6 +83,17 @@ func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration
 	return j, true, nil
 }
 
+// AckJob records that the runner holding lease received the job and extends the lease to ttl. Until
+// then the job can't be used (heartbeat, log, finish, artifacts, state: ErrLeaseLost) and UnclaimJobs
+// may hand it to another runner. Acknowledging again is harmless. ErrLeaseLost: the lease is gone.
+func (s *Store) AckJob(ctx context.Context, runID uuid.UUID, lease string, ttl time.Duration) error {
+	n, err := s.q.AckLease(ctx, db.AckLeaseParams{ID: runID, LeaseID: lease, TtlSecs: ttl.Seconds()})
+	if err == nil && n == 0 {
+		err = ErrLeaseLost
+	}
+	return err
+}
+
 // Heartbeat extends the lease of a running job. cancel reports that a user asked to cancel it.
 func (s *Store) Heartbeat(ctx context.Context, runID uuid.UUID, lease string, ttl time.Duration) (cancel bool, err error) {
 	cancel, err = s.q.Heartbeat(ctx, db.HeartbeatParams{ID: runID, LeaseID: lease, TtlSecs: ttl.Seconds()})
@@ -241,6 +252,41 @@ func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 		return "", err
 	}
 	return final, nil
+}
+
+// Unclaimed is a job UnclaimJobs put back in the queue.
+type Unclaimed struct {
+	RunID  uuid.UUID
+	Runner string // the runner that claimed it and never acknowledged it
+}
+
+// UnclaimJobs puts claimed jobs whose runner didn't acknowledge them within their claim's lease (the
+// ack window, see ClaimJob's lease) back in the queue: planning → plan_queued, applying →
+// apply_queued; setStatus ends the lease and wakes claimers. Nothing ran yet (a runner acknowledges
+// before it starts), so this is safe; an acknowledged job is never unclaimed (ReapExpiredLeases).
+func (s *Store) UnclaimJobs(ctx context.Context) ([]Unclaimed, error) {
+	var out []Unclaimed
+	err := s.tx(ctx, func(q *db.Queries) error {
+		rows, err := q.UnackedLeases(ctx)
+		if err != nil {
+			return err
+		}
+		for _, r := range rows {
+			queued := map[string]string{Planning: PlanQueued, Applying: ApplyQueued}[r.Status]
+			if _, err := setStatus(ctx, q, r.ID, queued, "not acknowledged by runner "+r.Runner+": queued again"); err != nil {
+				return err
+			}
+			if err := q.ClearRunner(ctx, r.ID); err != nil {
+				return err
+			}
+			out = append(out, Unclaimed{RunID: r.ID, Runner: r.Runner})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // ReapExpiredLeases errors runs whose runner stopped heartbeating (setStatus releases their state

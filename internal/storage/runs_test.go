@@ -23,6 +23,10 @@ func TestTransitions(t *testing.T) {
 		{Applied, Planning, false},
 		{Canceled, Canceled, false},
 		{Errored, PlanQueued, false},
+		{Planning, PlanQueued, true},  // unclaim only
+		{Applying, ApplyQueued, true}, // unclaim only
+		{Planning, ApplyQueued, true}, // auto-apply, not unclaim
+		{Applying, PlanQueued, false},
 	} {
 		if got := canTransition(c.from, c.to); got != c.ok {
 			t.Errorf("%s → %s: %v, want %v", c.from, c.to, got, c.ok)

@@ -82,10 +82,12 @@ SELECT status FROM runs WHERE id = sqlc.arg(id)::uuid FOR UPDATE;
 SELECT status, workspace_id, remove_template, config_changes FROM runs WHERE id = sqlc.arg(id)::uuid FOR UPDATE;
 
 -- name: UpdateRunStatus :exec
--- Only setStatus calls this. The lease ends unless the run starts working; config_changes goes when it ends.
+-- Only setStatus calls this. The lease ends unless the run starts working (a new claim: not acknowledged
+-- yet); config_changes goes when it ends.
 UPDATE runs SET status = sqlc.arg(status)::text, updated_at = now(),
     lease_id = CASE WHEN sqlc.arg(leased)::boolean THEN lease_id END,
     lease_until = CASE WHEN sqlc.arg(leased)::boolean THEN lease_until END,
+    lease_acked_at = NULL,
     config_changes = CASE WHEN sqlc.arg(ended)::boolean THEN NULL ELSE config_changes END
 WHERE id = sqlc.arg(id)::uuid;
 

@@ -610,6 +610,7 @@ const updateRunStatus = `-- name: UpdateRunStatus :exec
 UPDATE runs SET status = $1::text, updated_at = now(),
     lease_id = CASE WHEN $2::boolean THEN lease_id END,
     lease_until = CASE WHEN $2::boolean THEN lease_until END,
+    lease_acked_at = NULL,
     config_changes = CASE WHEN $3::boolean THEN NULL ELSE config_changes END
 WHERE id = $4::uuid
 `
@@ -621,7 +622,8 @@ type UpdateRunStatusParams struct {
 	ID     uuid.UUID
 }
 
-// Only setStatus calls this. The lease ends unless the run starts working; config_changes goes when it ends.
+// Only setStatus calls this. The lease ends unless the run starts working (a new claim: not acknowledged
+// yet); config_changes goes when it ends.
 func (q *Queries) UpdateRunStatus(ctx context.Context, arg UpdateRunStatusParams) error {
 	_, err := q.db.Exec(ctx, updateRunStatus,
 		arg.Status,

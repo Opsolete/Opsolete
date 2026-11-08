@@ -33,12 +33,14 @@ const (
 
 // transitions is the run state machine: every status a run may move to from each status. A status
 // without any is terminal: the run has ended. setStatus is the only writer of runs.status.
+// Planning → PlanQueued and Applying → ApplyQueued undo a claim its runner never acknowledged:
+// only UnclaimJobs uses them.
 var transitions = map[string][]string{
 	PlanQueued:        {Planning, Canceled},
-	Planning:          {NeedsConfirmation, ApplyQueued, NoChanges, Drifted, Planned, Errored, Canceled},
+	Planning:          {NeedsConfirmation, ApplyQueued, NoChanges, Drifted, Planned, Errored, Canceled, PlanQueued},
 	NeedsConfirmation: {ApplyQueued, Discarded},
 	ApplyQueued:       {Applying, Canceled},
-	Applying:          {Applied, Errored, Canceled},
+	Applying:          {Applied, Errored, Canceled, ApplyQueued},
 }
 
 // ErrTransition: a status change the state machine doesn't allow. It means a bug, or a race the

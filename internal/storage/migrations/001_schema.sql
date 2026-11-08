@@ -276,6 +276,8 @@ CREATE UNIQUE INDEX template_rollouts_open_idx ON template_rollouts (template_id
 --   action: apply | destroy | refresh (refresh-only) | assess (drift check, never applied)
 --           | plan (speculative plan of a pull request, never applied)
 --   lease_id/lease_until: the claiming runner's fencing token, while planning or applying
+--   lease_acked_at: when the runner acknowledged the claim (storage.AckJob); NULL until then, and an
+--           unacknowledged claim goes back to the queue (storage.UnclaimJobs)
 --   remove_template: a destroy run that removes that added template (-target module.<name>)
 --   config_changes: [{module, before, after}] the run changed (configuring templates, rollouts);
 --           put back if it ends before its apply started
@@ -302,6 +304,7 @@ CREATE TABLE runs (
     runner           text,
     lease_id         text,
     lease_until      timestamptz,
+    lease_acked_at   timestamptz,
     cancel_requested boolean NOT NULL DEFAULT false,
     log_bytes        bigint NOT NULL DEFAULT 0,
     log_removed_at   timestamptz,
@@ -315,6 +318,7 @@ CREATE TABLE runs (
     updated_at       timestamptz NOT NULL DEFAULT now(),
     CHECK ((lease_id IS NULL) = (lease_until IS NULL)),
     CHECK (lease_id IS NULL OR run_working(status)),
+    CHECK (lease_acked_at IS NULL OR lease_id IS NOT NULL),
     CHECK (remove_template IS NULL OR action = 'destroy'),
     CHECK (vcs_pull_request IS NULL OR action = 'plan')
 );

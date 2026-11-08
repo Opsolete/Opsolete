@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/opsolete/opsolete/internal/registry"
 	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage"
 )
@@ -35,11 +36,61 @@ func configured(t *testing.T, a *App) (storage.Workspace, storage.Run) {
 }
 
 // leased puts a queued run in planning, held by lease.
+// leased makes run runID's plan phase claimed and acknowledged by runner "r" with lease.
 func leased(t *testing.T, a *App, runID uuid.UUID, lease string) {
 	t.Helper()
 	if _, err := a.Store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'planning', runner = 'r', lease_id = $2,
-		lease_until = now() + interval '1 minute' WHERE id = $1`, runID, lease); err != nil {
+		lease_until = now() + interval '1 minute', lease_acked_at = now() WHERE id = $1`, runID, lease); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A claim nothing acknowledged can't be used (heartbeat, log, artifacts, finish, state) and goes
+// back to the queue once its ack window passes; the ack makes it usable.
+func TestUnacknowledgedClaim(t *testing.T) {
+	a, ctx := testApp(t), context.Background()
+	a.Registry = &registry.Registry{Key: []byte("ack-test")}
+	ws, run := configured(t, a)
+	leased(t, a, run.ID, "l")
+	if _, err := a.Store.Pool.Exec(ctx, `UPDATE runs SET lease_acked_at = NULL WHERE id = $1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Heartbeat(ctx, run.ID, "l"); !errors.Is(err, storage.ErrLeaseLost) {
+		t.Errorf("heartbeat before the ack: %v", err)
+	}
+	if _, err := a.AppendLog(ctx, run.ID, "l", []byte("x")); !errors.Is(err, storage.ErrLeaseLost) {
+		t.Errorf("log before the ack: %v", err)
+	}
+	if err := a.PutArtifact(ctx, run.ID, "l", runnerapi.ArtifactPlan, []byte("x")); !errors.Is(err, storage.ErrLeaseLost) {
+		t.Errorf("artifact before the ack: %v", err)
+	}
+	if _, err := a.FinishJob(ctx, run.ID, "l", runnerapi.FinishRequest{Status: "failed"}); !errors.Is(err, storage.ErrLeaseLost) {
+		t.Errorf("finish before the ack: %v", err)
+	}
+	if _, err := a.StateRun(ctx, ws.ID, ws.ID.String(), a.StateToken(ws.ID, run.ID)); !errors.Is(err, ErrForbidden) {
+		t.Errorf("state credential before the ack: %v", err)
+	}
+
+	// within the window nothing happens; past it the job is queued again
+	a.ReapLeases(ctx)
+	if r, _ := a.Store.RunStatus(ctx, run.ID); r.Status != storage.Planning {
+		t.Fatalf("unclaimed within the window: %s", r.Status)
+	}
+	a.Store.Pool.Exec(ctx, `UPDATE runs SET lease_until = now() - interval '1 second' WHERE id = $1`, run.ID)
+	a.ReapLeases(ctx)
+	if r, _ := a.Store.RunStatus(ctx, run.ID); r.Status != storage.PlanQueued {
+		t.Fatalf("after the window: %s, want plan_queued", r.Status)
+	}
+	if err := a.AckJob(ctx, run.ID, "l"); !errors.Is(err, storage.ErrLeaseLost) {
+		t.Errorf("a late ack: %v", err)
+	}
+
+	leased(t, a, run.ID, "l2") // acknowledged: usable
+	if _, err := a.Heartbeat(ctx, run.ID, "l2"); err != nil {
+		t.Errorf("heartbeat after the ack: %v", err)
+	}
+	if _, err := a.StateRun(ctx, ws.ID, ws.ID.String(), a.StateToken(ws.ID, run.ID)); err != nil {
+		t.Errorf("state credential after the ack: %v", err)
 	}
 }
 

@@ -11,6 +11,26 @@ import (
 	"github.com/google/uuid"
 )
 
+const ackLease = `-- name: AckLease :execrows
+UPDATE runs SET lease_acked_at = COALESCE(lease_acked_at, now()), lease_until = now() + make_interval(secs => $1::float8)
+WHERE id = $2::uuid AND lease_id = $3::text AND run_working(status)
+`
+
+type AckLeaseParams struct {
+	TtlSecs float64
+	ID      uuid.UUID
+	LeaseID string
+}
+
+// Idempotent: a retried acknowledgement keeps the first time.
+func (q *Queries) AckLease(ctx context.Context, arg AckLeaseParams) (int64, error) {
+	result, err := q.db.Exec(ctx, ackLease, arg.TtlSecs, arg.ID, arg.LeaseID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const anyActiveRun = `-- name: AnyActiveRun :one
 SELECT EXISTS (SELECT 1 FROM runs WHERE run_active(status))
 `
@@ -35,7 +55,8 @@ type ClaimableRunRow struct {
 }
 
 // Jobs: runners claiming, heartbeating and finishing run phases. "Working" is status planning or
-// applying, the statuses a lease (lease_id) belongs to.
+// applying, the statuses a lease (lease_id) belongs to. A claim is used (heartbeat, log, finish,
+// artifacts, state) only once acknowledged (lease_acked_at): before that the claim may be undone.
 // The longest-waiting queued phase. SKIP LOCKED: runners never get the same one. Runs of a locked
 // workspace wait, except speculative plans and drift checks, which never take the state lock.
 func (q *Queries) ClaimableRun(ctx context.Context) (ClaimableRunRow, error) {
@@ -45,12 +66,21 @@ func (q *Queries) ClaimableRun(ctx context.Context) (ClaimableRunRow, error) {
 	return i, err
 }
 
+const clearRunner = `-- name: ClearRunner :exec
+UPDATE runs SET runner = NULL WHERE id = $1::uuid
+`
+
+func (q *Queries) ClearRunner(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, clearRunner, id)
+	return err
+}
+
 const expiredLeases = `-- name: ExpiredLeases :many
-SELECT id FROM runs WHERE run_working(status) AND lease_id IS NOT NULL AND lease_until < now()
+SELECT id FROM runs WHERE run_working(status) AND lease_acked_at IS NOT NULL AND lease_until < now()
 FOR UPDATE SKIP LOCKED
 `
 
-// SKIP LOCKED: a run being finished or canceled right now isn't waited for.
+// Acknowledged claims only (unacknowledged ones: UnackedLeases). SKIP LOCKED: a run being finished or canceled right now isn't waited for.
 func (q *Queries) ExpiredLeases(ctx context.Context) ([]uuid.UUID, error) {
 	rows, err := q.db.Query(ctx, expiredLeases)
 	if err != nil {
@@ -73,7 +103,7 @@ func (q *Queries) ExpiredLeases(ctx context.Context) ([]uuid.UUID, error) {
 
 const heartbeat = `-- name: Heartbeat :one
 UPDATE runs SET lease_until = now() + make_interval(secs => $1::float8)
-WHERE id = $2::uuid AND lease_id = $3::text AND run_working(status)
+WHERE id = $2::uuid AND lease_id = $3::text AND run_working(status) AND lease_acked_at IS NOT NULL
 RETURNING cancel_requested
 `
 
@@ -91,7 +121,8 @@ func (q *Queries) Heartbeat(ctx context.Context, arg HeartbeatParams) (bool, err
 }
 
 const holdsLease = `-- name: HoldsLease :one
-SELECT EXISTS (SELECT 1 FROM runs WHERE id = $1::uuid AND lease_id = $2::text AND status = $3::text)
+SELECT EXISTS (SELECT 1 FROM runs WHERE id = $1::uuid AND lease_id = $2::text AND status = $3::text
+    AND lease_acked_at IS NOT NULL)
 `
 
 type HoldsLeaseParams struct {
@@ -123,7 +154,7 @@ func (q *Queries) InsertLog(ctx context.Context, arg InsertLogParams) error {
 
 const leaseLogBytes = `-- name: LeaseLogBytes :one
 UPDATE runs SET lease_until = now() + make_interval(secs => $1::float8), log_bytes = log_bytes + $2::bigint
-WHERE id = $3::uuid AND lease_id = $4::text AND run_working(status)
+WHERE id = $3::uuid AND lease_id = $4::text AND run_working(status) AND lease_acked_at IS NOT NULL
 RETURNING log_bytes, cancel_requested
 `
 
@@ -194,7 +225,7 @@ func (q *Queries) LeaseRun(ctx context.Context, arg LeaseRunParams) (LeaseRunRow
 const lockLeasedRun = `-- name: LockLeasedRun :one
 SELECT r.status, r.action, r.workspace_id, w.auto_apply, (r.rollout_id IS NOT NULL)::boolean AS needs_confirmation, r.cancel_requested
 FROM runs r JOIN workspaces w ON w.id = r.workspace_id
-WHERE r.id = $1::uuid AND r.lease_id = $2::text AND run_working(r.status)
+WHERE r.id = $1::uuid AND r.lease_id = $2::text AND run_working(r.status) AND r.lease_acked_at IS NOT NULL
 FOR UPDATE OF r
 `
 
@@ -332,6 +363,38 @@ func (q *Queries) Stats(ctx context.Context) (StatsRow, error) {
 	var i StatsRow
 	err := row.Scan(&i.Workspaces, &i.OldestQueued)
 	return i, err
+}
+
+const unackedLeases = `-- name: UnackedLeases :many
+SELECT id, status, COALESCE(runner, '')::text AS runner FROM runs WHERE run_working(status) AND lease_id IS NOT NULL AND lease_acked_at IS NULL AND lease_until < now()
+FOR UPDATE SKIP LOCKED
+`
+
+type UnackedLeasesRow struct {
+	ID     uuid.UUID
+	Status string
+	Runner string
+}
+
+// Claims not acknowledged within their lease (the ack window). SKIP LOCKED: an acknowledgement being written waits for nothing.
+func (q *Queries) UnackedLeases(ctx context.Context) ([]UnackedLeasesRow, error) {
+	rows, err := q.db.Query(ctx, unackedLeases)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []UnackedLeasesRow
+	for rows.Next() {
+		var i UnackedLeasesRow
+		if err := rows.Scan(&i.ID, &i.Status, &i.Runner); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const workspaceHasVCS = `-- name: WorkspaceHasVCS :one
