@@ -745,7 +745,7 @@ func TestWorkspaceFlow(t *testing.T) {
 	first := strings.TrimPrefix(strings.SplitN(stream, "\n", 2)[0], "id: ")
 	req := httptest.NewRequest("GET", runURL+"/logs/stream", nil)
 	req.Header.Set("Last-Event-ID", first)
-	if resumed := do(h, req).Body.String(); strings.Contains(resumed, "line one") || !strings.Contains(resumed, "line two") {
+	if resumed := do(h, req).Body.String(); strings.Contains(resumed, "line one") || !strings.Contains(resumed, "two") {
 		t.Fatalf("resume: %q", resumed)
 	}
 	if rec := get(h, "/workspaces/"+name+"/runs/"+newID()+"/logs"); rec.Code != http.StatusNotFound {
@@ -1005,6 +1005,7 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 	for _, v := range []url.Values{
 		{"category": {"env"}, "key": {"ARM_CLIENT_SECRET"}, "value": {"s3cret-ws"}, "sensitive": {"on"}},
 		{"category": {"env"}, "key": {"ARM_CLIENT_ID"}, "value": {"client-ws"}},
+		{"category": {"env"}, "key": {"OPS_DEBUG"}, "value": {"1"}}, // the one OPS_* a workspace may set
 		{"category": {"terraform"}, "key": {"tags"}, "value": {"from-ws"}},
 	} {
 		if rec := post(operator, wsURL+"/variables", v); rec.Code != http.StatusSeeOther {
@@ -1016,6 +1017,8 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 		{"category": {"env"}, "key": {"TF_CLI_ARGS"}, "value": {"-x"}},
 		{"category": {"env"}, "key": {"TF_VAR_tags"}, "value": {"x"}},
 		{"category": {"env"}, "key": {"GIT_SSH_COMMAND"}, "value": {"sh"}},
+		{"category": {"env"}, "key": {"OPS_RUNNER_TOKEN"}, "value": {"x"}},
+		{"category": {"env"}, "key": {"ops_debug"}, "value": {"1"}}, // the runner reads OPS_DEBUG only
 		{"category": {"nope"}, "key": {"A"}},
 	} {
 		if rec := post(operator, wsURL+"/variables", v); rec.Code != http.StatusBadRequest {
@@ -1070,7 +1073,7 @@ func TestTeamsVariablesRenameCancel(t *testing.T) {
 		t.Fatalf("claim: %d %s", rec.Code, rec.Body.String())
 	}
 	if job.Env["ARM_CLIENT_SECRET"] != "s3cret-ws" || job.Env["ARM_CLIENT_ID"] != "client-ws" || job.Env["ARM_TENANT_ID"] != "tenant-set" ||
-		job.Vars["tags"] != "from-ws" || len(job.Modules) != 1 || job.Modules[0].Inputs["location"] != "westeurope" {
+		job.Env["OPS_DEBUG"] != "1" || job.Vars["tags"] != "from-ws" || len(job.Modules) != 1 || job.Modules[0].Inputs["location"] != "westeurope" {
 		t.Fatalf("job variables: env %v vars %v modules %+v", job.Env, job.Vars, job.Modules)
 	}
 

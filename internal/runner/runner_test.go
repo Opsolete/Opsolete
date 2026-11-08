@@ -384,6 +384,24 @@ func TestJobEnv(t *testing.T) {
 	}
 }
 
+// TestCompactWarnings: warnings are one line each, unless the workspace sets OPS_DEBUG.
+func TestCompactWarnings(t *testing.T) {
+	f := &fakeServer{}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	r := testRunner(t, srv)
+	src := f.module(t, helloModule)
+	for _, debug := range []string{"", "1"} {
+		j := job("warn"+debug, "plan", "plan", src, map[string]any{"greeting": "hi"})
+		j.Target, j.Env = []string{"terraform_data.this"}, map[string]string{"OPS_DEBUG": debug} // -target always warns
+		res, logs := f.do(t, r, j)
+		if res.Status != "succeeded" || !strings.Contains(logs, "Resource targeting is in effect") ||
+			strings.Contains(logs, "not for routine use") != (debug == "1") {
+			t.Fatalf("OPS_DEBUG=%q: %+v\n%s", debug, res, logs)
+		}
+	}
+}
+
 // TestAddedTemplates: templates added to a workspace become module blocks, with or without a root
 // module, their outputs root outputs, and form values stay values.
 // TestEscapeValue: nested strings and object keys are escaped too, so list/object inputs can't inject.

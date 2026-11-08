@@ -44,6 +44,9 @@ const maxVariableValue = 64 << 10
 // shortcut: a denylist of the well-known vectors, not a sandbox; isolate runners per job if
 // workspace operators aren't trusted with code execution on runners.
 func reservedEnv(key string) bool {
+	if key == "OPS_DEBUG" { // read from the job by the runner (full warnings), never its own settings
+		return false
+	}
 	k := strings.ToUpper(key)
 	switch k {
 	case "PATH", "HOME", "SHELL", "TMPDIR", "BASH_ENV", "ENV", "NODE_OPTIONS", "PERL5OPT", "RUBYOPT",

@@ -213,7 +213,14 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	for k, v := range env {
 		cmdEnv = append(cmdEnv, k+"="+v)
 	}
-	run := func(args ...string) (bool, error) { return r.tfRun(ctx, dir, cmdEnv, w, args...) }
+	debug, _ := strconv.ParseBool(job.Env["OPS_DEBUG"]) // a workspace env variable: full warnings
+	run := func(args ...string) (bool, error) {
+		if !debug && (args[0] == "plan" || args[0] == "apply") {
+			// one line per warning, e.g. the -target warning of every template removal
+			args = slices.Insert(args, 1, "-compact-warnings")
+		}
+		return r.tfRun(ctx, dir, cmdEnv, w, args...)
+	}
 
 	fmt.Fprintf(w, "==> runner %s: %s phase of %s run %s\n", r.Name, job.Phase, job.Action, job.RunID)
 	if src != "" {
