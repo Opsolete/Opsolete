@@ -1,4 +1,5 @@
 {
+  "$schema": "https://opsolete.github.io/Opsolete/schema/template-1.json",
   "id": "storage-account",
   "name": "Azure Storage Account",
   "description": "A general-purpose v2 storage account with optional blob versioning.",
@@ -7,9 +8,9 @@
     "ref": "v1.0.0"
   },
   "inputs": [
-    { "name": "name", "label": "Account name: 3-24 lowercase letters or digits, unique in Azure.", "type": "string", "required": true, "pattern": "^[a-z0-9]{3,24}$" },
+    { "name": "name", "label": "Account name", "help": "3-24 lowercase letters or digits, unique in Azure.", "type": "string", "required": true, "pattern": "^[a-z0-9]{3,24}$" },
     { "name": "location", "label": "Region", "type": "select", "required": true, "options": ["westeurope", "northeurope"], "default": "westeurope" },
-    { "name": "retention_days", "label": "Soft-delete retention (days)", "type": "number", "default": "7" },
+    { "name": "retention_days", "label": "Soft-delete retention (days)", "type": "number", "default": 7 },
     { "name": "enable_versioning", "label": "Enable blob versioning", "type": "bool" }
   ]
 }

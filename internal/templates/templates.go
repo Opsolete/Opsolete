@@ -33,7 +33,8 @@ type Module struct {
 type Input struct {
 	Name     string   `json:"name"`
 	Label    string   `json:"label"`
-	Type     string   `json:"type"` // string | number | bool | select
+	Help     string   `json:"help,omitempty"` // shown under the field, and as the error when Pattern doesn't match
+	Type     string   `json:"type"`           // string | number | bool | select
 	Required bool     `json:"required"`
 	Pattern  string   `json:"pattern,omitempty"`
 	Options  []Option `json:"options,omitempty"`
@@ -48,10 +49,11 @@ type Input struct {
 	Key bool `json:"key,omitempty"`
 }
 
-// Title and Help split the label at its first ": ", as module variable descriptions often read
-// ("VM name: 1-64 letters…"): the form shows Title and puts Help behind a ?.
-func (in Input) Title() string { t, _, _ := strings.Cut(in.Label, ": "); return cmp.Or(t, in.Name) }
-func (in Input) Help() string  { _, h, _ := strings.Cut(in.Label, ": "); return h }
+// InputTypes are the input types; the JSON Schema's enum must match (TestSchema).
+var InputTypes = []string{"string", "number", "bool", "select"}
+
+// Title is what the form calls the input: its label, else its name.
+func (in Input) Title() string { return cmp.Or(in.Label, in.Name) }
 
 // KeyInput returns the template's key input, nil without one.
 func (t Template) KeyInput() *Input {
@@ -85,7 +87,10 @@ func (o *Option) UnmarshalJSON(b []byte) error {
 	if json.Unmarshal(b, &o.Value) == nil {
 		return nil
 	}
-	return json.Unmarshal(b, (*plainOption)(o))
+	if err := strict(b, (*plainOption)(o)); err != nil {
+		return fmt.Errorf("option: %w", err)
+	}
+	return nil
 }
 
 func (o Option) MarshalJSON() ([]byte, error) {
@@ -324,14 +329,11 @@ func (t Template) check() error {
 			return fmt.Errorf("invalid input name %q (a Terraform variable name: lowercase, digits, underscores; not %s)",
 				in.Name, strings.Join(reserved, ", "))
 		}
-		switch in.Type {
-		case "string", "number", "bool":
-		case "select":
-			if len(in.Options) == 0 {
-				return fmt.Errorf("input %q: select needs options", in.Name)
-			}
-		default:
-			return fmt.Errorf("input %q: unknown type %q", in.Name, in.Type)
+		if !slices.Contains(InputTypes, in.Type) {
+			return fmt.Errorf("input %q: unknown type %q (%s)", in.Name, in.Type, strings.Join(InputTypes, ", "))
+		}
+		if in.Type == "select" && len(in.Options) == 0 {
+			return fmt.Errorf("input %q: select needs options", in.Name)
 		}
 		if in.Sensitive && in.Type != "string" && in.Type != "number" {
 			return fmt.Errorf("input %q: only string and number inputs can be sensitive", in.Name)
@@ -514,7 +516,7 @@ func (t Template) Validate(raw map[string]string) (map[string]any, map[string]st
 		default:
 			// anchored like the browser's pattern attribute: the whole value must match
 			if in.Pattern != "" && !regexp.MustCompile(anchored(in.Pattern)).MatchString(v) {
-				errs[in.Name] = cmp.Or(in.Help(), "Doesn't have the expected format: "+in.Pattern) // the help says it in words
+				errs[in.Name] = cmp.Or(in.Help, "Doesn't have the expected format: "+in.Pattern) // the help says it in words
 				continue
 			}
 			vals[in.Name] = v

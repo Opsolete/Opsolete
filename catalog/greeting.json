@@ -1,4 +1,5 @@
 {
+  "$schema": "https://opsolete.github.io/Opsolete/schema/template-1.json",
   "id": "greeting",
   "name": "Greeting (example)",
   "description": "Example template on the registry's examples/greeting module. Needs no cloud credentials.",

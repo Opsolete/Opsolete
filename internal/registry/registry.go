@@ -333,7 +333,9 @@ func extract(archive []byte, dir string) error {
 // simple form field yet; they are returned in skipped so the builder can warn about them.
 func Inputs(vars []Variable) (inputs []templates.Input, skipped []string) {
 	for _, v := range vars {
-		in := templates.Input{Name: v.Name, Label: v.Description, Required: v.Required}
+		in := templates.Input{Name: v.Name, Required: v.Required}
+		// descriptions often read "VM name: 1-64 letters…": the label, then help for the form
+		in.Label, in.Help, _ = strings.Cut(v.Description, ": ")
 		switch v.Type {
 		case "", "string":
 			in.Type = "string"
@@ -361,7 +363,7 @@ func Inputs(vars []Variable) (inputs []templates.Input, skipped []string) {
 
 // Resolve makes a template's form match the module version it pins: one input per module variable,
 // with name, type, required-ness and regex validation pattern from variables.tf. The template's JSON
-// inputs only add a label, a pattern (replacing the module's), select options or default, and keep their order. JSON inputs the module doesn't declare are
+// inputs only add a label, help, a pattern (replacing the module's), select options or default, and keep their order. JSON inputs the module doesn't declare are
 // dropped. Sensitive variables appear only if the JSON lists them; listed, they are sensitive inputs.
 func Resolve(overrides []templates.Input, vars []Variable) []templates.Input {
 	gen, _ := Inputs(vars)
@@ -385,6 +387,9 @@ func Resolve(overrides []templates.Input, vars []Variable) []templates.Input {
 		}
 		if o.Label != "" {
 			in.Label = o.Label
+		}
+		if o.Help != "" {
+			in.Help = o.Help
 		}
 		if o.Default != "" {
 			in.Default = o.Default

@@ -118,7 +118,7 @@ func TestShowIfBool(t *testing.T) {
 }
 
 func TestDescribe(t *testing.T) {
-	tpl := Template{Inputs: []Input{{Name: "size", Label: "Size: the VM size", Type: "select", Options: []Option{{Label: "Small", Value: "s"}}},
+	tpl := Template{Inputs: []Input{{Name: "size", Label: "Size", Type: "select", Options: []Option{{Label: "Small", Value: "s"}}},
 		{Name: "pw", Sensitive: true}, {Name: "backup", Type: "bool"}, {Name: "disk", Type: "number"}}}
 	got := fmt.Sprint(tpl.Describe(map[string]any{"disk": 1e6, "old": "x", "backup": true, "pw": map[string]any{"sealed": "c2"}, "size": "s"}))
 	if want := "[{size Size Small false} {pw pw  true} {backup backup Yes false} {disk disk 1000000 false} {old old x false}]"; got != want {
@@ -195,20 +195,6 @@ func TestParseLimits(t *testing.T) {
 	for name, files := range map[string]map[string][]byte{"file": big, "count": many, "total": total} {
 		if _, _, err := Parse(files); err == nil || !strings.Contains(err.Error(), "at most") && !strings.Contains(err.Error(), "total over") {
 			t.Errorf("%s limit: %v", name, err)
-		}
-	}
-}
-
-func TestInputTitleHelp(t *testing.T) {
-	for _, c := range []struct{ label, title, help string }{
-		{"VM name: 1-64 letters, digits or -.", "VM name", "1-64 letters, digits or -."},
-		{"Region", "Region", ""},
-		{"", "vm_name", ""},
-		{"a: b: c", "a", "b: c"},
-	} {
-		in := Input{Name: "vm_name", Label: c.label}
-		if in.Title() != c.title || in.Help() != c.help {
-			t.Errorf("%q: got %q / %q, want %q / %q", c.label, in.Title(), in.Help(), c.title, c.help)
 		}
 	}
 }
