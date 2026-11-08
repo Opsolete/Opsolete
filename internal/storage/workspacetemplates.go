@@ -36,9 +36,10 @@ func (s *Store) AllTemplateInputs(ctx context.Context) ([]TemplateInputs, error)
 	return out, err
 }
 
-// ResealInputs replaces an added template's inputs, unless they changed since they were read.
+// ResealInputs replaces an added template's inputs, unless they changed since they were read
+// (ErrNotFound).
 func (s *Store) ResealInputs(ctx context.Context, workspaceID uuid.UUID, name string, old, inputs []byte) error {
-	return s.q.ResealInputs(ctx, db.ResealInputsParams{WorkspaceID: workspaceID, Name: name, Old: old, Inputs: inputs})
+	return affected(s.q.ResealInputs(ctx, db.ResealInputsParams{WorkspaceID: workspaceID, Name: name, Old: old, Inputs: inputs}))
 }
 
 // WorkspaceTemplates lists a workspace's added templates by name.

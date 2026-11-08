@@ -82,7 +82,7 @@ func loadSnapshot(cat *templates.Catalog, tc storage.TemplateCatalog) error {
 
 // SyncCatalog brings cat to the head of the configured branch. A commit with an invalid template is
 // recorded as the sync error and not loaded: the catalog keeps the last good commit.
-func SyncCatalog(ctx context.Context, st *storage.Store, key []byte, cat *templates.Catalog) error {
+func SyncCatalog(ctx context.Context, st *storage.Store, open OpenToken, cat *templates.Catalog) error {
 	tc, err := st.GetTemplateCatalog(ctx)
 	if errors.Is(err, storage.ErrNotFound) { // disconnected, maybe by another instance
 		if mode, _ := cat.Source(); mode != "" {
@@ -93,7 +93,7 @@ func SyncCatalog(ctx context.Context, st *storage.Store, key []byte, cat *templa
 	if err != nil {
 		return err
 	}
-	head, files, err := fetchCatalog(ctx, st, key, tc)
+	head, files, err := fetchCatalog(ctx, st, open, tc)
 	if err == nil && head == tc.Commit {
 		ok, err := st.CheckedTemplateCatalog(ctx, tc)
 		switch {
@@ -141,8 +141,8 @@ func SyncCatalog(ctx context.Context, st *storage.Store, key []byte, cat *templa
 }
 
 // fetchCatalog returns the branch head and, unless it's the commit already loaded, its template files.
-func fetchCatalog(ctx context.Context, st *storage.Store, key []byte, tc storage.TemplateCatalog) (string, map[string][]byte, error) {
-	c, err := catalogConn(ctx, st, key, tc)
+func fetchCatalog(ctx context.Context, st *storage.Store, open OpenToken, tc storage.TemplateCatalog) (string, map[string][]byte, error) {
+	c, err := catalogConn(ctx, st, open, tc)
 	if err != nil {
 		return "", nil, err
 	}
@@ -164,36 +164,36 @@ func fetchCatalog(ctx context.Context, st *storage.Store, key []byte, tc storage
 	return head, catalogFiles(files, tc.Dir), nil
 }
 
-func catalogConn(ctx context.Context, st *storage.Store, key []byte, tc storage.TemplateCatalog) (Conn, error) {
+func catalogConn(ctx context.Context, st *storage.Store, open OpenToken, tc storage.TemplateCatalog) (Conn, error) {
 	sc, err := st.GetVCSConnection(ctx, tc.ConnectionID)
 	if err != nil {
 		return Conn{}, fmt.Errorf("VCS connection: %w", err)
 	}
-	return ConnFor(key, sc)
+	return ConnFor(open, sc)
 }
 
 // SaveTemplate writes t to the catalog's repository, as the editor mode says: a commit to the branch
 // (then reloads the catalog), or a pull request (returned: its URL). The commit is based on the loaded
 // one, so the provider refuses to overwrite a change made in Git since it was loaded.
-func SaveTemplate(ctx context.Context, st *storage.Store, key []byte, cat *templates.Catalog, t templates.Template, by string) (string, error) {
+func SaveTemplate(ctx context.Context, st *storage.Store, open OpenToken, cat *templates.Catalog, t templates.Template, by string) (string, error) {
 	body, err := templates.Encode(t)
 	if err != nil {
 		return "", err
 	}
-	return writeTemplate(ctx, st, key, cat, t.ID, t.Name, body, by)
+	return writeTemplate(ctx, st, open, cat, t.ID, t.Name, body, by)
 }
 
 // DeleteTemplate removes template id's file from the catalog's repository, like SaveTemplate.
-func DeleteTemplate(ctx context.Context, st *storage.Store, key []byte, cat *templates.Catalog, id, by string) (string, error) {
+func DeleteTemplate(ctx context.Context, st *storage.Store, open OpenToken, cat *templates.Catalog, id, by string) (string, error) {
 	t, ok := cat.Get(id)
 	if !ok {
 		return "", fmt.Errorf("template %q does not exist", id)
 	}
-	return writeTemplate(ctx, st, key, cat, id, t.Name, nil, by)
+	return writeTemplate(ctx, st, open, cat, id, t.Name, nil, by)
 }
 
 // writeTemplate commits body as template id's file; a nil body deletes it.
-func writeTemplate(ctx context.Context, st *storage.Store, key []byte, cat *templates.Catalog, id, name string, body []byte, by string) (string, error) {
+func writeTemplate(ctx context.Context, st *storage.Store, open OpenToken, cat *templates.Catalog, id, name string, body []byte, by string) (string, error) {
 	tc, err := st.GetTemplateCatalog(ctx)
 	if errors.Is(err, storage.ErrNotFound) {
 		return "", errors.New("the template catalog is not a Git repository")
@@ -208,7 +208,7 @@ func writeTemplate(ctx context.Context, st *storage.Store, key []byte, cat *temp
 	if base == "" {
 		return "", errors.New("the catalog isn't loaded from the repository yet: see Settings → Templates")
 	}
-	c, err := catalogConn(ctx, st, key, tc)
+	c, err := catalogConn(ctx, st, open, tc)
 	if err != nil {
 		return "", err
 	}
@@ -248,7 +248,7 @@ func writeTemplate(ctx context.Context, st *storage.Store, key []byte, cat *temp
 	}
 	if err := c.commitFile(ctx, tc.Repo, branch, base, file, body, isNew, msg); err != nil {
 		if se, ok := errors.AsType[*StatusError](err); ok && se.Code == http.StatusConflict || isNew && ok && se.Code == http.StatusUnprocessableEntity {
-			SyncCatalog(ctx, st, key, cat)
+			SyncCatalog(ctx, st, open, cat)
 			return "", fmt.Errorf("the provider refused the commit; if %s changed in Git since it was loaded, the catalog is reloaded now: review and save again. %w", file, err)
 		}
 		return "", tokenHint(err)
@@ -257,7 +257,7 @@ func writeTemplate(ctx context.Context, st *storage.Store, key []byte, cat *temp
 		pr, err := c.openPR(ctx, tc.Repo, branch, tc.Branch, title, msg)
 		return pr, tokenHint(err)
 	}
-	if err := SyncCatalog(ctx, st, key, cat); err != nil {
+	if err := SyncCatalog(ctx, st, open, cat); err != nil {
 		return "", fmt.Errorf("committed %s to %s, but reloading the catalog failed (it retries every minute): %w", file, tc.Branch, err)
 	}
 	return "", nil

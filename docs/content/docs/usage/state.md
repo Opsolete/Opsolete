@@ -40,7 +40,7 @@ The runner sets `TF_HTTP_USERNAME`/`TF_HTTP_PASSWORD` to the run's own state cre
 
 ## Security
 
-State files contain secrets in plain text, and the server can read them. With `SECRET_KEY` set, the server encrypts every state file and saved plan (AES-256-GCM) before it uploads them, so read access to the bucket alone exposes nothing; files written before `SECRET_KEY` was set stay plaintext until the workspace saves state again. Still give the server an identity that can only access the state container, and turn on encryption at rest in the store. Cloud credentials in [variables]({{< relref "variables" >}}) are encrypted with `SECRET_KEY` and only handed to the runner of a claimed job.
+State files contain secrets in plain text, and the server can read them. The server encrypts every state file and saved plan with `SECRET_KEY` (AES-256-GCM) before it uploads them, so read access to the bucket alone exposes nothing; it refuses to read a file in `STATE_STORE` that it didn't encrypt. Still give the server an identity that can only access the state container, and turn on encryption at rest in the store. Cloud credentials in [variables]({{< relref "variables" >}}) are encrypted with `SECRET_KEY` and only handed to the runner of a claimed job.
 
 {{< callout type="warning" >}}
 Without `SECRET_KEY`, encrypted state can't be recovered. See [Backing up `SECRET_KEY`]({{< relref "/docs/operations/secret-key" >}}).

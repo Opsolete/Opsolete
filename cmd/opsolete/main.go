@@ -3,7 +3,7 @@
 //	opsolete                          serve the web UI, registry and runner API
 //	opsolete runner                   execute deployments (no database needed)
 //	opsolete token <name>             create a registry API token
-//	opsolete rotate-key               re-seal everything from SECRET_KEY_PREVIOUS to SECRET_KEY (server stopped)
+//	opsolete rotate-key               re-seal everything from SECRET_KEY_PREVIOUS to SECRET_KEY
 package main
 
 import (
@@ -32,6 +32,7 @@ import (
 	httpserver "github.com/opsolete/opsolete/internal/http"
 	"github.com/opsolete/opsolete/internal/registry"
 	"github.com/opsolete/opsolete/internal/runner"
+	"github.com/opsolete/opsolete/internal/secrets"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
 	"github.com/opsolete/opsolete/internal/vcs"
@@ -79,15 +80,20 @@ func openStore(ctx context.Context, cfg config.Config) (*storage.Store, error) {
 	return store, nil
 }
 
-// rotateKey re-seals everything sealed with SECRET_KEY_PREVIOUS under SECRET_KEY. Sessions, state
-// credentials and signed URLs are derived from SECRET_KEY too: users sign in again afterwards.
+// rotateKey re-seals everything sealed with SECRET_KEY_PREVIOUS under SECRET_KEY, while the servers
+// run with both. Sessions, state credentials and signed URLs are derived from SECRET_KEY too: users
+// sign in again after the restart with the new key.
 func rotateKey(log *slog.Logger) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return err
 	}
-	if cfg.SecretKeyPrevious == "" || cfg.SecretKeyPrevious == cfg.SecretKey {
-		return errors.New("set SECRET_KEY to the new key and SECRET_KEY_PREVIOUS to the current one")
+	if cfg.SecretKeyPrevious == "" {
+		return errors.New("set SECRET_KEY to the new key and SECRET_KEY_PREVIOUS to the old one")
+	}
+	keys, err := secrets.New(cfg.SecretKey, cfg.SecretKeyPrevious)
+	if err != nil {
+		return err
 	}
 	ctx := context.Background()
 	store, err := openStore(ctx, cfg)
@@ -102,14 +108,14 @@ func rotateKey(log *slog.Logger) error {
 		}
 		defer state.Close()
 	}
-	n, err := app.RotateKey(ctx, store, state, vcs.Key(cfg.SecretKeyPrevious), vcs.Key(cfg.SecretKey), log)
+	n, err := app.RotateKey(ctx, store, state, keys, log)
 	if err != nil {
 		return fmt.Errorf("re-sealed %d values, then: %w (fix it and run rotate-key again)", n, err)
 	}
 	if err := store.Audit(ctx, "cli", "rotate secret key", map[string]any{"principal": map[string]any{"type": "system"}, "resealed": n}); err != nil {
 		return fmt.Errorf("re-sealed %d values, but not audited: %w", n, err)
 	}
-	log.Info("SECRET_KEY rotated: start the server with the new SECRET_KEY; keep SECRET_KEY_PREVIOUS set only to verify older audit entries", "resealed", n)
+	log.Info("SECRET_KEY rotated: nothing is sealed with SECRET_KEY_PREVIOUS any more; remove it from the servers (or keep it only to verify audit entries from before the rotation)", "resealed", n)
 	return nil
 }
 
@@ -218,19 +224,17 @@ func serve(log *slog.Logger) error {
 	}
 
 	vcsOn := cfg.Registry || cfg.Deployments // modules for the registry, workspaces and the catalog for deployments
-	ops := &app.App{Store: store, Blobs: state, SecretKey: vcs.Key(cfg.SecretKey), Templates: tpls, Registry: reg, Log: log,
+	keys, err := secrets.New(cfg.SecretKey, cfg.SecretKeyPrevious)
+	if err != nil {
+		return err
+	}
+	ops := &app.App{Store: store, Blobs: state, Secrets: keys, Templates: tpls, Registry: reg, Log: log,
 		RunLogRetention: time.Duration(cfg.RunLogRetentionDays) * 24 * time.Hour,
 		Notify:          &app.Notifier{DB: store.Pool.Config().ConnConfig, Log: log}}
 	server := httpserver.New(ops, authn, httpserver.Features{
 		Deployments: cfg.Deployments, Registry: cfg.Registry, Editor: cfg.TemplateEditor, VCS: vcsOn})
 	server.Organization = cfg.Organization
 	server.RunnerToken = cfg.RunnerToken
-	// values sealed before they were bound to their row only open after this
-	if n, err := vcs.Reseal(ctx, store, ops.SecretKey); err != nil {
-		return fmt.Errorf("re-seal variables and VCS tokens: %w", err)
-	} else if n > 0 {
-		log.Info("re-sealed variables and VCS tokens", "count", n)
-	}
 	// A catalog in Git (Settings → Templates) replaces TEMPLATES_DIR: its last loaded commit now, then what the leader syncs.
 	if cfg.Deployments {
 		if err := vcs.LoadCatalog(ctx, store, tpls); err != nil {
@@ -290,7 +294,7 @@ func jobs(cfg config.Config, a *app.App) []app.Job {
 	var js []app.Job
 	if cfg.Registry {
 		js = append(js, app.Job{Name: "vcs modules", Every: 5 * time.Minute,
-			Run: func(ctx context.Context) error { return vcs.Poll(ctx, a.Store, a.SecretKey, a.Log) }})
+			Run: func(ctx context.Context) error { return vcs.Poll(ctx, a.Store, a.OpenToken, a.Log) }})
 	}
 	if !cfg.Deployments {
 		return js
@@ -308,9 +312,9 @@ func jobs(cfg config.Config, a *app.App) []app.Job {
 		app.Job{Name: "retention", Every: time.Hour,
 			Run: func(ctx context.Context) error { _, err := a.Retention(ctx); return err }},
 		app.Job{Name: "vcs runs", Every: time.Minute,
-			Run: func(ctx context.Context) error { return vcs.PollRuns(ctx, a.Store, a.SecretKey, a.Log) }},
+			Run: func(ctx context.Context) error { return vcs.PollRuns(ctx, a.Store, a.OpenToken, a.Log) }},
 		app.Job{Name: "catalog sync", Every: time.Minute,
-			Run: func(ctx context.Context) error { return vcs.SyncCatalog(ctx, a.Store, a.SecretKey, a.Templates) }},
+			Run: func(ctx context.Context) error { return vcs.SyncCatalog(ctx, a.Store, a.OpenToken, a.Templates) }},
 		// every replica serves templates from memory: reload them when the leader (or an edit) changed the snapshot
 		app.Job{Name: "catalog reload", Every: 10 * time.Second, Local: true,
 			Run: func(ctx context.Context) error { return vcs.ReloadCatalog(ctx, a.Store, a.Templates) }},

@@ -6,12 +6,11 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/opsolete/opsolete/internal/templates"
-	"github.com/opsolete/opsolete/internal/vcs"
 )
 
 // A sensitive input left empty keeps its stored value; one with a rejected new value keeps the error.
 func TestSealInputsKeepsRejectedError(t *testing.T) {
-	s := &App{SecretKey: vcs.Key("test-secret-key")}
+	s := &App{Secrets: keys("test-secret-key", "")}
 	tpl := templates.Template{Inputs: []templates.Input{{Name: "pin", Type: "number", Required: true, Sensitive: true}}}
 	old := map[string]any{"pin": map[string]any{"sealed": "c3RvcmVk"}}
 

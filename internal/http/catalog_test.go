@@ -288,13 +288,13 @@ func TestTemplateCatalogInGit(t *testing.T) {
 		g.held, g.release = held, release
 		g.mu.Unlock()
 		slow := make(chan error)
-		go func() { slow <- vcs.SyncCatalog(ctx, store, app.App.SecretKey, app.App.Templates) }()
+		go func() { slow <- vcs.SyncCatalog(ctx, store, app.App.OpenToken, app.App.Templates) }()
 		older := <-held
 		g.mu.Lock()
 		g.commit("main", map[string]string{"catalog/web.json": tplJSON("web-"+id, "Newer")})
 		newer := g.branches["main"]
 		g.mu.Unlock()
-		if err := vcs.SyncCatalog(ctx, store, other.App.SecretKey, other.App.Templates); err != nil {
+		if err := vcs.SyncCatalog(ctx, store, other.App.OpenToken, other.App.Templates); err != nil {
 			t.Fatal(err)
 		}
 		close(release)
@@ -312,7 +312,7 @@ func TestTemplateCatalogInGit(t *testing.T) {
 		g.mu.Lock()
 		g.commit("main", map[string]string{"catalog/web.json": tplJSON("web-"+id, "From the leader")})
 		g.mu.Unlock()
-		if err := vcs.SyncCatalog(ctx, store, app.App.SecretKey, app.App.Templates); err != nil {
+		if err := vcs.SyncCatalog(ctx, store, app.App.OpenToken, app.App.Templates); err != nil {
 			t.Fatal(err)
 		}
 		if tpl, _ := other.App.Templates.Get("web-" + id); tpl.Name == "From the leader" {

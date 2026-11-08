@@ -11,12 +11,11 @@ import (
 
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
-	"github.com/opsolete/opsolete/internal/vcs"
 )
 
 // A rollout upgrades stale remote uses with their inputs plus new defaults, and skips the rest.
 func TestRolloutPlan(t *testing.T) {
-	a := &App{SecretKey: vcs.Key("test-secret-key")}
+	a := &App{Secrets: keys("test-secret-key", "")}
 	tpl := templates.Template{ID: "sa", Module: templates.Module{Source: "git::x", Ref: "v3"}, Inputs: []templates.Input{
 		{Name: "name", Type: "string", Required: true},
 		{Name: "tls", Type: "select", Required: true, Options: []templates.Option{{Value: "1.2"}, {Value: "1.3"}}, Default: "1.3"}, // new in v3

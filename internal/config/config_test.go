@@ -20,6 +20,13 @@ func TestLoad(t *testing.T) {
 		t.Fatal("expected error without SECRET_KEY")
 	}
 	t.Setenv("SECRET_KEY", "test-secret-key-of-at-least-32-chars")
+	for _, bad := range []string{"short", "test-secret-key-of-at-least-32-chars"} {
+		t.Setenv("SECRET_KEY_PREVIOUS", bad)
+		if _, err := Load(); err == nil {
+			t.Errorf("SECRET_KEY_PREVIOUS %q should be rejected", bad)
+		}
+	}
+	t.Setenv("SECRET_KEY_PREVIOUS", "")
 	c, err := Load()
 	if err != nil {
 		t.Fatal(err)

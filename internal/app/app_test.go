@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"gocloud.dev/blob/memblob"
 
+	"github.com/opsolete/opsolete/internal/secrets"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/testdb"
 )
@@ -27,8 +28,16 @@ func testApp(t *testing.T) *App {
 	if err := s.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	return &App{Store: s, Blobs: memblob.OpenBucket(nil), SecretKey: []byte("0123456789abcdef0123456789abcdef"),
+	return &App{Store: s, Blobs: memblob.OpenBucket(nil), Secrets: keys("test-secret-key", ""),
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+}
+
+func keys(current, previous string) *secrets.Keyring {
+	k, err := secrets.New(current, previous)
+	if err != nil {
+		panic(err)
+	}
+	return k
 }
 
 func uniq(prefix string) string { return prefix + strings.ToLower(rand.Text()[:10]) } // several per test

@@ -3,21 +3,22 @@ title: Backing up SECRET_KEY
 weight: 5
 ---
 
-With `SECRET_KEY` set, the state files in `STATE_STORE` can only be read with that key. Back up the bucket and the database as usual, but neither backup restores state without the key.
+The state files in `STATE_STORE` can only be read with that key. Back up the bucket and the database as usual, but neither backup restores state without the key.
 
 ## Risks
 
 - **Lost key = lost state.** If `SECRET_KEY` is lost, every encrypted state version is unreadable, and so are variables and VCS tokens. Terraform then no longer knows which resources it manages: you'd have to import them all again by hand.
-- **Changed key = same as lost.** After just replacing the key, reading old state fails with "SECRET_KEY changed?". Never rotate the key by just replacing it: use `opsolete rotate-key` (below).
+- **Changed key = same as lost.** After just replacing the key, reading old state fails with "sealed with key …, which is neither SECRET_KEY nor SECRET_KEY_PREVIOUS". Never rotate the key by just replacing it: follow the steps below.
 - **One key for everything.** The same key protects state files, plans, variables and VCS tokens, so anyone who has it and read access to the bucket or the database can read all of them. Store it as carefully as the cloud credentials themselves.
 
 ## Rotating it
 
-1. Wait until no run is active (or discard them), then stop the server (all replicas). Runners can stay up.
-2. Back up the database and `STATE_STORE`.
-3. Run `opsolete rotate-key` with the server's usual environment, but `SECRET_KEY` set to the new key and `SECRET_KEY_PREVIOUS` to the current one. It re-seals variables, VCS tokens, sensitive template inputs and every file in `STATE_STORE` (state versions, saved plans) under the new key, and records the rotation in the audit log. It refuses while a run is active. If it stops halfway, run it again: values already under the new key are skipped. Values that open with neither key were already unreadable; they are logged and left as they are.
-4. Start the server with the new `SECRET_KEY`. Everyone signs in again, and `terraform login` tokens keep working.
-5. Keep `SECRET_KEY_PREVIOUS` set on the server only if you want the audit log page to verify entries from before the rotation: it isn't used for anything else. Entries written after the rotation must carry the new key, so the old key can't forge them.
+Every encrypted value records which key encrypted it (a key id: a hash that doesn't reveal the key), and the server decrypts with `SECRET_KEY` or `SECRET_KEY_PREVIOUS`, so rotating needs restarts, no downtime. Runners aren't involved.
+
+1. Back up the database and `STATE_STORE`.
+2. Restart every server replica with `SECRET_KEY` set to the new key and `SECRET_KEY_PREVIOUS` to the old one. They read values under either key and write new ones under the new key. Everyone signs in again (sessions are signed with `SECRET_KEY`; replicas still on the old key reject the new ones until they restart), and `terraform login` tokens keep working.
+3. Run `opsolete rotate-key` with the same environment, while the servers keep running. It re-encrypts everything not yet under the new key: variables, VCS tokens, sensitive template inputs and every file in `STATE_STORE` (state versions, saved plans), and records the rotation in the audit log. It refuses while a run is active, because a run keeps a copy of encrypted template inputs that it puts back if it fails; wait until runs end (or discard them). If a run starts or a value changes while it works, or it stops halfway, it says so: run it again, values already under the new key are skipped. Values that open with neither key were already unreadable; they are logged and left as they are.
+4. When its last log line says so, remove `SECRET_KEY_PREVIOUS` from the servers and restart them. Keep it set only if you want the audit log page to verify entries from before the rotation. Entries written after the rotation must carry the new key, so the old key can't forge them.
 
 Store the new key as described below, and keep the old one until you've checked that state reads.
 

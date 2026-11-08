@@ -34,7 +34,7 @@ func (a *App) vcsConn(ctx context.Context, connID uuid.UUID, workspace, project 
 		}
 		return vcs.Conn{}, invalid("vcs_connection", fmt.Sprintf("workspace %q may not link repositories through VCS connection %s: ask an admin", workspace, sc.Name))
 	}
-	return vcs.ConnFor(a.SecretKey, sc)
+	return vcs.ConnFor(a.OpenToken, sc)
 }
 
 // pinCommit records the commit a plan job runs, unless the run was queued with its commit: the head

@@ -71,7 +71,7 @@ func (a *App) SetTemplateCatalog(ctx context.Context, actor Actor, in CatalogSet
 	} else if err != nil {
 		return err
 	}
-	c, err := vcs.ConnFor(a.SecretKey, sc)
+	c, err := vcs.ConnFor(a.OpenToken, sc)
 	if err == nil {
 		_, err = c.Head(ctx, tc.Repo, tc.Branch)
 	}
@@ -82,7 +82,7 @@ func (a *App) SetTemplateCatalog(ctx context.Context, actor Actor, in CatalogSet
 		return err
 	}
 	a.Log.Info("template catalog set", "connection", sc.Name, "repo", tc.Repo, "branch", tc.Branch, "dir", tc.Dir, "mode", tc.Mode, "user", actor.Email)
-	if err := vcs.SyncCatalog(ctx, a.Store, a.SecretKey, a.Templates); err != nil {
+	if err := vcs.SyncCatalog(ctx, a.Store, a.OpenToken, a.Templates); err != nil {
 		return &ValidationError{Message: "Saved, but loading the templates failed: " + err.Error()}
 	}
 	return nil
@@ -99,7 +99,7 @@ func (a *App) SyncCatalog(ctx context.Context, actor Actor) error {
 }
 
 func (a *App) syncCatalog(ctx context.Context) {
-	if err := vcs.SyncCatalog(ctx, a.Store, a.SecretKey, a.Templates); err != nil {
+	if err := vcs.SyncCatalog(ctx, a.Store, a.OpenToken, a.Templates); err != nil {
 		a.Log.Warn("template catalog sync", "err", err) // recorded as the sync error
 	}
 }
@@ -230,7 +230,7 @@ func (a *App) SaveCatalogTemplate(ctx context.Context, actor Actor, t templates.
 		return t, "", err
 	}
 	if mode, _ := a.Templates.Source(); mode != "" {
-		pr, err = vcs.SaveTemplate(ctx, a.Store, a.SecretKey, a.Templates, t, actor.Email)
+		pr, err = vcs.SaveTemplate(ctx, a.Store, a.OpenToken, a.Templates, t, actor.Email)
 	} else {
 		err = a.Templates.Save(t, editing)
 	}
@@ -252,7 +252,7 @@ func (a *App) DeleteCatalogTemplate(ctx context.Context, actor Actor, id string)
 		return t, "", ErrNotFound
 	}
 	if mode, _ := a.Templates.Source(); mode != "" {
-		pr, err = vcs.DeleteTemplate(ctx, a.Store, a.SecretKey, a.Templates, t.ID, actor.Email)
+		pr, err = vcs.DeleteTemplate(ctx, a.Store, a.OpenToken, a.Templates, t.ID, actor.Email)
 	} else {
 		err = a.Templates.Delete(t.ID)
 	}

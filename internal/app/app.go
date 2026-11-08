@@ -12,6 +12,7 @@ import (
 	"gocloud.dev/blob"
 
 	"github.com/opsolete/opsolete/internal/registry"
+	"github.com/opsolete/opsolete/internal/secrets"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
 )
@@ -20,7 +21,7 @@ type App struct {
 	Store *storage.Store
 	// Blobs is the state store: state files and run artifacts, sealed (any gocloud.dev/blob URL).
 	Blobs     *blob.Bucket
-	SecretKey []byte // from SECRET_KEY: seals template inputs, variables, VCS tokens and blobs
+	Secrets   *secrets.Keyring // SECRET_KEY (and SECRET_KEY_PREVIOUS): seals template inputs, variables, VCS tokens and blobs (sealing.go)
 	Templates *templates.Catalog
 	Registry  *registry.Registry
 	// RegistryEnabled: templates pinning a module of this registry take their inputs from its variables.

@@ -39,8 +39,9 @@ type Config struct {
 	// SecretKey encrypts VCS access tokens and variables in Postgres, and state files and saved plans
 	// in STATE_STORE, and signs the audit log. Required.
 	SecretKey string
-	// SecretKeyPrevious is the SECRET_KEY being replaced: `opsolete rotate-key` re-seals from it, and
-	// the server verifies the audit entries signed before the rotation with it. Optional.
+	// SecretKeyPrevious is the SECRET_KEY being replaced: the server still opens values sealed with
+	// it (`opsolete rotate-key` re-seals them) and verifies the audit entries signed before the
+	// rotation with it. Optional.
 	SecretKeyPrevious string
 	// RunnerToken authenticates runners (their OPS_RUNNER_TOKEN). The operator generates it, so it
 	// exists before the first deploy. Required by the server when deployments are on.
@@ -85,6 +86,9 @@ func Load() (Config, error) {
 	}
 	if len(c.SecretKey) < 32 {
 		return c, errors.New("SECRET_KEY is required and must be at least 32 characters (e.g. openssl rand -base64 32)")
+	}
+	if c.SecretKeyPrevious != "" && (len(c.SecretKeyPrevious) < 32 || c.SecretKeyPrevious == c.SecretKey) {
+		return c, errors.New("SECRET_KEY_PREVIOUS, when set, must be at least 32 characters and differ from SECRET_KEY")
 	}
 	var err error
 	if c.StaleLockTimeout, err = time.ParseDuration(getenv("STALE_LOCK_TIMEOUT", "15m")); err != nil || c.StaleLockTimeout <= 0 {

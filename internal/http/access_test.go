@@ -71,7 +71,7 @@ func TestAccessMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := &app.App{Store: store, Blobs: memblob.OpenBucket(nil), SecretKey: vcs.Key("test-secret-key"), Templates: tpls, Registry: testReg,
+	a := &app.App{Store: store, Blobs: memblob.OpenBucket(nil), Secrets: testKeys, Templates: tpls, Registry: testReg,
 		Log: testLog(t)}
 	all := Features{Deployments: true, Registry: true, Editor: true, VCS: true}
 	server := func(au *auth.Auth) *Server {
@@ -194,7 +194,7 @@ func TestAccessMatrix(t *testing.T) {
 		archive := registrytest.TarGz(t, map[string]string{"main.tf": `variable "x" {}`})
 		must(t, upload(admin, map[string]string{"namespace": f.ns, "name": "net", "system": "azurerm", "version": "1.0.0"}, archive), http.StatusSeeOther, "module")
 		conn := storage.VCSConnection{Name: f.conn, Provider: vcs.GitHub, BaseURL: "https://api.github.com"}
-		if conn.Token, err = vcs.Seal(a.SecretKey, "tok", vcs.TokenAD(conn)); err != nil {
+		if conn.Token, err = a.Secrets.Seal("tok", app.TokenAD(conn)); err != nil {
 			t.Fatal(err)
 		}
 		id, err := store.CreateVCSConnection(ctx, conn)

@@ -89,7 +89,7 @@ func testConnection(t *testing.T, a *App, base, scope string) uuid.UUID {
 	ctx := context.Background()
 	c := storage.VCSConnection{Name: uniq("gh-"), Provider: vcs.GitHub, BaseURL: base}
 	var err error
-	if c.Token, err = vcs.Seal(a.SecretKey, "pat", vcs.TokenAD(c)); err != nil {
+	if c.Token, err = a.Secrets.Seal("pat", TokenAD(c)); err != nil {
 		t.Fatal(err)
 	}
 	id, err := a.Store.CreateVCSConnection(ctx, c)

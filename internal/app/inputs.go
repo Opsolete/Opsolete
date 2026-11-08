@@ -10,16 +10,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/opsolete/opsolete/internal/templates"
-	"github.com/opsolete/opsolete/internal/vcs"
 )
 
-// Sensitive template inputs are stored in a workspace's inputs as {"sealed": "<base64 AES-GCM>"}.
+// Sensitive template inputs are stored in a workspace's inputs as {"sealed": "<base64 secrets.Seal>"}.
 // A form value is a string, number or bool, never an object, so it can't pass for a sealed one.
-
-// InputAD binds a sealed input to its workspace, its module and its name.
-func InputAD(workspaceID uuid.UUID, module, name string) string {
-	return "template input\x00" + workspaceID.String() + "\x00" + module + "\x00" + name
-}
 
 func IsSealed(v any) bool { _, ok := v.(map[string]any); return ok }
 
@@ -66,7 +60,7 @@ func (a *App) SealInputs(t templates.Template, raw map[string]string, vals, old 
 		if err != nil {
 			return err
 		}
-		sealed, err := vcs.Seal(a.SecretKey, string(plain), InputAD(wsID, module, in.Name))
+		sealed, err := a.Secrets.Seal(string(plain), InputAD(wsID, module, in.Name))
 		if err != nil {
 			return err
 		}
@@ -89,7 +83,7 @@ func (a *App) OpenInputs(inputs map[string]any, wsID uuid.UUID, module string) (
 		if err != nil {
 			return nil, nil, fmt.Errorf("input %s: %w", k, err)
 		}
-		plain, err := vcs.Open(a.SecretKey, sealed, InputAD(wsID, module, k))
+		plain, err := a.Secrets.Open(sealed, InputAD(wsID, module, k))
 		if err != nil {
 			return nil, nil, fmt.Errorf("input %s: %w", k, err)
 		}

@@ -9,7 +9,7 @@ ORDER BY category, key;
 -- name: AllVariables :many
 SELECT * FROM variables;
 
--- name: ResealVariable :exec
+-- name: ResealVariable :execrows
 UPDATE variables SET value = sqlc.arg(sealed)::bytea WHERE id = sqlc.arg(id)::uuid AND value = sqlc.arg(old)::bytea;
 
 -- name: SetWorkspaceVariable :exec

@@ -18,7 +18,6 @@ import (
 
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
-	"github.com/opsolete/opsolete/internal/vcs"
 )
 
 // runVariables opens the variables of a workspace's run: environment variables for Terraform's
@@ -30,7 +29,7 @@ func (a *App) runVariables(ctx context.Context, workspaceID uuid.UUID) (env map[
 	}
 	env, vars = map[string]string{}, map[string]any{}
 	for _, v := range list {
-		val, err := vcs.Open(a.SecretKey, v.Value, vcs.VariableAD(v))
+		val, err := a.Secrets.Open(v.Value, VariableAD(v))
 		if err != nil {
 			return nil, nil, nil, fmt.Errorf("can't decrypt variable %s: SECRET_KEY missing or changed? Set the variable again", v.Key)
 		}
@@ -140,7 +139,7 @@ func (a *App) sealVariable(o storage.VarOwner, in VariableInput) (storage.Variab
 	}
 	v := storage.Variable{Category: cat, Key: key, Sensitive: in.Sensitive, Owner: o}
 	var err error
-	v.Value, err = vcs.Seal(a.SecretKey, val, vcs.VariableAD(v))
+	v.Value, err = a.Secrets.Seal(val, VariableAD(v))
 	return v, err
 }
 
@@ -162,7 +161,7 @@ func (a *App) variables(ctx context.Context, o storage.VarOwner) ([]Variable, er
 	for _, v := range list {
 		vv := Variable{ID: v.ID, Category: v.Category, Key: v.Key, Sensitive: v.Sensitive}
 		if !v.Sensitive {
-			if vv.Value, err = vcs.Open(a.SecretKey, v.Value, vcs.VariableAD(v)); err != nil {
+			if vv.Value, err = a.Secrets.Open(v.Value, VariableAD(v)); err != nil {
 				vv.Value = "(can't decrypt: SECRET_KEY changed? Set it again)"
 			}
 		}

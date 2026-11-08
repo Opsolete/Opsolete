@@ -10,9 +10,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -28,7 +25,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/hashicorp/go-version"
 	"github.com/opsolete/opsolete/internal/registry"
 	"github.com/opsolete/opsolete/internal/storage"
@@ -637,145 +633,20 @@ func writeTarGz(files []file) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-// Key derives the token encryption key from SECRET_KEY.
-func Key(secret string) []byte {
-	k := sha256.Sum256([]byte("opsolete vcs token\n" + secret))
-	return k[:]
-}
-
-// sealedV2 starts values sealed with associated data. Older values (a bare nonce and ciphertext)
-// open only through OpenLegacy.
-var sealedV2 = []byte("opsolete-v2:")
-
-// Seal encrypts plain with AES-256-GCM (random nonce). ad binds the result to where it is stored
-// (e.g. VariableAD): copied to another row or file, it no longer opens.
-func Seal(key []byte, plain, ad string) ([]byte, error) {
-	g, err := gcm(key)
-	if err != nil {
-		return nil, err
-	}
-	nonce := make([]byte, g.NonceSize())
-	rand.Read(nonce)
-	return g.Seal(append(bytes.Clone(sealedV2), nonce...), nonce, []byte(plain), []byte(ad)), nil
-}
-
-// Open decrypts a value sealed with the same ad; it fails if SECRET_KEY changed since, or the
-// value was moved.
-func Open(key, sealed []byte, ad string) (string, error) {
-	if !bytes.HasPrefix(sealed, sealedV2) {
-		return "", errors.New("can't decrypt: not sealed for this place, or from before Opsolete re-sealed it")
-	}
-	return open(key, sealed[len(sealedV2):], []byte(ad))
-}
-
-// OpenLegacy decrypts a value sealed without associated data, for re-sealing and old state files.
-func OpenLegacy(key, sealed []byte) (string, error) { return open(key, sealed, nil) }
-
-func open(key, sealed, ad []byte) (string, error) {
-	g, err := gcm(key)
-	if err != nil {
-		return "", err
-	}
-	if len(sealed) < g.NonceSize() {
-		return "", errors.New("sealed value too short")
-	}
-	b, err := g.Open(nil, sealed[:g.NonceSize()], sealed[g.NonceSize():], ad)
-	if err != nil {
-		return "", errors.New("can't decrypt: SECRET_KEY changed, or the value was moved? Set it again")
-	}
-	return string(b), nil
-}
-
-// TokenAD binds a VCS token to its connection's endpoint: pointing base_url elsewhere in the
-// database must not send the token there.
-func TokenAD(c storage.VCSConnection) string {
-	return "vcs token\x00" + c.Provider + "\x00" + c.BaseURL + "\x00" + c.Name
-}
-
-// VariableAD binds a variable's value to its owner, name and sensitivity: a sensitive value copied
-// into a non-sensitive row (which the UI shows) or into another workspace doesn't open.
-func VariableAD(v storage.Variable) string {
-	return fmt.Sprintf("variable\x00%s\x00%s\x00%s\x00%s\x00%t", adID(v.Owner.WorkspaceID), adID(v.Owner.SetID), v.Category, v.Key, v.Sensitive)
-}
-
-// adID is an owner id in associated data: "" for none, as when ids were strings.
-func adID(id uuid.UUID) string {
-	if id == uuid.Nil {
-		return ""
-	}
-	return id.String()
-}
-
-// Reseal moves variables and VCS tokens sealed without associated data to Seal's format, once
-// at startup; values that don't open (SECRET_KEY changed) are left as they are.
-func Reseal(ctx context.Context, st *storage.Store, key []byte) (int, error) {
-	n := 0
-	vars, err := st.AllVariables(ctx)
-	if err != nil {
-		return n, err
-	}
-	for _, v := range vars {
-		if bytes.HasPrefix(v.Value, sealedV2) {
-			continue
-		}
-		plain, err := OpenLegacy(key, v.Value)
-		if err != nil {
-			continue
-		}
-		sealed, err := Seal(key, plain, VariableAD(v))
-		if err != nil {
-			return n, err
-		}
-		if err := st.ResealVariable(ctx, v.ID, v.Value, sealed); err != nil {
-			return n, err
-		}
-		n++
-	}
-	conns, err := st.VCSConnections(ctx)
-	if err != nil {
-		return n, err
-	}
-	for _, c := range conns {
-		if bytes.HasPrefix(c.Token, sealedV2) {
-			continue
-		}
-		plain, err := OpenLegacy(key, c.Token)
-		if err != nil {
-			continue
-		}
-		sealed, err := Seal(key, plain, TokenAD(c))
-		if err != nil {
-			return n, err
-		}
-		if err := st.ResealVCSToken(ctx, c.ID, c.Token, sealed); errors.Is(err, storage.ErrNotFound) {
-			continue // another replica was faster, or the token was replaced
-		} else if err != nil {
-			return n, err
-		}
-		n++
-	}
-	return n, nil
-}
-
-func gcm(key []byte) (cipher.AEAD, error) {
-	b, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	return cipher.NewGCM(b)
-}
+// OpenToken opens a stored connection's sealed token (app.App.OpenToken).
+type OpenToken func(storage.VCSConnection) (string, error)
 
 // ConnFor opens a stored connection's token.
-func ConnFor(key []byte, c storage.VCSConnection) (Conn, error) {
-	token, err := Open(key, c.Token, TokenAD(c))
+func ConnFor(open OpenToken, c storage.VCSConnection) (Conn, error) {
+	token, err := open(c)
 	return Conn{Provider: c.Provider, BaseURL: c.BaseURL, Token: token}, err
 }
 
 // Sync publishes every semver tag of a linked repo that isn't a module version yet, and records
 // the outcome. A bad tag doesn't stop the others. It returns the versions it added.
 // shortcut: a tag that fails to publish is retried on every sync; fine for the odd broken tag.
-func Sync(ctx context.Context, st *storage.Store, key []byte, m storage.VCSModule) ([]string, error) {
-	added, err := syncModule(ctx, st, key, m)
+func Sync(ctx context.Context, st *storage.Store, open OpenToken, m storage.VCSModule) ([]string, error) {
+	added, err := syncModule(ctx, st, open, m)
 	msg := ""
 	if err != nil {
 		msg = err.Error()
@@ -786,12 +657,12 @@ func Sync(ctx context.Context, st *storage.Store, key []byte, m storage.VCSModul
 	return added, err
 }
 
-func syncModule(ctx context.Context, st *storage.Store, key []byte, m storage.VCSModule) ([]string, error) {
+func syncModule(ctx context.Context, st *storage.Store, open OpenToken, m storage.VCSModule) ([]string, error) {
 	sc, err := st.GetVCSConnection(ctx, m.ConnectionID)
 	if err != nil {
 		return nil, err
 	}
-	c, err := ConnFor(key, sc)
+	c, err := ConnFor(open, sc)
 	if err != nil {
 		return nil, err
 	}
@@ -867,13 +738,13 @@ func syncModule(ctx context.Context, st *storage.Store, key []byte, m storage.VC
 
 // Poll syncs every linked module once (a scheduler job). It needs no inbound webhooks, so Opsolete
 // can stay private. A module's error is logged and doesn't stop the others.
-func Poll(ctx context.Context, st *storage.Store, key []byte, log *slog.Logger) error {
+func Poll(ctx context.Context, st *storage.Store, open OpenToken, log *slog.Logger) error {
 	mods, err := st.VCSModules(ctx)
 	if err != nil {
 		return fmt.Errorf("list vcs modules: %w", err)
 	}
 	for _, m := range mods {
-		added, err := Sync(ctx, st, key, m)
+		added, err := Sync(ctx, st, open, m)
 		if err != nil && ctx.Err() == nil {
 			log.Warn("vcs sync", "module", m.Namespace+"/"+m.Name+"/"+m.System, "repo", m.Repo, "err", err)
 		}
@@ -889,7 +760,7 @@ func Poll(ctx context.Context, st *storage.Store, key []byte, log *slog.Logger) 
 // Polling, like Poll, needs no inbound webhooks, so Opsolete can stay internal. Each repository
 // branch is polled once per round however many workspaces link it, and on GitHub with conditional
 // requests, so an unchanged branch costs no rate limit.
-func PollRuns(ctx context.Context, st *storage.Store, key []byte, log *slog.Logger) error {
+func PollRuns(ctx context.Context, st *storage.Store, open OpenToken, log *slog.Logger) error {
 	wss, err := st.VCSTriggered(ctx)
 	if err != nil {
 		return fmt.Errorf("list vcs-triggered workspaces: %w", err)
@@ -900,7 +771,7 @@ func PollRuns(ctx context.Context, st *storage.Store, key []byte, log *slog.Logg
 		groups[k] = append(groups[k], ws)
 	}
 	for _, g := range groups {
-		if err := TriggerRuns(ctx, st, key, g); err != nil && ctx.Err() == nil {
+		if err := TriggerRuns(ctx, st, open, g); err != nil && ctx.Err() == nil {
 			log.Warn("vcs trigger", "repo", g[0].VCSRepo, "branch", g[0].VCSBranch, "workspaces", len(g), "err", err)
 		}
 	}
@@ -911,13 +782,13 @@ func PollRuns(ctx context.Context, st *storage.Store, key []byte, log *slog.Logg
 // workspaces of group, which all link the same connection, repository and branch. A workspace with
 // an active run gets them at a later round, one at a time. One workspace's error (or a failed list
 // of tags, head or pull requests) doesn't keep the others from their runs; all are returned.
-func TriggerRuns(ctx context.Context, st *storage.Store, key []byte, group []storage.Workspace) error {
+func TriggerRuns(ctx context.Context, st *storage.Store, open OpenToken, group []storage.Workspace) error {
 	ws := group[0]
 	sc, err := st.GetVCSConnection(ctx, ws.VCSConnectionID)
 	if err != nil {
 		return err
 	}
-	c, err := ConnFor(key, sc)
+	c, err := ConnFor(open, sc)
 	if err != nil {
 		return err
 	}

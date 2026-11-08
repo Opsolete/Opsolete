@@ -55,7 +55,7 @@ func checkToken(ctx context.Context, provider, baseURL, token string) error {
 }
 
 // CreateVCSConnection checks the token against the provider and stores it sealed to the connection's
-// endpoint (vcs.TokenAD). A new connection is open to no workspace (see SetVCSScope). Admins only;
+// endpoint (app.TokenAD). A new connection is open to no workspace (see SetVCSScope). Admins only;
 // ValidationError: name (also when taken), provider or base URL, token (also when the check fails).
 func (a *App) CreateVCSConnection(ctx context.Context, actor Actor, in NewVCSConnection) (uuid.UUID, error) {
 	if !actor.Admin {
@@ -73,7 +73,7 @@ func (a *App) CreateVCSConnection(ctx context.Context, actor Actor, in NewVCSCon
 		return uuid.Nil, err
 	}
 	conn := storage.VCSConnection{Name: in.Name, Provider: in.Provider, BaseURL: baseURL}
-	if conn.Token, err = vcs.Seal(a.SecretKey, in.Token, vcs.TokenAD(conn)); err != nil {
+	if conn.Token, err = a.Secrets.Seal(in.Token, TokenAD(conn)); err != nil {
 		return uuid.Nil, err
 	}
 	id, err := a.Store.CreateVCSConnection(ctx, conn)
@@ -102,7 +102,7 @@ func (a *App) ReplaceVCSToken(ctx context.Context, actor Actor, id uuid.UUID, to
 	if err := checkToken(ctx, sc.Provider, sc.BaseURL, token); err != nil {
 		return sc, err
 	}
-	sealed, err := vcs.Seal(a.SecretKey, token, vcs.TokenAD(sc))
+	sealed, err := a.Secrets.Seal(token, TokenAD(sc))
 	if err == nil {
 		err = a.Store.ResealVCSToken(ctx, sc.ID, sc.Token, sealed)
 	}
@@ -191,7 +191,7 @@ func (a *App) VCSRepos(ctx context.Context, actor Actor, id uuid.UUID) ([]string
 	if err != nil {
 		return nil, err
 	}
-	c, err := vcs.ConnFor(a.SecretKey, sc)
+	c, err := vcs.ConnFor(a.OpenToken, sc)
 	if err != nil {
 		return nil, err
 	}

@@ -108,7 +108,7 @@ func (a *App) SyncVCSModule(ctx context.Context, actor Actor, namespace, name, s
 }
 
 func (a *App) syncVCSModule(ctx context.Context, m storage.VCSModule) []string {
-	added, err := vcs.Sync(ctx, a.Store, a.SecretKey, m)
+	added, err := vcs.Sync(ctx, a.Store, a.OpenToken, m)
 	if err != nil {
 		a.Log.Warn("vcs sync", "module", m.Namespace+"/"+m.Name+"/"+m.System, "err", err)
 	}

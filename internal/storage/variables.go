@@ -17,7 +17,7 @@ type Variable struct {
 	Key       string
 	Value     []byte
 	Sensitive bool
-	Owner     VarOwner // part of the value's seal (vcs.VariableAD)
+	Owner     VarOwner // part of the value's seal (app.VariableAD)
 	UpdatedAt time.Time
 }
 
@@ -43,9 +43,10 @@ func (s *Store) AllVariables(ctx context.Context) ([]Variable, error) {
 	return toVariables(s.q.AllVariables(ctx))
 }
 
-// ResealVariable replaces a variable's sealed value, unless it changed since it was read.
+// ResealVariable replaces a variable's sealed value, unless it changed since it was read
+// (ErrNotFound).
 func (s *Store) ResealVariable(ctx context.Context, id uuid.UUID, old, sealed []byte) error {
-	return s.q.ResealVariable(ctx, db.ResealVariableParams{ID: id, Old: old, Sealed: sealed})
+	return affected(s.q.ResealVariable(ctx, db.ResealVariableParams{ID: id, Old: old, Sealed: sealed}))
 }
 
 // SetVariable adds a variable, or replaces the owner's variable with the same category and key.

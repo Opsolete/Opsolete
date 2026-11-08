@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/registry/registrytest"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/vcs"
@@ -84,7 +85,7 @@ func TestFormsRerender(t *testing.T) {
 	}
 	must(post(h, "/variable-sets", url.Values{"name": {set}}), "variable set")
 	conn := storage.VCSConnection{Name: "frm-" + sfx, Provider: vcs.GitHub, BaseURL: "https://api.github.com"}
-	if conn.Token, err = vcs.Seal(srv.App.SecretKey, "tok", vcs.TokenAD(conn)); err != nil {
+	if conn.Token, err = srv.App.Secrets.Seal("tok", app.TokenAD(conn)); err != nil {
 		t.Fatal(err)
 	}
 	connID, err := store.CreateVCSConnection(ctx, conn)

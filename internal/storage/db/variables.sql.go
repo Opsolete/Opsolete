@@ -241,7 +241,7 @@ func (q *Queries) ProjectVariableSets(ctx context.Context, projectID uuid.UUID) 
 	return items, nil
 }
 
-const resealVariable = `-- name: ResealVariable :exec
+const resealVariable = `-- name: ResealVariable :execrows
 UPDATE variables SET value = $1::bytea WHERE id = $2::uuid AND value = $3::bytea
 `
 
@@ -251,9 +251,12 @@ type ResealVariableParams struct {
 	Old    []byte
 }
 
-func (q *Queries) ResealVariable(ctx context.Context, arg ResealVariableParams) error {
-	_, err := q.db.Exec(ctx, resealVariable, arg.Sealed, arg.ID, arg.Old)
-	return err
+func (q *Queries) ResealVariable(ctx context.Context, arg ResealVariableParams) (int64, error) {
+	result, err := q.db.Exec(ctx, resealVariable, arg.Sealed, arg.ID, arg.Old)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const runVariables = `-- name: RunVariables :many

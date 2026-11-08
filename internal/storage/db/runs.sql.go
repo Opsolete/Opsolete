@@ -500,7 +500,7 @@ func (q *Queries) RemoveRestoredTemplate(ctx context.Context, arg RemoveRestored
 	return err
 }
 
-const resealInputs = `-- name: ResealInputs :exec
+const resealInputs = `-- name: ResealInputs :execrows
 UPDATE workspace_templates SET inputs = $1::jsonb
 WHERE workspace_id = $2::uuid AND name = $3::text AND inputs = $4::jsonb
 `
@@ -512,14 +512,17 @@ type ResealInputsParams struct {
 	Old         []byte
 }
 
-func (q *Queries) ResealInputs(ctx context.Context, arg ResealInputsParams) error {
-	_, err := q.db.Exec(ctx, resealInputs,
+func (q *Queries) ResealInputs(ctx context.Context, arg ResealInputsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, resealInputs,
 		arg.Inputs,
 		arg.WorkspaceID,
 		arg.Name,
 		arg.Old,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const restoreTemplate = `-- name: RestoreTemplate :exec

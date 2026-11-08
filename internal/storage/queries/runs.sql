@@ -127,7 +127,7 @@ WHERE workspace_id = sqlc.arg(workspace_id)::uuid ORDER BY name;
 -- name: AllTemplateInputs :many
 SELECT workspace_id, name, inputs FROM workspace_templates;
 
--- name: ResealInputs :exec
+-- name: ResealInputs :execrows
 UPDATE workspace_templates SET inputs = sqlc.arg(inputs)::jsonb
 WHERE workspace_id = sqlc.arg(workspace_id)::uuid AND name = sqlc.arg(name)::text AND inputs = sqlc.arg(old)::jsonb;
 

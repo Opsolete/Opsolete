@@ -76,7 +76,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 	}
 	claimVCS := func(t *testing.T, wantAction, wantTar string) {
 		t.Helper()
-		if err := vcs.TriggerRuns(ctx, store, app.App.SecretKey, []storage.Workspace{lw}); err != nil {
+		if err := vcs.TriggerRuns(ctx, store, app.App.OpenToken, []storage.Workspace{lw}); err != nil {
 			t.Fatal(err)
 		}
 		mu.Lock()
@@ -240,7 +240,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 			!strings.Contains(page, `name="vcs_tag_format" value="semantic" checked`) {
 			t.Fatalf("the page must show the tag format: %s", page)
 		}
-		if err := vcs.TriggerRuns(ctx, store, app.App.SecretKey, []storage.Workspace{lw}); err != nil {
+		if err := vcs.TriggerRuns(ctx, store, app.App.OpenToken, []storage.Workspace{lw}); err != nil {
 			t.Fatal(err)
 		}
 		if runs, _ := store.Runs(ctx, lw.ID, 1); runs[0].Active() {
