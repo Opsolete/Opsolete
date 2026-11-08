@@ -1057,7 +1057,7 @@ func (s *Server) logStream(w http.ResponseWriter, r *http.Request) {
 			cursor = c.Seq
 		}
 		if len(chunks) < 200 {
-			cur, _, err := s.Store.GetRun(ctx, run.ID)
+			cur, err := s.Store.RunStatus(ctx, run.ID)
 			if err != nil {
 				return
 			}

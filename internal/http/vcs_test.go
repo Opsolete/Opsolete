@@ -34,6 +34,7 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 	// Fake GitHub: tags are added during the test.
 	var mu sync.Mutex
 	tags := map[string]string{"v1.0.0": `variable "db_name" { type = string }`}
+	archives := 0 // tarball downloads
 	gh := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -45,13 +46,14 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 		case p == "/user/repos":
 			w.Write([]byte(`[{"full_name":"acme/terraform-aws-rds"}]`))
 		case p == "/repos/acme/terraform-aws-rds/tags":
-			var list []map[string]string
+			var list []map[string]any
 			for tag := range tags {
-				list = append(list, map[string]string{"name": tag})
+				list = append(list, map[string]any{"name": tag, "commit": map[string]string{"sha": "c-" + tag}})
 			}
 			json.NewEncoder(w).Encode(list)
 		case strings.HasPrefix(p, "/repos/acme/terraform-aws-rds/tarball/"):
 			tag := strings.TrimPrefix(p, "/repos/acme/terraform-aws-rds/tarball/")
+			archives++
 			files := map[string]string{"acme-rds-1/main.tf": tags[tag]}
 			if tag == "v1.1.0" { // a monorepo: the vm folder only exists from this tag on
 				files["acme-rds-1/vm/main.tf"] = `variable "size" { type = string }`
@@ -133,6 +135,17 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 	}
 	if m, err := store.GetVCSModule(ctx, "terraform-aws-rds", "f"+id, "aws"); err != nil || m.Dir != "nope" || !strings.Contains(m.SyncError, `no folder "nope"`) {
 		t.Fatalf("linked from a folder: %+v %v", m, err)
+	}
+	// A tag's commit known to lack the folder isn't downloaded again, and still counts as missing it.
+	mu.Lock()
+	before := archives
+	mu.Unlock()
+	post(h, "/registry/terraform-aws-rds/f"+id+"/aws/sync", nil)
+	mu.Lock()
+	again := archives - before
+	mu.Unlock()
+	if m, err := store.GetVCSModule(ctx, "terraform-aws-rds", "f"+id, "aws"); again != 0 || err != nil || !strings.Contains(m.SyncError, `no folder "nope"`) {
+		t.Fatalf("resync without the folder: %d downloads, %+v %v", again, m, err)
 	}
 	if rec := post(h, "/registry/terraform-aws-rds/f"+id+"/aws/unlink", nil); rec.Code != http.StatusSeeOther {
 		t.Fatalf("unlink: %d", rec.Code)

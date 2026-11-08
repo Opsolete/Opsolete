@@ -255,6 +255,22 @@ func TestConditionalRequestsAndPause(t *testing.T) {
 	if _, err := other.Head(t.Context(), "acme/infra", "main"); err != nil || full != 2 {
 		t.Fatalf("another token must not get the cached answer: %v, %d full", err, full)
 	}
+	// A full cache drops one entry for a new one, not every entry.
+	t.Cleanup(func() { cacheMu.Lock(); clear(cache); cacheMu.Unlock() })
+	cacheMu.Lock()
+	for i := len(cache); i < maxCached; i++ {
+		cache["filler"+strconv.Itoa(i)] = cachedResponse{}
+	}
+	cacheMu.Unlock()
+	if _, err := c.Head(t.Context(), "acme/other", "main"); err != nil {
+		t.Fatal(err)
+	}
+	cacheMu.Lock()
+	n := len(cache)
+	cacheMu.Unlock()
+	if n != maxCached {
+		t.Fatalf("full cache holds %d entries after one more, want %d", n, maxCached)
+	}
 
 	if !c.pausedUntil().IsZero() {
 		t.Fatal("paused without being asked")

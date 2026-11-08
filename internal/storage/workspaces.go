@@ -785,6 +785,13 @@ func (s *Store) CurrentOutputs(ctx context.Context, workspaceID string) (outputs
 }
 
 // GetRun returns a run and its status history; sql.ErrNoRows if the id is unknown or not a uuid.
+// RunStatus is a run with only its status: GetRun without the columns and history, for polling.
+func (s *Store) RunStatus(ctx context.Context, id string) (Run, error) {
+	var r Run
+	err := s.DB.QueryRowContext(ctx, `SELECT status FROM runs WHERE id = ops_uuid($1)`, id).Scan(&r.Status)
+	return r, err
+}
+
 func (s *Store) GetRun(ctx context.Context, id string) (Run, []StatusEntry, error) {
 	r, err := scanRun(s.DB.QueryRowContext(ctx, `SELECT `+runCols+` FROM runs r WHERE r.id = ops_uuid($1)`, id))
 	if err != nil {

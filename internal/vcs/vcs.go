@@ -87,7 +87,8 @@ func splitRepo(repo string) (string, string, error) {
 // GitHub answers a conditional request with 304 when nothing changed, and a 304 doesn't count
 // against the rate limit, so polling an unchanged branch or pull request list is free. Responses
 // are cached per token and URL, in memory: each replica's first poll after a start costs one call.
-// shortcut: at most maxCached responses up to maxCachedSize each, then the cache starts over.
+// shortcut: at most maxCached responses up to maxCachedSize each, then a random one is evicted; LRU if
+// more repos than that are polled.
 const (
 	maxCached     = 500
 	maxCachedSize = 1 << 20
@@ -102,6 +103,9 @@ var (
 	cacheMu sync.Mutex
 	cache   = map[string]cachedResponse{}
 	pauses  = map[string]time.Time{} // token hash + API root -> when the provider wants polling to resume
+	// connection, repo, module folder, tag commit -> the ErrNoFolder Archive gave there, so Sync skips the download.
+	// shortcut: never pruned (one small entry per such tag); prune with the module links if that grows.
+	noFolderSeen = map[string]error{}
 )
 
 // pausedUntil is when the provider asked this connection's token to wait until; zero if it didn't.
@@ -192,8 +196,11 @@ func (c Conn) get(ctx context.Context, u string, limit int64, conditional bool) 
 	}
 	if etag := resp.Header.Get("ETag"); err == nil && conditional && etag != "" && len(b) <= maxCachedSize {
 		cacheMu.Lock()
-		if len(cache) >= maxCached {
-			clear(cache)
+		for k := range cache { // full: drop one entry (whichever map order gives), not every 304 at once
+			if len(cache) < maxCached {
+				break
+			}
+			delete(cache, k)
 		}
 		cache[key] = cachedResponse{etag, b}
 		cacheMu.Unlock()
@@ -801,8 +808,22 @@ func syncModule(ctx context.Context, st *storage.Store, key []byte, m storage.VC
 			continue // not a release tag, or already published (v1.0.0 and 1.0.0 are one version)
 		}
 		have[ver] = true
+		// a commit's tree never changes: once without the folder, always without it
+		seen := m.ConnectionID + "\x00" + m.Repo + "\x00" + m.Dir + "\x00" + t.Commit
+		cacheMu.Lock()
+		known := noFolderSeen[seen]
+		cacheMu.Unlock()
+		if known != nil {
+			noFolder = append(noFolder, fmt.Errorf("tag %s: %w", tag, known))
+			continue
+		}
 		archive, err := c.Archive(ctx, m.Repo, tag, "tag", m.Dir)
 		if errors.Is(err, ErrNoFolder) {
+			if t.Commit != "" {
+				cacheMu.Lock()
+				noFolderSeen[seen] = err
+				cacheMu.Unlock()
+			}
 			noFolder = append(noFolder, fmt.Errorf("tag %s: %w", tag, err))
 			continue
 		}
