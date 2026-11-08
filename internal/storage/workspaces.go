@@ -77,6 +77,9 @@ func toRun(r db.RunList) (Run, error) {
 	run := Run{ID: r.ID, WorkspaceID: r.WorkspaceID, Action: r.Action, Status: r.Status, Runner: r.Runner,
 		CreatedBy: r.CreatedByEmail, ConfirmedBy: r.ConfirmedByEmail, CancelRequested: r.CancelRequested,
 		VCSCommit: r.VcsCommit, VCSPullRequest: int(r.VcsPullRequest), CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt}
+	if r.LogBytes > 0 { // retention marks every ended run it passed (so it isn't picked again); only one with a log lost one
+		run.LogRemovedAt = r.LogRemovedAt
+	}
 	for _, f := range []struct {
 		raw []byte
 		v   any

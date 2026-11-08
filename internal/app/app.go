@@ -6,6 +6,7 @@ package app
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 	"gocloud.dev/blob"
@@ -28,7 +29,9 @@ type App struct {
 	// TemplateEditor (TEMPLATE_EDITOR, for development): the template builder writes into
 	// TEMPLATES_DIR, and module uploads are on. A Git catalog has its own editor mode, uploads their own setting.
 	TemplateEditor bool
-	Log            *slog.Logger
+	// RunLogRetention (RUN_LOG_RETENTION_DAYS): run logs are deleted this long after the run ended; 0 keeps them.
+	RunLogRetention time.Duration
+	Log             *slog.Logger
 }
 
 // Actor is who performs an operation. A system actor (VCS poller, rollouts) has UserID uuid.Nil,

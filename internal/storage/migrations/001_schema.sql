@@ -279,6 +279,7 @@ CREATE UNIQUE INDEX template_rollouts_open_idx ON template_rollouts (template_id
 --   remove_template: a destroy run that removes that added template (-target module.<name>)
 --   config_changes: [{module, before, after}] the run changed (configuring templates, rollouts);
 --           put back if it ends before its apply started
+--   log_removed_at: retention (app/retention.go) deleted its run_logs then; updated_at is when it ended
 -- run_active: the run holds its workspace (storage.Ended is its negation; a test keeps them equal).
 -- run_working: a runner holds its lease. Every query and index that asks either uses these.
 CREATE FUNCTION run_active(status text) RETURNS boolean LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
@@ -303,6 +304,7 @@ CREATE TABLE runs (
     lease_until      timestamptz,
     cancel_requested boolean NOT NULL DEFAULT false,
     log_bytes        bigint NOT NULL DEFAULT 0,
+    log_removed_at   timestamptz,
     vcs_commit       text,    -- pinned by the plan (or when queued for a commit)
     vcs_pull_request integer, -- speculative plans
     rollout_id       uuid REFERENCES template_rollouts ON DELETE SET NULL,
@@ -326,6 +328,9 @@ CREATE INDEX runs_vcs_commit_idx ON runs (workspace_id, vcs_commit) WHERE vcs_co
 CREATE INDEX runs_rollout_idx ON runs (rollout_id) WHERE rollout_id IS NOT NULL;
 CREATE INDEX runs_created_by_idx ON runs (created_by) WHERE created_by IS NOT NULL;
 CREATE INDEX runs_confirmed_by_idx ON runs (confirmed_by) WHERE confirmed_by IS NOT NULL;
+-- retention (queries/runs.sql Prune*): ended runs whose log is still there; drift checks and speculative plans
+CREATE INDEX runs_log_retention_idx ON runs (updated_at) WHERE log_removed_at IS NULL AND NOT run_active(status);
+CREATE INDEX runs_speculative_idx ON runs (updated_at) WHERE action IN ('assess', 'plan');
 
 CREATE TABLE run_status_history (
     id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -456,7 +461,8 @@ LEFT JOIN workspace_vcs vcs ON vcs.workspace_id = w.id;
 CREATE VIEW run_list AS
 SELECT r.id, r.workspace_id, r.action, r.status, r.replace, r.plan, r.outputs, r.runner, r.cancel_requested,
     COALESCE(r.vcs_commit, '') AS vcs_commit, COALESCE(r.vcs_pull_request, 0)::integer AS vcs_pull_request,
-    COALESCE(cu.email, '') AS created_by_email, COALESCE(fu.email, '') AS confirmed_by_email, r.created_at, r.updated_at
+    COALESCE(cu.email, '') AS created_by_email, COALESCE(fu.email, '') AS confirmed_by_email, r.created_at, r.updated_at,
+    r.log_removed_at, r.log_bytes
 FROM runs r
 LEFT JOIN users cu ON cu.id = r.created_by
 LEFT JOIN users fu ON fu.id = r.confirmed_by;

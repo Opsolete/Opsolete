@@ -32,6 +32,10 @@ func (s *Server) logText(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if l.Removed != "" {
+		io.WriteString(w, l.Removed+"\n")
+		return
+	}
 	var after int64
 	for {
 		chunks, err := l.Chunks(r.Context(), after, 500)
@@ -71,6 +75,13 @@ func (s *Server) logStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("X-Accel-Buffering", "no") // stop nginx-style ingresses from buffering the stream
 	w.WriteHeader(http.StatusOK)
+	if l.Removed != "" { // an ended run: that line, then done like any finished run
+		cur, err := l.Status(ctx)
+		if err == nil {
+			fmt.Fprintf(w, "data: %s\n\nevent: done\ndata: %s\n\n", l.Removed, cur.Status)
+		}
+		return
+	}
 
 	tick := time.NewTicker(time.Second)
 	defer tick.Stop()

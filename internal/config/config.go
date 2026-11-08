@@ -50,6 +50,8 @@ type Config struct {
 	// StaleLockTimeout: a rollback's state lock older than this is released as orphaned (its server
 	// died mid-rollback). Run locks go with the run's lease; CLI and UI locks never expire.
 	StaleLockTimeout time.Duration
+	// RunLogRetentionDays: run logs are deleted this many days after the run ended; 0 keeps them forever.
+	RunLogRetentionDays int
 }
 
 func Load() (Config, error) {
@@ -87,6 +89,9 @@ func Load() (Config, error) {
 	var err error
 	if c.StaleLockTimeout, err = time.ParseDuration(getenv("STALE_LOCK_TIMEOUT", "15m")); err != nil || c.StaleLockTimeout <= 0 {
 		return c, errors.New("STALE_LOCK_TIMEOUT must be a duration like 15m")
+	}
+	if c.RunLogRetentionDays, err = strconv.Atoi(getenv("RUN_LOG_RETENTION_DAYS", "90")); err != nil || c.RunLogRetentionDays < 0 || c.RunLogRetentionDays > 36500 {
+		return c, errors.New("RUN_LOG_RETENTION_DAYS must be a whole number of days up to 36500 (0 keeps run logs forever)")
 	}
 	if c.Deployments, err = getbool("DEPLOYMENTS_ENABLED"); err != nil {
 		return c, err

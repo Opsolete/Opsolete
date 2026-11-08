@@ -209,6 +209,78 @@ func (q *Queries) LockWorkspaceTemplate(ctx context.Context, arg LockWorkspaceTe
 	return column_1, err
 }
 
+const pruneRunLogs = `-- name: PruneRunLogs :many
+
+WITH r AS (
+    SELECT id FROM runs WHERE log_removed_at IS NULL AND NOT run_active(status)
+        AND updated_at < now() - make_interval(secs => $1::float8)
+    LIMIT $2::integer FOR UPDATE SKIP LOCKED
+), d AS (
+    DELETE FROM run_logs l USING r WHERE l.run_id = r.id
+)
+UPDATE runs SET log_removed_at = now() FROM r WHERE runs.id = r.id
+RETURNING (runs.log_bytes > 0)::boolean AS had_log
+`
+
+type PruneRunLogsParams struct {
+	OlderSecs float64
+	Lim       int32
+}
+
+// Retention (storage.PruneRunLogs, storage.PruneSpeculativeRuns): at most lim runs per statement, so
+// a first pass over a big database holds short locks; ended runs only, updated_at is when they ended.
+// Marks every ended run it passes (so it isn't picked again); had_log: it had a log to remove.
+func (q *Queries) PruneRunLogs(ctx context.Context, arg PruneRunLogsParams) ([]bool, error) {
+	rows, err := q.db.Query(ctx, pruneRunLogs, arg.OlderSecs, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []bool
+	for rows.Next() {
+		var had_log bool
+		if err := rows.Scan(&had_log); err != nil {
+			return nil, err
+		}
+		items = append(items, had_log)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const pruneSpeculativeRuns = `-- name: PruneSpeculativeRuns :execrows
+DELETE FROM runs WHERE id IN (
+    SELECT r.id FROM runs r WHERE r.action IN ('assess', 'plan') AND NOT run_active(r.status)
+        AND r.updated_at < now() - make_interval(secs => $1::float8)
+        AND CASE WHEN r.action = 'assess' THEN
+                EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = r.workspace_id AND a.action = 'assess' AND a.created_at > r.created_at)
+                AND (r.status NOT IN ('no_changes', 'drifted') OR EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = r.workspace_id
+                    AND a.action = 'assess' AND a.status IN ('no_changes', 'drifted') AND a.created_at > r.created_at))
+            ELSE r.vcs_pull_request IS NULL OR EXISTS (SELECT 1 FROM runs p WHERE p.workspace_id = r.workspace_id
+                AND p.action = 'plan' AND p.vcs_pull_request = r.vcs_pull_request AND p.created_at > r.created_at) END
+    LIMIT $2::integer FOR UPDATE OF r SKIP LOCKED
+)
+`
+
+type PruneSpeculativeRunsParams struct {
+	OlderSecs float64
+	Lim       int32
+}
+
+// Drift checks and speculative plans, history and logs with them (cascade), except what readers
+// need: a workspace's latest drift check (LatestAssessment) and latest one that found drift or none
+// (workspace_list.drifted), and a pull request's latest plan (QueueVCSRun's dedupe). Plans run by
+// hand (no pull request) have no exception.
+func (q *Queries) PruneSpeculativeRuns(ctx context.Context, arg PruneSpeculativeRunsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneSpeculativeRuns, arg.OlderSecs, arg.Lim)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const queueAssessments = `-- name: QueueAssessments :many
 WITH s AS (
     SELECT w.id AS workspace_id, 'assess'::text AS action, NULL::uuid AS created_by, NULL::text AS vcs_commit, NULL::integer AS vcs_pull_request

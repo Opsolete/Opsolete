@@ -67,7 +67,16 @@ type Run struct {
 	VCSCommit       string // commit a VCS workspace's run planned; "" until its plan fetched the configuration
 	VCSPullRequest  int    // pull request a speculative plan was made for; 0 for other runs
 	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	UpdatedAt       time.Time  // when it ended, once it has
+	LogRemovedAt    *time.Time // retention deleted its log (PruneRunLogs); nil while it's kept
+}
+
+// LogRemoved is what an ended run whose log was deleted shows instead; "" while the log is kept.
+func (r Run) LogRemoved() string {
+	if r.LogRemovedAt == nil {
+		return ""
+	}
+	return fmt.Sprintf("The log was removed %d days after the run ended (RUN_LOG_RETENTION_DAYS).", int(r.LogRemovedAt.Sub(r.UpdatedAt)/(24*time.Hour)))
 }
 
 // Active: the run still holds its workspace (queued, working or waiting for confirmation).
@@ -194,4 +203,43 @@ func restoreConfig(ctx context.Context, q *db.Queries, workspaceID uuid.UUID, ra
 		}
 	}
 	return nil
+}
+
+// pruneBatch is how many runs one retention statement handles: short locks on a big first pass.
+const pruneBatch = 1000
+
+// PruneRunLogs deletes the logs of runs that ended more than olderThan ago, marking each run's
+// log_removed_at in the same statement. It returns how many runs lost their log.
+func (s *Store) PruneRunLogs(ctx context.Context, olderThan time.Duration) (int64, error) {
+	var logs int64 // runs that had a log; the batch counts every run it marked
+	_, err := prune(func(lim int32) (int64, error) {
+		had, err := s.q.PruneRunLogs(ctx, db.PruneRunLogsParams{OlderSecs: olderThan.Seconds(), Lim: lim})
+		for _, h := range had {
+			if h {
+				logs++
+			}
+		}
+		return int64(len(had)), err
+	}, pruneBatch)
+	return logs, err
+}
+
+// PruneSpeculativeRuns deletes drift checks and speculative plans that ended more than olderThan
+// ago, except the latest ones their readers need (see the query). It returns how many it deleted.
+func (s *Store) PruneSpeculativeRuns(ctx context.Context, olderThan time.Duration) (int64, error) {
+	return prune(func(lim int32) (int64, error) {
+		return s.q.PruneSpeculativeRuns(ctx, db.PruneSpeculativeRunsParams{OlderSecs: olderThan.Seconds(), Lim: lim})
+	}, pruneBatch)
+}
+
+// prune runs batch until one handles fewer than lim rows, and returns the total.
+func prune(batch func(lim int32) (int64, error), lim int32) (int64, error) {
+	var total int64
+	for {
+		n, err := batch(lim)
+		total += n
+		if err != nil || n < int64(lim) {
+			return total, err
+		}
+	}
 }

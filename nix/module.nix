@@ -73,6 +73,7 @@ self: {
       REGISTRY_ENABLED = lib.boolToString cfg.registry.enable;
       ORGANIZATION = cfg.organization;
       STALE_LOCK_TIMEOUT = cfg.staleLockTimeout;
+      RUN_LOG_RETENTION_DAYS = toString cfg.runLogRetentionDays;
       ADMIN_EMAILS = joinOrNull cfg.adminEmails;
       ADMIN_GROUPS = joinOrNull cfg.adminGroups;
       OIDC_ISSUER = cfg.oidc.issuer;
@@ -222,6 +223,11 @@ in {
       type = types.str;
       default = "15m";
       description = "STALE_LOCK_TIMEOUT (Go duration).";
+    };
+    runLogRetentionDays = mkOption {
+      type = types.ints.between 0 36500;
+      default = 90;
+      description = "RUN_LOG_RETENTION_DAYS: run logs are deleted this many days after the run ended; 0 keeps them forever.";
     };
     adminEmails = mkOption {
       type = types.listOf types.str;

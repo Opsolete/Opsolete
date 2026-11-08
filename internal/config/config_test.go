@@ -6,7 +6,7 @@ import (
 )
 
 func TestLoad(t *testing.T) {
-	for _, k := range []string{"ADDR", "PUBLIC_URL", "DEPLOYMENTS_ENABLED", "REGISTRY_ENABLED", "TEMPLATE_EDITOR"} {
+	for _, k := range []string{"ADDR", "PUBLIC_URL", "DEPLOYMENTS_ENABLED", "REGISTRY_ENABLED", "TEMPLATE_EDITOR", "RUN_LOG_RETENTION_DAYS"} {
 		t.Setenv(k, "")
 	}
 	t.Setenv("DATABASE_URL", "")
@@ -50,6 +50,21 @@ func TestLoad(t *testing.T) {
 		}
 	}
 	t.Setenv("PUBLIC_URL", "")
+
+	if c.RunLogRetentionDays != 90 {
+		t.Fatalf("RUN_LOG_RETENTION_DAYS default: %d", c.RunLogRetentionDays)
+	}
+	t.Setenv("RUN_LOG_RETENTION_DAYS", "0")
+	if c, err := Load(); err != nil || c.RunLogRetentionDays != 0 {
+		t.Fatalf("RUN_LOG_RETENTION_DAYS=0 keeps logs forever: %d %v", c.RunLogRetentionDays, err)
+	}
+	for _, bad := range []string{"-1", "90d", "1.5", "36501"} {
+		t.Setenv("RUN_LOG_RETENTION_DAYS", bad)
+		if _, err := Load(); err == nil {
+			t.Errorf("RUN_LOG_RETENTION_DAYS %q should be rejected", bad)
+		}
+	}
+	t.Setenv("RUN_LOG_RETENTION_DAYS", "")
 
 	t.Setenv("TEMPLATE_EDITOR", "1")
 	t.Setenv("TEMPLATES_DIR", t.TempDir())

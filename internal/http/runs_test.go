@@ -524,3 +524,35 @@ func TestWorkspaceFlow(t *testing.T) {
 		}
 	})
 }
+
+// A run whose log retention removed: the page, the raw log and the stream all say so, in one line.
+func TestRemovedLog(t *testing.T) {
+	ctx, store := context.Background(), testStore(t)
+	srv := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true})
+	h := srv.Handler()
+	ws, err := store.CreateEmptyWorkspace(ctx, storage.EmptyWorkspace{Name: "retained"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	if err := store.Pool.QueryRow(ctx, `WITH r AS (INSERT INTO runs (workspace_id, action, status, log_bytes, updated_at)
+		VALUES ($1, 'apply', 'applied', 18, now() - interval '100 days') RETURNING id)
+		INSERT INTO run_logs (run_id, chunk) SELECT id, 'secret plan output' FROM r RETURNING run_id::text`, ws.ID).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	srv.App.RunLogRetention = 90 * 24 * time.Hour
+	if _, err := srv.App.Retention(ctx); err != nil {
+		t.Fatal(err)
+	}
+	const line = "The log was removed 100 days after the run ended (RUN_LOG_RETENTION_DAYS)."
+	runURL := "/workspaces/retained/runs/" + id
+	if page := get(h, runURL).Body.String(); !strings.Contains(page, line) || strings.Contains(page, "secret plan output") {
+		t.Errorf("run page: %s", page)
+	}
+	if rec := get(h, runURL+"/logs"); rec.Code != http.StatusOK || rec.Body.String() != line+"\n" {
+		t.Errorf("raw log: %d %q", rec.Code, rec.Body.String())
+	}
+	if s := get(h, runURL+"/logs/stream").Body.String(); s != "data: "+line+"\n\nevent: done\ndata: applied\n\n" {
+		t.Errorf("stream: %q", s)
+	}
+}

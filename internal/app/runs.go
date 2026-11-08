@@ -125,16 +125,18 @@ func (a *App) CancelRun(ctx context.Context, actor Actor, workspace string, id u
 
 // RunLog reads one run's log; RunLog (the function) checked the actor may read it.
 type RunLog struct {
-	a  *App
-	ID uuid.UUID
+	a       *App
+	ID      uuid.UUID
+	Removed string // storage.Run.LogRemoved: retention deleted the log, this line stands in for it
 }
 
 // RunLog opens the log of run id of the workspace for reading. Needs read.
 func (a *App) RunLog(ctx context.Context, actor Actor, workspace string, id uuid.UUID) (RunLog, error) {
-	if _, err := a.Run(ctx, actor, workspace, id, LevelRead); err != nil {
+	d, err := a.Run(ctx, actor, workspace, id, LevelRead)
+	if err != nil {
 		return RunLog{}, err
 	}
-	return RunLog{a, id}, nil
+	return RunLog{a, id, d.Run.LogRemoved()}, nil
 }
 
 // Chunks returns up to limit chunks of the log after seq.

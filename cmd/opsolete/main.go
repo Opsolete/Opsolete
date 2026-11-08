@@ -218,7 +218,8 @@ func serve(log *slog.Logger) error {
 	}
 
 	vcsOn := cfg.Registry || cfg.Deployments // modules for the registry, workspaces and the catalog for deployments
-	ops := &app.App{Store: store, Blobs: state, SecretKey: vcs.Key(cfg.SecretKey), Templates: tpls, Registry: reg, Log: log}
+	ops := &app.App{Store: store, Blobs: state, SecretKey: vcs.Key(cfg.SecretKey), Templates: tpls, Registry: reg, Log: log,
+		RunLogRetention: time.Duration(cfg.RunLogRetentionDays) * 24 * time.Hour}
 	server := httpserver.New(ops, authn, httpserver.Features{
 		Deployments: cfg.Deployments, Registry: cfg.Registry, Editor: cfg.TemplateEditor, VCS: vcsOn})
 	server.Organization = cfg.Organization
@@ -302,6 +303,8 @@ func jobs(cfg config.Config, a *app.App) []app.Job {
 			Run: logged(func(ctx context.Context) { a.ReleaseOrphanedLocks(ctx, cfg.StaleLockTimeout) })},
 		app.Job{Name: "rollouts", Every: 15 * time.Second, Run: logged(a.TickRollouts)},
 		app.Job{Name: "drift checks", Every: 15 * time.Second, Run: logged(a.QueueDriftChecks)},
+		app.Job{Name: "retention", Every: time.Hour,
+			Run: func(ctx context.Context) error { _, err := a.Retention(ctx); return err }},
 		app.Job{Name: "vcs runs", Every: time.Minute,
 			Run: func(ctx context.Context) error { return vcs.PollRuns(ctx, a.Store, a.SecretKey, a.Log) }},
 		app.Job{Name: "catalog sync", Every: time.Minute,

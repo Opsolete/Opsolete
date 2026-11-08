@@ -108,6 +108,7 @@ type Run struct {
 	LeaseUntil      *time.Time
 	CancelRequested bool
 	LogBytes        int64
+	LogRemovedAt    *time.Time
 	VcsCommit       *string
 	VcsPullRequest  *int32
 	RolloutID       uuid.NullUUID
@@ -134,6 +135,8 @@ type RunList struct {
 	ConfirmedByEmail string
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+	LogRemovedAt     *time.Time
+	LogBytes         int64
 }
 
 type RunLog struct {
