@@ -26,8 +26,11 @@ import (
 )
 
 const (
-	LeaseTTL        = 2 * time.Minute  // runners heartbeat well within this
-	AckWindow       = 30 * time.Second // a claim's lease until acknowledged: enough for a slow network, short against LeaseTTL
+	LeaseTTL  = 2 * time.Minute  // runners heartbeat well within this
+	AckWindow = 30 * time.Second // a claim's lease until acknowledged: enough for a slow network, short against LeaseTTL
+	// ReapGrace: how long a new leader waits before failing expired leases. A live runner heartbeats
+	// within it after an outage: every LeaseTTL/4 (30 s) when idle, after a post that may hang up to 15 s.
+	ReapGrace       = time.Minute
 	MaxLogBytes     = 10 << 20         // per run
 	MaxArtifactSize = 256 << 20        // saved plans embed the configuration; generous
 	runnerSrcTTL    = 15 * time.Minute // signed archive URL handed to the runner; it downloads right away
@@ -232,7 +235,7 @@ func (a *App) Artifact(ctx context.Context, runID uuid.UUID, lease, name string)
 
 // ReapLeases queues again claimed jobs their runner never acknowledged (storage.UnclaimJobs), and
 // fails acknowledged jobs whose runner stopped heartbeating (crash, node loss) and cleans up after
-// them, but not within LeaseTTL of this replica taking the lead. For a background loop: errors are logged.
+// them, but not within ReapGrace of this replica taking the lead. For a background loop: errors are logged.
 func (a *App) ReapLeases(ctx context.Context) {
 	unclaimed, err := a.Store.UnclaimJobs(ctx)
 	if err != nil {
@@ -244,8 +247,8 @@ func (a *App) ReapLeases(ctx context.Context) {
 	}
 	// Leases that ran out while no replica led (a server or database outage) aren't the runners' fault:
 	// failing those runs now would refuse their applies' state writes and orphan what they created.
-	// A new leader gives runners one LeaseTTL to heartbeat again (Heartbeat renews an expired lease).
-	if since, ok := leadingSince(ctx); ok && time.Since(since) < LeaseTTL {
+	// A new leader gives runners ReapGrace to heartbeat again (Heartbeat renews an expired lease).
+	if since, ok := leadingSince(ctx); ok && time.Since(since) < ReapGrace {
 		return
 	}
 	ids, err := a.Store.ReapExpiredLeases(ctx)

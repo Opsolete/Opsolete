@@ -98,7 +98,7 @@ func TestUnacknowledgedClaim(t *testing.T) {
 }
 
 // A lease that ran out while no replica led (an outage) isn't reaped by a new leader until its
-// runner had LeaseTTL to heartbeat again; the heartbeat renews it. Past that, it is reaped.
+// runner had ReapGrace to heartbeat again; the heartbeat renews it. Past that, it is reaped.
 func TestReapAfterOutage(t *testing.T) {
 	a, ctx := testApp(t), context.Background()
 	_, run := configured(t, a)
@@ -125,9 +125,9 @@ func TestReapAfterOutage(t *testing.T) {
 	}
 
 	expire() // the runner is really gone
-	a.ReapLeases(context.WithValue(ctx, leadKey{}, time.Now().Add(-LeaseTTL)))
+	a.ReapLeases(context.WithValue(ctx, leadKey{}, time.Now().Add(-ReapGrace)))
 	if s := status(); s != storage.Errored {
-		t.Fatalf("leading for LeaseTTL: %s, want errored", s)
+		t.Fatalf("leading for ReapGrace: %s, want errored", s)
 	}
 }
 
