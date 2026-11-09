@@ -36,6 +36,8 @@ type fakeServer struct {
 	claim         http.HandlerFunc  // answers POST /jobs/claim
 	calls         []string          // job calls in order: ack, logs, heartbeat, finish
 	stall         bool              // artifact downloads hang until the runner gives up
+	failWrites    int               // refuse state writes under this many locks (one per terraform command)
+	refused       bool              // a write under the current lock was refused
 }
 
 // artifact stores and serves plan artifacts, like the server, only for the job's lease.
@@ -92,6 +94,11 @@ func (f *fakeServer) state(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusNoContent)
 	case "POST":
+		if f.failWrites > 0 {
+			f.refused = true
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
 		if f.planning || f.locks[id] == "" || r.URL.Query().Get("ID") != f.locks[id] {
 			w.WriteHeader(http.StatusConflict)
 			return
@@ -103,6 +110,9 @@ func (f *fakeServer) state(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.locks[id] = info.ID
+		if f.refused {
+			f.failWrites, f.refused = f.failWrites-1, false
+		}
 	case "UNLOCK":
 		delete(f.locks, id)
 	}

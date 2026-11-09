@@ -125,6 +125,38 @@ func TestExecuteReportsFailure(t *testing.T) {
 	}
 }
 
+// TestErroredState: state an apply couldn't save (errored.tfstate) is pushed again, or else kept
+// outside the workdir, which is deleted.
+func TestErroredState(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir()) // where a kept state goes
+	f := &fakeServer{}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	r := testRunner(t, srv)
+	src := f.module(t, helloModule)
+	vars := map[string]any{"greeting": "hello"}
+
+	f.do(t, r, job("once", "plan", "apply", src, vars))
+	f.failWrites = 1 // the apply's write fails, the push's succeeds
+	res, logs := f.do(t, r, job("once", "apply", "apply", src, vars))
+	if res.Status != "failed" || !strings.HasPrefix(res.Message, "the state was saved on a second try; apply: ") ||
+		!strings.Contains(string(f.states["ws1"]), `"terraform_data"`) || len(res.Resources) != 1 {
+		t.Fatalf("pushed: %+v %q\n%s", res, f.states["ws1"], logs)
+	}
+
+	f.do(t, r, job("twice", "plan", "apply", src, map[string]any{"greeting": "hi"}))
+	f.failWrites = 2 // the push fails too
+	res, logs = f.do(t, r, job("twice", "apply", "apply", src, map[string]any{"greeting": "hi"}))
+	kept := filepath.Join(os.TempDir(), "opsolete-errored-twice.tfstate")
+	b, err := os.ReadFile(kept)
+	if res.Status != "failed" || !strings.Contains(res.Message, kept) || err != nil || !strings.Contains(string(b), `"hi"`) {
+		t.Fatalf("kept: %+v %v\n%s", res, err, logs)
+	}
+	if fi, _ := os.Stat(kept); fi.Mode().Perm() != 0o600 {
+		t.Errorf("kept state mode %v", fi.Mode().Perm())
+	}
+}
+
 // TestJobEnv: a job's environment variables reach Terraform, on top of the runner's own.
 func TestJobEnv(t *testing.T) {
 	f := &fakeServer{}

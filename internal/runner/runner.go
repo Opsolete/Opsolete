@@ -139,6 +139,9 @@ func (r *Runner) Execute(hard context.Context, job runnerapi.Job) {
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		res.Status, res.Message = "failed", fmt.Sprintf("timed out after %s; %s", r.JobTimeout, stopped)
 	}
+	if p.rescued != "" { // first: the message is cut at 2000 runes
+		res.Message = strings.TrimSuffix(p.rescued+"; "+res.Message, "; ")
+	}
 	res.Message = ship.redact.Replace(res.Message) // Terraform's stderr may quote a signed URL
 	if m := []rune(res.Message); len(m) > 2000 {   // after redacting: a cut must not split a signed URL
 		res.Message = string(m[:2000]) + "…"
@@ -242,6 +245,7 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	// The apply writes state: report what's in it however it ends, since a failed apply can
 	// leave resources behind too.
 	defer func() { res.Resources = inventory(ctx, tf) }()
+	defer func() { tf.rescued = r.rescueState(ctx, tf, job, w) }() // before inventory (LIFO) and before dir is removed
 	fmt.Fprintln(w, "\n==> terraform apply (saved plan)")
 	if _, err := run("apply", "-auto-approve", "-input=false", planFile); err != nil {
 		return fail("apply", err)
@@ -277,6 +281,39 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	}
 	fmt.Fprintln(w, "\n==> done")
 	return runnerapi.FinishRequest{Status: "succeeded", Outputs: outputs}
+}
+
+// erroredState is where Terraform writes the state it couldn't save to the backend (in its working dir).
+const erroredState = "errored.tfstate"
+
+// rescueState handles the state an apply couldn't save: it tracks resources the apply changed, so
+// losing it with the workdir orphans them. It pushes it again; if that fails too (lease lost,
+// server unreachable), it moves it out of the workdir and says where. "" if there was none.
+func (r *Runner) rescueState(ctx context.Context, tf *tfProc, job runnerapi.Job, w io.Writer) string {
+	file := filepath.Join(tf.dir, erroredState)
+	if _, err := os.Stat(file); err != nil {
+		return ""
+	}
+	// own context, like inventory: the job's may be done (cancel, timeout), the phase's hard end isn't
+	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), min(time.Minute, time.Until(tf.end)))
+	defer cancel()
+	fmt.Fprintln(w, "\n==> terraform state push (the state the apply couldn't save)")
+	if _, err := tf.run(pctx, w, w, "state", "push", "-no-color", erroredState); err == nil {
+		fmt.Fprintln(w, "\n==> state saved")
+		return "the state was saved on a second try"
+	}
+	// shortcut: kept in the runner's temp dir, which an ephemeral container loses on restart; upload it
+	// to the server instead if that matters.
+	kept := filepath.Join(os.TempDir(), "opsolete-errored-"+job.RunID+".tfstate")
+	if err := os.Rename(file, kept); err != nil {
+		r.Log.Error("state the apply couldn't save is lost", "run", job.RunID, "err", err)
+		return "the state couldn't be saved and is lost: the resources this apply changed may be untracked"
+	}
+	os.Chmod(kept, 0o600) // it holds secrets
+	r.Log.Error("state the apply couldn't save kept on the runner: push it with terraform state push", "run", job.RunID, "file", kept)
+	msg := fmt.Sprintf("the state couldn't be saved; it is kept on runner %s at %s: push it with terraform state push", r.Name, kept)
+	fmt.Fprintf(w, "\n==> %s\n", msg)
+	return msg
 }
 
 // plan saves a plan; with changes it reports a summary and uploads the plan and the lock file
