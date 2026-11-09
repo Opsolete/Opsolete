@@ -496,6 +496,34 @@ Test paths are relative to `internal/`, except `cmd/opsolete/…` (from the repo
 
 ---
 
+## R. Environments and promotion
+
+**R1. Set environment values on a project** — `full`
+- Project › Environment values; admins and groups with operate on the project set/clear (`POST /projects/{project}/environment`, `…/clear`); readers see them; checked by the input's own rules, not empty.
+- Failures: reader 403; unknown template/input or not per-environment 404; invalid value 422.
+- Coverage: `http/environments_test.go:TestEnvironmentValuesPages` (set as admin, read-only for a reader); `http/access_test.go:TestAccessMatrix` (the three routes); `app/environments_test.go:TestEnvironmentValueAccess`; `templates/json_test.go` (`per_environment` not with sensitive/key, schema and loader agree); `http/builder_test.go` (checkbox).
+
+**R2. Per-environment input at run time** — `partial`
+- The project value replaces the workspace's own when a runner claims the job (the workspace's current project; moving switches it); hidden by `show_if` → not set; a value the template now rejects fails the job. Forms show it read-only ("Set by project X"), a posted value is ignored; the deploy form re-renders for another project; rollouts count it.
+- Coverage: `app/environments_test.go:TestEnvironmentValuesInJobs` (`Store.ClaimJob` + `assembleJob`: precedence, move to another project, stored config never holds project values, restore), `TestEnvironmentValueShowIf`; `http/environments_test.go:TestEnvironmentValuesPages` (deploy/configure forms locked, posted value ignored, project switch re-renders and creates nothing); `app/rollouts_test.go:TestRolloutPlanEnvironment`; `app/promote_test.go:TestPromote` ("the project's value applies").
+- Missing: the job content through the runner API or the real runner (app level only); a rejected project value failing the job.
+
+**R3. Promote to an existing workspace, one run** — `full`
+- Promote to… (read on the source, operate on the target); preview (added/updated/replaced/removed with resource counts/unchanged, per-environment source, sensitive kept or asked); pinned by a digest; one apply run with every change in config_changes, always waits for confirmation; discard/failed plan restores the target's templates incl. removed ones; audit `promote`.
+- Failures: stale preview 409; target busy 409; nothing to change 409; to itself / local target refused; read-only target 403; invalid asked values 422.
+- Coverage: `e2e/e2e_test.go:TestRealRunner` (promote steps: "nothing left to remove, one run; applied, the target runs exactly dev's templates"); `http/promote_test.go:TestPromotePages`; `app/promote_test.go:TestPromote` (preview, stale, exact copy, own size and password kept, nothing to change, auto-apply target waits, discard restores, audit), `TestPromoteAccess`; `storage/promote_test.go:TestPromote` (discarded / failed plan restore incl. a removed template, a taken name wins); `http/access_test.go:TestAccessMatrix`; `http/forms_test.go`; `http/render_test.go`.
+
+**R4. Promote with a deployed template removed or replaced (two chained runs)** — `full`
+- Preview says "runs twice"; run A destroys (`-target`) only the removed/replaced modules, always confirms, carries the promotion; A applied/no_changes → removal rows deleted, run B (apply, always confirms) queued, audit `promote apply queued`; A ending otherwise drops it ("promotion not continued"); B discarded → the post-A templates.
+- Coverage: `e2e/e2e_test.go:TestRealRunner` (the removed module configures its own provider: destroy run with its block, then the apply run; discarded → back to post-destroy templates; re-promotion is one run); `storage/promote_test.go:TestPromoteChained` (incl. "promotion not continued" for failed/discarded/canceled, `promote apply queued` audit), `TestModuleIndex`; `app/promote_test.go:TestPromoteChained` (audit `chained`).
+
+**R5. Promote to a new workspace** — `full`
+- Name + a project the user may create workspaces in; the workspace is created by the promotion (remote execution) with one run that waits; sensitive and per-environment inputs without a value are asked for; discard leaves it without templates.
+- Failures: name taken / invalid 422; project the user may not create in 422.
+- Coverage: `http/promote_test.go:TestPromotePages` (picker, preview `?new=`, refused form re-rendered with field errors, run opened); `app/promote_test.go:TestPromote` ("a new target: per-environment and sensitive values asked for"), `TestPromoteAccess`; `storage/promote_test.go:TestPromote` ("a new workspace: created with the templates, removed again on discard", taken name).
+
+---
+
 ## Counts
 
 | Area | Flows | full | partial | none |
@@ -517,7 +545,8 @@ Test paths are relative to `internal/`, except `cmd/opsolete/…` (from the repo
 | O Account, organization | 3 | 3 | 0 | 0 |
 | P Operations | 6 | 5 | 1 | 0 |
 | Q Runner lifecycle | 8 | 7 | 1 | 0 |
-| **Total** | **96** | **90** | **6** | **0** |
+| R Environments, promotion | 5 | 4 | 1 | 0 |
+| **Total** | **101** | **94** | **7** | **0** |
 
 A1, I1 and J2 are counted by their first verdict (`full`); their `partial` halves are listed in the gaps.
 

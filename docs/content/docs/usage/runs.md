@@ -13,7 +13,7 @@ A run can also end as `no_changes`, `discarded` (plan not confirmed), `errored` 
 
 The plan phase saves a plan file and reports what it will do (`+2 ~1 −0`, plus the resource addresses, never values). Confirming queues the apply phase, which may run on any runner and applies exactly the saved plan. Terraform refuses the apply if the state changed since the plan, so a stale plan can't be applied.
 
-- **Auto-apply** (per workspace, off by default) applies plans without confirmation. **Destroy, refresh-only and [template rollout]({{< relref "workspaces#update-to-a-new-module-version" >}}) runs always ask.**
+- **Auto-apply** (per workspace, off by default) applies plans without confirmation. **Destroy, refresh-only, [template rollout]({{< relref "workspaces#update-to-a-new-module-version" >}}) and [promotion]({{< relref "environments#one-run-or-two" >}}) runs always ask.**
 - **One active run per workspace.** Starting a run while another is active (queued, planning, waiting for confirmation or applying) is refused: confirm or discard it, or wait for it to finish. A plan waiting for confirmation holds the workspace until then.
 - **Remote execution only.** A workspace set to local execution (*Settings › General*) is run by the [Terraform CLI]({{< relref "terraform-cli" >}}) on your machine: its runs, drift checks, VCS triggers and rollouts don't start in Opsolete.
 - **A held state lock** (a CLI, or *Settings › Locking*) keeps queued runs waiting until it's released; see [Locking]({{< relref "state#locking" >}}).
@@ -31,6 +31,7 @@ The plan phase saves a plan file and reports what it will do (`+2 ~1 −0`, plus
 Elsewhere:
 
 - **Replace** resources: tick them in the workspace's resource list and choose **Plan replacing selected** (`-replace=<address>`; only addresses in the current state are accepted).
+- **Promotion:** a [promotion]({{< relref "environments#one-run-or-two" >}}) that removes or replaces a deployed template first runs a destroy targeting only those modules; once it is applied, the promotion's apply run is queued automatically. Both wait for confirmation.
 - **Queue destroy plan** (*Settings › Destruction and deletion*) plans `terraform plan -destroy`; once confirmed and applied, the workspace is marked destroyed. A new run can recreate it.
 
 ## Drift detection

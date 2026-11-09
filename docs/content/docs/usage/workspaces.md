@@ -38,6 +38,10 @@ Add any number of templates (**Deploy…** in a workspace's menu, operate access
   - *Possible improvement:* the runner has every template's module on disk after `terraform init`, `git::` ones too. It could add the workspace Terraform variables each module declares itself, if the job also lists the inputs each template's form asks for, so those keep winning.
 - Each template's module configures its own providers (see [Writing modules for templates]({{< relref "/docs/catalog/templates#writing-modules-for-templates" >}})).
 
+## Promote to another workspace
+
+**Promote to…** in a workspace's menu (read access) makes another workspace, existing (operate) or new, an exact copy of its templates, e.g. dev's in test. A preview shows every change first, and the target's run always waits for confirmation. See [Environments and promotion]({{< relref "environments#promote-a-workspace" >}}).
+
 ## Update to a new module version
 
 When a template is moved to a newer module version, the workspace's **Templates** tab shows *update: <version>* next to it. **Configure…** shows the form filled with its inputs, plus any new ones. Saving moves it to the template's version and queues a plan, which is confirmed as usual.

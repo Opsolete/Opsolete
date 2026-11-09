@@ -10,6 +10,7 @@ Day-to-day use: workspaces and the projects that group them, the runs that chang
   {{< card link="projects" title="Projects" >}}
   {{< card link="runs" title="Runs" >}}
   {{< card link="variables" title="Variables and variable sets" >}}
+  {{< card link="environments" title="Environments and promotion" >}}
   {{< card link="state" title="State" >}}
   {{< card link="terraform-cli" title="Terraform CLI" >}}
 {{< /cards >}}

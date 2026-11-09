@@ -54,6 +54,7 @@ See also [`catalog/storage-account.json`](https://github.com/Opsolete/Opsolete/b
 | `sensitive` | boolean | optional | `string` and `number` only, no `default`; see below. |
 | `show_if` | object | optional | `{"input": "<name>", "equals": [...]}`; see [conditional inputs](#conditional-inputs). |
 | `key` | boolean | optional | At most one input, not `bool` or sensitive; see below. |
+| `per_environment` | boolean | optional | Not with `sensitive` or `key`. Each project may set the value for all its workspaces; see below. |
 
 **Strict parsing.** Every object accepts only the fields above: an unknown field (a typo such as `"lable"`) is an error, as is a value of the wrong JSON type. Any invalid file fails the whole catalog: from Git, the last good commit stays loaded and **Settings → Templates** shows the error; from `TEMPLATES_DIR`, the server doesn't start. The error names the file, template, input and field:
 
@@ -69,6 +70,8 @@ A catalog has at most 500 files of at most 256 KiB each, 8 MiB in total.
 Mark a `string` or `number` input `"sensitive": true` for passwords and keys. It is typed in a password field, stored encrypted with `SECRET_KEY`, shown as *(sensitive)*, left out of the audit log, and kept when left empty on reconfigure. It can't have a `default`. A module variable declared `sensitive` in Terraform becomes a sensitive input when the template lists it. Values saved before an input was marked sensitive are encrypted the next time the template is configured.
 
 Mark one input `"key": true` (not `bool` or sensitive) to name the template after its value when it's added to a workspace: a key `vm_name` of `Web-Prod 01` adds it as `module.web_prod_01_c8ad`: a random hex suffix, so the same key can be added twice. Without a key, the template's name is used. The name can't be typed in, and is fixed once added: changing the key's value later doesn't rename it, since that would destroy and recreate its resources.
+
+Mark an input `"per_environment": true` for a value that differs per environment (a region, a size): each project may then set it for all its workspaces under *Environment values*, and that value applies at every run, over the workspace's own. See [Environments and promotion]({{< relref "/docs/usage/environments#per-environment-inputs" >}}).
 
 Fields generated from a [registry]({{< relref "module-registry" >}}) module's variables take their label and help from the variable's `description`, split once at its first `: ` when the builder imports them: `VM name: 1-64 letters, digits or -.` becomes the label *VM name* and the help *1-64 letters, digits or -.*. So write descriptions in that form. A template's own `help` takes precedence over the module's.
 
