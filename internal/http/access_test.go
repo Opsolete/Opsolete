@@ -141,7 +141,7 @@ func TestAccessMatrix(t *testing.T) {
 			must(t, post(admin, "/projects/"+f.project+"/access", url.Values{"group": {group}, "level": {level}}), http.StatusSeeOther, "grant")
 		}
 		rec := must(t, post(admin, "/templates/new", url.Values{"name": {"Acc " + s}, "module_source": {"git::https://x//m"}, "module_ref": {"v1"},
-			"in_name": {"location"}, "in_type": {"string"}, "in_default": {"westeurope"}}), http.StatusSeeOther, "template")
+			"in_name": {"location"}, "in_type": {"string"}, "in_default": {"westeurope"}, "in_per_environment": {"0"}}), http.StatusSeeOther, "template")
 		f.tpl = strings.TrimPrefix(rec.Header().Get("Location"), "/templates/")
 		rec = must(t, post(admin, "/templates/"+f.tpl, url.Values{"ops-workspace": {f.ws}, fieldProject: {f.project}, "location": {"westeurope"}}),
 			http.StatusSeeOther, "workspace")
@@ -419,6 +419,10 @@ func accessRows() []accessRow {
 		{"POST /projects", "/projects", "name={proj}-new", onUI, []int{401, 403, 403, 403, 303}, true},
 		{"GET /projects/{project}", "/projects/{proj}", "", onUI, []int{302, 404, 200, 200, 200}, false},
 		{"GET /projects/{project}/workspaces", "/projects/{proj}/workspaces", "", onUI, []int{302, 404, 200, 200, 200}, false},
+		// environment values: whoever sees the project reads them; who creates workspaces in it (operate) sets them
+		{"GET /projects/{project}/environment", "/projects/{proj}/environment", "", onUI, []int{302, 404, 200, 200, 200}, false},
+		{"POST /projects/{project}/environment", "/projects/{proj}/environment", "template={tpl}&input=location&value=northeurope", onUI, []int{401, 404, 403, 303, 303}, false},
+		{"POST /projects/{project}/environment/clear", "/projects/{proj}/environment/clear", "template={tpl}&input=location", onUI, []int{401, 404, 403, 303, 303}, false},
 		// settings pages: admins only, as only they save them
 		{"GET /projects/{project}/settings", "/projects/{proj}/settings", "", onUI, []int{302, 404, 403, 403, 200}, false},
 		{"GET /projects/{project}/settings/{page}", "/projects/{proj}/settings/access", "", onUI, []int{302, 404, 403, 403, 200}, false},

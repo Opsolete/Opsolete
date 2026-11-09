@@ -30,6 +30,15 @@ type AuditLog struct {
 	Hash     []byte
 }
 
+type EnvironmentValue struct {
+	ProjectID  uuid.UUID
+	TemplateID string
+	InputName  string
+	Value      string
+	UpdatedAt  time.Time
+	UpdatedBy  uuid.NullUUID
+}
+
 type Module struct {
 	Namespace  string
 	Name       string

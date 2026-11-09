@@ -54,7 +54,8 @@ func (s *Server) workspaceRoutes(mux routes) {
 	mux.HandleFunc("GET /workspaces/{name}/runs/{run}/logs/stream", s.logStream)
 }
 
-// createWorkspace creates a workspace with the template added to it and queues its first plan.
+// createWorkspace creates a workspace with the template added to it and queues its first plan;
+// with refresh (the project picker changed) it only shows the form again for the picked project.
 func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 	t, err := s.App.Template(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -67,16 +68,28 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	in := app.NewWorkspace{Name: strings.TrimSpace(f.Get(fieldWorkspace)), Project: f.Get(fieldProject),
 		AutoApply: f.Get(fieldAutoApply) != "", TemplateID: t.ID, Inputs: formValues(f, t)}
-	ws, run, err := s.App.CreateWorkspace(r.Context(), actor(r), in)
-	if s.failed(w, r, err, "workspace", f, func(status int, fs *formState) {
-		fs.Labels = inputLabels(t)
+	form := func(status int, fs *formState) { // the form again, as posted
+		if fs != nil {
+			fs.Labels = inputLabels(t)
+		}
 		page := formPage{Page: Page{Section: "templates"}, T: t, Editor: s.canEditTemplates(r), Values: in.Inputs, F: fs, Workspace: in.Name, AutoApply: in.AutoApply, Project: in.Project}
+		var err error
 		if page.Projects, err = s.creatableProjects(r); err != nil {
 			s.internalError(w, "list projects", err)
 			return
 		}
+		if err := s.lockDeploy(r, &page); err != nil {
+			s.internalError(w, "environment values", err)
+			return
+		}
 		s.render(w, r, status, "form.html", &page)
-	}) {
+	}
+	if f.Has("refresh") { // another project picked: its values, nothing created
+		form(http.StatusOK, nil)
+		return
+	}
+	ws, run, err := s.App.CreateWorkspace(r.Context(), actor(r), in)
+	if s.failed(w, r, err, "workspace", f, form) {
 		return
 	}
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID.String(), http.StatusSeeOther)

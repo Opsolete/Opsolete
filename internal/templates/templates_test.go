@@ -121,7 +121,7 @@ func TestDescribe(t *testing.T) {
 	tpl := Template{Inputs: []Input{{Name: "size", Label: "Size", Type: "select", Options: []Option{{Label: "Small", Value: "s"}}},
 		{Name: "pw", Sensitive: true}, {Name: "backup", Type: "bool"}, {Name: "disk", Type: "number"}}}
 	got := fmt.Sprint(tpl.Describe(map[string]any{"disk": 1e6, "old": "x", "backup": true, "pw": map[string]any{"sealed": "c2"}, "size": "s"}))
-	if want := "[{size Size Small false} {pw pw  true} {backup backup Yes false} {disk disk 1000000 false} {old old x false}]"; got != want {
+	if want := "[{size Size Small false } {pw pw  true } {backup backup Yes false } {disk disk 1000000 false } {old old x false }]"; got != want {
 		t.Errorf("got  %s\nwant %s", got, want)
 	}
 }

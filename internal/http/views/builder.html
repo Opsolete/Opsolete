@@ -114,6 +114,8 @@
               <span class="f-head">Required{{template "tip" "End users must fill it in. A hidden field is never required. Dropdowns and Yes / no fields always have a value."}}</span></label>
             <label class="check only-secret"><input type="checkbox" class="switch" name="in_sensitive" value="{{$i}}"{{if .Sensitive}} checked{{end}}>
               <span class="f-head">Sensitive{{template "tip" "For passwords and keys: typed in a password field, stored encrypted and never shown again. Can't have a default."}}</span></label>
+            <label class="check"><input type="checkbox" class="switch" name="in_per_environment" value="{{$i}}"{{if .PerEnvironment}} checked{{end}}>
+              <span class="f-head">Per environment{{template "tip" "Each project (environment) may set this value for all its workspaces, under Environment values; it then overrides what the workspace's form says. Not for sensitive or key fields."}}</span></label>
           </div>
         </div>
         <div class="fcard-cond">

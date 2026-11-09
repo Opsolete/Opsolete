@@ -67,6 +67,11 @@ func (a *App) workspaceMasker(ctx context.Context, workspaceID uuid.UUID) (mask.
 	return mask.New(secrets), nil
 }
 
+// An added template's module argument comes from, strongest first: the workspace's project's value
+// for a per-environment input (withEnvironmentValues), the workspace's stored input (its form), the
+// workspace's Terraform variables (own, then workspace sets, project sets, global sets: SQL's
+// variable_set_rank) for variables the template doesn't ask, then the module's default.
+//
 // withWorkspaceVars adds to an added template's inputs the workspace's Terraform variables (vars, from
 // the workspace and its variable sets) that its module declares, under its own inputs: as a root module
 // gets them through tfvars, but only declared ones, since an unknown module argument fails the run.

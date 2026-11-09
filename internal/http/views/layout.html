@@ -61,6 +61,7 @@
     <span class="nav-head">{{.}}</span>
     <a href="/projects/{{.}}"{{if eq $t "overview"}} aria-current="page"{{end}}>Overview</a>
     <a href="/projects/{{.}}/workspaces"{{if eq $t "workspaces"}} aria-current="page"{{end}}>Workspaces <span class="tag">{{$.WorkspaceCount}}</span></a>
+    <a href="/projects/{{.}}/environment"{{if eq $t "environment"}} aria-current="page"{{end}}>Environment values</a>
     {{if $.User.Admin}}<a href="/projects/{{.}}/settings"{{if eq $t "settings"}} aria-current="page"{{end}}>Settings ›</a>{{end}}
   </nav>
   {{end}}

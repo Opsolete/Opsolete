@@ -130,24 +130,25 @@ func TestTemplateBuilder(t *testing.T) {
 func TestBuilderRoundTrip(t *testing.T) {
 	tpl := templateFromForm(url.Values{
 		"name": {"VM"}, "module_source": {"git::https://x//vm"}, "module_ref": {"v1"}, "key": {"vm_name"},
-		"in_name":         {"vm_name", "disks", "backup", "size", "note"},
-		"in_label":        {"VM name", "Disks", "Backups", "Size", ""},
-		"in_help":         {"1-64 letters or digits", "", "", "", "Free text"},
-		"in_type":         {"string", "number", "bool", "select", "string"},
-		"in_default":      {"vm1", "2", "", "s", ""},
-		"in_bool_default": {"", "", "true", "", ""},
-		"in_required":     {"0"},
-		"in_opt_value_3":  {"s", "l"},
-		"in_opt_label_3":  {"Small", "l"},
-		"in_show_input":   {"", "", "", "", "backup"},
-		"in_show_equals":  {"", "", "", "", "false"},
+		"in_name":            {"vm_name", "disks", "backup", "size", "note"},
+		"in_label":           {"VM name", "Disks", "Backups", "Size", ""},
+		"in_help":            {"1-64 letters or digits", "", "", "", "Free text"},
+		"in_type":            {"string", "number", "bool", "select", "string"},
+		"in_default":         {"vm1", "2", "", "s", ""},
+		"in_bool_default":    {"", "", "true", "", ""},
+		"in_required":        {"0"},
+		"in_per_environment": {"3"},
+		"in_opt_value_3":     {"s", "l"},
+		"in_opt_label_3":     {"Small", "l"},
+		"in_show_input":      {"", "", "", "", "backup"},
+		"in_show_equals":     {"", "", "", "", "false"},
 	})
 	tpl.ID = "vm"
 	b, err := templates.Encode(tpl)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"default": 2`, `"default": true`, `"help": "Free text"`} {
+	for _, want := range []string{`"default": 2`, `"default": true`, `"help": "Free text"`, `"per_environment": true`} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("encoded lacks %s:\n%s", want, b)
 		}

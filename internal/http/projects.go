@@ -17,6 +17,9 @@ func (s *Server) projectRoutes(mux routes) {
 	// the project's menu pages: project.html shows the part of the tab
 	mux.HandleFunc("GET /projects/{project}", s.projectTab("overview"))
 	mux.HandleFunc("GET /projects/{project}/workspaces", s.projectTab("workspaces"))
+	mux.HandleFunc("GET /projects/{project}/environment", s.projectTab("environment"))
+	mux.HandleFunc("POST /projects/{project}/environment", s.setEnvironmentValue)
+	mux.HandleFunc("POST /projects/{project}/environment/clear", s.clearEnvironmentValue)
 	mux.HandleFunc("GET /projects/{project}/settings", s.projectTab("settings"))
 	mux.HandleFunc("GET /projects/{project}/settings/{page}", s.projectTab("settings"))
 	mux.HandleFunc("POST /projects/{project}/settings", s.projectSettings)
@@ -60,7 +63,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
 }
 
 // projectPage is a project's menu page (project.html): Overview, Workspaces and Settings (General,
-// Team access, Variable sets). Everyone who sees the project sees the first two; only admins the settings.
+// Team access, Variable sets) and Environment values. Everyone who sees the project sees all but the settings, which only admins see.
 type projectPage struct {
 	Page
 	P          storage.Project
@@ -70,6 +73,7 @@ type projectPage struct {
 	Grants     []storage.Grant     // settings: team access
 	Groups     []string            // settings: team access, known groups to grant
 	Sets       []storage.VariableSet
+	Env        app.EnvironmentValues // environment: per-environment input values
 }
 
 // projectTab serves the {project}'s menu page tab; "settings" also its sub-pages ({page}).
@@ -118,6 +122,11 @@ func (s *Server) renderProject(w http.ResponseWriter, r *http.Request, tab, sub 
 			list = list[:min(len(list), 5)]
 		}
 		data.Workspaces = list
+	case tab == "environment":
+		if data.Env, err = s.App.EnvironmentValues(ctx, a, p.Name); err != nil {
+			s.uiError(w, r, err)
+			return
+		}
 	case sub == "access":
 		acc, err := s.App.ProjectAccess(ctx, a, p.Name)
 		if err != nil {
@@ -132,6 +141,37 @@ func (s *Server) renderProject(w http.ResponseWriter, r *http.Request, tab, sub 
 		}
 	}
 	s.render(w, r, status, "project.html", data)
+}
+
+// setEnvironmentValue sets the project's value for a template's per-environment input; the form is
+// named after the template and input ("env:<template>/<input>"), one per input on the page.
+func (s *Server) setEnvironmentValue(w http.ResponseWriter, r *http.Request) {
+	f, ok := readForm(w, r)
+	if !ok {
+		return
+	}
+	project := r.PathValue("project")
+	err := s.App.SetEnvironmentValue(r.Context(), actor(r), project, f.Get("template"), f.Get("input"), f.Get("value"))
+	if s.failed(w, r, err, "env:"+f.Get("template")+"/"+f.Get("input"), f, func(status int, fs *formState) {
+		s.renderProject(w, r, "environment", "", status, fs)
+	}) {
+		return
+	}
+	http.Redirect(w, r, "/projects/"+project+"/environment", http.StatusSeeOther)
+}
+
+// clearEnvironmentValue removes the project's value: its workspaces use their own again.
+func (s *Server) clearEnvironmentValue(w http.ResponseWriter, r *http.Request) {
+	f, ok := readForm(w, r)
+	if !ok {
+		return
+	}
+	project := r.PathValue("project")
+	if err := s.App.ClearEnvironmentValue(r.Context(), actor(r), project, f.Get("template"), f.Get("input")); err != nil {
+		s.uiError(w, r, err)
+		return
+	}
+	http.Redirect(w, r, "/projects/"+project+"/environment", http.StatusSeeOther)
 }
 
 // projectAccess grants an IdP group read or operate access to all of a project's workspaces

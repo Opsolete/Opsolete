@@ -160,12 +160,17 @@ func (s *Server) renderWorkspace(w http.ResponseWriter, r *http.Request, tab, su
 		}
 		o := &overviewTab{Added: added, Updates: map[string]string{}, TemplateNames: map[string]string{},
 			AddedInputs: map[string][]templates.StoredValue{}, Show: r.URL.Query().Get("show")}
+		env, err := s.App.ProjectEnvironment(ctx, ws.ProjectID)
+		if err != nil {
+			s.internalError(w, "environment values", err)
+			return
+		}
 		for _, a := range added {
 			t, ok := s.App.Templates.Get(a.TemplateID)
 			if ok {
 				o.TemplateNames[t.ID] = t.Name
 			}
-			o.AddedInputs[a.Name] = t.Describe(a.Inputs)
+			o.AddedInputs[a.Name] = env.Describe(t, a.Inputs, ws.ProjectName)
 			if ok && (t.Module.Source != a.ModuleSource || t.Module.Ref != a.ModuleRef) {
 				o.Updates[a.Name] = t.Module.Ref
 			}

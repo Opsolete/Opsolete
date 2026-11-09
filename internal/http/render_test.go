@@ -48,7 +48,7 @@ func TestPageModels(t *testing.T) {
 	overview := func(show string) *workspacePage {
 		return tab("overview", "", func(p *workspacePage) {
 			p.overviewTab = &overviewTab{Added: []storage.WorkspaceTemplate{{Name: "vm_1", TemplateID: "vm"}}, Updates: map[string]string{"vm_1": "v2"},
-				TemplateNames: map[string]string{"vm": "VM"}, AddedInputs: map[string][]templates.StoredValue{"vm_1": tpl.Describe(nil)},
+				TemplateNames: map[string]string{"vm": "VM"}, AddedInputs: map[string][]templates.StoredValue{"vm_1": {{Name: "size", Title: "Size", Text: "s", Project: "p"}}},
 				ResourceGroups: groupResources(p.Resources, nil, nil), TemplateResources: map[string]int{"vm_1": 1}, LatestPlan: plan, LatestApply: apply, Show: show}
 		})
 	}
@@ -91,7 +91,14 @@ func TestPageModels(t *testing.T) {
 			&projectPage{Page: Page{InProject: "p", Tab: "workspaces"}, P: storage.Project{Name: "p"}, Workspaces: []storage.Workspace{ws}},
 			&projectPage{Page: Page{InProject: "p", Tab: "settings"}, P: storage.Project{Name: "p", Workspaces: 2}},
 			&projectPage{Page: Page{InProject: "p", Tab: "settings", Sub: "access"}, P: storage.Project{Name: "p"}, Grants: []storage.Grant{{Group: "g"}}, Groups: []string{"g"}},
-			&projectPage{Page: Page{InProject: "p", Tab: "settings", Sub: "variable-sets"}, P: storage.Project{Name: "p"}, Sets: []storage.VariableSet{set}}},
+			&projectPage{Page: Page{InProject: "p", Tab: "settings", Sub: "variable-sets"}, P: storage.Project{Name: "p"}, Sets: []storage.VariableSet{set}},
+			&projectPage{Page: Page{InProject: "p", Tab: "environment"}, P: storage.Project{Name: "p"}},
+			&projectPage{Page: Page{InProject: "p", Tab: "environment"}, P: storage.Project{Name: "p"}, F: &formState{Name: "env:vm/size", Fields: map[string]string{"value": "bad"}},
+				Env: app.EnvironmentValues{CanEdit: true, Templates: []app.EnvironmentTemplate{{Template: tpl, Inputs: []app.EnvironmentInput{
+					{Input: tpl.Inputs[0], Set: true, Value: "s", Text: "s", UpdatedAt: now, UpdatedBy: "a@b"}, {Input: templates.Input{Name: "on", Type: "bool"}},
+					{Input: templates.Input{Name: "n", Type: "number", Pattern: "x"}}}}}}},
+			&projectPage{Page: Page{InProject: "p", Tab: "environment"}, P: storage.Project{Name: "p"},
+				Env: app.EnvironmentValues{Templates: []app.EnvironmentTemplate{{Template: tpl, Inputs: []app.EnvironmentInput{{Input: tpl.Inputs[0], Set: true, Value: "s"}}}}}}},
 		"variablesets.html": {&variableSetsPage{}, &variableSetsPage{Sets: []storage.VariableSet{set}, F: &formState{Name: "set", Input: map[string][]string{"project": {"p"}}}}},
 		"variableset.html":  {&variableSetPage{}, &variableSetPage{Set: set, Variables: vars, Picker: picks, Projects: []pickerItem{{"p", "p", true}}}},
 		"newworkspace.html": {&newWorkspacePage{},
@@ -111,7 +118,9 @@ func TestPageModels(t *testing.T) {
 		"rollout.html": {&rolloutPage{}, &rolloutPage{T: tpl, Rollout: &storage.Rollout{Status: "paused"}, Projects: []storage.Project{{Name: "p"}}}},
 		"builder.html": {&builderPage{}, &builderPage{T: tpl, Rows: tpl.Inputs, Editing: true, Warning: "w", Modules: []storage.Module{{Name: "m"}}, Registry: true, PullRequest: "u"}},
 		"form.html": {&formPage{}, &formPage{T: tpl, Editor: true, Values: map[string]string{"size": "s"}, Projects: []storage.Project{{Name: "p"}}},
-			&formPage{Page: workspaceNav("ws", "templates", "", true), T: tpl, Configure: &ws, Module: "vm_1", Set: map[string]bool{"pw": true}}},
+			&formPage{Page: workspaceNav("ws", "templates", "", true), T: tpl, Configure: &ws, Module: "vm_1", Set: map[string]bool{"pw": true}},
+			&formPage{T: tpl, Values: map[string]string{"size": "s"}, Projects: []storage.Project{{Name: "p"}, {Name: "q"}}, EnvReload: true,
+				Locked: map[string]string{"size": "s"}, LockedBy: "p"}},
 	}
 	for _, f := range must(views.ReadDir("views")) {
 		if name := f.Name(); name != "layout.html" && name != "variables.html" && pages[name] == nil { // the two hold partials only
