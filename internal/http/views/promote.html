@@ -1,0 +1,141 @@
+{{template "top" .Page}}
+{{with .P}}
+<a class="back" href="/workspaces/{{$.Source}}/promote">← Pick another target</a>
+<div class="page-head">
+  <div>
+    <h1>Promote {{.Source.Name}} to {{.Target.Name}}</h1>
+    <p class="muted">{{if .New}}A new workspace in project <a href="/projects/{{.Target.ProjectName}}">{{.Target.ProjectName}}</a> gets{{else}}<a href="/workspaces/{{.Target.Name}}">{{.Target.Name}}</a> (project <a href="/projects/{{.Target.ProjectName}}">{{.Target.ProjectName}}</a>) becomes{{end}} an exact copy of {{.Source.Name}}'s templates: the same modules, versions and inputs. Per-environment inputs come from its project (else its own value), sensitive ones are never copied; VCS links, variables and settings stay as they are. Each run on {{.Target.Name}} waits for your confirmation, even with auto-apply; discarding one puts the templates back as they were before it.</p>
+  </div>
+</div>
+{{with .Destroy}}<div class="alert warn" role="status">This promotion runs twice: first a destroy of {{range $i, $m := .}}{{if $i}}, {{end}}<code>module.{{$m}}</code>{{end}} ({{$.P.DestroyResources}} resource{{if ne $.P.DestroyResources 1}}s{{end}}), then the apply of the rest. Each waits for your confirmation.</div>{{end}}
+{{$f := formOf $.F "promote"}}
+{{template "formerror" $f}}
+<div class="card flush">
+<table>
+<tr><th>Module</th><th>Template</th><th>Change</th><th>Details</th></tr>
+{{range .Modules}}
+<tr>
+  <td><code>module.{{.Module}}</code></td>
+  <td>{{.Template}}</td>
+  <td>
+    {{if eq .Change "add"}}<span class="change create">added</span>
+    {{else if eq .Change "update"}}<span class="change update">updated</span>
+    {{else if eq .Change "replace"}}<span class="change delete">replaced</span> <small class="muted">another template: remove + add</small>
+    {{else if eq .Change "remove"}}<span class="change delete">removed</span>
+    {{else}}<span class="muted">unchanged</span>{{end}}
+  </td>
+  <td>
+    {{if and .FromRef .ToRef (or (ne .FromRef .ToRef) (ne .FromSrc .ToSrc))}}<p class="m-0">Version <span class="tag">{{.FromRef}}</span> → <span class="tag">{{.ToRef}}</span>{{if ne .FromSrc .ToSrc}} (source <code>{{.ToSrc}}</code>){{end}}</p>
+    {{else if and (not .FromRef) .ToRef}}<p class="m-0">Version <span class="tag">{{.ToRef}}</span></p>{{end}}
+    {{if eq .Change "remove"}}<p class="m-0">Destroys the {{.Resources}} resource{{if ne .Resources 1}}s{{end}} it manages.</p>
+    {{else if and (eq .Change "replace") .Resources}}<p class="m-0">Its {{.Resources}} resource{{if ne .Resources 1}}s{{end}} may be destroyed or replaced.</p>{{end}}
+    {{range .Inputs}}<p class="m-0">{{.Title}}:
+      {{if .Field}}<a href="#{{.Field}}">needs a value</a>
+      {{else if .Sensitive}}<span class="muted">sensitive, {{if .Kept}}{{$.P.Target.Name}}'s own value kept{{end}}</span>
+      {{else if eq .Env "project"}}<code>{{.To}}</code> <small class="muted">set by project {{$.P.Target.ProjectName}}</small>
+      {{else if eq .Env "own"}}<code>{{.To}}</code> <small class="muted">per environment: {{$.P.Target.Name}}'s own value kept</small>
+      {{else}}{{with .From}}<code>{{.}}</code> → {{end}}{{with .To}}<code>{{.}}</code>{{else}}<span class="muted">none</span>{{end}}{{end}}
+    </p>{{end}}
+    {{range .Invalid}}<p class="err m-0">{{.}}</p>{{end}}
+  </td>
+</tr>
+{{end}}
+</table>
+</div>
+{{$invalid := false}}{{range .Modules}}{{if .Invalid}}{{$invalid = true}}{{end}}{{end}}
+{{if eq .Changes 0}}
+<div class="alert" role="status">Nothing to promote: {{.Target.Name}} already runs what {{.Source.Name}} runs.</div>
+{{else if $invalid}}
+<div class="alert warn" role="status">Some copied values aren't valid for the template (see above): fix them in {{.Source.Name}} first.</div>
+{{else}}
+<form method="post" action="/workspaces/{{$.Source}}/promote" class="card form-rows mt-125"
+  data-confirm="Promote {{.Source.Name}} to {{.Target.Name}}? A {{if .Destroy}}destroy {{end}}plan starts on {{.Target.Name}}; nothing changes before you confirm it.">
+  {{if .New}}<input type="hidden" name="new" value="{{.Target.Name}}"><input type="hidden" name="project" value="{{.Target.ProjectName}}">
+  {{else}}<input type="hidden" name="target" value="{{.Target.Name}}">{{end}}
+  <input type="hidden" name="digest" value="{{.Digest}}">
+  {{if .Asks}}
+  <div class="rows-head"><h2>Values for {{.Target.Name}}</h2><p class="hint"><span class="req" aria-hidden="true">*</span> Required</p></div>
+  <div class="rows">
+  {{range $m := .Modules}}{{range .Inputs}}{{if .Field}}{{$err := fieldError $f .Field}}
+    <div class="row{{if $err}} invalid{{end}}">
+      <label for="{{.Field}}">{{$m.Module}}: {{.Title}}{{if .Required}} <span class="req" aria-hidden="true">*</span>{{end}}</label>
+      {{if eq .Type "bool"}}
+      <input type="checkbox" id="{{.Field}}" name="{{.Field}}"{{if eq (print (value $f .Field .Value)) "on" "true"}} checked{{end}}{{aria $f .Field}}>
+      {{else if eq .Type "select"}}{{$cur := print (value $f .Field .Value)}}
+      <select id="{{.Field}}" name="{{.Field}}"{{aria $f .Field}}>
+        {{if not .Required}}<option value="">—</option>{{end}}
+        {{range .Options}}<option value="{{.Value}}"{{if eq .Value $cur}} selected{{end}}>{{.Text}}</option>{{end}}
+      </select>
+      {{else if .Sensitive}}
+      <input id="{{.Field}}" name="secret.{{.Field}}" type="password" autocomplete="new-password"{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}{{aria $f .Field (print .Field "-hint")}}>
+      <p class="hint" id="{{.Field}}-hint">Sensitive: {{$.P.Target.Name}} has no value of its own, and {{$.P.Source.Name}}'s is never copied.</p>
+      {{else}}
+      <input id="{{.Field}}" name="{{.Field}}" value="{{value $f .Field .Value}}" autocomplete="off" spellcheck="false"
+        {{if eq .Type "number"}}type="number" step="any" inputmode="decimal"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}{{aria $f .Field (print .Field "-hint")}}>
+      <p class="hint" id="{{.Field}}-hint">{{if .PerEnvironment}}Per environment: project {{$.P.Target.ProjectName}} sets no value and {{$.P.Target.Name}} has none of its own.{{else}}{{$.P.Source.Name}} has no value to copy.{{end}}</p>
+      {{end}}
+      {{template "fielderror" (dict "F" $f "N" .Field)}}
+    </div>
+  {{end}}{{end}}{{end}}
+  </div>
+  {{end}}
+  <div class="form-foot">
+    <p class="hint">{{.Changes}} module{{if ne .Changes 1}}s{{end}} change{{if eq .Changes 1}}s{{end}}.</p>
+    <div class="actions">
+      <button type="submit">Promote &amp; start {{if .Destroy}}the destroy {{end}}plan</button>
+      <a class="btn secondary" href="/workspaces/{{$.Source}}">Cancel</a>
+    </div>
+  </div>
+</form>
+{{end}}
+{{else}}
+<a class="back" href="/workspaces/{{.Source}}">← {{.Source}}</a>
+<div class="page-head">
+  <div>
+    <h1>Promote {{.Source}}</h1>
+    <p class="muted">Copy {{.Source}}'s templates to another workspace, e.g. the next environment's: it becomes an exact copy of them. You'll see what changes before anything does.</p>
+  </div>
+</div>
+{{$f := formOf .F "target"}}
+{{template "formerror" $f}}
+<div class="grid">
+<form method="get" class="card form-rows">
+  <div class="rows-head"><h2>An existing workspace</h2></div>
+  <div class="rows">
+  {{if .Targets.Workspaces}}
+    <div class="row{{if fieldError $f "target"}} invalid{{end}}">
+      <label for="target">Workspace</label>
+      <select id="target" name="target"{{aria $f "target" "target-hint"}}>
+        {{$cur := print (value $f "target" .To.Name)}}{{range .Targets.Workspaces}}<option value="{{.Name}}"{{if eq .Name $cur}} selected{{end}}>{{.Name}} ({{.ProjectName}})</option>{{end}}
+      </select>
+      <p class="hint" id="target-hint">Workspaces you operate.</p>
+      {{template "fielderror" (dict "F" $f "N" "target")}}
+    </div>
+  {{else}}<p class="empty">You operate no other workspace.</p>{{end}}
+  </div>
+  {{if .Targets.Workspaces}}<div class="form-foot"><div class="actions"><button type="submit">Preview</button></div></div>{{end}}
+</form>
+<form method="get" class="card form-rows">
+  <div class="rows-head"><h2>A new workspace</h2></div>
+  <div class="rows">
+  {{if .Targets.Projects}}
+    <div class="row{{if fieldError $f "new"}} invalid{{end}}">
+      <label for="new">Name</label>
+      <input id="new" name="new" value="{{value $f "new" .To.Name}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}" autocomplete="off" spellcheck="false"{{aria $f "new" "new-hint"}}>
+      <p class="hint" id="new-hint">Lowercase letters, digits and dashes.</p>
+      {{template "fielderror" (dict "F" $f "N" "new")}}
+    </div>
+    <div class="row{{if fieldError $f "project"}} invalid{{end}}">
+      <label for="project">Project</label>
+      <select id="project" name="project"{{aria $f "project"}}>
+        {{$sel := print (value $f "project" .To.Project)}}{{range .Targets.Projects}}<option value="{{.Name}}"{{if or (eq .Name $sel) (and (not $sel) .Default)}} selected{{end}}>{{.Name}}{{if .Default}} (default){{end}}</option>{{end}}
+      </select>
+      {{template "fielderror" (dict "F" $f "N" "project")}}
+    </div>
+  {{else}}<p class="empty">You may not create workspaces in any project.</p>{{end}}
+  </div>
+  {{if .Targets.Projects}}<div class="form-foot"><div class="actions"><button type="submit">Preview</button></div></div>{{end}}
+</form>
+</div>
+{{end}}
+{{template "bottom"}}

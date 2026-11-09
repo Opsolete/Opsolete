@@ -129,24 +129,8 @@ func (s *Store) createWorkspace(ctx context.Context, id uuid.UUID, e EmptyWorksp
 	var run Run
 	err := s.tx(ctx, func(q *db.Queries) error {
 		var err error
-		id, err = q.InsertWorkspace(ctx, db.InsertWorkspaceParams{ID: optID(id), Name: e.Name, AutoApply: e.AutoApply,
-			CreatedBy: optID(e.CreatedBy), Project: e.Project})
-		if isUnique(err) {
-			return ErrNameTaken
-		}
-		if err != nil {
+		if id, err = insertWorkspace(ctx, q, id, e); err != nil {
 			return err
-		}
-		if e.ExecutionMode != "" {
-			if err := q.SetExecutionMode(ctx, db.SetExecutionModeParams{ID: id, Mode: e.ExecutionMode}); err != nil {
-				return err
-			}
-		}
-		if l := e.VCS; l != nil {
-			if err := q.UpsertWorkspaceVCS(ctx, db.UpsertWorkspaceVCSParams{WorkspaceID: id, ConnectionID: l.ConnectionID, Repo: l.Repo,
-				Branch: l.Branch, Trigger: l.Trigger, PullRequests: l.PullRequests, TagsRegex: l.TagsRegex, TagBaseline: l.TagBaseline}); err != nil {
-				return err
-			}
 		}
 		if t == nil {
 			return nil
@@ -167,6 +151,31 @@ func (s *Store) createWorkspace(ctx context.Context, id uuid.UUID, e EmptyWorksp
 	}
 	w, err := s.GetWorkspaceByID(ctx, id)
 	return w, run, err
+}
+
+// insertWorkspace inserts workspace e (id uuid.Nil: a random id) with its execution mode and VCS
+// link, and returns its id; ErrNameTaken.
+func insertWorkspace(ctx context.Context, q *db.Queries, id uuid.UUID, e EmptyWorkspace) (uuid.UUID, error) {
+	id, err := q.InsertWorkspace(ctx, db.InsertWorkspaceParams{ID: optID(id), Name: e.Name, AutoApply: e.AutoApply,
+		CreatedBy: optID(e.CreatedBy), Project: e.Project})
+	if isUnique(err) {
+		return id, ErrNameTaken
+	}
+	if err != nil {
+		return id, err
+	}
+	if e.ExecutionMode != "" {
+		if err := q.SetExecutionMode(ctx, db.SetExecutionModeParams{ID: id, Mode: e.ExecutionMode}); err != nil {
+			return id, err
+		}
+	}
+	if l := e.VCS; l != nil {
+		if err := q.UpsertWorkspaceVCS(ctx, db.UpsertWorkspaceVCSParams{WorkspaceID: id, ConnectionID: l.ConnectionID, Repo: l.Repo,
+			Branch: l.Branch, Trigger: l.Trigger, PullRequests: l.PullRequests, TagsRegex: l.TagsRegex, TagBaseline: l.TagBaseline}); err != nil {
+			return id, err
+		}
+	}
+	return id, nil
 }
 
 // CreateRun queues a new plan (action apply, destroy, refresh or assess) on a workspace without an

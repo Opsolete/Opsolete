@@ -459,6 +459,9 @@ func accessRows() []accessRow {
 		{"POST " + w + "/settings/remote-state", ws + "/settings/remote-state", "remote_state=specific", onUI, []int{401, 404, 403, 303, 303}, false},
 		{"POST " + w + "/access", ws + "/access", "group=acc-other&level=read", onUI, []int{401, 403, 403, 403, 303}, false},
 		{"POST " + w + "/lock", ws + "/lock", "action=lock", onUI, []int{401, 404, 403, 303, 303}, true},
+		// promote: read on the source; a new target needs operate on its project (422 for the reader), then the bogus digest is a conflict
+		{"GET " + w + "/promote", ws + "/promote", "", onUI, []int{302, 404, 200, 200, 200}, false},
+		{"POST " + w + "/promote", ws + "/promote", "new={ws}-p&project={proj}&digest=x", onUI, []int{401, 404, 422, 409, 409}, false},
 		{"POST " + w + "/project", ws + "/project", "project={proj}", onUI, []int{401, 403, 403, 403, 303}, false},
 		{"POST " + w + "/state-versions/{version}/rollback", "/workspaces/{cws}/state-versions/{sv}/rollback", "", onUI, []int{401, 404, 403, 409, 409}, true},
 		{"POST " + w + "/runs", ws + "/runs", "action=plan", onUI, []int{401, 404, 403, 409, 409}, true},

@@ -101,7 +101,7 @@ func (s *Store) RemoveWorkspaceTemplate(ctx context.Context, workspaceID uuid.UU
 			if r, err = createRun(ctx, q, workspaceID, "destroy", createdBy); err != nil {
 				return err
 			}
-			return q.SetRunRemoveTemplate(ctx, db.SetRunRemoveTemplateParams{ID: r.ID, RemoveTemplate: name})
+			return q.SetRunRemoveTemplates(ctx, db.SetRunRemoveTemplatesParams{ID: r.ID, RemoveTemplates: []string{name}})
 		case err != nil:
 			return err
 		}

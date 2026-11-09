@@ -109,7 +109,6 @@ type Run struct {
 	Action          string
 	Status          string
 	Replace         []byte
-	RemoveTemplate  *string
 	Plan            []byte
 	Outputs         []byte
 	Runner          *string
@@ -127,6 +126,9 @@ type Run struct {
 	ConfirmedBy     uuid.NullUUID
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+	AlwaysConfirm   bool
+	RemoveTemplates []string
+	Promotion       []byte
 }
 
 type RunList struct {

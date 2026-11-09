@@ -158,14 +158,15 @@ func (q *Queries) ListWorkspaceTemplates(ctx context.Context, workspaceID uuid.U
 }
 
 const lockRun = `-- name: LockRun :one
-SELECT status, workspace_id, remove_template, config_changes FROM runs WHERE id = $1::uuid FOR UPDATE
+SELECT status, workspace_id, remove_templates, config_changes, promotion FROM runs WHERE id = $1::uuid FOR UPDATE
 `
 
 type LockRunRow struct {
-	Status         string
-	WorkspaceID    uuid.UUID
-	RemoveTemplate *string
-	ConfigChanges  []byte
+	Status          string
+	WorkspaceID     uuid.UUID
+	RemoveTemplates []string
+	ConfigChanges   []byte
+	Promotion       []byte
 }
 
 func (q *Queries) LockRun(ctx context.Context, id uuid.UUID) (LockRunRow, error) {
@@ -174,8 +175,9 @@ func (q *Queries) LockRun(ctx context.Context, id uuid.UUID) (LockRunRow, error)
 	err := row.Scan(
 		&i.Status,
 		&i.WorkspaceID,
-		&i.RemoveTemplate,
+		&i.RemoveTemplates,
 		&i.ConfigChanges,
+		&i.Promotion,
 	)
 	return i, err
 }
@@ -525,6 +527,25 @@ func (q *Queries) ResealInputs(ctx context.Context, arg ResealInputsParams) (int
 	return result.RowsAffected(), nil
 }
 
+const restoreRemovedTemplate = `-- name: RestoreRemovedTemplate :exec
+INSERT INTO workspace_templates (workspace_id, name, template_id, module_source, module_ref, inputs)
+VALUES ($1::uuid, $2::text, $3::jsonb->>'template_id', $3::jsonb->>'module_source',
+    $3::jsonb->>'module_ref', $3::jsonb->'inputs')
+ON CONFLICT (workspace_id, name) DO NOTHING
+`
+
+type RestoreRemovedTemplateParams struct {
+	WorkspaceID uuid.UUID
+	Name        string
+	Before      []byte
+}
+
+// puts back a template a run removed, unless a template took its name since
+func (q *Queries) RestoreRemovedTemplate(ctx context.Context, arg RestoreRemovedTemplateParams) error {
+	_, err := q.db.Exec(ctx, restoreRemovedTemplate, arg.WorkspaceID, arg.Name, arg.Before)
+	return err
+}
+
 const restoreTemplate = `-- name: RestoreTemplate :exec
 UPDATE workspace_templates t SET template_id = $1::jsonb->>'template_id', module_source = $1::jsonb->>'module_source',
     module_ref = $1::jsonb->>'module_ref', inputs = $1::jsonb->'inputs'
@@ -564,17 +585,40 @@ func (q *Queries) SetConfigChanges(ctx context.Context, arg SetConfigChangesPara
 	return err
 }
 
-const setRunRemoveTemplate = `-- name: SetRunRemoveTemplate :exec
-UPDATE runs SET remove_template = $1::text WHERE id = $2::uuid
+const setRunAlwaysConfirm = `-- name: SetRunAlwaysConfirm :exec
+UPDATE runs SET always_confirm = true WHERE id = $1::uuid
 `
 
-type SetRunRemoveTemplateParams struct {
-	RemoveTemplate string
-	ID             uuid.UUID
+func (q *Queries) SetRunAlwaysConfirm(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, setRunAlwaysConfirm, id)
+	return err
 }
 
-func (q *Queries) SetRunRemoveTemplate(ctx context.Context, arg SetRunRemoveTemplateParams) error {
-	_, err := q.db.Exec(ctx, setRunRemoveTemplate, arg.RemoveTemplate, arg.ID)
+const setRunPromotion = `-- name: SetRunPromotion :exec
+UPDATE runs SET promotion = $1::jsonb WHERE id = $2::uuid
+`
+
+type SetRunPromotionParams struct {
+	Promotion []byte
+	ID        uuid.UUID
+}
+
+func (q *Queries) SetRunPromotion(ctx context.Context, arg SetRunPromotionParams) error {
+	_, err := q.db.Exec(ctx, setRunPromotion, arg.Promotion, arg.ID)
+	return err
+}
+
+const setRunRemoveTemplates = `-- name: SetRunRemoveTemplates :exec
+UPDATE runs SET remove_templates = $1::text[] WHERE id = $2::uuid
+`
+
+type SetRunRemoveTemplatesParams struct {
+	RemoveTemplates []string
+	ID              uuid.UUID
+}
+
+func (q *Queries) SetRunRemoveTemplates(ctx context.Context, arg SetRunRemoveTemplatesParams) error {
+	_, err := q.db.Exec(ctx, setRunRemoveTemplates, arg.RemoveTemplates, arg.ID)
 	return err
 }
 
@@ -611,7 +655,8 @@ UPDATE runs SET status = $1::text, updated_at = now(),
     lease_id = CASE WHEN $2::boolean THEN lease_id END,
     lease_until = CASE WHEN $2::boolean THEN lease_until END,
     lease_acked_at = NULL,
-    config_changes = CASE WHEN $3::boolean THEN NULL ELSE config_changes END
+    config_changes = CASE WHEN $3::boolean THEN NULL ELSE config_changes END,
+    promotion = CASE WHEN $3::boolean THEN NULL ELSE promotion END
 WHERE id = $4::uuid
 `
 
@@ -623,7 +668,7 @@ type UpdateRunStatusParams struct {
 }
 
 // Only setStatus calls this. The lease ends unless the run starts working (a new claim: not acknowledged
-// yet); config_changes goes when it ends.
+// yet); config_changes and promotion go when it ends.
 func (q *Queries) UpdateRunStatus(ctx context.Context, arg UpdateRunStatusParams) error {
 	_, err := q.db.Exec(ctx, updateRunStatus,
 		arg.Status,

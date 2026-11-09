@@ -45,7 +45,10 @@ const runnerToken = "e2e-runner-token-0123456789abcdef"
 // the catalog's greeting template; the runner plans it with Terraform, the admin confirms, the runner
 // applies. A second template with a sensitive input is added (masked in the log and its outputs) and removed again
 // (a targeted destroy, then its outputs dropped); then the workspace is destroyed. Terraform fetches the module from the server's own
-// registry and keeps state in its http backend: no network beyond the test server.
+// registry and keeps state in its http backend: no network beyond the test server. Last, a dev
+// workspace is promoted to a target that runs one of its templates at an older version plus a third
+// whose module configures its own provider: a destroy run removes the third, then the apply run
+// updates and adds; discarded it leaves the target as the destroy did, promoted again it's one run.
 func TestRealRunner(t *testing.T) {
 	tf := os.Getenv("TERRAFORM")
 	if tf == "" {
@@ -155,7 +158,7 @@ func TestRealRunner(t *testing.T) {
 		}
 		return string(b)
 	}
-	const ws = "e2e-greeting"
+	ws := "e2e-greeting" // the workspace await, confirm and runLog look at
 	var runID uuid.UUID
 	// await waits for the run to reach status, failing on any other ended status.
 	await := func(t *testing.T, status string) {
@@ -337,6 +340,156 @@ func TestRealRunner(t *testing.T) {
 		}
 		if log := page(t, "/workspaces/"+ws+"/runs/"+runID.String()+"/logs"); !strings.Contains(log, "Resources: 0 added, 0 changed, 1 destroyed") {
 			t.Fatalf("destroy log: %s", log)
+		}
+	})
+
+	// 1.0.0: the older version; 1.2.0: 1.1.0 configuring its own provider (the builtin terraform
+	// provider: offline, and Terraform treats its block like any provider's), as catalog modules do
+	ownProvider := t.TempDir()
+	mainTF, err := os.ReadFile("../../examples/modules/greeting/1.1.0/main.tf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ownProvider, "main.tf"), append(mainTF, "\nprovider \"terraform\" {}\n"...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for version, dir := range map[string]string{"1.0.0": "../../examples/modules/greeting/1.0.0", "1.2.0": ownProvider} {
+		t.Run("upload the greeting module "+version, func(t *testing.T) {
+			var body bytes.Buffer
+			mw := multipart.NewWriter(&body)
+			for k, v := range map[string]string{"namespace": "examples", "name": "greeting", "system": "terraform", "version": version} {
+				mw.WriteField(k, v)
+			}
+			fw, _ := mw.CreateFormFile("archive", "greeting.tar.gz")
+			fw.Write(tarGz(t, dir))
+			mw.Close()
+			send(t, "/registry", mw.FormDataContentType(), &body)
+		})
+	}
+	var dev []storage.WorkspaceTemplate
+	t.Run("promote: a dev workspace with two templates, applied", func(t *testing.T) {
+		ws = "e2e-dev"
+		runOf(postForm(t, "/templates/greeting", url.Values{"ops-workspace": {ws}, "greeting": {"hi"}, "name": {"Dev"}}))
+		await(t, storage.NeedsConfirmation)
+		confirm(t)
+		await(t, storage.Applied)
+		runOf(postForm(t, "/workspaces/"+ws+"/templates/new?template=greeting", url.Values{"greeting": {"hey"}, "name": {"Two"}}))
+		await(t, storage.NeedsConfirmation)
+		confirm(t)
+		await(t, storage.Applied)
+		w, _ := store.GetWorkspace(ctx, ws)
+		if dev, _ = store.WorkspaceTemplates(ctx, w.ID); len(dev) != 2 {
+			t.Fatalf("dev: %+v", dev)
+		}
+	})
+	var prd uuid.UUID
+	t.Run("promote: the target runs dev's first template at 1.0.0 and a third with its own provider, applied (auto-apply)", func(t *testing.T) {
+		ws = "e2e-prd"
+		w, err := store.CreateEmptyWorkspace(ctx, storage.EmptyWorkspace{Name: ws, AutoApply: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		prd = w.ID
+		if _, err := store.Pool.Exec(ctx, `INSERT INTO workspace_templates (workspace_id, name, template_id, module_source, module_ref, inputs)
+			VALUES ($1, $2, 'greeting', $3, '1.0.0', '{"greeting": "hello"}'), ($1, 'third', 'greeting', $3, '1.2.0', '{"greeting": "hi", "name": "Third"}')`,
+			w.ID, dev[0].Name, dev[0].ModuleSource); err != nil {
+			t.Fatal(err)
+		}
+		runOf(postForm(t, "/workspaces/"+ws+"/runs", url.Values{"action": {"apply"}}))
+		await(t, storage.Applied)
+		if res, _ := store.Resources(ctx, w.ID); len(res) != 2 {
+			t.Fatalf("target resources: %+v", res)
+		}
+	})
+	promote := func(t *testing.T, want ...string) {
+		t.Helper()
+		p := page(t, "/workspaces/e2e-dev/promote?target="+ws)
+		for _, w := range want {
+			if !strings.Contains(p, w) {
+				t.Fatalf("preview lacks %q:\n%s", w, p)
+			}
+		}
+		digest := p[strings.Index(p, `name="digest" value="`)+len(`name="digest" value="`):]
+		runOf(postForm(t, "/workspaces/e2e-dev/promote", url.Values{"target": {ws}, "digest": {digest[:strings.Index(digest, `"`)]}}))
+	}
+	changes := func(t *testing.T) map[string]string {
+		t.Helper()
+		run, _, _ := store.GetRun(ctx, runID)
+		got := map[string]string{}
+		if run.Plan != nil {
+			for _, c := range run.Plan.Changes {
+				got[c.Address] = c.Action
+			}
+		}
+		return got
+	}
+	addr := func(module string) string { return "module." + module + ".terraform_data.greeting" }
+	templates := func(t *testing.T) string {
+		t.Helper()
+		list, _ := store.WorkspaceTemplates(ctx, prd)
+		var out []string
+		for _, x := range list {
+			out = append(out, x.Name+"@"+x.ModuleRef)
+		}
+		return strings.Join(out, " ")
+	}
+	t.Run("promote: the preview says it runs twice; the first run destroys the third template only, with its provider block", func(t *testing.T) {
+		promote(t, "<code>module."+dev[0].Name+"</code>", `<span class="tag">1.0.0</span> → <span class="tag">1.1.0</span>`,
+			`<span class="change create">added</span>`, `<span class="change delete">removed</span>`, "Destroys the 1 resource it manages.",
+			"This promotion runs twice: first a destroy of <code>module.third</code> (1 resource)")
+		await(t, storage.NeedsConfirmation) // auto-apply, but a promotion waits
+		if got := changes(t); len(got) != 1 || got[addr("third")] != "delete" {
+			t.Fatalf("destroy plan: %v", got)
+		}
+		if p := page(t, "/workspaces/"+ws+"/runs/"+runID.String()); !strings.Contains(p, "Promotion from e2e-dev: destroys third first") {
+			t.Fatalf("run page: %s", p)
+		}
+		confirm(t)
+		await(t, storage.Applied)
+	})
+	t.Run("promote: the apply run follows; discarded, the target is back after the destroy", func(t *testing.T) {
+		if err := store.Pool.QueryRow(ctx, `SELECT id FROM runs WHERE workspace_id = $1 AND run_active(status)`, prd).Scan(&runID); err != nil {
+			t.Fatalf("no apply run queued: %v", err)
+		}
+		await(t, storage.NeedsConfirmation)
+		if got := changes(t); got[addr(dev[1].Name)] != "create" || got[addr(dev[0].Name)] == "" || got[addr("third")] != "" {
+			t.Fatalf("apply plan: %v", got)
+		}
+		postForm(t, "/workspaces/"+ws+"/runs/"+runID.String()+"/discard", nil)
+		if got := templates(t); got != dev[0].Name+"@1.0.0" {
+			t.Fatalf("after discard: %s", got)
+		}
+		res, _ := store.Resources(ctx, prd)
+		if len(res) != 1 || strings.HasPrefix(res[0].Address, "module.third.") {
+			t.Fatalf("resources: %+v", res)
+		}
+		if out := page(t, "/workspaces/"+ws+"?show=outputs"); strings.Contains(out, "third__") {
+			t.Fatalf("outputs: %s", out)
+		}
+	})
+	t.Run("promote: nothing left to remove, one run; applied, the target runs exactly dev's templates", func(t *testing.T) {
+		promote(t)
+		await(t, storage.NeedsConfirmation)
+		if run, _, _ := store.GetRun(ctx, runID); run.Action != "apply" {
+			t.Fatalf("one apply run: %s", run.Action)
+		}
+		confirm(t)
+		await(t, storage.Applied)
+		tgt, _ := store.WorkspaceTemplates(ctx, prd)
+		if len(tgt) != len(dev) {
+			t.Fatalf("target templates %+v, want %+v", tgt, dev)
+		}
+		for i := range dev {
+			if tgt[i].Name != dev[i].Name || tgt[i].TemplateID != dev[i].TemplateID || tgt[i].ModuleRef != dev[i].ModuleRef ||
+				tgt[i].Inputs["greeting"] != dev[i].Inputs["greeting"] || tgt[i].Inputs["name"] != dev[i].Inputs["name"] {
+				t.Fatalf("target templates %+v, want %+v", tgt, dev)
+			}
+		}
+		if res, _ := store.Resources(ctx, prd); len(res) != 2 {
+			t.Fatalf("resources: %+v", res)
+		}
+		if out := page(t, "/workspaces/"+ws+"?show=outputs"); strings.Contains(out, "third__") || !strings.Contains(out, "hi, Dev!") || !strings.Contains(out, "hey, Two!") {
+			t.Fatalf("outputs: %s", out)
 		}
 	})
 	t.Logf("the runs took %s", time.Since(start).Round(time.Millisecond))

@@ -46,6 +46,8 @@ func (s *Server) workspaceRoutes(mux routes) {
 	mux.HandleFunc("POST /workspaces/{name}/templates/{module}", s.saveWorkspaceTemplate)
 	mux.HandleFunc("POST /workspaces/{name}/templates/{module}/remove", s.removeWorkspaceTemplate)
 	mux.HandleFunc("POST /workspaces/{name}/access", s.workspaceAccess)
+	mux.HandleFunc("GET /workspaces/{name}/promote", s.promotePage)
+	mux.HandleFunc("POST /workspaces/{name}/promote", s.promote)
 	mux.HandleFunc("GET /workspaces/{name}/runs/{run}", s.run)
 	mux.HandleFunc("POST /workspaces/{name}/runs/{run}/confirm", s.confirmRun)
 	mux.HandleFunc("POST /workspaces/{name}/runs/{run}/discard", s.discardRun)

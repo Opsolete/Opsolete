@@ -56,7 +56,7 @@ func (q *Queries) ClearRemoteStateConsumers(ctx context.Context, workspaceID uui
 
 const currentOutputs = `-- name: CurrentOutputs :one
 SELECT (SELECT v.outputs FROM state_versions v WHERE v.workspace_id = $1::uuid ORDER BY v.id DESC LIMIT 1)::jsonb AS outputs,
-    COALESCE((SELECT r.action = 'destroy' AND r.remove_template IS NULL FROM runs r
+    COALESCE((SELECT r.action = 'destroy' AND r.remove_templates IS NULL FROM runs r
         WHERE r.workspace_id = $1::uuid AND r.status = 'applied' ORDER BY r.created_at DESC LIMIT 1), false)::boolean AS destroyed
 `
 
