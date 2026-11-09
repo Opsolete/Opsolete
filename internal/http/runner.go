@@ -49,6 +49,8 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 	}
 	wait, cancel := context.WithTimeout(r.Context(), s.ClaimWait)
 	defer cancel()
+	// on shutdown: 204, the runner claims again elsewhere
+	defer context.AfterFunc(s.Stopping, cancel)()
 	jobs := s.App.Notify.Jobs() // before the first try: a job queued during it still wakes us
 	defer jobs.Close()
 	for {
