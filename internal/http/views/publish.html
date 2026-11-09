@@ -84,15 +84,11 @@
 <p class="muted">Repositories of <strong>{{$conn.Name}}</strong> ({{$conn.Provider}}). The module is at the repository root or in a folder you choose next.</p>
 <form method="get" class="inline">
   <input type="hidden" name="connection" value="{{$conn.ID}}">
-  <input name="repo" list="repos" required aria-label="repository" placeholder="{{if eq $conn.Provider "azure-devops"}}project/repo{{else}}owner/repo{{end}}">
-  <datalist id="repos">{{range .Repos}}<option value="{{.}}">{{end}}</datalist>
+  <input type="search" name="repo" required autocomplete="off" aria-label="repository" class="mw-24"
+    placeholder="{{with .Repos}}Search {{len .}} repositories, or {{end}}type {{if eq $conn.Provider "azure-devops"}}project/repo{{else}}owner/repo{{end}}"{{with .Repos}} data-filter="repos" aria-controls="repos"{{end}}>
   <button type="submit">Next</button>
 </form>
-{{with .Repos}}
-<div class="runlist mt-1">
-  {{range .}}<a class="runrow" href="?connection={{$conn.ID}}&repo={{.}}">{{.}}</a>{{end}}
-</div>
-{{end}}
+{{with .Repos}}{{template "repolist" (dict "ID" "repos" "Repos" . "Href" (print "?connection=" $conn.ID "&repo="))}}{{end}}
 <div class="actions"><a href="?type=vcs">‹ Previous</a><a class="btn secondary" href="/registry">Cancel</a></div>
 
 {{else}}

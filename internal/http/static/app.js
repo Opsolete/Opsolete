@@ -65,19 +65,22 @@ document.addEventListener('input', e => {
     const q = t.value.toLowerCase();
     document.querySelectorAll('#resources tr[data-row]').forEach(tr => tr.hidden = !tr.textContent.toLowerCase().includes(q));
     document.querySelectorAll('#resources details').forEach(d => d.hidden = !d.querySelector('tr[data-row]:not([hidden])'));
-  } else if (t.hasAttribute('data-filter-projects')) { // shows the projects whose name contains the search text
+  } else if (t.dataset.filter) { // a searchable list: in element #<data-filter>, the [data-filter-item]s containing the text
     const q = t.value.trim().toLowerCase();
     let n = 0;
-    for (const tr of document.querySelectorAll('tr[data-name]')) {
-      tr.hidden = !tr.dataset.name.includes(q);
-      n += !tr.hidden;
+    for (const el of document.getElementById(t.dataset.filter).querySelectorAll('[data-filter-item]')) {
+      el.hidden = !el.dataset.filterItem.toLowerCase().includes(q);
+      n += !el.hidden;
     }
-    document.getElementById('no-projects').hidden = n > 0;
+    const empty = document.getElementById(t.dataset.filter + '-empty'); // shown when nothing matches
+    if (empty) empty.hidden = n > 0;
   }
 });
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.matches('.picker input[type=search]')) e.preventDefault(); // else it submits the form
+  // a search box that isn't a form field itself only filters: Enter doesn't submit its form (e.g. the catalog's repository list)
+  if (e.key === 'Enter' && e.target.dataset.filter && !e.target.name) e.preventDefault();
 });
 
 document.addEventListener('change', e => {

@@ -10,14 +10,14 @@
 {{template "formerror" .F}}
 <div class="inline mb-1">
   <input type="search" id="project-search" placeholder="Search by project name" aria-label="Search by project name" aria-describedby="project-search-hint"
-    autocomplete="off" class="mw-24" data-filter-projects>
+    autocomplete="off" class="mw-24" data-filter="projects" aria-controls="projects">
   <span id="project-search-hint" class="sr-hint">This table updates as you type a name.</span>
 </div>
 <div class="card flush">
-<table>
+<table id="projects">
 <tr><th>Project name</th><th>Description</th><th>Teams</th><th>Workspaces</th>{{if $.User.Admin}}<th><span class="sr-hint">Actions</span></th>{{end}}</tr>
 {{range .Projects}}
-<tr data-name="{{.Name}}">
+<tr data-filter-item="{{.Name}}">
   <td><a href="/projects/{{.Name}}"><strong>{{.Name}}</strong></a>{{if .Default}} <span class="tag" title="new workspaces go here unless another project is picked">default</span>{{end}}</td>
   <td>{{with .Description}}{{.}}{{else}}<span class="muted">No description</span>{{end}}</td>
   <td>{{if $.User.Admin}}<a href="/projects/{{.Name}}/settings/access">{{.Grants}}</a>{{else}}{{.Grants}}{{end}}</td>
@@ -28,7 +28,7 @@
   </details></td>{{end}}
 </tr>
 {{end}}
-<tr id="no-projects"{{if .Projects}} hidden{{end}}><td colspan="5" class="empty">No projects{{if .Projects}} match{{else}} you can see{{end}}.</td></tr>
+<tr id="projects-empty"{{if .Projects}} hidden{{end}}><td colspan="5" class="empty">No projects{{if .Projects}} match{{else}} you can see{{end}}.</td></tr>
 </table>
 </div>
 

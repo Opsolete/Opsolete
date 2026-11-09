@@ -79,15 +79,12 @@
 <form method="get" class="inline">
   <input type="hidden" name="project" value="{{$pq}}">
   <input type="hidden" name="type" value="vcs"><input type="hidden" name="conn" value="{{$conn.ID}}">
-  <input name="repo" list="vcs-repos" required aria-label="repository" placeholder="owner/repo or project/repo">
-  <datalist id="vcs-repos">{{range .VCS.Repos}}<option value="{{.}}">{{end}}</datalist>
+  <input type="search" name="repo" required autocomplete="off" aria-label="repository" class="mw-24"
+    placeholder="{{with .VCS.Repos}}Search {{len .}} repositories, or {{end}}type owner/repo or project/repo"{{with .VCS.Repos}} data-filter="vcs-repos" aria-controls="vcs-repos"{{end}}>
   <button type="submit">Continue</button>
 </form>
-{{with .VCS.Repos}}
-<div class="runlist mt-1">
-  {{range .}}<a class="runrow" href="?type=vcs&conn={{$conn.ID}}&repo={{.}}{{with $pq}}&project={{.}}{{end}}">{{.}}</a>{{end}}
-</div>
-{{end}}
+{{$href := print "?type=vcs&conn=" $conn.ID}}{{with $pq}}{{$href = print $href "&project=" .}}{{end}}
+{{with .VCS.Repos}}{{template "repolist" (dict "ID" "vcs-repos" "Repos" . "Href" (print $href "&repo="))}}{{end}}
 <div class="actions"><a href="?type=vcs{{with $pq}}&project={{.}}{{end}}">‹ Previous</a><a class="btn secondary" href="/workspaces">Cancel</a></div>
 
 {{else if eq $step 4}}

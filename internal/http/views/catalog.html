@@ -37,10 +37,9 @@
   {{if not (index $f "connection")}}
   <select id="repo" name="repo" disabled><option>Choose a VCS connection first</option></select>
   {{else if .Repos}}
-  <select id="repo" name="repo" required{{aria $.F "repo"}}>
-    <option value="">Choose…</option>
-    {{range .Repos}}<option value="{{.}}"{{if eq . (index $f "repo")}} selected{{end}}>{{.}}</option>{{end}}
-  </select>
+  <input type="search" id="repo" autocomplete="off" class="mw-24" placeholder="Search {{len .Repos}} repositories"
+    data-filter="repo-list" aria-controls="repo-list"{{aria $.F "repo"}}>
+  {{template "repolist" (dict "ID" "repo-list" "Repos" .Repos "Field" "repo" "Selected" (index $f "repo"))}}
   {{else}}
   <input id="repo" name="repo" value="{{index $f "repo"}}" placeholder="owner/repo or project/repo" required{{aria $.F "repo" "repo-hint"}}>
   <p class="hint" id="repo-hint">{{if .ListErr}}The repositories couldn't be listed with this connection's token: type the name.{{else}}The token can't see any repository: type the name, or give the token access.{{end}}</p>
