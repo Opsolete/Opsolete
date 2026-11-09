@@ -3,6 +3,7 @@ package httpserver
 
 import (
 	"bytes"
+	"context"
 	"embed"
 	"html/template"
 	"net/http"
@@ -35,6 +36,9 @@ type Server struct {
 		sync.Mutex
 		n map[uuid.UUID]int
 	}
+	// Stopping ends with shutdown. Shutdown waits for requests but doesn't cancel them: this ends the
+	// long-lived ones (log streams, runner claims), while the rest (state writes, finish) drain.
+	Stopping context.Context
 }
 
 // routes is the server's mux; it records every pattern it registers in *patterns.
@@ -69,7 +73,7 @@ func New(a *app.App, au *auth.Auth, f Features) *Server {
 		"duration": humanDuration, "ago": ago, "asset": asset,
 		"provider": func(p string) string { return strings.TrimPrefix(p, "registry.terraform.io/") },
 		"status":   func(s string) string { return strings.ReplaceAll(s, "_", " ") }}).Funcs(formFuncs).ParseFS(views, "views/*.html"))
-	return &Server{App: a, Auth: au, Features: f, ClaimWait: 20 * time.Second, pages: pages}
+	return &Server{App: a, Auth: au, Features: f, ClaimWait: 20 * time.Second, Stopping: context.Background(), pages: pages}
 }
 
 func (s *Server) Handler() http.Handler {

@@ -132,6 +132,15 @@ func TestCloudGoTFE(t *testing.T) {
 		t.Fatalf("read returns the project: %+v %v", got, err)
 	}
 
+	// A remote-execution workspace gives the CLI no lock, and says why (not "already locked").
+	if err := store.SetExecutionMode(ctx, uuid.MustParse(inPrj.ID), "remote"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.Workspaces.Lock(ctx, inPrj.ID, tfe.WorkspaceLockOptions{}); err == nil ||
+		errors.Is(err, tfe.ErrWorkspaceLocked) || !strings.Contains(err.Error(), "remote execution") {
+		t.Fatalf("lock of a remote workspace: %v", err)
+	}
+
 	// A run's lock (here a rollback's) is reported as a run's.
 	if _, ok, err := store.LockState(ctx, uuid.MustParse(ws.ID), "run-lock", uuid.Nil, []byte(`{"ID":"run-lock"}`)); !ok || err != nil {
 		t.Fatalf("take a non-CLI lock: %v %v", ok, err)

@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -74,7 +75,10 @@ func (s *Server) logStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.closeStream(actor(r).UserID)
-	ctx := r.Context()
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	// on shutdown: the browser reconnects to another replica
+	defer context.AfterFunc(s.Stopping, cancel)()
 	changed := s.App.Notify.Run(l.ID) // before the first read: a change during it still wakes us
 	defer changed.Close()
 	cursor, _ := strconv.ParseInt(r.Header.Get("Last-Event-ID"), 10, 64)

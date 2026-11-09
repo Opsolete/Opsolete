@@ -43,6 +43,44 @@ func TestClaimWakesOnQueue(t *testing.T) {
 	}
 }
 
+// Shutdown ends a waiting claim (204) and a log stream, not other requests (their context lives on).
+func TestStoppingEndsLongPolls(t *testing.T) {
+	ctx, store := context.Background(), testStore(t)
+	srv := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true})
+	stopping, stop := context.WithCancel(ctx)
+	srv.Stopping, srv.ClaimWait = stopping, 10*time.Second
+	h := srv.Handler()
+	ws, err := store.CreateEmptyWorkspace(ctx, storage.EmptyWorkspace{Name: "stopping"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.CreateRun(ctx, ws.ID, "apply", uuid.Nil, nil) // queued but not claimable: its stream stays open
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim, stream := make(chan *httptest.ResponseRecorder), make(chan *httptest.ResponseRecorder)
+	go func() {
+		req := httptest.NewRequest("POST", runnerapi.Prefix+"/jobs/claim", strings.NewReader(`{"runner":"r1"}`))
+		req.Header.Set("Authorization", "Bearer "+testRunnerToken)
+		claim <- do(h, req)
+	}()
+	go func() {
+		stream <- do(h, httptest.NewRequest("GET", "/workspaces/stopping/runs/"+run.ID.String()+"/logs/stream", nil))
+	}()
+	time.Sleep(300 * time.Millisecond)
+	start := time.Now()
+	stop()
+	if rec := <-claim; rec.Code != http.StatusNoContent {
+		t.Fatalf("claim on shutdown: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := <-stream; rec.Code != http.StatusOK {
+		t.Fatalf("stream on shutdown: %d", rec.Code)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Fatalf("long polls ended %v after shutdown", took)
+	}
+}
+
 // One user gets maxLogStreams concurrent log streams per replica; another user has their own.
 func TestLogStreamCap(t *testing.T) {
 	ctx, store := context.Background(), testStore(t)

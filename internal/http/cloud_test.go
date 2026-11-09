@@ -123,7 +123,7 @@ func TestCloudLoginAndState(t *testing.T) {
 	if err := store.SetExecutionMode(t.Context(), uuid.MustParse(id), "remote"); err != nil {
 		t.Fatal(err)
 	}
-	if rec := api("POST", "/workspaces/"+id+"/actions/lock", ""); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "remote execution") {
+	if rec := api("POST", "/workspaces/"+id+"/actions/lock", ""); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "remote execution") {
 		t.Fatalf("lock of a remote workspace: %d %s", rec.Code, rec.Body)
 	}
 	if rec := api("POST", "/workspaces/"+id+"/state-versions", sv); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "remote execution") {

@@ -1209,7 +1209,7 @@ func TestExecutionMode(t *testing.T) {
 	}
 
 	step(t, "remote: the CLI can't lock", func(t *testing.T) {
-		if rec := cli("lock"); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "remote execution") {
+		if rec := cli("lock"); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "remote execution") {
 			t.Fatalf("CLI lock of a remote workspace: %d %s", rec.Code, rec.Body.String())
 		}
 	})
@@ -1230,7 +1230,7 @@ func TestExecutionMode(t *testing.T) {
 		mode(t, "remote")
 		r.claim(t, runID(t, post(h, "/workspaces/"+ws+"/runs", url.Values{"action": {"apply"}})), "plan")
 		r.finish(t, planNone)
-		if rec := cli("lock"); rec.Code != http.StatusConflict {
+		if rec := cli("lock"); rec.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("CLI lock of a remote workspace: %d", rec.Code)
 		}
 	})

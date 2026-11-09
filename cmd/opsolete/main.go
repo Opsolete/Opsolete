@@ -273,10 +273,8 @@ func serve(log *slog.Logger) error {
 		defer msrv.Close()
 		log.Info("metrics listening", "addr", cfg.MetricsAddr)
 	}
-	srv := &http.Server{Addr: cfg.Addr, Handler: server.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-		// Shutdown doesn't cancel requests; this ends log streams and runner long-polls on SIGTERM.
-		BaseContext: func(net.Listener) context.Context { return ctx }}
+	server.Stopping = ctx // ends log streams and runner long-polls on SIGTERM; other requests drain
+	srv := &http.Server{Addr: cfg.Addr, Handler: server.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	drained := make(chan struct{})
 	go func() {
 		defer close(drained)

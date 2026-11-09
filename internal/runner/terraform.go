@@ -33,6 +33,7 @@ type tfProc struct {
 	end         time.Time   // the phase's hard end: its deadline plus grace
 	interrupted atomic.Bool // a running command got SIGINT
 	killed      atomic.Bool // a command didn't stop in time and was killed
+	rescued     string      // what became of state the apply couldn't save (rescueState); "" if none
 }
 
 // run runs a terraform command, with its colors on unless args has -no-color (the run page renders
