@@ -1,5 +1,98 @@
 # Changelog
 
+## [0.6.0](https://github.com/Opsolete/Opsolete/compare/v0.5.1...v0.6.0) (2026-11-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **auth:** existing session cookies are invalid after the upgrade: everyone signs in once.
+* **templates:** 0.x template files fail to load: string defaults on number/bool inputs, unknown fields, and "Label: help" is no longer split at runtime.
+* **runner:** kill every process a job leaves behind, PID 1 or not
+* **runner:** runners and servers must both be 1.0 (older runners never acknowledge).
+* **secrets:** values sealed by 0.x don't open; 1.0 starts from a fresh database and state store.
+* **access:** users without operate on a project can no longer create workspaces (UI and terraform cloud block); grant their group operate on the default project to keep the old behaviour.
+* **storage:** sqlc + native pgx, typed ids, ErrNotFound
+* **storage:** Opsolete 1.0 needs a new, empty database.
+
+### Features
+
+* **access:** only admins and project operators create workspaces; settings need operate ([63a0640](https://github.com/Opsolete/Opsolete/commit/63a06402a7bc0d8eb0037aa0c423b46e44ceaae9))
+* **account:** add account settings with profile and token revocation ([62a5bfa](https://github.com/Opsolete/Opsolete/commit/62a5bfadf2eb5480513f1ae7a36004b42cef6bc2))
+* **auth:** server-side sessions ([8e391a3](https://github.com/Opsolete/Opsolete/commit/8e391a3852f83b2e592ddd72d0ad9c07b9aa982b))
+* **builder:** help field and typed default controls; template format 1.0 docs ([515bb0e](https://github.com/Opsolete/Opsolete/commit/515bb0eef71771a7a379bb1dc686c17de649bb25))
+* **catalog:** add a commit to a template's open pull request instead of opening another ([181e76a](https://github.com/Opsolete/Opsolete/commit/181e76ae32971815b8d54f5a60e51bcc30b254fe))
+* **form:** one striped row per field, label help behind a ?, error states and a busy submit button ([09158b7](https://github.com/Opsolete/Opsolete/commit/09158b77ad5b62d15cd8a272ee6e82a5bc4b5335))
+* **http:** static assets and a strict Content-Security-Policy ([6612302](https://github.com/Opsolete/Opsolete/commit/66123029271856b41a717ca71431d22fb0cdc3d8))
+* **projects:** add project pages, a project picker and moving workspaces ([bf20182](https://github.com/Opsolete/Opsolete/commit/bf2018290736bca1092eb832cc38850adf789f88))
+* **projects:** add the projects data model ([dcbbbd0](https://github.com/Opsolete/Opsolete/commit/dcbbbd08d930e09ad62cba2821a1ee29d831ac9c))
+* **projects:** attach variable sets to projects ([6a7106d](https://github.com/Opsolete/Opsolete/commit/6a7106dfd738df37601c653234c2950cbb983f58))
+* **projects:** give projects their own menu and a searchable projects page ([69c9ea4](https://github.com/Opsolete/Opsolete/commit/69c9ea42aaf83737f906b3ed54ba6a99d85e72ce))
+* **projects:** grant groups access through projects ([9c05d04](https://github.com/Opsolete/Opsolete/commit/9c05d0440fef27c4a2ec135dcbea3b829aaeafdb))
+* **projects:** support projects in Terraform's cloud block ([f1561a5](https://github.com/Opsolete/Opsolete/commit/f1561a5671417894902f6939afc23d2e4dfd20ad))
+* **registry:** delete modules from the UI ([a546722](https://github.com/Opsolete/Opsolete/commit/a5467224be7ce2ecd83d1e4e46bd41f84ee49b36))
+* **runs:** color Terraform plan/apply lines in the live log ([80dd417](https://github.com/Opsolete/Opsolete/commit/80dd417954880309e32366d872b6d0012e0d2cbd))
+* **runs:** compact Terraform warnings unless the workspace sets OPS_DEBUG ([f65baba](https://github.com/Opsolete/Opsolete/commit/f65babae3780e49859a799ca1802fbc47d44ef94))
+* **runs:** LISTEN/NOTIFY wakes runner claims and live logs; a cap on log streams ([b0cc666](https://github.com/Opsolete/Opsolete/commit/b0cc666fdc344f1711bb5abb83effa9f4746156d))
+* **runs:** retention for run logs, drift checks and speculative plans ([70cf4a9](https://github.com/Opsolete/Opsolete/commit/70cf4a92f29451328f050b7ab2c87853fdb00c6b))
+* **runs:** show Terraform's own colors in the run log ([6404ede](https://github.com/Opsolete/Opsolete/commit/6404ede6c5aaffbcdba362655960452df3ed112c))
+* **security:** mask known secrets in outputs and state diffs, like the logs ([2c1edd5](https://github.com/Opsolete/Opsolete/commit/2c1edd57d3f36fba05810837267e621cb95091b6))
+* **server:** one scheduler for background work, run on one replica ([ac2e072](https://github.com/Opsolete/Opsolete/commit/ac2e0725d608fdf901e711f442ed592b98e30eca))
+* **settings:** group the settings menu into organization settings sections ([765fc03](https://github.com/Opsolete/Opsolete/commit/765fc03d789ba35799f2d25ac8ca04846554f42c))
+* **templates:** preview forms, yes / no conditions and clearer messages for end users ([de47cc9](https://github.com/Opsolete/Opsolete/commit/de47cc965540417c0ec2af4e2437b99e40a88a45))
+* **templates:** roll out a template's module version to its workspaces ([d714e20](https://github.com/Opsolete/Opsolete/commit/d714e2038e336a0a71295ff20ffb6ae493187663))
+* **templates:** template format 1.0: typed values, help, strict parsing, JSON Schema ([799b687](https://github.com/Opsolete/Opsolete/commit/799b687880be2f5ca5d759e4a57846a1fad6f7db))
+* **ui:** own confirmation dialog instead of the browser's confirm(), require JavaScript ([8dee4b0](https://github.com/Opsolete/Opsolete/commit/8dee4b0f845ccc3c0877faa0b2214847d72e58b5))
+* **variable-sets:** create a set from a project's or workspace's page ([3448d29](https://github.com/Opsolete/Opsolete/commit/3448d29a7df598eaa96b2510fe2f39f53d3496f5))
+* **vcs:** scope VCS connections to projects ([e7495e9](https://github.com/Opsolete/Opsolete/commit/e7495e906e1edc7121670cde4f1c802bd830bcd9))
+* **workspaces:** pass workspace and variable-set Terraform variables to added templates ([ec76565](https://github.com/Opsolete/Opsolete/commit/ec765658c028c9b3eda1a271da0078663bdba0ca))
+* **workspaces:** remove the root template too ([8571a4c](https://github.com/Opsolete/Opsolete/commit/8571a4c84ccd34c494fd64e78331eb5a80bd22cf))
+
+
+### Bug Fixes
+
+* atomic settings and selections, lost token replacements, runner transfer limits ([242cb63](https://github.com/Opsolete/Opsolete/commit/242cb637788ebe847710ed9aa559de85b82145f0))
+* cap audited form bodies, uncapped replace check, rename of unknown workspace ([ce63f10](https://github.com/Opsolete/Opsolete/commit/ce63f105fed11a30a83952679dbdd03207f31df0))
+* **config:** trim spaces around AUTH_DEV_GROUPS entries ([a7e5b6b](https://github.com/Opsolete/Opsolete/commit/a7e5b6b02e74b66698e7620b956cd5c30973c8d3))
+* default project warnings, template inputs and template pull requests ([bbdffa7](https://github.com/Opsolete/Opsolete/commit/bbdffa72b6df91fe6e4e131c401827f26f75a42d))
+* **deps:** bump golang.org/x/net to v0.62.0 for CVE-2026-78661 ([ff2a8a5](https://github.com/Opsolete/Opsolete/commit/ff2a8a5aea8500180ac8bb4a346d8c4f5ebec423))
+* **http:** reject an unparsable form before the handler acts on an empty one ([0741312](https://github.com/Opsolete/Opsolete/commit/0741312f9fad281f7c0c56789410dceef70196c8))
+* nix vendorHash and PR_SET_CHILD_SUBREAPER on linux ([12f6650](https://github.com/Opsolete/Opsolete/commit/12f66506334a00012ed6d03e243bd46f8f6be7c7))
+* **nix:** let the runner's stop timeout cover Terraform's wait delay after a job timeout ([35b6c72](https://github.com/Opsolete/Opsolete/commit/35b6c72a674874844e3fb3fe7e657fed7ed9870c))
+* review fixes for projects, rollouts and sensitive inputs ([e1c4191](https://github.com/Opsolete/Opsolete/commit/e1c419131a4dcdbd69ddcfa9cebb7e679de1399c))
+* **runner:** a phase ends within OPS_JOB_TIMEOUT + OPS_JOB_GRACE ([49bb613](https://github.com/Opsolete/Opsolete/commit/49bb613decc1847f6f2afaf095aafdc5e2a03356))
+* **runner:** drop a removed template's outputs in its destroy run ([1ee435a](https://github.com/Opsolete/Opsolete/commit/1ee435a13470ca026ec7bbf2476baf6a9aefff85))
+* **runner:** kill every process a job leaves behind, PID 1 or not ([59e98f8](https://github.com/Opsolete/Opsolete/commit/59e98f820cb6e924fc4f58f1b59798213c7cf68f))
+* **runner:** two-phase claim, so a drain or lost response never loses a job ([c3965d3](https://github.com/Opsolete/Opsolete/commit/c3965d32145c739d69c5de6bfd7d01581d5ae044))
+* **runs:** color only Terraform's action symbols, and only in plan output ([85456da](https://github.com/Opsolete/Opsolete/commit/85456da1dbab0345bb9ea6d9e3855c90bc814163))
+* **runs:** send a finished run's last log lines before ending the stream ([989997e](https://github.com/Opsolete/Opsolete/commit/989997ee14b9a70f07699acf4e967e189ef1e4ad))
+* **runs:** show the log in the apply step once the plan is confirmed ([cd0e1f3](https://github.com/Opsolete/Opsolete/commit/cd0e1f39adfbfd1f8896e295d050603890c309ee))
+* **security:** address CodeQL critical and high alerts ([343af10](https://github.com/Opsolete/Opsolete/commit/343af1049f42dfdfeaeb768ec7ab89f91628ad1e))
+* **security:** operator-only state diffs, ADMIN_GROUPS, masked secrets in run logs, rotate-key ([e1a9936](https://github.com/Opsolete/Opsolete/commit/e1a9936a854ac171df21471540ca928d632af45b))
+* **state:** a rollback records only while it still holds its lock ([0151c59](https://github.com/Opsolete/Opsolete/commit/0151c5916b0d8cf3c4b05b405443281bf1b4c391))
+* **state:** drop a run's intermediate state snapshots when it ends ([73e6199](https://github.com/Opsolete/Opsolete/commit/73e6199eb527fd636120db9989bafb6934d143ac))
+* **state:** finish state, artifact and job result writes when the server shuts down ([08746d8](https://github.com/Opsolete/Opsolete/commit/08746d88bb5c62dd7b045b72cfcbdc59ab78bc0b))
+* **state:** never release a run's state lock as a cloud lock ([4b067e2](https://github.com/Opsolete/Opsolete/commit/4b067e27724774238c3b6b0a228718c9773ba531))
+* **templates:** hide show_if fields whose condition fails instead of showing them disabled ([4a5a0a6](https://github.com/Opsolete/Opsolete/commit/4a5a0a6159f606489f481b339255dea7aab4c31c))
+* **templates:** keep a new template's id on resave, check browser-incompatible patterns, show numbers in full ([d896bad](https://github.com/Opsolete/Opsolete/commit/d896bad3b8c3c2457ad53d81d9cdde891be3fee1))
+* **vcs:** swap the workspace version control page headings ([f50eebf](https://github.com/Opsolete/Opsolete/commit/f50eebfbde3df29bb64964620377ff33fca0477b))
+* **workspaces:** a template or root removal no longer marks the workspace destroyed ([be347a2](https://github.com/Opsolete/Opsolete/commit/be347a242161e29f0932ac4043211b47edbb9d74))
+* **workspaces:** keep the error of a rejected sensitive input instead of saving the old value ([b971fe8](https://github.com/Opsolete/Opsolete/commit/b971fe86e6a105dd65efeffbc7fbc20d0314a539))
+* **workspaces:** put the previous configuration back when a run ends before its apply ([322ed4b](https://github.com/Opsolete/Opsolete/commit/322ed4b8f61b9ba4dd3a63d16201ed13d32e9f56))
+* **workspaces:** refuse to delete a workspace while its state is locked ([ac41eed](https://github.com/Opsolete/Opsolete/commit/ac41eed9fd9c583751fee21842554e8f0c485a6e))
+
+
+### Performance Improvements
+
+* skip known folder-less tags, evict one ETag entry, poll only the run status ([718d6ce](https://github.com/Opsolete/Opsolete/commit/718d6cea37b2c02032d9c7c98b37506510874a44))
+* **storage:** index rollout runs, template uses, drift checks and VCS connection workspaces ([b678356](https://github.com/Opsolete/Opsolete/commit/b67835608748ed05e4dd998141f321db31976a8b))
+
+
+### Code Refactoring
+
+* **secrets:** internal/secrets with key ids; rotation without downtime ([0afc41f](https://github.com/Opsolete/Opsolete/commit/0afc41f2d9d3b88e21c3e3ad04681e62f4ae2c01))
+* **storage:** 1.0 schema, one run state machine, one access rule ([ad797bd](https://github.com/Opsolete/Opsolete/commit/ad797bde2eb4995e2a142f14ac166e7c5ced5392))
+* **storage:** sqlc + native pgx, typed ids, ErrNotFound ([eae53d9](https://github.com/Opsolete/Opsolete/commit/eae53d98f64318e0ecacd626d4b7d6e2fa306573))
+
 ## [0.5.1](https://github.com/Opsolete/Opsolete/compare/v0.5.0...v0.5.1) (2026-11-05)
 
 
