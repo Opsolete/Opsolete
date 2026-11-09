@@ -6,7 +6,7 @@ toolchain go1.26.10
 
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0
-	github.com/go-jose/go-jose/v4 v4.1.7
+	github.com/go-jose/go-jose/v4 v4.1.8
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-tfe v1.94.0 // test only, pinned: Terraform 1.14's, the strictest error decoder (cloud_gotfe_test.go)
 	github.com/hashicorp/go-version v1.9.0
@@ -14,7 +14,7 @@ require (
 	github.com/hashicorp/terraform-config-inspect v0.0.0-20260904064934-75d64de68c31
 	github.com/hashicorp/terraform-exec v0.26.0
 	github.com/hashicorp/terraform-json v0.29.0
-	github.com/hashicorp/terraform-registry-address v0.5.0
+	github.com/hashicorp/terraform-registry-address v0.5.1
 	github.com/jackc/pgx/v5 v5.12.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/zclconf/go-cty v1.19.0
