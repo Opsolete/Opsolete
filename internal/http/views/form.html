@@ -39,7 +39,7 @@
       <p class="hint" id="ops-workspace-hint">Lowercase letters, digits and dashes. It holds this deployment's state and runs.</p>
       {{template "fielderror" (dict "F" .F "N" "ops-workspace")}}
     </div>
-    {{if .Projects}}<div class="row">{{template "projectpick" .}}</div>{{end}}
+    {{if .Projects}}<div class="row"{{if .EnvReload}} data-refresh{{end}}>{{template "projectpick" .}}</div>{{end}}
     <div class="row">
       <label for="ops-auto-apply">Auto-apply</label>
       <input type="checkbox" id="ops-auto-apply" name="ops-auto-apply"{{if .AutoApply}} checked{{end}} aria-describedby="ops-auto-apply-hint">
@@ -50,11 +50,18 @@
 {{if .T.Inputs}}
   <div class="rows-head"><h2>Settings</h2>{{if .Configure}}<p class="hint"><span class="req" aria-hidden="true">*</span> Required</p>{{end}}</div>
   <div class="rows">
-{{range .T.Inputs}}{{$err := fieldError $.F .Name}}{{$help := and .Help (print .Name "-help")}}
+{{range .T.Inputs}}{{$err := fieldError $.F .Name}}{{$help := and .Help (print .Name "-help")}}{{$lock := index $.Locked .Name}}
   <!-- a fieldset per row: disabling it keeps a hidden show_if field from being posted -->
   <fieldset class="row{{if .ShowIf}} show-if{{end}}{{if $err}} invalid{{end}}"{{with .ShowIf}} data-show-if="{{json .}}"{{if not ($.T.Match . $v)}} hidden disabled{{end}}{{end}}>
+  {{if $lock}}
+    <!-- set by the project: shown, not posted (the server ignores it anyway); show_if reads its value -->
+    <label>{{.Title}}</label>
+    <input type="hidden" id="{{.Name}}" name="{{.Name}}" value="{{$lock}}" disabled data-locked>
+    <p><code>{{$.LockedText .}}</code> <span class="hint">Set by project <a href="/projects/{{$.LockedBy}}/environment">{{$.LockedBy}}</a></span></p>
+  {{else}}
     <label for="{{.Name}}">{{.Title}}{{if .Required}} <span class="req" aria-hidden="true">*</span>{{end}}</label>
-  {{if eq .Type "bool"}}
+  {{end}}
+  {{if $lock}}{{else if eq .Type "bool"}}
     <input type="checkbox" id="{{.Name}}" name="{{.Name}}"{{if eq (index $v .Name) "on" "true"}} checked{{end}}{{aria $.F .Name $help}}>
   {{else if eq .Type "select"}}
     <select id="{{.Name}}" name="{{.Name}}"{{aria $.F .Name $help}}>

@@ -1,11 +1,13 @@
 package httpserver
 
 import (
+	"maps"
 	"net/http"
 
 	"github.com/google/uuid"
 
 	"github.com/opsolete/opsolete/internal/app"
+	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
 )
 
@@ -26,6 +28,10 @@ func (s *Server) loadTemplateForm(w http.ResponseWriter, r *http.Request) (formP
 		inputs, page.Cur = f.Current.Inputs, templates.Module{Source: f.Current.ModuleSource, Ref: f.Current.ModuleRef}
 	}
 	page.Values, page.Set = app.FormDefaults(f.Template, inputs)
+	if err := s.lock(r, &page, storage.Project{ID: f.Workspace.ProjectID, Name: f.Workspace.ProjectName}); err != nil {
+		s.internalError(w, "environment values", err)
+		return formPage{}, false
+	}
 	return page, true
 }
 
@@ -50,6 +56,7 @@ func (s *Server) saveWorkspaceTemplate(w http.ResponseWriter, r *http.Request) {
 	_, run, err := s.App.SaveTemplate(r.Context(), actor(r), r.PathValue("name"), r.PathValue("module"), page.T.ID, page.Values)
 	if s.failed(w, r, err, "template", f, func(status int, fs *formState) {
 		fs.Labels, page.F = inputLabels(page.T), fs
+		maps.Copy(page.Values, page.Locked) // shown as before, not as posted
 		s.render(w, r, status, "form.html", &page)
 	}) {
 		return

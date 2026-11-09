@@ -62,6 +62,8 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 | `GET /workspaces/{name}/templates/{module}` | operate | Configure an added template (or update it to the template's version) |
 | `POST /workspaces/{name}/templates/{module}` | operate | Saves it and queues a plan |
 | `POST /workspaces/{name}/templates/{module}/remove` | operate | Removes it: a plan destroying its resources, or at once if nothing is deployed |
+| `GET /workspaces/{name}/promote` | read | Pick a promotion target; with `?target={workspace}` (operate on it) or `?new={name}&project={project}` (operate on the project) the preview of what changes there |
+| `POST /workspaces/{name}/promote` | read; operate on the target | Promotes: `target` or `new` + `project`, `digest` (the preview's), the asked-for inputs as `{module}.{input}` (sensitive: `secret.{module}.{input}`); queues a plan on the target that waits for confirmation (a destroy plan first if it removes or replaces a deployed template; its apply run follows once that is applied) |
 | `GET /workspaces/{name}/vcs` | operate | Version control settings |
 | `GET /workspaces/{name}/vcs/edit` | operate | Change the linked repository or branch |
 | `POST /workspaces/{name}/vcs` | operate | Links, changes or unlinks a repository branch and its triggers |
@@ -95,6 +97,9 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 | `POST /projects` | admin | Creates a project (`name`, `description`) |
 | `GET /projects/{project}` | read, or any user for the default project | Overview |
 | `GET /projects/{project}/workspaces` | same | Its workspaces |
+| `GET /projects/{project}/environment` | same | Environment values: the project's values for per-environment template inputs |
+| `POST /projects/{project}/environment` | admin, or operate on the project | Sets one (`template`, `input`, `value`) |
+| `POST /projects/{project}/environment/clear` | admin, or operate on the project | Clears one (`template`, `input`) |
 | `GET /projects/{project}/settings` | admin | Settings › General |
 | `GET /projects/{project}/settings/{page}` | admin | `access` (team access), `variable-sets` |
 | `POST /projects/{project}/settings` | admin | `name`, `description`, `default` |

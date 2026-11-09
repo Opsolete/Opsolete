@@ -34,7 +34,8 @@ const (
 // transitions is the run state machine: every status a run may move to from each status. A status
 // without any is terminal: the run has ended. setStatus is the only writer of runs.status.
 // Planning → PlanQueued and Applying → ApplyQueued undo a claim its runner never acknowledged:
-// only UnclaimJobs uses them.
+// only UnclaimJobs uses them. A promotion's destroy run ending applied or no_changes queues the
+// promotion's apply run, a new run (setStatus).
 var transitions = map[string][]string{
 	PlanQueued:        {Planning, Canceled},
 	Planning:          {NeedsConfirmation, ApplyQueued, NoChanges, Drifted, Planned, Errored, Canceled, PlanQueued},
@@ -102,51 +103,72 @@ type StatusEntry struct {
 //     may have left behind (never a rollback's or CLI's)
 //   - ending: config_changes is dropped; ended before its apply started (discarded, canceled,
 //     errored), the configuration the run changed goes back (see restoreConfig); a destroy run
-//     removing a template that succeeded removes it
+//     removing templates that succeeded (applied, or no changes: nothing was left) removes them
+//   - a promotion's first run (a destroy carrying the pending promotion) that succeeded queues the
+//     promotion's apply run, after removing its templates (continuePromotion); one that ended any
+//     other way drops the promotion, and nothing else changes
 //
 // Status-specific columns (plan, outputs, confirmed_by, runner and lease) stay with the callers.
 // It returns the status the run came from.
 func setStatus(ctx context.Context, q *db.Queries, runID uuid.UUID, to, message string) (string, error) {
+	from, _, err := transition(ctx, q, runID, to, message)
+	return from, err
+}
+
+// transition is setStatus, and returns the promotion step it queued (nil: none) for the caller's
+// audit entry: only FinishJob ends a run applied or with no changes.
+func transition(ctx context.Context, q *db.Queries, runID uuid.UUID, to, message string) (string, *PromotionStep, error) {
 	run, err := q.LockRun(ctx, runID)
 	if err != nil {
-		return "", notFound(err)
+		return "", nil, notFound(err)
 	}
 	from := run.Status
 	if !canTransition(from, to) {
-		return from, fmt.Errorf("%w: run %s from %s to %s", ErrTransition, runID, from, to)
+		return from, nil, fmt.Errorf("%w: run %s from %s to %s", ErrTransition, runID, from, to)
 	}
 	leased, ended := to == Planning || to == Applying, Ended(to)
 	if err := q.UpdateRunStatus(ctx, db.UpdateRunStatusParams{ID: runID, Status: to, Leased: leased, Ended: ended}); err != nil {
-		return from, err
+		return from, nil, err
 	}
 	if err := addHistory(ctx, q, runID, to, message); err != nil {
-		return from, err
+		return from, nil, err
 	}
 	if err := notifyRun(ctx, q, runID); err != nil {
-		return from, err
+		return from, nil, err
 	}
 	if to == PlanQueued || to == ApplyQueued {
 		if err := notifyJobs(ctx, q); err != nil {
-			return from, err
+			return from, nil, err
 		}
 	}
 	if !leased {
 		n, err := q.ReleaseRunStateLock(ctx, db.ReleaseRunStateLockParams{WorkspaceID: run.WorkspaceID, RunID: runID})
 		if err := locksReleased(ctx, q, n, err); err != nil {
-			return from, err
+			return from, nil, err
 		}
 	}
 	if (to == Discarded || to == Canceled || to == Errored) && from != Applying && run.ConfigChanges != nil {
 		if err := restoreConfig(ctx, q, run.WorkspaceID, run.ConfigChanges); err != nil {
-			return from, err
+			return from, nil, err
 		}
 	}
-	if run.RemoveTemplate != nil && (to == Applied || to == NoChanges) { // its resources are gone now
-		if err := q.DeleteWorkspaceTemplate(ctx, db.DeleteWorkspaceTemplateParams{WorkspaceID: run.WorkspaceID, Name: *run.RemoveTemplate}); err != nil {
-			return from, err
+	succeeded := to == Applied || to == NoChanges
+	if succeeded { // the removed templates' resources are gone now
+		for _, name := range run.RemoveTemplates {
+			if err := q.DeleteWorkspaceTemplate(ctx, db.DeleteWorkspaceTemplateParams{WorkspaceID: run.WorkspaceID, Name: name}); err != nil {
+				return from, nil, err
+			}
 		}
 	}
-	return from, nil
+	switch {
+	case run.Promotion == nil || !ended:
+	case succeeded:
+		step, err := continuePromotion(ctx, q, runID, run.WorkspaceID, to, run.Promotion)
+		return from, step, err
+	default:
+		return from, nil, addHistory(ctx, q, runID, to, "promotion not continued: "+to)
+	}
+	return from, nil, nil
 }
 
 // Notification channels, listened to by app.Notifier. They are sent inside the transaction of the
@@ -183,13 +205,13 @@ func addHistory(ctx context.Context, q *db.Queries, runID uuid.UUID, status, mes
 }
 
 // configChange is one added template's configuration before and after a run's change (configuring
-// templates, rollouts). A run that ends before its apply started puts the before back, so the
+// templates, rollouts, promotions). A run that ends before its apply started puts the before back, so the
 // workspace never claims a version that wasn't applied; once its apply started the state may already
 // hold part of the new one, so it stays. Before and After are template_config (001_schema.sql).
 type configChange struct {
 	Module string          `json:"module"`
 	Before json.RawMessage `json:"before"` // nil (null): an added template that wasn't there
-	After  json.RawMessage `json:"after"`
+	After  json.RawMessage `json:"after"`  // nil (null): a removed template (a promotion)
 }
 
 // configSnapshot reads one added template's configuration; nil if there is none.
@@ -218,8 +240,10 @@ func recordConfigChanges(ctx context.Context, q *db.Queries, runID, workspaceID 
 	return q.SetConfigChanges(ctx, db.SetConfigChangesParams{ID: runID, ConfigChanges: b})
 }
 
-// restoreConfig puts back the before of each change (raw config_changes) whose template is still
-// at its after: a template changed since is left alone. A before of null removes the template.
+// restoreConfig puts back the before of each change (raw config_changes):
+//   - changed (before and after): only while the template is still at its after; one changed since is left alone
+//   - added (before null): removed, only while it is still at its after
+//   - removed (after null, a promotion): put back, unless a template took its module name since
 func restoreConfig(ctx context.Context, q *db.Queries, workspaceID uuid.UUID, raw []byte) error {
 	var changes []configChange
 	if err := json.Unmarshal(raw, &changes); err != nil {
@@ -229,8 +253,10 @@ func restoreConfig(ctx context.Context, q *db.Queries, workspaceID uuid.UUID, ra
 	for _, c := range changes {
 		var err error
 		switch {
+		case isNull(c.After) && isNull(c.Before):
+			continue // nothing was there before or after
 		case isNull(c.After):
-			continue // nothing to compare with: never restored
+			err = q.RestoreRemovedTemplate(ctx, db.RestoreRemovedTemplateParams{WorkspaceID: workspaceID, Name: c.Module, Before: c.Before})
 		case isNull(c.Before):
 			err = q.RemoveRestoredTemplate(ctx, db.RemoveRestoredTemplateParams{WorkspaceID: workspaceID, Name: c.Module, After: c.After})
 		default:

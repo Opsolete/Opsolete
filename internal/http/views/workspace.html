@@ -485,4 +485,4 @@
 </a>{{end}}
 {{define "deployed"}}<br><small class="muted" title="resources of this template in the current state">{{if .}}{{.}} resource{{if ne . 1}}s{{end}}{{else}}⚠ no resources in state{{end}}</small>{{end}}
 {{define "inputs"}}{{if .}}<details class="inputs"><summary>{{len .}} input{{if ne (len .) 1}}s{{end}}</summary>
-<dl>{{range .}}<dt title="{{.Name}}">{{.Title}}</dt><dd>{{if .Sensitive}}<span class="muted">(sensitive)</span>{{else}}<code>{{.Text}}</code>{{end}}</dd>{{end}}</dl></details>{{else}}<span class="muted">none</span>{{end}}{{end}}
+<dl>{{range .}}<dt title="{{.Name}}">{{.Title}}</dt><dd>{{if .Sensitive}}<span class="muted">(sensitive)</span>{{else}}<code>{{.Text}}</code>{{with .Project}} <small class="muted">Set by project <a href="/projects/{{.}}/environment">{{.}}</a></small>{{end}}{{end}}</dd>{{end}}</dl></details>{{else}}<span class="muted">none</span>{{end}}{{end}}

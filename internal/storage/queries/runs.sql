@@ -69,26 +69,33 @@ SELECT r.id, r.workspace_id, r.action, r.created_at FROM r;
 -- name: SetRunReplace :exec
 UPDATE runs SET replace = sqlc.arg(replace)::jsonb WHERE id = sqlc.arg(id)::uuid;
 
--- name: SetRunRemoveTemplate :exec
-UPDATE runs SET remove_template = sqlc.arg(remove_template)::text WHERE id = sqlc.arg(id)::uuid;
+-- name: SetRunRemoveTemplates :exec
+UPDATE runs SET remove_templates = sqlc.arg(remove_templates)::text[] WHERE id = sqlc.arg(id)::uuid;
+
+-- name: SetRunPromotion :exec
+UPDATE runs SET promotion = sqlc.arg(promotion)::jsonb WHERE id = sqlc.arg(id)::uuid;
 
 -- name: SetRunRollout :exec
 UPDATE runs SET rollout_id = sqlc.arg(rollout_id)::uuid WHERE id = sqlc.arg(id)::uuid;
+
+-- name: SetRunAlwaysConfirm :exec
+UPDATE runs SET always_confirm = true WHERE id = sqlc.arg(id)::uuid;
 
 -- name: LockRunStatus :one
 SELECT status FROM runs WHERE id = sqlc.arg(id)::uuid FOR UPDATE;
 
 -- name: LockRun :one
-SELECT status, workspace_id, remove_template, config_changes FROM runs WHERE id = sqlc.arg(id)::uuid FOR UPDATE;
+SELECT status, workspace_id, remove_templates, config_changes, promotion FROM runs WHERE id = sqlc.arg(id)::uuid FOR UPDATE;
 
 -- name: UpdateRunStatus :exec
 -- Only setStatus calls this. The lease ends unless the run starts working (a new claim: not acknowledged
--- yet); config_changes goes when it ends.
+-- yet); config_changes and promotion go when it ends.
 UPDATE runs SET status = sqlc.arg(status)::text, updated_at = now(),
     lease_id = CASE WHEN sqlc.arg(leased)::boolean THEN lease_id END,
     lease_until = CASE WHEN sqlc.arg(leased)::boolean THEN lease_until END,
     lease_acked_at = NULL,
-    config_changes = CASE WHEN sqlc.arg(ended)::boolean THEN NULL ELSE config_changes END
+    config_changes = CASE WHEN sqlc.arg(ended)::boolean THEN NULL ELSE config_changes END,
+    promotion = CASE WHEN sqlc.arg(ended)::boolean THEN NULL ELSE promotion END
 WHERE id = sqlc.arg(id)::uuid;
 
 -- name: AddRunHistory :exec
@@ -121,6 +128,13 @@ WHERE t.workspace_id = sqlc.arg(workspace_id)::uuid AND t.name = sqlc.arg(name):
 DELETE FROM workspace_templates t
 WHERE t.workspace_id = sqlc.arg(workspace_id)::uuid AND t.name = sqlc.arg(name)::text
     AND template_config(t.template_id, t.module_source, t.module_ref, t.inputs) = sqlc.arg(after)::jsonb;
+
+-- name: RestoreRemovedTemplate :exec
+-- puts back a template a run removed, unless a template took its name since
+INSERT INTO workspace_templates (workspace_id, name, template_id, module_source, module_ref, inputs)
+VALUES (sqlc.arg(workspace_id)::uuid, sqlc.arg(name)::text, sqlc.arg(before)::jsonb->>'template_id', sqlc.arg(before)::jsonb->>'module_source',
+    sqlc.arg(before)::jsonb->>'module_ref', sqlc.arg(before)::jsonb->'inputs')
+ON CONFLICT (workspace_id, name) DO NOTHING;
 
 -- name: ListWorkspaceTemplates :many
 SELECT name, template_id, module_source, module_ref, inputs FROM workspace_templates

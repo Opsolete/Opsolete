@@ -47,6 +47,8 @@ type Input struct {
 	// Key: at most one input per template; its value names the template when it's added to a workspace
 	// (module.<name>). The name is fixed then: changing the value later doesn't rename it.
 	Key bool `json:"key,omitempty"`
+	// PerEnvironment: a project ("environment") may set the value for all its workspaces, overriding theirs at every run.
+	PerEnvironment bool `json:"per_environment,omitempty"`
 }
 
 // InputTypes are the input types; the JSON Schema's enum must match (TestSchema).
@@ -350,6 +352,12 @@ func (t Template) check() error {
 		if k := t.KeyInput(); in.Key && k.Name != in.Name {
 			return fmt.Errorf("input %q: only one input can be the key, %q is", in.Name, k.Name)
 		}
+		if in.PerEnvironment && in.Sensitive { // project values are stored and shown in plain text
+			return fmt.Errorf("template %q, input %q: a per-environment input can't be sensitive", t.ID, in.Name)
+		}
+		if in.PerEnvironment && in.Key { // the key names the module, fixed when added
+			return fmt.Errorf("template %q, input %q: a per-environment input can't be the key", t.ID, in.Name)
+		}
 		if in.Sensitive && in.Default != "" { // the template file is plain text
 			return fmt.Errorf("input %q: a sensitive input can't have a default", in.Name)
 		}
@@ -435,7 +443,8 @@ func anchored(pattern string) string { return "^(?:" + pattern + ")$" }
 // StoredValue is a stored input as the form asked it: the question and the answer in its words.
 type StoredValue struct {
 	Name, Title, Text string
-	Sensitive         bool // sealed: the text is never shown
+	Sensitive         bool   // sealed: the text is never shown
+	Project           string // set by this project (a per-environment input): Text is its value, not the stored one
 }
 
 // Describe lists the stored inputs in the form's order, then any the template no longer asks (by name).

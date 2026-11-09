@@ -122,6 +122,17 @@ SELECT a::text FROM unnest(sqlc.arg(addresses)::text[]) a
 WHERE NOT EXISTS (SELECT 1 FROM cur JOIN state_version_resources r ON r.state_version_id = cur.id AND r.address = a)
 LIMIT 1;
 
+-- name: ModuleResources :many
+-- resources of the current state version per top-level module name (module.<name>…; module names hold no dots)
+WITH cur AS (SELECT v.id FROM state_versions v WHERE v.workspace_id = sqlc.arg(workspace_id)::uuid ORDER BY v.id DESC LIMIT 1)
+SELECT split_part(r.module, '.', 2)::text AS name, count(*)::bigint AS resources
+FROM cur JOIN state_version_resources r ON r.state_version_id = cur.id
+WHERE r.module LIKE 'module.%' GROUP BY 1;
+
+-- name: CurrentStateIndexed :one
+-- true without a state
+SELECT COALESCE((SELECT v.indexed FROM state_versions v WHERE v.workspace_id = sqlc.arg(workspace_id)::uuid ORDER BY v.id DESC LIMIT 1), true)::boolean;
+
 -- name: Resources :many
 -- shortcut: no paging, capped at 2000 rows; add paging when inventories get that large.
 WITH cur AS (SELECT v.id, v.workspace_id, v.serial FROM state_versions v

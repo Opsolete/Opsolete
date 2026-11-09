@@ -14,9 +14,10 @@ A **project** groups [workspaces]({{< relref "workspaces" >}}). Team access and 
 
 - **Overview:** its ID and description, and the most recently active workspaces. **+ New workspace** creates one in this project, if you [may](#access).
 - **Workspaces:** all of the project's workspaces you can see.
+- **Environment values:** the project's values for template inputs marked per environment; they apply to each of its workspaces at every run. Admins and groups with `operate` on the project set them. See [Environments and promotion]({{< relref "environments" >}}).
 - **Settings** (admins only): *General* (name, description, default project, delete), *Team access* and *Variable sets*.
 
-Everyone who can see a project sees the first two; only admins see and change its settings.
+Everyone who can see a project sees the first three; only admins see and change its settings.
 
 ## Manage projects
 
@@ -25,7 +26,7 @@ Admins:
 - **Create** a project with **+ New project** on the projects page. Its name follows the workspace name rule and is its URL: renaming a project changes its URL, not its workspaces'.
 - **Make another project the default** under *Settings › General*. The default project can't be deleted.
 - **Delete** an empty project under *Settings › General*: its team access and variable set attachments go with it. Move or delete its workspaces first.
-- **Move a workspace** to another project in the workspace's *Settings › General*. That's allowed during a run: its variables are resolved when each phase starts, so the next phase gets the new project's sets.
+- **Move a workspace** to another project in the workspace's *Settings › General*. That's allowed during a run: its variables are resolved when each phase starts, so the next phase gets the new project's sets. Its [per-environment values]({{< relref "environments#per-environment-inputs" >}}) switch too, from the next run.
 
 Every project change and move is in the [audit log]({{< relref "/docs/operations/authentication#audit-log" >}}).
 

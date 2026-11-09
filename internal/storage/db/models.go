@@ -30,6 +30,15 @@ type AuditLog struct {
 	Hash     []byte
 }
 
+type EnvironmentValue struct {
+	ProjectID  uuid.UUID
+	TemplateID string
+	InputName  string
+	Value      string
+	UpdatedAt  time.Time
+	UpdatedBy  uuid.NullUUID
+}
+
 type Module struct {
 	Namespace  string
 	Name       string
@@ -100,7 +109,6 @@ type Run struct {
 	Action          string
 	Status          string
 	Replace         []byte
-	RemoveTemplate  *string
 	Plan            []byte
 	Outputs         []byte
 	Runner          *string
@@ -118,6 +126,9 @@ type Run struct {
 	ConfirmedBy     uuid.NullUUID
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+	AlwaysConfirm   bool
+	RemoveTemplates []string
+	Promotion       []byte
 }
 
 type RunList struct {

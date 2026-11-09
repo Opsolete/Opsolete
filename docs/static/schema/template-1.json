@@ -49,7 +49,8 @@
         "default": { "description": "Typed by the input's type: string and select a string, number a number, bool a boolean." },
         "sensitive": { "description": "Stored sealed, typed in a password field, never shown (string and number inputs, no default).", "type": "boolean" },
         "show_if": { "$ref": "#/$defs/show_if" },
-        "key": { "description": "At most one input: its value names the template's module in a workspace (not bool or sensitive).", "type": "boolean" }
+        "key": { "description": "At most one input: its value names the template's module in a workspace (not bool or sensitive).", "type": "boolean" },
+        "per_environment": { "description": "A project may set the value for all its workspaces, overriding theirs at every run (not sensitive or key).", "type": "boolean" }
       },
       "allOf": [
         {
@@ -71,6 +72,10 @@
         {
           "if": { "required": ["sensitive"], "properties": { "sensitive": { "const": true } } },
           "then": { "not": { "required": ["default"] }, "properties": { "key": { "const": false } } }
+        },
+        {
+          "if": { "required": ["per_environment"], "properties": { "per_environment": { "const": true } } },
+          "then": { "properties": { "sensitive": { "const": false }, "key": { "const": false } } }
         }
       ]
     },

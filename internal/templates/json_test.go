@@ -75,7 +75,7 @@ func TestSchema(t *testing.T) {
 	const head = `{"id": "t", "name": "T", "module": {"source": "s", "ref": "r"}, "inputs": [`
 	for _, c := range []struct{ name, inputs, schema, err string }{
 		{"valid", `{"name": "s", "label": "S", "help": "h", "type": "string", "required": true, "pattern": "[a-z]+", "default": "abc", "key": true},
-			{"name": "n", "type": "number", "default": 0.5}, {"name": "b", "type": "bool", "default": false},
+			{"name": "n", "type": "number", "default": 0.5, "per_environment": true}, {"name": "b", "type": "bool", "default": false},
 			{"name": "o", "type": "select", "options": ["a", {"value": "b", "label": "B"}], "default": "b", "show_if": {"input": "b", "equals": [true]}},
 			{"name": "p", "type": "string", "sensitive": true, "show_if": {"input": "o", "equals": ["a", "b"]}}`, "", ""},
 		{"number default as a string", `{"name": "n", "type": "number", "default": "7"}`,
@@ -107,6 +107,10 @@ func TestSchema(t *testing.T) {
 		{"bad input name", `{"name": "Size", "type": "string"}`, "input name pattern", "invalid input name"},
 		{"reserved input name", `{"name": "count", "type": "string"}`, "input name not enum", "invalid input name"},
 		{"sensitive bool", `{"name": "b", "type": "bool", "sensitive": true}`, "input allOf[2] then sensitive const false", "only string and number"},
+		{"per_environment sensitive", `{"name": "p", "type": "string", "sensitive": true, "per_environment": true}`,
+			"input allOf[5] then sensitive const false", `template "t", input "p": a per-environment input can't be sensitive`},
+		{"per_environment key", `{"name": "k", "type": "string", "key": true, "per_environment": true}`,
+			"input allOf[5] then key const false", `template "t", input "k": a per-environment input can't be the key`},
 		{"sensitive with a default", `{"name": "p", "type": "string", "sensitive": true, "default": "x"}`, "input allOf[4] then not required default", "can't have a default"},
 	} {
 		file := head + c.inputs + `]}`
@@ -131,7 +135,7 @@ func TestSchema(t *testing.T) {
 // What Parse reads, Encode writes back the same: typed values in the file, the same strings in Go.
 func TestJSONRoundTrip(t *testing.T) {
 	file := []byte(`{"$schema": "` + SchemaURL + `", "id": "t", "name": "T", "description": "", "module": {"source": "s", "ref": "r"}, "inputs": [
-		{"name": "n", "label": "N", "help": "h", "type": "number", "required": false, "default": 1e21},
+		{"name": "n", "label": "N", "help": "h", "type": "number", "required": false, "default": 1e21, "per_environment": true},
 		{"name": "f", "label": "", "type": "number", "required": false, "default": 0.5},
 		{"name": "b", "label": "", "type": "bool", "required": false, "default": true},
 		{"name": "s", "label": "", "type": "string", "required": false, "default": "7", "show_if": {"input": "b", "equals": [false]}}]}`)
@@ -140,6 +144,9 @@ func TestJSONRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := ts["t"]
+	if !got.Inputs[0].PerEnvironment || got.Inputs[1].PerEnvironment {
+		t.Errorf("per_environment: %+v", got.Inputs[:2])
+	}
 	if d := []string{got.Inputs[0].Default, got.Inputs[1].Default, got.Inputs[2].Default, got.Inputs[3].Default, got.Inputs[3].ShowIf.Equals[0]}; !slices.Equal(d, []string{"1000000000000000000000", "0.5", "true", "7", "false"}) {
 		t.Errorf("canonical strings: %q", d)
 	}
@@ -149,7 +156,7 @@ func TestJSONRoundTrip(t *testing.T) {
 	}
 	var compact bytes.Buffer
 	json.Compact(&compact, b)
-	for _, want := range []string{`"default":1e+21`, `"default":0.5`, `"default":true`, `"default":"7"`, `"equals":[false]`, `"$schema":"` + SchemaURL + `"`} {
+	for _, want := range []string{`"default":1e+21`, `"default":0.5`, `"default":true`, `"default":"7"`, `"equals":[false]`, `"per_environment":true`, `"$schema":"` + SchemaURL + `"`} {
 		if !strings.Contains(compact.String(), want) {
 			t.Errorf("encoded lacks %s:\n%s", want, b)
 		}

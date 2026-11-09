@@ -84,12 +84,16 @@ document.addEventListener('change', e => {
   const t = e.target, choice = t.closest('[data-menu-choice]');
   if (t.closest('.picker-list')) filterPicker(t);
   else if (t.dataset.navigate !== undefined) location = t.dataset.navigate + encodeURIComponent(t.value);
-  else if (choice) { // radios in a <details> menu: the summary mirrors the choice
+  else if (t.closest('[data-refresh]')) { // the server shows the form again for the new choice, typed values kept
+    t.form.append(Object.assign(document.createElement('input'), {type: 'hidden', name: 'refresh', value: '1'}));
+    t.form.submit(); // not requestSubmit: no validation, no "Starting plan…"
+  } else if (choice) { // radios in a <details> menu: the summary mirrors the choice
     const d = choice.closest('details');
     d.querySelector('summary span').textContent = t.closest('label').querySelector('strong').textContent;
     d.open = false;
   }
 });
+addEventListener('pageshow', () => { for (const el of document.querySelectorAll('input[name=refresh]')) el.remove(); }); // Back restores the page as left
 
 // <dialog data-open>: re-shown with a refused form, it opens modally, at its first invalid field
 for (const d of document.querySelectorAll('dialog[data-open]')) {
@@ -143,7 +147,9 @@ for (const d of document.querySelectorAll('dialog[data-open]')) {
     for (const el of form.querySelectorAll('[data-show-if]')) {
       const c = JSON.parse(el.dataset.showIf), src = form.elements[c.input];
       const v = src?.type === 'checkbox' ? String(src.checked) : src?.value;
-      el.hidden = el.disabled = !src || src.matches(':disabled') || !c.equals.includes(v);
+      // a project's value (data-locked) is disabled so it isn't posted; it counts unless its row is hidden
+      const off = !src || ('locked' in src.dataset ? src.closest('fieldset').disabled : src.matches(':disabled'));
+      el.hidden = el.disabled = off || !c.equals.includes(v);
     }
   };
   form.addEventListener('change', update);
@@ -183,7 +189,8 @@ for (const d of document.querySelectorAll('dialog[data-open]')) {
   const refresh = () => {
     const keys = cards().filter(c => {
       const t = c.querySelector('.ftype').value;
-      return nameOf(c) && t !== 'bool' && !(t !== 'select' && c.querySelector('[name=in_sensitive]').checked);
+      return nameOf(c) && t !== 'bool' && !(t !== 'select' && c.querySelector('[name=in_sensitive]').checked) &&
+        !c.querySelector('[name=in_per_environment]').checked;
     });
     if (!keys.includes(keyCard)) keyCard = undefined;
     key.replaceChildren(new Option("the template's name", ''), ...keys.map(c => new Option(nameOf(c), nameOf(c), c === keyCard, c === keyCard)));

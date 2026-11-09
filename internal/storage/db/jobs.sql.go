@@ -186,7 +186,7 @@ const leaseRun = `-- name: LeaseRun :one
 UPDATE runs SET runner = $1::text, lease_id = $2::text,
     lease_until = now() + make_interval(secs => $3::float8)
 WHERE id = $4::uuid
-RETURNING workspace_id, action, replace, COALESCE(vcs_commit, '')::text AS vcs_commit, COALESCE(remove_template, '')::text AS remove_template
+RETURNING workspace_id, action, replace, COALESCE(vcs_commit, '')::text AS vcs_commit, remove_templates
 `
 
 type LeaseRunParams struct {
@@ -197,11 +197,11 @@ type LeaseRunParams struct {
 }
 
 type LeaseRunRow struct {
-	WorkspaceID    uuid.UUID
-	Action         string
-	Replace        []byte
-	VcsCommit      string
-	RemoveTemplate string
+	WorkspaceID     uuid.UUID
+	Action          string
+	Replace         []byte
+	VcsCommit       string
+	RemoveTemplates []string
 }
 
 func (q *Queries) LeaseRun(ctx context.Context, arg LeaseRunParams) (LeaseRunRow, error) {
@@ -217,13 +217,13 @@ func (q *Queries) LeaseRun(ctx context.Context, arg LeaseRunParams) (LeaseRunRow
 		&i.Action,
 		&i.Replace,
 		&i.VcsCommit,
-		&i.RemoveTemplate,
+		&i.RemoveTemplates,
 	)
 	return i, err
 }
 
 const lockLeasedRun = `-- name: LockLeasedRun :one
-SELECT r.status, r.action, r.workspace_id, w.auto_apply, (r.rollout_id IS NOT NULL)::boolean AS needs_confirmation, r.cancel_requested
+SELECT r.status, r.action, r.workspace_id, w.auto_apply, (r.rollout_id IS NOT NULL OR r.always_confirm)::boolean AS needs_confirmation, r.cancel_requested
 FROM runs r JOIN workspaces w ON w.id = r.workspace_id
 WHERE r.id = $1::uuid AND r.lease_id = $2::text AND run_working(r.status) AND r.lease_acked_at IS NOT NULL
 FOR UPDATE OF r
@@ -244,7 +244,7 @@ type LockLeasedRunRow struct {
 }
 
 // The run, if lease_id holds it; the lease is checked here, setStatus then checks the transition.
-// needs_confirmation: a template rollout's run (see template_rollouts) always waits for a human.
+// needs_confirmation: a template rollout's run (see template_rollouts) or a promotion's always waits for a human.
 func (q *Queries) LockLeasedRun(ctx context.Context, arg LockLeasedRunParams) (LockLeasedRunRow, error) {
 	row := q.db.QueryRow(ctx, lockLeasedRun, arg.ID, arg.LeaseID)
 	var i LockLeasedRunRow

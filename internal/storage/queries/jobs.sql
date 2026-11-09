@@ -13,7 +13,7 @@ ORDER BY r.updated_at FOR UPDATE OF r SKIP LOCKED LIMIT 1;
 UPDATE runs SET runner = sqlc.arg(runner)::text, lease_id = sqlc.arg(lease_id)::text,
     lease_until = now() + make_interval(secs => sqlc.arg(lease_secs)::float8)
 WHERE id = sqlc.arg(id)::uuid
-RETURNING workspace_id, action, replace, COALESCE(vcs_commit, '')::text AS vcs_commit, COALESCE(remove_template, '')::text AS remove_template;
+RETURNING workspace_id, action, replace, COALESCE(vcs_commit, '')::text AS vcs_commit, remove_templates;
 
 -- name: WorkspaceHasVCS :one
 SELECT EXISTS (SELECT 1 FROM workspace_vcs WHERE workspace_id = sqlc.arg(workspace_id)::uuid);
@@ -45,8 +45,8 @@ UPDATE runs SET cancel_requested = true WHERE id = sqlc.arg(id)::uuid;
 
 -- name: LockLeasedRun :one
 -- The run, if lease_id holds it; the lease is checked here, setStatus then checks the transition.
--- needs_confirmation: a template rollout's run (see template_rollouts) always waits for a human.
-SELECT r.status, r.action, r.workspace_id, w.auto_apply, (r.rollout_id IS NOT NULL)::boolean AS needs_confirmation, r.cancel_requested
+-- needs_confirmation: a template rollout's run (see template_rollouts) or a promotion's always waits for a human.
+SELECT r.status, r.action, r.workspace_id, w.auto_apply, (r.rollout_id IS NOT NULL OR r.always_confirm)::boolean AS needs_confirmation, r.cancel_requested
 FROM runs r JOIN workspaces w ON w.id = r.workspace_id
 WHERE r.id = sqlc.arg(id)::uuid AND r.lease_id = sqlc.arg(lease_id)::text AND run_working(r.status) AND r.lease_acked_at IS NOT NULL
 FOR UPDATE OF r;

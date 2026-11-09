@@ -37,6 +37,7 @@ type (
 		Sensitive bool            `json:"sensitive,omitempty"`
 		ShowIf    *fileShowIf     `json:"show_if,omitempty"`
 		Key       bool            `json:"key,omitempty"`
+		PerEnv    bool            `json:"per_environment,omitempty"`
 	}
 	fileShowIf struct {
 		Input  string            `json:"input"`
@@ -80,7 +81,7 @@ func (t *Template) UnmarshalJSON(b []byte) error {
 	}
 	for i, fi := range files {
 		in := Input{Name: fi.Name, Label: fi.Label, Help: fi.Help, Type: fi.Type, Required: fi.Required, Pattern: fi.Pattern,
-			Options: fi.Options, Sensitive: fi.Sensitive, Key: fi.Key}
+			Options: fi.Options, Sensitive: fi.Sensitive, Key: fi.Key, PerEnvironment: fi.PerEnv}
 		where := fmt.Sprintf("%s, input %v", where, inputRef(fi.Name, i))
 		var err error
 		if fi.Default != nil {
@@ -123,7 +124,7 @@ func (t Template) MarshalJSON() ([]byte, error) {
 	for i, in := range t.Inputs {
 		types[in.Name] = in.Type
 		inputs[i].fileInput = fileInput{Name: in.Name, Label: in.Label, Help: in.Help, Type: in.Type, Required: in.Required,
-			Pattern: in.Pattern, Options: in.Options, Sensitive: in.Sensitive, Key: in.Key}
+			Pattern: in.Pattern, Options: in.Options, Sensitive: in.Sensitive, Key: in.Key, PerEnv: in.PerEnvironment}
 		if in.Default != "" {
 			if inputs[i].Default, err = toJSON(in.Type, in.Default); err != nil {
 				return nil, fmt.Errorf("input %s: default: %w", in.Name, err)

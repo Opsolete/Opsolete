@@ -87,10 +87,17 @@ func (a *App) assembleJob(ctx context.Context, j storage.Job) ([]byte, error) {
 	if err == nil {
 		currency, err = a.Store.Currency(ctx)
 	}
+	var envValues EnvironmentMap // the workspace's project now: a moved workspace gets its new project's values
+	if err == nil {
+		envValues, err = environmentMap(a.Store.WorkspaceEnvironmentValues(ctx, j.WorkspaceID))
+	}
 	var mods []runnerapi.Module
 	for _, m := range j.Modules {
 		in, sec, oerr := a.OpenInputs(m.Inputs, j.WorkspaceID, m.Name)
 		err, secrets = cmp.Or(err, oerr), append(secrets, sec...)
+		if err == nil {
+			in, err = a.withEnvironmentValues(ctx, m.TemplateID, in, envValues)
+		}
 		if err == nil {
 			in, err = a.withWorkspaceVars(ctx, m.TemplateID, m.ModuleSource, m.ModuleRef, in, vars)
 		}

@@ -403,6 +403,7 @@ func Resolve(overrides []templates.Input, vars []Variable) []templates.Input {
 			in.Default = "" // never echoed into the form
 		}
 		in.Key = o.Key && !in.Sensitive && in.Type != "bool"
+		in.PerEnvironment = o.PerEnvironment && !in.Sensitive // a module's sensitive variable stays sealed per workspace
 		out = append(out, in)
 	}
 	for _, v := range vars {

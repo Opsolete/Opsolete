@@ -33,7 +33,7 @@ func TestRolloutPlan(t *testing.T) {
 	busy.RunID = uuid.New()
 	ready.WorkspaceID, ready.Module = w2, "sa_c8ad"
 
-	rows, ups, err := a.rolloutPlan(tpl, []storage.TemplateUse{cur, local, busy, missing, ready})
+	rows, ups, err := a.rolloutPlan(tpl, []storage.TemplateUse{cur, local, busy, missing, ready}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,5 +174,27 @@ func TestRolloutsAdminOnly(t *testing.T) {
 	}
 	if _, err := a.StartRollout(ctx, admin, "greeting", NewRollout{Source: tpl.Module.Source, Ref: tpl.Module.Ref, BatchSize: -1}); !isValidation(err) {
 		t.Fatalf("a negative batch size: %v", err)
+	}
+}
+
+// A required per-environment input the workspace's project sets isn't missing; the upgrade doesn't store the project's value.
+func TestRolloutPlanEnvironment(t *testing.T) {
+	a := &App{Secrets: keys("test-secret-key", "")}
+	tpl := templates.Template{ID: "sa", Module: templates.Module{Source: "git::x", Ref: "v3"}, Inputs: []templates.Input{
+		{Name: "name", Type: "string", Required: true},
+		{Name: "region", Type: "string", Required: true, PerEnvironment: true}, // new in v3
+	}}
+	w := uuid.New()
+	use := storage.TemplateUse{WorkspaceID: w, ExecutionMode: "remote", ModuleSource: "git::x", ModuleRef: "v2", Inputs: map[string]any{"name": "a"}}
+	rows, _, err := a.rolloutPlan(tpl, []storage.TemplateUse{use}, nil)
+	if err != nil || rows[0].State != RolloutNeedsInput || len(rows[0].Missing) != 1 || rows[0].Missing[0] != "region" {
+		t.Fatalf("no project value: %+v %v", rows, err)
+	}
+	rows, ups, err := a.rolloutPlan(tpl, []storage.TemplateUse{use}, map[uuid.UUID]EnvironmentMap{w: {"sa": {"region": "west"}}})
+	if err != nil || rows[0].State != RolloutReady || len(ups[w]) != 1 {
+		t.Fatalf("project value: %+v %v", rows, err)
+	}
+	if in := ups[w][0].Inputs; in["name"] != "a" || in["region"] != nil {
+		t.Errorf("upgrade inputs: %v", in)
 	}
 }

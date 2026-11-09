@@ -32,6 +32,7 @@ var noInvalidInput = map[string]string{
 	"POST /templates/{id}/delete":                               "a button",
 	"POST /templates/{id}/rollout/{action}":                     "buttons: the action is in the path",
 	"POST /projects/{project}/delete":                           "a button",
+	"POST /projects/{project}/environment/clear":                "a button",
 	"POST /workspaces/{name}/settings/health":                   "a checkbox",
 	"POST /workspaces/{name}/settings/remote-state":             "radios and a picker; unknown ids are ignored",
 	"POST /workspaces/{name}/templates/{module}/remove":         "a button",
@@ -76,7 +77,7 @@ func TestFormsRerender(t *testing.T) {
 		return rec
 	}
 	must(post(h, "/projects", url.Values{"name": {proj}}), "project")
-	tplForm := url.Values{"name": {"Frm " + sfx}, "module_source": {"git::https://x//m"}, "module_ref": {"v1"}, "in_name": {"size"}, "in_type": {"number"}}
+	tplForm := url.Values{"name": {"Frm " + sfx}, "module_source": {"git::https://x//m"}, "module_ref": {"v1"}, "in_name": {"size"}, "in_type": {"number"}, "in_per_environment": {"0"}}
 	tpl := strings.TrimPrefix(must(post(h, "/templates/new", tplForm), "template").Header().Get("Location"), "/templates/")
 	must(post(h, "/templates/"+tpl, url.Values{fieldWorkspace: {ws}, "size": {"1"}}), "workspace")
 	tplForm.Set("module_ref", "v2") // the workspace is on v1: a rollout is pending
@@ -116,6 +117,7 @@ func TestFormsRerender(t *testing.T) {
 		{"POST /projects", "/projects", url.Values{"name": {"Bad Name"}}, `id="new-project"`, `value="Bad Name"`, "name", true, false},
 		{"POST /projects/{project}/settings", "/projects/{proj}/settings", url.Values{"name": {"Bad Name"}}, `action="/projects/{proj}/settings"`, `value="Bad Name"`, "name", true, false},
 		{"POST /projects/{project}/access", "/projects/{proj}/access", url.Values{"group": {"echo-group"}, "level": {"admin"}}, `action="/projects/{proj}/access"`, `value="echo-group"`, "level", true, false},
+		{"POST /projects/{project}/environment", "/projects/{proj}/environment", url.Values{"template": {"{tpl}"}, "input": {"size"}, "value": {"abc"}}, `action="/projects/{proj}/environment"`, `value="abc"`, "value", true, false},
 		{"POST /workspaces/new", "/workspaces/new", url.Values{"type": {"cli"}, fieldWorkspace: {"Bad Name"}}, "Create a new workspace", `value="Bad Name"`, fieldWorkspace, true, false},
 		{"POST /workspaces/{name}/vcs", "/workspaces/{ws}/vcs", url.Values{"type": {"vcs"}, "vcs_connection": {"{conn}"}, "vcs_repo": {"acme/x"}, "vcs_branch": {"bad..branch"}},
 			`action="/workspaces/{ws}/vcs"`, `value="bad..branch"`, "vcs_branch", true, false},
@@ -126,6 +128,7 @@ func TestFormsRerender(t *testing.T) {
 		{"POST /workspaces/{name}/access", "/workspaces/{ws}/access", url.Values{"group": {"echo-group"}, "level": {"admin"}}, `action="/workspaces/{ws}/access"`, `value="echo-group"`, "level", true, false},
 		{"POST /workspaces/{name}/lock", "/workspaces/{ws}/lock", url.Values{"action": {"lock"}, "reason": {long}}, `action="/workspaces/{ws}/lock"`, ">" + long + "</textarea>", "reason", true, false},
 		{"POST /workspaces/{name}/project", "/workspaces/{ws}/project", url.Values{"project": {"nope-" + sfx}}, `action="/workspaces/{ws}/project"`, "", "project", true, false},
+		{"POST /workspaces/{name}/promote", "/workspaces/{ws}/promote", url.Values{"new": {"Bad Name"}, "project": {"{proj}"}}, "<h1>Promote {ws}", `value="Bad Name"`, "new", true, false},
 		{"POST /workspaces/{name}/runs", "/workspaces/{ws}/runs", url.Values{"action": {"bogus"}}, "<h1>{ws}", "", "", false, false},
 		{"POST /variable-sets", "/variable-sets", url.Values{"name": {"Bad Name"}, "project": {"{proj}"}}, `action="/variable-sets"`, `value="Bad Name"`, "name", true, false},
 		{"POST /variable-sets/{set}/variables", "/variable-sets/{set}/variables", url.Values{"category": {"env"}, "key": {"PATH"}, "value": {"v"}}, `action="/variable-sets/{set}/variables"`, `value="PATH"`, "key", true, false},

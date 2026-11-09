@@ -39,6 +39,7 @@
     <span class="nav-head">{{.}}</span>
     <a href="/workspaces/{{.}}"{{if eq $t "overview"}} aria-current="page"{{end}}>Overview</a>
     <a href="/workspaces/{{.}}/deploy"{{if eq $t "deploy"}} aria-current="page"{{end}}>Deploy…</a>
+    <a href="/workspaces/{{.}}/promote"{{if eq $t "promote"}} aria-current="page"{{end}}>Promote to…</a>
     <a href="/workspaces/{{.}}/runs"{{if eq $t "runs"}} aria-current="page"{{end}}>Runs</a>
     <a href="/workspaces/{{.}}/states"{{if eq $t "states"}} aria-current="page"{{end}}>States</a>
     <a href="/workspaces/{{.}}/variables"{{if eq $t "variables"}} aria-current="page"{{end}}>Variables</a>
@@ -61,6 +62,7 @@
     <span class="nav-head">{{.}}</span>
     <a href="/projects/{{.}}"{{if eq $t "overview"}} aria-current="page"{{end}}>Overview</a>
     <a href="/projects/{{.}}/workspaces"{{if eq $t "workspaces"}} aria-current="page"{{end}}>Workspaces <span class="tag">{{$.WorkspaceCount}}</span></a>
+    <a href="/projects/{{.}}/environment"{{if eq $t "environment"}} aria-current="page"{{end}}>Environment values</a>
     {{if $.User.Admin}}<a href="/projects/{{.}}/settings"{{if eq $t "settings"}} aria-current="page"{{end}}>Settings ›</a>{{end}}
   </nav>
   {{end}}

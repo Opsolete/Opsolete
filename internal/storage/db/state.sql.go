@@ -108,6 +108,18 @@ func (q *Queries) CopyStateIndex(ctx context.Context, arg CopyStateIndexParams) 
 	return err
 }
 
+const currentStateIndexed = `-- name: CurrentStateIndexed :one
+SELECT COALESCE((SELECT v.indexed FROM state_versions v WHERE v.workspace_id = $1::uuid ORDER BY v.id DESC LIMIT 1), true)::boolean
+`
+
+// true without a state
+func (q *Queries) CurrentStateIndexed(ctx context.Context, workspaceID uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, currentStateIndexed, workspaceID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const currentStateLock = `-- name: CurrentStateLock :one
 SELECT COALESCE((SELECT w.state_lock::text FROM workspaces w WHERE w.id = $1::uuid), '')::text
 `
@@ -230,6 +242,39 @@ UPDATE state_versions SET indexed = true WHERE id = $1::bigint
 func (q *Queries) MarkIndexed(ctx context.Context, id int64) error {
 	_, err := q.db.Exec(ctx, markIndexed, id)
 	return err
+}
+
+const moduleResources = `-- name: ModuleResources :many
+WITH cur AS (SELECT v.id FROM state_versions v WHERE v.workspace_id = $1::uuid ORDER BY v.id DESC LIMIT 1)
+SELECT split_part(r.module, '.', 2)::text AS name, count(*)::bigint AS resources
+FROM cur JOIN state_version_resources r ON r.state_version_id = cur.id
+WHERE r.module LIKE 'module.%' GROUP BY 1
+`
+
+type ModuleResourcesRow struct {
+	Name      string
+	Resources int64
+}
+
+// resources of the current state version per top-level module name (module.<name>…; module names hold no dots)
+func (q *Queries) ModuleResources(ctx context.Context, workspaceID uuid.UUID) ([]ModuleResourcesRow, error) {
+	rows, err := q.db.Query(ctx, moduleResources, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ModuleResourcesRow
+	for rows.Next() {
+		var i ModuleResourcesRow
+		if err := rows.Scan(&i.Name, &i.Resources); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const releaseOrphanedLocks = `-- name: ReleaseOrphanedLocks :many

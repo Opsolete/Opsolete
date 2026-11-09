@@ -92,10 +92,17 @@ func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, 
 	} else {
 		old = f.Current.Inputs
 	}
+	env, err := a.ProjectEnvironment(ctx, f.Workspace.ProjectID)
+	if err != nil {
+		return module, storage.Run{}, err
+	}
+	locked := env.Locked(t)
+	raw = lockInputs(raw, locked)
 	vals, errs := t.Validate(raw)
 	if err := a.SealInputs(t, raw, vals, old, errs, f.Workspace.ID, module); err != nil {
 		return module, storage.Run{}, err
 	}
+	keepOwn(vals, errs, locked, old)
 	if len(errs) > 0 {
 		return module, storage.Run{}, &ValidationError{Fields: errs}
 	}

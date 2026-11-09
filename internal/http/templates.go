@@ -2,8 +2,10 @@ package httpserver
 
 import (
 	"cmp"
+	"maps"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/opsolete/opsolete/internal/app"
@@ -46,8 +48,34 @@ type formPage struct {
 	Configure *storage.Workspace // set: change this workspace's inputs and module version instead of creating one
 	Module    string             // with Configure: the added template to change (or add, with Adding)
 	Adding    bool
-	Cur       templates.Module // with Configure: the module version it runs now
-	Set       map[string]bool  // sensitive inputs with a stored value: left empty, it's kept
+	Cur       templates.Module  // with Configure: the module version it runs now
+	Set       map[string]bool   // sensitive inputs with a stored value: left empty, it's kept
+	Locked    map[string]string // per-environment inputs the project sets (canonical values by name): read-only, not posted
+	LockedBy  string            // that project
+	EnvReload bool              // creating: picking another project posts the form with refresh, shown again with that project's values
+}
+
+// LockedText is how the form says the project's value of the locked input in.
+func (p formPage) LockedText(in templates.Input) string { return app.ValueText(in, p.Locked[in.Name]) }
+
+// lock shows the inputs project sets read-only (app.EnvironmentMap.Locked): their values are the
+// project's, also for show_if, and the server ignores what is posted for them.
+func (s *Server) lock(r *http.Request, page *formPage, project storage.Project) error {
+	env, err := s.App.ProjectEnvironment(r.Context(), project.ID)
+	page.Locked, page.LockedBy = env.Locked(page.T), project.Name
+	page.Values = maps.Clone(page.Values)
+	maps.Copy(page.Values, page.Locked)
+	return err
+}
+
+// lockDeploy is lock for the deploy form, with the project picked (name, "" the default) if the user may create workspaces there.
+func (s *Server) lockDeploy(r *http.Request, page *formPage) error {
+	page.EnvReload = len(page.Projects) > 1 && slices.ContainsFunc(page.T.Inputs, func(in templates.Input) bool { return in.PerEnvironment })
+	i := slices.IndexFunc(page.Projects, func(p storage.Project) bool { return p.Name == page.Project || page.Project == "" && p.Default })
+	if i < 0 {
+		return nil
+	}
+	return s.lock(r, page, page.Projects[i])
 }
 
 var nonNameChars = regexp.MustCompile(`[^a-z0-9]+`)
@@ -71,6 +99,11 @@ func (s *Server) form(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "list projects", err)
 		return
 	}
-	s.render(w, r, http.StatusOK, "form.html", &formPage{Page: Page{Section: "templates"}, T: t, Editor: s.canEditTemplates(r), Values: vals,
-		Project: r.URL.Query().Get("project"), Projects: projects})
+	page := formPage{Page: Page{Section: "templates"}, T: t, Editor: s.canEditTemplates(r), Values: vals,
+		Project: r.URL.Query().Get("project"), Projects: projects}
+	if err := s.lockDeploy(r, &page); err != nil {
+		s.internalError(w, "environment values", err)
+		return
+	}
+	s.render(w, r, http.StatusOK, "form.html", &page)
 }

@@ -24,7 +24,7 @@ type Job struct {
 	Phase       string // plan | apply
 	Action      string // apply | destroy | refresh | assess | plan
 	Replace     []string
-	Target      []string // -target: module.<name> of a destroy run that removes that template
+	Target      []string // -target: module.<name> of each template a destroy run removes
 	LeaseID     string
 	VCS         bool                // the root configuration comes from the workspace's VCS branch
 	VCSCommit   string              // commit pinned when the run was queued (VCS-triggered runs), or by an earlier phase
@@ -65,8 +65,8 @@ func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration
 				return err
 			}
 		}
-		if r.RemoveTemplate != "" {
-			j.Target = []string{"module." + r.RemoveTemplate}
+		for _, m := range r.RemoveTemplates {
+			j.Target = append(j.Target, "module."+m)
 		}
 		if j.VCS, err = q.WorkspaceHasVCS(ctx, j.WorkspaceID); err != nil {
 			return err
@@ -193,6 +193,7 @@ func (s *Store) CancelRun(ctx context.Context, id uuid.UUID, email string, force
 func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, message string, outputs map[string]any,
 	plan *runnerapi.Plan, resources []runnerapi.Resource) (string, error) {
 	var final string
+	var entry *AuditEntry
 	err := s.tx(ctx, func(q *db.Queries) error {
 		// the lease is checked here; setStatus then checks the transition
 		r, err := q.LockLeasedRun(ctx, db.LockLeasedRunParams{ID: runID, LeaseID: lease})
@@ -237,8 +238,17 @@ func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 		if final == ApplyQueued && message == "" {
 			message = "auto-apply: waiting for a runner"
 		}
-		if _, err := setStatus(ctx, q, runID, final, message); err != nil {
+		_, step, err := transition(ctx, q, runID, final, message)
+		if err != nil {
 			return err
+		}
+		if step != nil { // a promotion's apply run, in the name of who promoted
+			e, err := s.audit(ctx, q, step.Actor, "promote apply queued", map[string]any{"source": step.Source,
+				"workspace_id": r.WorkspaceID, "run": step.Run.ID, "after": step.After})
+			if err != nil {
+				return err
+			}
+			entry = &e
 		}
 		if err := q.SetRunResult(ctx, db.SetRunResultParams{ID: runID, Plan: planJSON, Outputs: outJSON}); err != nil {
 			return err
@@ -250,6 +260,9 @@ func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 	})
 	if err != nil {
 		return "", err
+	}
+	if entry != nil {
+		entry.stream()
 	}
 	return final, nil
 }

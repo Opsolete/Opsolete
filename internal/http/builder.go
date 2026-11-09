@@ -173,7 +173,7 @@ func (s *Server) deleteTemplate(w http.ResponseWriter, r *http.Request) {
 }
 
 // templateFromForm reads the builder form. Field cards are parallel in_* lists, rows without a name are
-// dropped; the in_required/in_sensitive checkboxes post their card's index, since unchecked ones post nothing.
+// dropped; the in_required/in_sensitive/in_per_environment checkboxes post their card's index, since unchecked ones post nothing.
 // The key select posts the key input's name. Defaults: in_bool_default for Yes / no cards, in_default for the rest.
 func templateFromForm(f url.Values) templates.Template {
 	get := func(key string) string { return strings.TrimSpace(f.Get(key)) }
@@ -197,7 +197,8 @@ func templateFromForm(f url.Values) templates.Template {
 			def = at("in_bool_default", i)
 		}
 		in := templates.Input{Name: name, Label: at("in_label", i), Help: at("in_help", i), Type: typ, Default: def,
-			Required: typ != "bool" && typ != "select" && slices.Contains(f["in_required"], idx), Key: name == get("key")} // a dropdown always has a value
+			Required: typ != "bool" && typ != "select" && slices.Contains(f["in_required"], idx), Key: name == get("key"), // a dropdown always has a value
+			PerEnvironment: slices.Contains(f["in_per_environment"], idx)}
 		// the card hides the settings its type doesn't use; drop what they still post
 		if typ == "string" {
 			in.Pattern = at("in_pattern", i)

@@ -28,7 +28,9 @@ var (
 	// ErrRemoteExecution: the CLI may not lock or write the state of a workspace its runs plan and apply.
 	ErrRemoteExecution = errors.New("the workspace uses remote execution: only its runs use its state")
 	// ErrChanged: what the request was based on changed meanwhile (a race): reload and try again.
-	ErrChanged = errors.New("changed meanwhile: reload and try again")
+	ErrChanged = storage.ErrChanged
+	// ErrNotPromotable: the source can't be promoted (as it is now) to the target; the reason says why.
+	ErrNotPromotable = errors.New("can't promote")
 
 	errReadOnly   = reason{ErrForbidden, "you have read-only access to this workspace"}
 	errAdminsOnly = reason{ErrForbidden, "admins only"}
@@ -48,7 +50,7 @@ func (r reason) Unwrap() error { return r.kind }
 var conflicts = []error{storage.ErrRunActive, storage.ErrNotConfirmable, storage.ErrNotCancelable,
 	storage.ErrHasResources, storage.ErrStateLocked, storage.ErrLocalExecution, storage.ErrExists,
 	storage.ErrProjectNotEmpty, storage.ErrDefaultProject, storage.ErrInUse,
-	storage.ErrLeaseLost, storage.ErrNotCloudLocked, storage.ErrLockLost, storage.ErrRolloutClosed, ErrNoConfig, ErrStateConflict, ErrRemoteExecution, ErrChanged}
+	storage.ErrLeaseLost, storage.ErrNotCloudLocked, storage.ErrLockLost, storage.ErrRolloutClosed, ErrNoConfig, ErrStateConflict, ErrRemoteExecution, ErrChanged, ErrNotPromotable}
 
 // IsConflict reports whether err is a conflict (HTTP 409); its message says why.
 func IsConflict(err error) bool {
