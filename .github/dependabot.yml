@@ -1,10 +1,13 @@
-# Update PRs for Go modules, and pinned actions (image contents come from flake.lock). PR titles follow
-# Conventional Commits (pr-title.yml) so they flow through Release Please.
+# Update PRs for Go modules (the app and the docs theme) and pinned actions; image contents come from
+# flake.lock. Commit messages are Conventional Commits (ci.yml checks every commit), so Release Please
+# picks them up. The cooldown waits a week after a release before proposing it: most compromised
+# package versions are caught and pulled within days.
 version: 2
 updates:
   - package-ecosystem: gomod
     directory: /
     schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
     commit-message: { prefix: "fix(deps)" }
     # One PR for all Go modules: separate PRs each carry a vendorHash for their own go.sum, and merging
     # several of them leaves master with a combined go.sum that matches none of those hashes.
@@ -14,11 +17,17 @@ updates:
     ignore:
       # test only, pinned on purpose: the oldest go-tfe a supported Terraform ships (see cloud_gotfe_test.go)
       - dependency-name: github.com/hashicorp/go-tfe
+  - package-ecosystem: gomod
+    directory: /docs # the Hextra theme (Hugo module)
+    schedule: { interval: monthly }
+    cooldown: { default-days: 7 }
+    commit-message: { prefix: "docs(deps)" }
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
     commit-message: { prefix: "ci" }
-    # init and analyze must run the same version, separate PRs each fail with a version mismatch.
+    # One PR for all actions (codeql init and analyze must move together anyway).
     groups:
-      codeql:
-        patterns: ["github/codeql-action*"]
+      actions:
+        patterns: ["*"]
