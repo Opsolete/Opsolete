@@ -2,37 +2,25 @@ package httpserver
 
 import (
 	"bytes"
-	"context"
-	"crypto/hmac"
 	"crypto/md5"
-	"crypto/rand"
-	"crypto/sha256"
-	"database/sql"
 	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 
-	"gocloud.dev/blob"
-
+	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/runnerapi"
-	"github.com/opsolete/opsolete/internal/storage"
-	"github.com/opsolete/opsolete/internal/vcs"
 )
-
-const maxStateSize = 64 << 20
 
 // Terraform http state backend, one state per workspace (deployment):
 // https://developer.hashicorp.com/terraform/language/backend/http
-// Runners authenticate with per-run credentials (username = workspace id, password = stateToken),
+// Runners authenticate with per-run credentials (username = workspace id, password = app.StateToken),
 // so only the run a runner is working on can read or write the workspace's state, and only while it
 // is planning or applying. A run of another workspace may read it (terraform_remote_state, its own
-// credentials) if the workspace shares its state with that one.
-func (s *Server) stateRoutes(mux *http.ServeMux) {
+// credentials) if the workspace shares its state with that one (app.StateRun). Errors are plain
+// text, as on the UI (uiError); 423 with the holder's LockInfo for a held lock.
+func (s *Server) stateRoutes(mux routes) {
 	p := runnerapi.StatePrefix + "/{id}"
 	mux.HandleFunc("GET "+p, s.stateAuth(s.getState))
 	mux.HandleFunc("POST "+p, s.stateAuth(s.putState))
@@ -40,100 +28,41 @@ func (s *Server) stateRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("UNLOCK "+p, s.stateAuth(s.unlockState))
 }
 
-// stateToken is a run's state password. It is per run, not per phase: Terraform embeds the backend
-// config in the saved plan, so the apply phase authenticates with what the plan phase used.
-func (s *Server) stateToken(workspaceID, runID string) string {
-	m := hmac.New(sha256.New, s.Registry.Key)
-	m.Write([]byte("opsolete state\x00" + workspaceID + "\x00" + runID))
-	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
-}
-
-func (s *Server) stateAuth(next http.HandlerFunc) http.HandlerFunc {
+func (s *Server) stateAuth(next func(http.ResponseWriter, *http.Request, app.StateRun)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		id := r.PathValue("id")
-		user, pass, ok := r.BasicAuth()
+		username, pass, ok := r.BasicAuth()
 		if !ok {
 			http.Error(w, "state credentials required", http.StatusUnauthorized)
 			return
 		}
-		// terraform_remote_state: another workspace's run reads this state, never writes or locks it
-		if user != id && r.Method != http.MethodGet {
-			http.Error(w, "only this workspace's runs may change its state", http.StatusForbidden)
-			return
-		}
-		run, status, pullRequest, err := s.Store.WorkingRun(r.Context(), user)
-		if errors.Is(err, sql.ErrNoRows) {
-			http.Error(w, "no run is working on this workspace", http.StatusForbidden)
-			return
-		}
+		id, _ := pathID(r, "id") // not an id: uuid.Nil, no run's own state and shared by none
+		run, err := s.App.StateRun(r.Context(), id, username, pass)
 		if err != nil {
-			s.Log.Error("state auth", "err", err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			s.uiError(w, r, err)
 			return
 		}
-		if !hmac.Equal([]byte(pass), []byte(s.stateToken(user, run))) {
-			http.Error(w, "invalid state credentials", http.StatusForbidden)
-			return
-		}
-		// plans (also speculative ones of unreviewed code, and drift checks) lock but never write state
-		if r.Method == http.MethodPost && status != storage.Applying {
-			http.Error(w, "only an apply may write the state", http.StatusForbidden)
-			return
-		}
-		if user != id {
-			// unreviewed code: SetWorkspaceVCS keeps variable sets from these plans for the same reason
-			if pullRequest {
-				http.Error(w, "a pull request's speculative plan can't read other workspaces' state", http.StatusForbidden)
-				return
-			}
-			shared, err := s.Store.SharesState(r.Context(), id, user)
-			if err != nil {
-				s.internalError(w, "remote state sharing", err)
-				return
-			}
-			if !shared {
-				http.Error(w, "this workspace does not share its state with yours (Settings > General > Remote state sharing)", http.StatusForbidden)
-				return
-			}
-		}
-		r.SetPathValue("run", run) // the authenticated run, for lockState and putState
-		next(w, r)
+		next(w, r, run)
 	}
 }
 
-func (s *Server) getState(w http.ResponseWriter, r *http.Request) {
-	vs, err := s.Store.StateVersions(r.Context(), r.PathValue("id"), 1)
+func (s *Server) getState(w http.ResponseWriter, r *http.Request, run app.StateRun) {
+	b, err := run.Read(r.Context())
 	if err != nil {
-		s.internalError(w, "list state versions", err)
+		s.uiError(w, r, err)
 		return
 	}
-	if len(vs) == 0 {
+	if b == nil {
 		w.WriteHeader(http.StatusNoContent) // new workspace: no state yet
-		return
-	}
-	b, err := s.readBlob(r.Context(), vs[0].BlobKey)
-	if err != nil {
-		s.internalError(w, "read state", err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(b)
 }
 
-func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
-	// not canceled on SIGTERM: a lost state write orphans the resources the apply just created
-	ctx, id := context.WithoutCancel(r.Context()), r.PathValue("id")
-	// the lock this run took, not just its ID: a 423 shows other locks' IDs to any run
-	if locked, err := s.Store.StateLockedBy(ctx, id, r.URL.Query().Get("ID"), r.PathValue("run")); err != nil {
-		s.internalError(w, "state lock", err)
-		return
-	} else if !locked {
-		http.Error(w, "the state must be locked by this run", http.StatusConflict)
-		return
-	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxStateSize))
+func (s *Server) putState(w http.ResponseWriter, r *http.Request, run app.StateRun) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, app.MaxStateSize))
 	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
-		http.Error(w, fmt.Sprintf("state larger than %d MB", maxStateSize>>20), http.StatusRequestEntityTooLarge)
+		http.Error(w, fmt.Sprintf("state larger than %d MB", app.MaxStateSize>>20), http.StatusRequestEntityTooLarge)
 		return
 	} else if err != nil {
 		http.Error(w, "reading the state failed", http.StatusBadRequest)
@@ -144,126 +73,21 @@ func (s *Server) putState(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Content-MD5 mismatch", http.StatusBadRequest)
 		return
 	}
-	if code, msg := s.saveState(ctx, id, r.PathValue("run"), "", body); code != http.StatusOK {
-		http.Error(w, msg, code)
+	if err := run.Write(r.Context(), r.URL.Query().Get("ID"), body); err != nil {
+		s.uiError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
 }
 
-// saveState stores body as the workspace's new current state version, unless it's the same as the
-// current one. The caller holds the state lock; runID is the run writing it, cloudUser the cloud API
-// user (see AddStateVersion; both "" for rollbacks). It returns 200, or an error status and message.
-func (s *Server) saveState(ctx context.Context, id, runID, cloudUser string, body []byte) (int, string) {
-	sum := md5.Sum(body)
-	// Only the fields needed to version the file and show its outputs; the rest is Terraform's business.
-	var head struct {
-		Serial  *int64 `json:"serial"`
-		Lineage string `json:"lineage"`
-		Outputs map[string]struct {
-			Value     any  `json:"value"`
-			Sensitive bool `json:"sensitive"`
-		} `json:"outputs"`
-	}
-	if err := json.Unmarshal(body, &head); err != nil || head.Serial == nil || head.Lineage == "" {
-		return http.StatusBadRequest, "not a Terraform state file"
-	}
-	v := storage.StateVersion{Serial: *head.Serial, Lineage: head.Lineage, MD5: hex.EncodeToString(sum[:]), Size: int64(len(body)),
-		Outputs: map[string]any{}}
-	for k, o := range head.Outputs {
-		v.Outputs[k] = o.Value
-		if o.Sensitive { // sensitive values never leave the state file
-			v.Outputs[k] = "(sensitive)"
-		}
-	}
-	cur, err := s.Store.StateVersions(ctx, id, 1)
-	if err != nil {
-		return s.stateFailure("list state versions", err)
-	}
-	if len(cur) > 0 {
-		switch {
-		case cur[0].Lineage != v.Lineage:
-			return http.StatusConflict, "state lineage differs from the workspace's state"
-		case v.Serial < cur[0].Serial:
-			return http.StatusConflict, "state serial is older than the workspace's state"
-		case v.MD5 == cur[0].MD5:
-			return http.StatusOK, "" // unchanged: no new version
-		case v.Serial == cur[0].Serial: // Terraform bumps the serial on every change: same serial, other content is a fork
-			return http.StatusConflict, "state serial equals the workspace's state, but its content differs"
-		}
-	}
-	ws, err := s.Store.GetWorkspaceByID(ctx, id)
-	if err != nil {
-		return s.stateFailure("get workspace", err)
-	}
-	v.BlobKey = fmt.Sprintf("%s/%d-%s.tfstate", strings.TrimSuffix(ws.StateKey, ".tfstate"), v.Serial, rand.Text())
-	if err := s.writeBlob(ctx, v.BlobKey, body); err != nil {
-		return s.stateFailure("write state", err)
-	}
-	if err := s.Store.AddStateVersion(ctx, id, runID, cloudUser, v); err != nil {
-		// WithoutCancel: a dropped request must not stop the cleanup and leave the file behind.
-		if derr := s.StateStore.Delete(context.WithoutCancel(ctx), v.BlobKey); derr != nil {
-			s.Log.Warn("delete unrecorded state file", "key", v.BlobKey, "err", derr)
-		}
-		if errors.Is(err, storage.ErrLeaseLost) {
-			return http.StatusConflict, "the run was canceled or lost its runner: state not saved"
-		}
-		if errors.Is(err, storage.ErrNotCloudLocked) {
-			return http.StatusConflict, err.Error()
-		}
-		return s.stateFailure("record state version", err)
-	}
-	s.Log.Info("state saved", "workspace", id, "serial", v.Serial, "bytes", v.Size)
-	return http.StatusOK, ""
-}
-
-// sealedPrefix marks state store files encrypted with SECRET_KEY; files without it are plaintext
-// (written before SECRET_KEY was set) and are still read as is.
-const sealedPrefix = "opsolete-sealed-v1\n"
-
-// writeBlob stores a state file or run artifact, encrypted (AES-256-GCM) with SECRET_KEY:
-// they hold secrets, so bucket read access alone must not expose them.
-func (s *Server) writeBlob(ctx context.Context, key string, body []byte) error {
-	sealed, err := vcs.Seal(s.SecretKey, string(body), blobAD(key))
-	if err != nil {
-		return err
-	}
-	body = append([]byte(sealedPrefix), sealed...)
-	return s.StateStore.WriteAll(ctx, key, body, &blob.WriterOptions{ContentType: "application/octet-stream"})
-}
-
-// readBlob reads a file written by writeBlob, decrypting it if it was sealed.
-func (s *Server) readBlob(ctx context.Context, key string) ([]byte, error) {
-	b, err := s.StateStore.ReadAll(ctx, key)
-	if err != nil || !bytes.HasPrefix(b, []byte(sealedPrefix)) {
-		return b, err
-	}
-	plain, err := vcs.Open(s.SecretKey, b[len(sealedPrefix):], blobAD(key))
-	if err != nil { // sealed before files were bound to their key
-		plain, err = vcs.OpenLegacy(s.SecretKey, b[len(sealedPrefix):])
-	}
-	if err != nil {
-		return nil, fmt.Errorf("decrypt %s: SECRET_KEY changed?", key)
-	}
-	return []byte(plain), nil
-}
-
-// blobAD binds a sealed file to its key: a state file copied over another workspace's doesn't open.
-func blobAD(key string) string { return "blob\x00" + key }
-
-func (s *Server) stateFailure(what string, err error) (int, string) {
-	s.Log.Error(what, "err", err)
-	return http.StatusInternalServerError, "internal error"
-}
-
-func (s *Server) lockState(w http.ResponseWriter, r *http.Request) {
-	info, lockID, ok := readLockInfo(w, r)
+func (s *Server) lockState(w http.ResponseWriter, r *http.Request, run app.StateRun) {
+	info, ok := readLockInfo(w, r)
 	if !ok {
 		return
 	}
-	held, ok, err := s.Store.LockState(r.Context(), r.PathValue("id"), lockID, r.PathValue("run"), info)
+	held, ok, err := run.Lock(r.Context(), info)
 	if err != nil {
-		s.internalError(w, "lock state", err)
+		s.uiError(w, r, err)
 		return
 	}
 	if !ok { // Terraform shows who holds the lock from this body
@@ -275,25 +99,24 @@ func (s *Server) lockState(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-func (s *Server) unlockState(w http.ResponseWriter, r *http.Request) {
-	_, lockID, ok := readLockInfo(w, r)
+func (s *Server) unlockState(w http.ResponseWriter, r *http.Request, run app.StateRun) {
+	info, ok := readLockInfo(w, r)
 	if !ok {
 		return
 	}
-	if err := s.Store.UnlockState(r.Context(), r.PathValue("id"), lockID, r.PathValue("run")); err != nil {
-		s.internalError(w, "unlock state", err)
+	if err := run.Unlock(r.Context(), info); err != nil {
+		s.uiError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusOK)
 }
 
-// readLockInfo reads Terraform's LockInfo JSON and returns it with its ID.
-func readLockInfo(w http.ResponseWriter, r *http.Request) ([]byte, string, bool) {
+// readLockInfo reads the body, Terraform's LockInfo JSON (app checks it).
+func readLockInfo(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<10))
-	var info struct{ ID string }
-	if err != nil || json.Unmarshal(b, &info) != nil || info.ID == "" {
+	if err != nil {
 		http.Error(w, "body must be Terraform lock info with an ID", http.StatusBadRequest)
-		return nil, "", false
+		return nil, false
 	}
-	return bytes.TrimSpace(b), info.ID, true
+	return bytes.TrimSpace(b), true
 }

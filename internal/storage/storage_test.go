@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/opsolete/opsolete/internal/auth"
 )
 
@@ -19,11 +20,11 @@ func TestWorkspaceRoundTrip(t *testing.T) {
 	}
 	w, run := newWorkspace(t, s, false)
 	added, _ := s.WorkspaceTemplates(ctx, w.ID)
-	if w.StateKey != "opsolete/job-test/"+w.ID+".tfstate" || w.Templates != 1 || len(added) != 1 || added[0].Inputs["n"] != 1.0 ||
+	if w.Templates != 1 || len(added) != 1 || added[0].Inputs["n"] != 1.0 ||
 		run.Status != PlanQueued || run.Action != "apply" {
 		t.Fatalf("unexpected workspace/run: %+v %+v", w, run)
 	}
-	if _, _, err := s.CreateWorkspace(ctx, "", w.Name, "", testTemplate(nil), false, ""); !errors.Is(err, ErrNameTaken) {
+	if _, _, err := s.CreateWorkspace(ctx, uuid.Nil, w.Name, "", testTemplate(nil), false, uuid.Nil); !errors.Is(err, ErrNameTaken) {
 		t.Fatalf("duplicate name: %v", err)
 	}
 	list, err := s.ListWorkspaces(ctx, Viewer{Admin: true}, "")
@@ -61,7 +62,7 @@ func TestUpsertUserSubject(t *testing.T) {
 	}
 	var email, role string
 	var groups int
-	if err := s.DB.QueryRowContext(ctx, `SELECT email, role, cardinality(groups) FROM users WHERE id = $1`, pre).Scan(&email, &role, &groups); err != nil ||
+	if err := s.Pool.QueryRow(ctx, `SELECT email, role, cardinality(groups) FROM users WHERE id = $1`, pre).Scan(&email, &role, &groups); err != nil ||
 		email != nu || role != "user" || groups != 0 {
 		t.Fatalf("email, role and groups follow the last login: %q %q %v %v", email, role, groups, err)
 	}

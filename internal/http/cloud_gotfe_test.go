@@ -6,12 +6,16 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
 
 	tfe "github.com/hashicorp/go-tfe"
+
+	"github.com/google/uuid"
 )
 
 // TestCloudGoTFE drives the cloud API with go-tfe, the client inside the Terraform CLI, at the
@@ -26,9 +30,10 @@ func TestCloudGoTFE(t *testing.T) {
 	app.Organization = "acme"
 	srv := httptest.NewServer(app.Handler())
 	t.Cleanup(srv.Close)
-	client := func(email string) *tfe.Client {
+	group := "tfe-grp-" + suffix
+	client := func(email, role string) *tfe.Client { // role: as recorded at the user's last login
 		t.Helper()
-		id, err := store.UpsertUser(ctx, "", email, "user", nil)
+		id, err := store.UpsertUser(ctx, "", email, role, []string{group})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -42,7 +47,7 @@ func TestCloudGoTFE(t *testing.T) {
 		}
 		return c
 	}
-	alice, other := client("tfe-alice-"+suffix+"@example.com"), client(admin)
+	alice, other := client("tfe-alice-"+suffix+"@example.com", "user"), client(admin, "admin")
 
 	if _, err := alice.Organizations.ReadEntitlements(ctx, "acme"); err != nil {
 		t.Fatalf("entitlements: %v", err)
@@ -51,11 +56,14 @@ func TestCloudGoTFE(t *testing.T) {
 	if _, err := alice.Workspaces.Read(ctx, "acme", name); !errors.Is(err, tfe.ErrResourceNotFound) {
 		t.Fatalf("missing workspace: %v", err)
 	}
+	if _, err := alice.Workspaces.Create(ctx, "acme", tfe.WorkspaceCreateOptions{Name: tfe.String(name)}); err == nil || !strings.Contains(err.Error(), "operate") {
+		t.Fatalf("a user without operate on the default project creates a workspace in it: %v", err)
+	}
+	operateDefault(t, store, group)
 	ws, err := alice.Workspaces.Create(ctx, "acme", tfe.WorkspaceCreateOptions{Name: tfe.String(name)})
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
-	t.Cleanup(func() { store.DB.Exec(`DELETE FROM workspaces WHERE id::text = $1`, ws.ID) })
 	if _, err := alice.Workspaces.UpdateByID(ctx, ws.ID, tfe.WorkspaceUpdateOptions{TerraformVersion: tfe.String("1.14.0")}); err != nil {
 		t.Fatalf("update workspace: %v", err)
 	}
@@ -113,10 +121,6 @@ func TestCloudGoTFE(t *testing.T) {
 	if err != nil || prj.Name != pname {
 		t.Fatalf("an admin creates the project: %+v %v", prj, err)
 	}
-	t.Cleanup(func() {
-		store.DB.Exec(`DELETE FROM workspaces WHERE project_id::text = $1`, prj.ID)
-		store.DB.Exec(`DELETE FROM projects WHERE id::text = $1`, prj.ID)
-	})
 	if _, err := alice.Workspaces.Create(ctx, "acme", tfe.WorkspaceCreateOptions{Name: tfe.String(name + "-p"), Project: prj}); err == nil || !strings.Contains(err.Error(), "operate") {
 		t.Fatalf("a user without operate on the project creates a workspace in it: %v", err)
 	}
@@ -129,10 +133,103 @@ func TestCloudGoTFE(t *testing.T) {
 	}
 
 	// A run's lock (here a rollback's) is reported as a run's.
-	if _, ok, err := store.LockState(ctx, ws.ID, "run-lock", "", []byte(`{"ID":"run-lock"}`)); !ok || err != nil {
+	if _, ok, err := store.LockState(ctx, uuid.MustParse(ws.ID), "run-lock", uuid.Nil, []byte(`{"ID":"run-lock"}`)); !ok || err != nil {
 		t.Fatalf("take a non-CLI lock: %v %v", ok, err)
 	}
 	if _, err := alice.Workspaces.Unlock(ctx, ws.ID); !errors.Is(err, tfe.ErrWorkspaceLockedByRun) {
 		t.Fatalf("unlock of a run's lock: %v", err)
+	}
+}
+
+// TestCLIForceUnlock (F4): `terraform force-unlock` (go-tfe ForceUnlock) releases another user's CLI
+// lock for anyone with operate; a run's or rollback's lock ends only with them.
+func TestCLIForceUnlock(t *testing.T) {
+	store := testStore(t)
+	ctx := context.Background()
+	suffix := newID()[:8]
+	srv := newApp(t, "../../catalog", store, devAuth(t, store, "fu-admin-"+suffix+"@example.com", true), Features{Deployments: true})
+	srv.Organization = "acme"
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	group := "fu-grp-" + suffix
+	operateDefault(t, store, group)
+	client := func(email string, groups ...string) *tfe.Client {
+		t.Helper()
+		id, err := store.UpsertUser(ctx, "", email, "user", groups)
+		if err != nil {
+			t.Fatal(err)
+		}
+		token, err := store.CreateUserToken(ctx, id, "go-tfe test", time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := tfe.NewClient(&tfe.Config{Address: ts.URL, Token: token})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	alice, bob := client("fu-alice-"+suffix+"@example.com", group), client("fu-bob-"+suffix+"@example.com", group)
+	reader := client("fu-reader-"+suffix+"@example.com", "fu-readers-"+suffix)
+
+	ws, err := alice.Workspaces.Create(ctx, "acme", tfe.WorkspaceCreateOptions{Name: tfe.String("fu-" + suffix)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetGrant(ctx, uuid.MustParse(ws.ID), "fu-readers-"+suffix, "read"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := alice.Workspaces.Lock(ctx, ws.ID, tfe.WorkspaceLockOptions{}); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	if _, err := reader.Workspaces.ForceUnlock(ctx, ws.ID); err == nil {
+		t.Fatal("read access force-unlocked")
+	}
+	if _, err := bob.Workspaces.Unlock(ctx, ws.ID); !errors.Is(err, tfe.ErrWorkspaceLockedByUser) {
+		t.Fatalf("unlock of another user's lock: %v", err)
+	}
+	if got, err := bob.Workspaces.ForceUnlock(ctx, ws.ID); err != nil || got.Locked {
+		t.Fatalf("force-unlock of another user's lock: %+v %v", got, err)
+	}
+	if lock, _ := store.StateLockID(ctx, uuid.MustParse(ws.ID)); lock != "" {
+		t.Fatalf("lock after force-unlock: %q", lock)
+	}
+	if _, err := bob.Workspaces.Lock(ctx, ws.ID, tfe.WorkspaceLockOptions{}); err != nil {
+		t.Fatalf("the workspace locks again after a force-unlock: %v", err)
+	}
+	if _, err := bob.Workspaces.Unlock(ctx, ws.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// A rollback's lock (no run, not a CLI's) and a run's lock: refused, and kept.
+	refused := func(what string) {
+		t.Helper()
+		lock, _ := store.StateLockID(ctx, uuid.MustParse(ws.ID))
+		if _, err := bob.Workspaces.ForceUnlock(ctx, ws.ID); err == nil || !strings.Contains(err.Error(), "locked by Run") {
+			t.Fatalf("force-unlock of a %s lock: %v", what, err)
+		}
+		if after, _ := store.StateLockID(ctx, uuid.MustParse(ws.ID)); after != lock || lock == "" {
+			t.Fatalf("a %s lock must stay: %q → %q", what, lock, after)
+		}
+	}
+	if _, ok, err := store.LockState(ctx, uuid.MustParse(ws.ID), "rollback-lock", uuid.Nil, []byte(`{"ID":"rollback-lock"}`)); !ok || err != nil {
+		t.Fatalf("rollback lock: %v %v", ok, err)
+	}
+	refused("rollback")
+	store.UnlockState(ctx, uuid.MustParse(ws.ID), "rollback-lock", uuid.Nil)
+
+	h := srv.Handler()
+	name := "fu-run-" + suffix
+	r := &fakeRunner{h: h}
+	run := runID(t, post(h, "/templates/greeting", url.Values{fieldWorkspace: {name}, "greeting": {"hello"}, "name": {"world"}}))
+	r.claim(t, run, "plan")
+	if c := r.state("LOCK", "", `{"ID":"tf-run"}`); c != http.StatusOK {
+		t.Fatalf("run lock: %d", c)
+	}
+	ws, _ = bob.Workspaces.Read(ctx, "acme", name) // the admin's workspace: bob has operate on the default project
+	refused("run")
+	r.finish(t, planNone)
+	if lock, _ := store.StateLockID(ctx, uuid.MustParse(ws.ID)); lock != "" {
+		t.Fatalf("the run's lock ends with the run: %q", lock)
 	}
 }

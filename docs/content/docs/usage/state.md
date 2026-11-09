@@ -8,7 +8,7 @@ Each workspace has exactly one Terraform state. Opsolete is the state backend: r
 ## Storage and versions
 
 - **Storage:** every saved state is a new, immutable **state version**: a file in `STATE_STORE` under `opsolete/<template, or "workspaces">/<workspace>/<serial>-<random>.tfstate`. Postgres keeps only the version list. Writes with an older serial, a different lineage, or the same serial with other content are refused. During a long apply, Terraform also saves intermediate snapshots (every 20 seconds at most, `TF_STATE_PERSIST_INTERVAL`) so a crash loses little. As in HCP Terraform, the snapshots a run's final state supersedes are deleted when the run ends.
-- **Outputs** belong to a state version: they are read from the state file when it's saved, sensitive ones stored as `(sensitive)`. The workspace page shows the current version's.
+- **Outputs** belong to a state version: they are read from the state file when it's saved, sensitive ones, and those containing a sensitive variable's or input's value ([masking]({{< relref "variables" >}})), stored as `(sensitive)`; state diffs hide such values too. The workspace page shows the current version's.
 - **Resources:** a workspace page lists the resources (address, type, provider, module) in its **current state version**. The index belongs to a state version. At the end of a run, the runner reads the state back (`terraform show -json`, parsed with HashiCorp's `terraform-json`) and sends names and types only. Attribute values never reach Postgres or the UI.
 
 ## Rollback
@@ -40,7 +40,7 @@ The runner sets `TF_HTTP_USERNAME`/`TF_HTTP_PASSWORD` to the run's own state cre
 
 ## Security
 
-State files contain secrets in plain text, and the server can read them. With `SECRET_KEY` set, the server encrypts every state file and saved plan (AES-256-GCM) before it uploads them, so read access to the bucket alone exposes nothing; files written before `SECRET_KEY` was set stay plaintext until the workspace saves state again. Still give the server an identity that can only access the state container, and turn on encryption at rest in the store. Cloud credentials in [variables]({{< relref "variables" >}}) are encrypted with `SECRET_KEY` and only handed to the runner of a claimed job.
+State files contain secrets in plain text, and the server can read them. The server encrypts every state file and saved plan with `SECRET_KEY` (AES-256-GCM) before it uploads them, so read access to the bucket alone exposes nothing; it refuses to read a file in `STATE_STORE` that it didn't encrypt. Still give the server an identity that can only access the state container, and turn on encryption at rest in the store. Cloud credentials in [variables]({{< relref "variables" >}}) are encrypted with `SECRET_KEY` and only handed to the runner of a claimed job.
 
 {{< callout type="warning" >}}
 Without `SECRET_KEY`, encrypted state can't be recovered. See [Backing up `SECRET_KEY`]({{< relref "/docs/operations/secret-key" >}}).

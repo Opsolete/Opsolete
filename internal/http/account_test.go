@@ -1,10 +1,13 @@
 package httpserver
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 func TestAccountTokens(t *testing.T) {
@@ -14,21 +17,20 @@ func TestAccountTokens(t *testing.T) {
 	email, other := "acct-"+sfx+"@example.com", "acct-other-"+sfx+"@example.com"
 	h := newServerAs(t, "../../catalog", false, store, devAuth(t, store, email, false, "grp-acct-"+sfx))
 	get(h, "/account/profile") // the dev login records the user and its groups
-	var me, them string
-	store.DB.QueryRow(`SELECT id FROM users WHERE email = $1`, email).Scan(&me)
+	var me, them uuid.UUID
+	store.Pool.QueryRow(context.Background(), `SELECT id FROM users WHERE email = $1`, email).Scan(&me)
 	them, err := store.UpsertUser(ctx, "", other, "user", nil)
-	if err != nil || me == "" {
+	if err != nil || me == uuid.Nil {
 		t.Fatalf("users: %q %v", me, err)
 	}
-	t.Cleanup(func() { store.DB.Exec(`DELETE FROM api_tokens WHERE user_id::text IN ($1, $2)`, me, them) })
-	token := func(user string) string {
+	token := func(user uuid.UUID) string {
 		tok, err := store.CreateUserToken(ctx, user, "terraform login", time.Hour)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return tok
 	}
-	valid := func(tok string) bool { _, _, err := store.TokenUser(ctx, tok); return err == nil }
+	valid := func(tok string) bool { _, _, _, _, err := store.TokenUser(ctx, tok); return err == nil }
 
 	if body := get(h, "/account/profile").Body.String(); !strings.Contains(body, email) || !strings.Contains(body, "<code>grp-acct-"+sfx+"</code>") ||
 		!strings.Contains(body, `<nav aria-label="Account settings">`) {
@@ -44,14 +46,17 @@ func TestAccountTokens(t *testing.T) {
 		t.Fatalf("own tokens: %+v", list)
 	}
 	theirList, _ := store.UserTokens(ctx, them)
-	if body := get(h, "/account/tokens").Body.String(); !strings.Contains(body, "/account/tokens/"+list[0].ID+"/revoke") ||
-		strings.Contains(body, theirList[0].ID) {
+	if body := get(h, "/account/tokens").Body.String(); !strings.Contains(body, "/account/tokens/"+list[0].ID.String()+"/revoke") ||
+		strings.Contains(body, theirList[0].ID.String()) {
 		t.Fatal("the tokens page lists only the user's own tokens")
 	}
-	if rec := post(h, "/account/tokens/"+theirList[0].ID+"/revoke", nil); rec.Code != http.StatusSeeOther || !valid(theirs) {
+	if rec := post(h, "/account/tokens/"+theirList[0].ID.String()+"/revoke", nil); rec.Code != http.StatusSeeOther || !valid(theirs) {
 		t.Fatal("another user's token can't be revoked")
 	}
-	post(h, "/account/tokens/"+list[0].ID+"/revoke", nil)
+	if rec := post(h, "/account/tokens/not-an-id/revoke", nil); rec.Code != http.StatusSeeOther {
+		t.Fatalf("revoking an id that isn't one revokes nothing, as an unknown one: %d", rec.Code)
+	}
+	post(h, "/account/tokens/"+list[0].ID.String()+"/revoke", nil)
 	if left, _ := store.UserTokens(ctx, me); len(left) != 1 || left[0].ID == list[0].ID {
 		t.Fatalf("one token revoked: %+v", left)
 	}

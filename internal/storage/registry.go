@@ -4,15 +4,15 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/opsolete/opsolete/internal/registry"
+	"github.com/opsolete/opsolete/internal/storage/db"
 )
 
 var ErrExists = errors.New("already exists")
@@ -29,6 +29,7 @@ type ModuleDocs struct {
 	Readme string
 }
 
+// CreateModule returns ErrExists if the version exists.
 func (s *Store) CreateModule(ctx context.Context, m Module, docs ModuleDocs, archive []byte) error {
 	vars, err := json.Marshal(m.Variables)
 	if err != nil {
@@ -38,83 +39,58 @@ func (s *Store) CreateModule(ctx context.Context, m Module, docs ModuleDocs, arc
 	if err != nil {
 		return err
 	}
-	_, err = s.DB.ExecContext(ctx, `INSERT INTO modules (namespace, name, system, version, archive, variables, docs, readme)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, m.Namespace, m.Name, m.System, m.Version, archive, vars, mod, docs.Readme)
-	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
+	err = s.q.CreateModule(ctx, db.CreateModuleParams{Namespace: m.Namespace, Name: m.Name, System: m.System, Version: m.Version,
+		Archive: archive, Variables: vars, Docs: mod, Readme: docs.Readme})
+	if isUnique(err) {
 		return ErrExists
 	}
 	return err
 }
 
+func toModule(namespace, name, system, version string, variables []byte, uploaded time.Time) (Module, error) {
+	m := Module{Namespace: namespace, Name: name, System: system, Version: version, UploadedAt: uploaded}
+	return m, json.Unmarshal(variables, &m.Variables)
+}
+
 // ListModules returns all module versions (without archives) by module, newest upload first.
 func (s *Store) ListModules(ctx context.Context) ([]Module, error) {
-	return s.queryModules(ctx, `SELECT namespace, name, system, version, variables, uploaded_at
-		FROM modules ORDER BY namespace, name, system, uploaded_at DESC`)
-}
-
-// ModuleVersions returns the versions of one module; empty if it doesn't exist.
-func (s *Store) ModuleVersions(ctx context.Context, namespace, name, system string) ([]string, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT version FROM modules WHERE namespace=$1 AND name=$2 AND system=$3`,
-		namespace, name, system)
+	rows, err := s.q.ListModules(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var v string
-		if err := rows.Scan(&v); err != nil {
-			return nil, err
-		}
-		out = append(out, v)
-	}
-	return out, rows.Err()
-}
-
-// GetModule returns sql.ErrNoRows if that version doesn't exist.
-func (s *Store) GetModule(ctx context.Context, namespace, name, system, version string) (Module, error) {
-	ms, err := s.queryModules(ctx, `SELECT namespace, name, system, version, variables, uploaded_at
-		FROM modules WHERE namespace=$1 AND name=$2 AND system=$3 AND version=$4`, namespace, name, system, version)
-	if err != nil {
-		return Module{}, err
-	}
-	if len(ms) == 0 {
-		return Module{}, sql.ErrNoRows
-	}
-	return ms[0], nil
-}
-
-func (s *Store) queryModules(ctx context.Context, q string, args ...any) ([]Module, error) {
-	rows, err := s.DB.QueryContext(ctx, q, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Module
-	for rows.Next() {
-		var m Module
-		var raw []byte
-		if err := rows.Scan(&m.Namespace, &m.Name, &m.System, &m.Version, &raw, &m.UploadedAt); err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal(raw, &m.Variables); err != nil {
+	out := make([]Module, 0, len(rows))
+	for _, r := range rows {
+		m, err := toModule(r.Namespace, r.Name, r.System, r.Version, r.Variables, r.UploadedAt)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, m)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
-// GetModuleDocs returns sql.ErrNoRows if that version doesn't exist.
-func (s *Store) GetModuleDocs(ctx context.Context, namespace, name, system, version string) (ModuleDocs, error) {
-	var d ModuleDocs
-	var raw []byte
-	err := s.DB.QueryRowContext(ctx, `SELECT docs, readme FROM modules WHERE namespace=$1 AND name=$2 AND system=$3 AND version=$4`,
-		namespace, name, system, version).Scan(&raw, &d.Readme)
-	if err != nil || raw == nil {
-		return d, err
+// ModuleVersions returns the versions of one module; empty if it doesn't exist.
+func (s *Store) ModuleVersions(ctx context.Context, namespace, name, system string) ([]string, error) {
+	return s.q.ModuleVersions(ctx, db.ModuleVersionsParams{Namespace: namespace, Name: name, System: system})
+}
+
+// GetModule returns ErrNotFound if that version doesn't exist.
+func (s *Store) GetModule(ctx context.Context, namespace, name, system, version string) (Module, error) {
+	r, err := s.q.GetModule(ctx, db.GetModuleParams{Namespace: namespace, Name: name, System: system, Version: version})
+	if err != nil {
+		return Module{}, notFound(err)
 	}
-	d.Module, err = decodeModule(raw)
+	return toModule(r.Namespace, r.Name, r.System, r.Version, r.Variables, r.UploadedAt)
+}
+
+// GetModuleDocs returns ErrNotFound if that version doesn't exist.
+func (s *Store) GetModuleDocs(ctx context.Context, namespace, name, system, version string) (ModuleDocs, error) {
+	r, err := s.q.GetModuleDocs(ctx, db.GetModuleDocsParams{Namespace: namespace, Name: name, System: system, Version: version})
+	d := ModuleDocs{Readme: r.Readme}
+	if err != nil || r.Docs == nil {
+		return d, notFound(err)
+	}
+	d.Module, err = decodeModule(r.Docs)
 	return d, err
 }
 
@@ -148,124 +124,92 @@ func decodeModule(raw []byte) (*tfconfig.Module, error) {
 	return m.Module, nil
 }
 
-// ModuleArchive returns sql.ErrNoRows if that version doesn't exist.
+// ModuleArchive returns ErrNotFound if that version doesn't exist.
 func (s *Store) ModuleArchive(ctx context.Context, namespace, name, system, version string) ([]byte, error) {
-	var b []byte
-	err := s.DB.QueryRowContext(ctx, `SELECT archive FROM modules WHERE namespace=$1 AND name=$2 AND system=$3 AND version=$4`,
-		namespace, name, system, version).Scan(&b)
-	return b, err
+	b, err := s.q.ModuleArchive(ctx, db.ModuleArchiveParams{Namespace: namespace, Name: name, System: system, Version: version})
+	return b, notFound(err)
 }
 
 // DeleteModule removes every version of a module and its VCS link (else the next sync republishes
-// it). Returns sql.ErrNoRows if the module has no versions.
+// it). Returns ErrNotFound if the module has no versions.
 func (s *Store) DeleteModule(ctx context.Context, namespace, name, system string) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
+	return s.tx(ctx, func(q *db.Queries) error {
+		if err := affected(q.DeleteModuleVersions(ctx, db.DeleteModuleVersionsParams{Namespace: namespace, Name: name, System: system})); err != nil {
+			return err
+		}
+		_, err := q.UnlinkVCSModule(ctx, db.UnlinkVCSModuleParams{Namespace: namespace, Name: name, System: system})
 		return err
-	}
-	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `DELETE FROM modules WHERE namespace=$1 AND name=$2 AND system=$3`, namespace, name, system)
-	if err != nil {
-		return err
-	}
-	if n, err := res.RowsAffected(); err != nil {
-		return err
-	} else if n == 0 {
-		return sql.ErrNoRows
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM vcs_modules WHERE namespace=$1 AND name=$2 AND system=$3`, namespace, name, system); err != nil {
-		return err
-	}
-	return tx.Commit()
+	})
 }
 
 // Token scopes: registry tokens are for Terraform clients, user tokens (terraform login) act as a
-// user and also work for the registry. Runners use RUNNER_TOKEN instead.
+// user and also work for the registry. Runners use RUNNER_TOKEN instead. The values are
+// api_tokens.scope's (001_schema.sql).
 const (
 	ScopeRegistry = "registry"
 	ScopeUser     = "user"
 )
 
+// newToken returns a new API token and its hash, the only form stored.
+func newToken() (string, []byte) {
+	token := "ops_" + rand.Text()
+	return token, tokenHash(token)
+}
+
+func tokenHash(token string) []byte {
+	h := sha256.Sum256([]byte(token))
+	return h[:]
+}
+
 // CreateToken stores a new API token and returns it; it can't be retrieved again.
 func (s *Store) CreateToken(ctx context.Context, name, scope string) (string, error) {
-	token := "ops_" + rand.Text()
-	h := sha256.Sum256([]byte(token))
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO api_tokens (name, token_hash, scope) VALUES ($1, $2, $3)`, name, h[:], scope)
-	return token, err
+	token, h := newToken()
+	return token, s.q.CreateToken(ctx, db.CreateTokenParams{Name: name, TokenHash: h, Scope: scope})
 }
 
 // ValidToken reports whether token exists with the given scope; an unexpired user token also
 // passes as a registry token, since `terraform login` stores one token per host.
 func (s *Store) ValidToken(ctx context.Context, token, scope string) (bool, error) {
-	h := sha256.Sum256([]byte(token))
-	var ok bool
-	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM api_tokens WHERE token_hash=$1
-		AND (scope=$2 OR ($2 = $3 AND scope = $4 AND expires_at > now())))`, h[:], scope, ScopeRegistry, ScopeUser).Scan(&ok)
-	return ok, err
+	return s.q.ValidToken(ctx, db.ValidTokenParams{TokenHash: tokenHash(token), Scope: scope})
 }
 
 // CreateUserToken stores a new token that acts as the user until it expires, and returns it.
-func (s *Store) CreateUserToken(ctx context.Context, userID, name string, ttl time.Duration) (string, error) {
-	token := "ops_" + rand.Text()
-	h := sha256.Sum256([]byte(token))
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO api_tokens (name, token_hash, scope, user_id, expires_at)
-		VALUES ($1, $2, $5, $3::uuid, now() + $4 * interval '1 second')`, name, h[:], userID, int64(ttl.Seconds()), ScopeUser)
-	return token, err
+func (s *Store) CreateUserToken(ctx context.Context, userID uuid.UUID, name string, ttl time.Duration) (string, error) {
+	token, h := newToken()
+	return token, s.q.CreateUserToken(ctx, db.CreateUserTokenParams{Name: name, TokenHash: h, UserID: userID, TtlSecs: float64(int64(ttl.Seconds()))})
 }
 
-// TokenUser returns the id and email of an unexpired user token's user; sql.ErrNoRows if
+// TokenUser returns the id and email of an unexpired user token's user; ErrNotFound if
 // the token is unknown, expired or not a user token.
-func (s *Store) TokenUser(ctx context.Context, token string) (id, email string, err error) {
-	h := sha256.Sum256([]byte(token))
-	err = s.DB.QueryRowContext(ctx, `SELECT u.id, u.email FROM api_tokens t JOIN users u ON u.id = t.user_id
-		WHERE t.token_hash = $1 AND t.scope = $2 AND t.expires_at > now()`, h[:], ScopeUser).Scan(&id, &email)
-	return id, email, err
+// role and groups are what the user's last login recorded.
+func (s *Store) TokenUser(ctx context.Context, token string) (id uuid.UUID, email, role string, groups []string, err error) {
+	u, err := s.q.TokenUser(ctx, tokenHash(token))
+	return u.ID, u.Email, u.Role, u.Groups, notFound(err)
 }
 
 // UserToken is one of a user's unexpired `terraform login` tokens; the token itself is only stored hashed.
 type UserToken struct {
-	ID, Name             string
+	ID                   uuid.UUID
+	Name                 string
 	CreatedAt, ExpiresAt time.Time
 }
 
 // UserTokens lists a user's unexpired tokens, newest first.
-func (s *Store) UserTokens(ctx context.Context, userID string) ([]UserToken, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT id, name, created_at, expires_at FROM api_tokens
-		WHERE scope = $2 AND user_id = ops_uuid($1) AND expires_at > now() ORDER BY created_at DESC`, userID, ScopeUser)
-	if err != nil {
-		return nil, err
+func (s *Store) UserTokens(ctx context.Context, userID uuid.UUID) ([]UserToken, error) {
+	rows, err := s.q.UserTokens(ctx, userID)
+	out := make([]UserToken, 0, len(rows))
+	for _, t := range rows {
+		out = append(out, UserToken{ID: t.ID, Name: t.Name, CreatedAt: t.CreatedAt, ExpiresAt: t.ExpiresAt})
 	}
-	defer rows.Close()
-	var out []UserToken
-	for rows.Next() {
-		var t UserToken
-		if err := rows.Scan(&t.ID, &t.Name, &t.CreatedAt, &t.ExpiresAt); err != nil {
-			return nil, err
-		}
-		out = append(out, t)
-	}
-	return out, rows.Err()
+	return out, err
 }
 
 // RevokeUserToken deletes one of the user's tokens; other users' token ids are ignored.
-func (s *Store) RevokeUserToken(ctx context.Context, userID, id string) error {
-	_, err := s.DB.ExecContext(ctx, `DELETE FROM api_tokens WHERE scope = $3 AND user_id = ops_uuid($1) AND id = ops_uuid($2)`, userID, id, ScopeUser)
-	return err
+func (s *Store) RevokeUserToken(ctx context.Context, userID, id uuid.UUID) error {
+	return s.q.RevokeUserToken(ctx, db.RevokeUserTokenParams{UserID: userID, ID: id})
 }
 
 // RevokeUserTokens deletes all of the user's tokens.
-func (s *Store) RevokeUserTokens(ctx context.Context, userID string) error {
-	_, err := s.DB.ExecContext(ctx, `DELETE FROM api_tokens WHERE scope = $2 AND user_id = ops_uuid($1)`, userID, ScopeUser)
-	return err
-}
-
-// SigningKey returns the registry's HMAC key, creating it on first use.
-func (s *Store) SigningKey(ctx context.Context) ([]byte, error) {
-	if _, err := s.DB.ExecContext(ctx, `INSERT INTO registry_signing_key (id, key) VALUES (1, $1) ON CONFLICT DO NOTHING`,
-		[]byte(rand.Text()+rand.Text())); err != nil {
-		return nil, err
-	}
-	var k []byte
-	err := s.DB.QueryRowContext(ctx, `SELECT key FROM registry_signing_key WHERE id=1`).Scan(&k)
-	return k, err
+func (s *Store) RevokeUserTokens(ctx context.Context, userID uuid.UUID) error {
+	return s.q.RevokeUserTokens(ctx, userID)
 }

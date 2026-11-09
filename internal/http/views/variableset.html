@@ -1,4 +1,4 @@
-{{template "top"}}
+{{template "top" .Page}}
 {{$v := .Set}}
 <a class="back" href="/variable-sets">← Variable sets</a>
 <div class="page-head">
@@ -7,14 +7,16 @@
     {{with $v.Description}}<p class="muted">{{.}}</p>{{end}}
   </div>
   <form method="post" action="/variable-sets/{{$v.Name}}/delete"
-    onsubmit="return opsConfirm(event, 'Delete this variable set and its variables? Runs of its workspaces no longer get them.')">
+    data-confirm="Delete this variable set and its variables? Runs of its workspaces no longer get them.">
     <button type="submit" class="danger">Delete</button></form>
 </div>
 
+{{template "formerror" .F}}
+{{$sf := formOf .F "set"}}
 <form method="post" action="/variable-sets/{{$v.Name}}" class="card">
   <label for="description">Description</label>
-  <input id="description" name="description" value="{{$v.Description}}" class="wide" maxlength="500">
-  <label for="global"><input type="checkbox" id="global" name="global"{{if $v.Global}} checked{{end}}> Global: apply to every workspace not linked to a repository</label>
+  <input id="description" name="description" value="{{value $sf "description" $v.Description}}" class="wide" maxlength="500">
+  <label for="global"><input type="checkbox" id="global" name="global"{{if checked $sf "global" $v.Global}} checked{{end}}> Global: apply to every workspace not linked to a repository</label>
   <div class="actions"><button type="submit" class="secondary">Save</button></div>
 </form>
 
@@ -26,11 +28,12 @@
 <form method="post" action="/variable-sets/{{$v.Name}}/projects" class="card">
   <p class="muted">The set applies to every workspace of the selected projects, except those linked to a repository:
     whoever operates one could link it to any code. Attach the set to such a workspace itself.
-    Every user may create workspaces in the default project: a set attached to it reaches all of them.</p>
+    Whoever may create workspaces in a selected project (admins, and groups with operate on it) gets the set in those.</p>
   <div role="group" aria-label="Projects to apply the set to">
   {{range .Projects}}<label class="check"><input type="checkbox" name="project" value="{{.Value}}"{{if .Selected}} checked{{end}}><span>{{.Name}}</span></label>
   {{else}}<p class="hint">There are no projects.</p>{{end}}
   </div>
+  {{template "fielderror" (dict "F" (formOf .F "projects") "N" "project")}}
   <div class="actions"><button type="submit" class="secondary">Save</button></div>
 </form>
 
@@ -38,6 +41,7 @@
 <form method="post" action="/variable-sets/{{$v.Name}}/workspaces" class="card">
   <p class="muted">The set applies to the selected workspaces. None selected: it applies to none.</p>
   {{template "picker" .Picker}}
+  {{template "fielderror" (dict "F" (formOf .F "workspaces") "N" "workspace")}}
   <div class="actions"><button type="submit" class="secondary">Save</button></div>
 </form>
 {{end}}

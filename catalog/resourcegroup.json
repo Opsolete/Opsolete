@@ -1,4 +1,5 @@
 {
+  "$schema": "https://opsolete.github.io/Opsolete/schema/template-1.json",
   "id": "resourcegroup",
   "name": "Azure Resource Group",
   "description": "One resource group, from the terraform-modules-examples repo. Needs Azure credentials as ARM_* env variables (e.g. a variable set).",

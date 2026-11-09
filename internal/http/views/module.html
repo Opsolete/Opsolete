@@ -1,4 +1,4 @@
-{{template "top"}}
+{{template "top" .Page}}
 <a class="back" href="/registry">← Registry</a>
 <div class="page-head">
   <div>
@@ -6,14 +6,14 @@
     <p class="muted"><code>{{.Source}}</code>{{with .Linked}} · published from <span class="tag">{{.Connection}}</span> {{.Repo}}{{with .Dir}} <code>/{{.}}</code>{{end}}{{end}}</p>
   </div>
   <div class="inline">
-    {{with .Linked}}{{if $.Admin}}<form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/sync"><button type="submit" class="secondary">Sync now</button></form>
+    {{with .Linked}}{{if $.User.Admin}}<form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/sync"><button type="submit" class="secondary">Sync now</button></form>
     <form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/unlink"
-      onsubmit="return opsConfirm(event, 'Unlink this module from its repository? New tags are no longer published; published versions stay.')">
+      data-confirm="Unlink this module from its repository? New tags are no longer published; published versions stay.">
       <button type="submit" class="danger">Unlink</button></form>{{end}}{{end}}
     {{if .Editor}}<a class="btn secondary" href="/templates/new?module={{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}">Create template</a>{{end}}
-    {{range .Templates}}<a class="btn" href="/templates/{{.ID}}">Provision workspace{{if gt (len $.Templates) 1}}: {{.Name}}{{end}}</a>{{end}}
-    {{if .Admin}}<form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/delete"
-      onsubmit="return opsConfirm(event, 'Delete {{.Namespace}}/{{.Name}}/{{.System}} and all its versions? Workspaces using it can no longer download it.')">
+    {{if .CanCreate}}{{range .Templates}}<a class="btn" href="/templates/{{.ID}}">Provision workspace{{if gt (len $.Templates) 1}}: {{.Name}}{{end}}</a>{{end}}{{end}}
+    {{if $.User.Admin}}<form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/delete"
+      data-confirm="Delete {{.Namespace}}/{{.Name}}/{{.System}} and all its versions? Workspaces using it can no longer download it.">
       <button type="submit" class="danger">Delete module</button></form>{{end}}
   </div>
 </div>
@@ -99,6 +99,6 @@
 
 {{with .Docs.Readme}}
 <h2>README</h2>
-<pre class="code" style="white-space:pre-wrap">{{.}}</pre>
+<pre class="code pre-wrap">{{.}}</pre>
 {{end}}
 {{template "bottom"}}

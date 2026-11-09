@@ -36,4 +36,13 @@ Per workspace, off by default: once a day the server queues a drift check, a ref
 
 ## Logs
 
-The run page follows the runner's output live. See [Runners]({{< relref "/docs/operations/runners#how-it-works" >}}) for how logs are shipped and capped.
+The run page follows the runner's output live. See [Runners]({{< relref "/docs/operations/runners#how-it-works" >}}) for how logs are shipped and capped. Values of sensitive variables and inputs are masked in the log (`***`) and in outputs (`(sensitive)`): see [masking]({{< relref "variables" >}}).
+
+## Retention
+
+Once an hour the server prunes what has expired. Active runs are never touched; a run's end is its last status change.
+
+- **Logs** of every run are deleted `RUN_LOG_RETENTION_DAYS` days (default 90, `0` = forever) after it ended. The run, its status history and plan summary stay; its page and raw log say "The log was removed N days after the run ended (RUN_LOG_RETENTION_DAYS)."
+- **Drift checks and speculative plans** are deleted entirely 30 days after they ended, except a workspace's latest drift check, its latest drift check that found drift or none (the drift flag), and the latest speculative plan of each pull request.
+- **Expired browser sessions** (12 hours after sign-in) are deleted too.
+- **Apply, destroy and refresh runs** are kept forever (only their logs expire), and so are state versions, the audit log and module archives.

@@ -29,8 +29,6 @@ self: {
     machine.fail("systemctl show opsolete -p Environment | grep 0123456789abcdef")
     # no token step: the runner works on first boot
     machine.wait_until_succeeds("journalctl -u opsolete-runner | grep 'runner started'")
-    # PrivatePIDs: the runner is PID 1 of its namespace, so it doesn't warn about job isolation
-    machine.fail("journalctl -u opsolete-runner | grep 'not running as a container'")
     machine.sleep(5)  # a rejected token would have stopped it by now
     machine.succeed("systemctl is-active opsolete-runner")
     # it read the token as root and dropped to its user; jobs (same user) find no credentials directory

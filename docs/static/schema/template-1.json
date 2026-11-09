@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://opsolete.github.io/Opsolete/schema/template-1.json",
+  "title": "Opsolete template 1.0",
+  "description": "A catalog template: a Terraform module at a pinned ref and the form inputs that set its variables. Opsolete's loader is the reference: it also checks what a schema can't (show_if refers to an earlier input, select defaults and show_if values are options, at most one key, patterns compile).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "module"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "id": {
+      "description": "Lowercase letters, digits and dashes; names the template in workspaces and URLs.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$",
+      "not": { "const": "new" }
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "module": { "$ref": "#/$defs/module" },
+    "inputs": { "type": "array", "items": { "$ref": "#/$defs/input" } }
+  },
+  "$defs": {
+    "module": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "ref"],
+      "properties": {
+        "source": { "description": "A git:: URL or a registry module address.", "type": "string", "minLength": 1 },
+        "ref": { "description": "The approved Git ref or registry version.", "type": "string", "minLength": 1 }
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type"],
+      "properties": {
+        "name": {
+          "description": "The Terraform variable it sets.",
+          "type": "string",
+          "pattern": "^[a-z_][a-z0-9_]*$",
+          "not": { "enum": ["source", "version", "providers", "count", "for_each", "lifecycle", "depends_on", "locals"] }
+        },
+        "label": { "description": "The question end users see; empty: the name.", "type": "string" },
+        "help": { "description": "Shown under the field, and as the error when the pattern doesn't match.", "type": "string" },
+        "type": { "enum": ["string", "number", "bool", "select"] },
+        "required": { "type": "boolean" },
+        "pattern": { "description": "A Go regular expression the whole value must match (string inputs).", "type": "string" },
+        "options": { "type": "array", "items": { "$ref": "#/$defs/option" } },
+        "default": { "description": "Typed by the input's type: string and select a string, number a number, bool a boolean." },
+        "sensitive": { "description": "Stored sealed, typed in a password field, never shown (string and number inputs, no default).", "type": "boolean" },
+        "show_if": { "$ref": "#/$defs/show_if" },
+        "key": { "description": "At most one input: its value names the template's module in a workspace (not bool or sensitive).", "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "enum": ["string", "select"] } } },
+          "then": { "properties": { "default": { "type": "string" } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "number" } } },
+          "then": { "properties": { "default": { "type": "number" } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "bool" } } },
+          "then": { "properties": { "default": { "type": "boolean" }, "sensitive": { "const": false }, "key": { "const": false } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "select" } } },
+          "then": { "required": ["options"], "properties": { "options": { "minItems": 1 }, "sensitive": { "const": false } } }
+        },
+        {
+          "if": { "required": ["sensitive"], "properties": { "sensitive": { "const": true } } },
+          "then": { "not": { "required": ["default"] }, "properties": { "key": { "const": false } } }
+        }
+      ]
+    },
+    "option": {
+      "description": "A select choice: a string is both value and label.",
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["value"],
+          "properties": {
+            "value": { "description": "What Terraform gets.", "type": "string", "minLength": 1 },
+            "label": { "description": "What end users see.", "type": "string" }
+          }
+        }
+      ]
+    },
+    "show_if": {
+      "description": "Show the input only while an earlier select or bool input has one of these values (typed like that input: strings for a select, booleans for a bool).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input", "equals"],
+      "properties": {
+        "input": { "type": "string" },
+        "equals": { "type": "array", "minItems": 1, "items": { "type": ["string", "boolean"] } }
+      }
+    }
+  }
+}

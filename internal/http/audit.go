@@ -5,13 +5,14 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"mime"
 	"net"
 	"net/http"
 	"slices"
 	"strings"
 
+	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/auth"
 	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage"
@@ -29,10 +30,7 @@ func secretName(k string) bool {
 
 const maxAuditError = 300 // bytes of a plain-text error response kept as the entry's error
 
-const (
-	maxFormSize   = 1 << 20 // urlencoded body; the largest real field is a 64 KB variable value
-	maxAuditValue = 1 << 10 // bytes of each form value kept in the entry
-)
+const maxAuditValue = 1 << 10 // bytes of each form value kept in the entry
 
 // truncate cuts each value to maxAuditValue: the log is append-only, refused requests included.
 func truncate(v []string) []string {
@@ -78,34 +76,38 @@ func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 // are recorded, and their progress is the run's status history.
 func (s *Server) audit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.Store == nil { // only the DB-less tests
-			next.ServeHTTP(w, r)
-			return
-		}
 		mutating := r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions
 		h := next
 		if mutating {
-			// urlencoded bodies only; capped as this runs before login. Rejected here: the handlers' own
-			// ParseForm then returns nil and they'd act on an empty form.
-			if ct, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); ct == "application/x-www-form-urlencoded" {
-				r.Body = http.MaxBytesReader(w, r.Body, maxFormSize)
-			}
-			if err := r.ParseForm(); err != nil {
-				h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					http.Error(w, "invalid form: "+err.Error(), http.StatusBadRequest)
-				})
+			// the handlers' own parse (readForm), done first: capped as this runs before login. Answered
+			// here when it fails: readForm then finds the form parsed and would act on an empty one.
+			if err := parseForm(w, r); err != nil {
+				h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { badBody(w, err) })
 			}
 		}
+		machine := strings.HasPrefix(r.URL.Path, runnerapi.Prefix+"/") || strings.HasPrefix(r.URL.Path, runnerapi.StatePrefix+"/")
+		// the request's one session lookup: requireLogin takes the user from this principal. Static
+		// files and the runner and state APIs never use a session: no database query for them.
 		p := &auth.Principal{Type: "anonymous"}
-		if u, ok := s.Auth.User(r); ok {
+		var u auth.User
+		err := auth.ErrNoSession
+		if !machine && !strings.HasPrefix(r.URL.Path, "/static/") {
+			u, err = s.Auth.User(r)
+		}
+		switch {
+		case err == nil:
 			*p = auth.Principal{User: u, Type: "user"}
+		case !errors.Is(err, auth.ErrNoSession):
+			s.App.Log.Error("session lookup failed", "err", err)
+			h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "session lookup failed, please try again", http.StatusServiceUnavailable)
+			})
 		}
 		sw := &statusWriter{ResponseWriter: w}
 		h.ServeHTTP(sw, r.WithContext(auth.WithPrincipal(r.Context(), p)))
 		if sw.status == 0 {
 			sw.status = http.StatusOK
 		}
-		machine := strings.HasPrefix(r.URL.Path, runnerapi.Prefix+"/") || strings.HasPrefix(r.URL.Path, runnerapi.StatePrefix+"/")
 		denied := sw.status == http.StatusUnauthorized || sw.status == http.StatusForbidden
 		if !denied && (machine || !mutating) && r.URL.Path != "/auth/callback" {
 			return
@@ -127,7 +129,7 @@ func (s *Server) audit(next http.Handler) http.Handler {
 		if p.Email != "" {
 			actor = p.Email
 			principal["id"], principal["role"] = p.ID, p.Role
-			if groups, err := s.Store.UserGroups(ctx, p.ID); err == nil {
+			if groups, err := s.App.UserGroups(ctx, app.Actor{UserID: p.ID}); err == nil {
 				principal["groups"] = groups
 			}
 		}
@@ -146,29 +148,32 @@ func (s *Server) audit(next http.Handler) http.Handler {
 		// shortcut: written after the response, so a failed write loses the entry (logged below); make it
 		// part of each handler's transaction if the log must never miss an action.
 		// escaped: a decoded %00 or %ff would fail the insert, and a probe would leave no entry
-		if err := s.Store.Audit(ctx, actor, r.Method+" "+r.URL.EscapedPath(), detail); err != nil {
-			s.Log.Error("audit log write failed", "err", err, "actor", actor, "method", r.Method, "path", r.URL.Path)
+		if err := s.App.Audit(ctx, actor, r.Method+" "+r.URL.EscapedPath(), detail); err != nil {
+			s.App.Log.Error("audit log write failed", "err", err, "actor", actor, "method", r.Method, "path", r.URL.Path)
 		}
 	})
 }
 
 func (s *Server) auditPage(w http.ResponseWriter, r *http.Request) {
 	access := r.URL.Query().Get("show") == "access"
-	entries, err := s.Store.AuditLog(r.Context(), 500, access)
+	entries, broken, err := s.App.AuditLog(r.Context(), actor(r), access)
 	if err != nil {
-		s.internalError(w, "audit log", err)
-		return
-	}
-	broken, err := s.Store.VerifyAuditLog(r.Context())
-	if err != nil {
-		s.internalError(w, "verify audit log", err)
+		s.uiError(w, r, err)
 		return
 	}
 	rows := make([]auditRow, len(entries))
 	for i, e := range entries {
 		rows[i] = newAuditRow(e)
 	}
-	s.render(w, r, http.StatusOK, "audit.html", map[string]any{"Entries": rows, "Broken": broken, "Access": access})
+	s.render(w, r, http.StatusOK, "audit.html", &auditPage{Page{Section: "audit"}, rows, broken, access})
+}
+
+// auditPage is the audit log (audit.html).
+type auditPage struct {
+	Page
+	Entries []auditRow
+	Broken  int64 // the first entry whose hash doesn't match; 0 intact
+	Access  bool  // sign-ins and refused requests, not changes
 }
 
 // auditRow is an entry as the audit page lists it: a one-line summary, the full detail behind a click.
@@ -180,12 +185,16 @@ type auditRow struct {
 	From        string // client address
 	Summary     string // key form fields and the error, if any
 	Pretty      string // the detail, indented
+	UserID      string // the principal's user, whose sessions an admin can end here (there is no users page)
 }
 
 func newAuditRow(e storage.AuditEntry) auditRow {
 	row := auditRow{AuditEntry: e}
 	var d struct {
-		Form    map[string]any `json:"form"`
+		Form      map[string]any `json:"form"`
+		Principal struct {
+			ID string `json:"id"`
+		} `json:"principal"`
 		Request struct {
 			IP           string `json:"ip"`
 			ForwardedFor string `json:"forwarded_for"`
@@ -200,7 +209,7 @@ func newAuditRow(e storage.AuditEntry) auditRow {
 	} else {
 		row.Pretty = string(e.Detail)
 	}
-	row.From = d.Request.IP
+	row.From, row.UserID = d.Request.IP, d.Principal.ID
 	if f := d.Request.ForwardedFor; f != "" { // client-supplied unless a proxy sets it: keep the peer address next to it
 		row.From = f + " (via " + d.Request.IP + ")"
 	}

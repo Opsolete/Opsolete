@@ -1,267 +1,204 @@
 package httpserver
 
 import (
-	"context"
-	"database/sql"
-	"errors"
 	"net/http"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
-	"github.com/opsolete/opsolete/internal/auth"
+	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/storage"
 )
 
-// Projects group workspaces. Admins create, rename and delete them and move workspaces; the
-// audit middleware records each of those requests.
-func (s *Server) projectRoutes(mux *http.ServeMux) {
+// Projects group workspaces. Admins create, rename and delete them and move workspaces (app decides);
+// the audit middleware records each of those requests.
+func (s *Server) projectRoutes(mux routes) {
 	mux.HandleFunc("GET /projects", s.projects)
-	mux.HandleFunc("POST /projects", s.admin(s.createProject))
-	// the project's menu pages: one handler, project.html shows the part of the current tab
-	mux.HandleFunc("GET /projects/{project}", s.project)
-	mux.HandleFunc("GET /projects/{project}/workspaces", s.project)
-	mux.HandleFunc("GET /projects/{project}/settings", s.project)
-	mux.HandleFunc("GET /projects/{project}/settings/{page}", s.project)
-	mux.HandleFunc("POST /projects/{project}/settings", s.admin(s.projectSettings))
-	mux.HandleFunc("POST /projects/{project}/delete", s.admin(s.deleteProject))
-	mux.HandleFunc("POST /projects/{project}/access", s.admin(s.projectAccess))
-	mux.HandleFunc("POST /workspaces/{name}/project", s.admin(s.moveWorkspace))
+	mux.HandleFunc("POST /projects", s.createProject)
+	// the project's menu pages: project.html shows the part of the tab
+	mux.HandleFunc("GET /projects/{project}", s.projectTab("overview"))
+	mux.HandleFunc("GET /projects/{project}/workspaces", s.projectTab("workspaces"))
+	mux.HandleFunc("GET /projects/{project}/settings", s.projectTab("settings"))
+	mux.HandleFunc("GET /projects/{project}/settings/{page}", s.projectTab("settings"))
+	mux.HandleFunc("POST /projects/{project}/settings", s.projectSettings)
+	mux.HandleFunc("POST /projects/{project}/delete", s.deleteProject)
+	mux.HandleFunc("POST /projects/{project}/access", s.projectAccess)
+	mux.HandleFunc("POST /workspaces/{name}/project", s.moveWorkspace)
 }
 
 func (s *Server) projects(w http.ResponseWriter, r *http.Request) {
-	list, err := s.Store.Projects(r.Context(), viewer(r))
-	if err != nil {
-		s.internalError(w, "list projects", err)
-		return
-	}
-	s.render(w, r, http.StatusOK, "projects.html", map[string]any{"Projects": list, "Org": s.Organization})
+	s.projectsPage(w, r, http.StatusOK, nil)
 }
 
-// projectFromForm reads and checks a project's name and description.
-func projectFromForm(w http.ResponseWriter, r *http.Request) (name, description string, ok bool) {
-	name, description = strings.TrimSpace(r.PostFormValue("name")), strings.TrimSpace(r.PostFormValue("description"))
-	if !validWorkspaceName(name) { // the same rule: names are URL keys like workspace names
-		http.Error(w, "a project name is "+workspaceNameRule, http.StatusBadRequest)
-		return "", "", false
+// projectsPage lists the projects; f: a refused new project.
+func (s *Server) projectsPage(w http.ResponseWriter, r *http.Request, status int, f *formState) {
+	list, err := s.App.Projects(r.Context(), actor(r))
+	if err != nil {
+		s.uiError(w, r, err)
+		return
 	}
-	if utf8.RuneCountInString(description) > 1000 {
-		http.Error(w, "the description is at most 1000 characters", http.StatusBadRequest)
-		return "", "", false
-	}
-	return name, description, true
+	s.render(w, r, status, "projects.html", &projectsPage{Page{Section: "projects"}, list, s.Organization, f})
+}
+
+// projectsPage is the project list (projects.html).
+type projectsPage struct {
+	Page
+	Projects []storage.Project
+	Org      string
+	F        *formState // a refused new project
 }
 
 func (s *Server) createProject(w http.ResponseWriter, r *http.Request) {
-	name, description, ok := projectFromForm(w, r)
+	f, ok := readForm(w, r)
 	if !ok {
 		return
 	}
-	p, err := s.Store.CreateProject(r.Context(), name, description)
-	if errors.Is(err, storage.ErrProjectNameTaken) {
-		http.Error(w, err.Error(), http.StatusConflict)
+	p, err := s.App.CreateProject(r.Context(), actor(r), f.Get("name"), f.Get("description"))
+	if s.failed(w, r, err, "project", f, func(status int, fs *formState) { s.projectsPage(w, r, status, fs) }) {
 		return
 	}
-	if err != nil {
-		s.internalError(w, "create project", err)
-		return
-	}
-	s.Log.Info("project created", "project", p.Name, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/projects/"+p.Name, http.StatusSeeOther)
 }
 
-// loadProject loads the {project} project if the user may see it; a 404 otherwise.
-func (s *Server) loadProject(w http.ResponseWriter, r *http.Request) (storage.Project, bool) {
-	list, err := s.Store.Projects(r.Context(), viewer(r))
-	if err != nil {
-		s.internalError(w, "list projects", err)
-		return storage.Project{}, false
-	}
-	i := slices.IndexFunc(list, func(p storage.Project) bool { return p.Name == r.PathValue("project") })
-	if i < 0 {
-		http.NotFound(w, r)
-		return storage.Project{}, false
-	}
-	return list[i], true
+// projectPage is a project's menu page (project.html): Overview, Workspaces and Settings (General,
+// Team access, Variable sets). Everyone who sees the project sees the first two; only admins the settings.
+type projectPage struct {
+	Page
+	P          storage.Project
+	F          *formState          // a refused form on the page
+	Workspaces []storage.Workspace // overview (the most recently active ones), workspaces
+	CanCreate  bool                // overview, workspaces: the user may create workspaces in it
+	Grants     []storage.Grant     // settings: team access
+	Groups     []string            // settings: team access, known groups to grant
+	Sets       []storage.VariableSet
 }
 
-// project serves a project's menu: Overview, Workspaces and Settings (General,
-// Team access, Variable sets). Everyone who sees the project sees them; only admins change them.
-func (s *Server) project(w http.ResponseWriter, r *http.Request) {
-	page := r.PathValue("page") // settings sub-pages; "" is General
-	if !slices.Contains([]string{"", "access", "variable-sets"}, page) {
+// projectTab serves the {project}'s menu page tab; "settings" also its sub-pages ({page}).
+func (s *Server) projectTab(tab string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.renderProject(w, r, tab, r.PathValue("page"), http.StatusOK, nil)
+	}
+}
+
+// onProjectPage re-renders a refused form on the {project}'s settings sub-page sub ("" General).
+func (s *Server) onProjectPage(w http.ResponseWriter, r *http.Request, sub string) func(int, *formState) {
+	return func(status int, f *formState) { s.renderProject(w, r, "settings", sub, status, f) }
+}
+
+// renderProject renders the {project}'s menu page tab (sub: the settings sub-page, "" General); f: a refused form on it.
+func (s *Server) renderProject(w http.ResponseWriter, r *http.Request, tab, sub string, status int, f *formState) {
+	if !slices.Contains([]string{"", "access", "variable-sets"}, sub) {
 		http.NotFound(w, r)
 		return
 	}
-	p, ok := s.loadProject(w, r)
-	if !ok {
+	ctx, a := r.Context(), actor(r)
+	load := s.App.Project
+	if tab == "settings" {
+		load = s.App.ProjectForSettings
+	}
+	p, err := load(ctx, a, r.PathValue("project"))
+	if err != nil {
+		s.uiError(w, r, err)
 		return
 	}
-	ctx := r.Context()
-	data := map[string]any{"P": p, "Page": page}
-	tab, _, _ := strings.Cut(strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/projects/"+p.Name), "/"), "/")
-	var err error
+	data := &projectPage{Page: Page{Section: "projects", InProject: r.PathValue("project"), Tab: tab, Sub: sub, WorkspaceCount: p.Workspaces}, P: p, F: f}
 	switch {
-	case tab == "" || tab == "workspaces":
-		var list []storage.Workspace
-		if list, err = s.Store.ListWorkspaces(ctx, viewer(r), p.Name); err != nil {
-			s.internalError(w, "list workspaces", err)
+	case tab == "overview" || tab == "workspaces":
+		list, err := s.App.ListWorkspaces(ctx, a, p.Name)
+		if err != nil {
+			s.uiError(w, r, err)
 			return
 		}
 		creatable, err := s.creatableProjects(r)
 		if err != nil {
-			s.internalError(w, "list projects", err)
+			s.uiError(w, r, err)
 			return
 		}
-		data["CanCreate"] = slices.ContainsFunc(creatable, func(c storage.Project) bool { return c.ID == p.ID })
-		if tab == "" { // the overview shows the most recently active ones
+		data.CanCreate = slices.ContainsFunc(creatable, func(c storage.Project) bool { return c.ID == p.ID })
+		if tab == "overview" { // the overview shows the most recently active ones
 			list = list[:min(len(list), 5)]
 		}
-		data["Workspaces"] = list
-	case page == "access":
-		if data["Grants"], err = s.Store.ProjectGrants(ctx, p.ID); err != nil {
-			s.internalError(w, "project grants", err)
+		data.Workspaces = list
+	case sub == "access":
+		acc, err := s.App.ProjectAccess(ctx, a, p.Name)
+		if err != nil {
+			s.uiError(w, r, err)
 			return
 		}
-		if auth.FromContext(ctx).Admin() {
-			if data["Groups"], err = s.Store.KnownGroups(ctx); err != nil {
-				s.internalError(w, "known groups", err)
-				return
-			}
-		}
-	case page == "variable-sets":
-		if data["Sets"], err = s.Store.ProjectVariableSets(ctx, p.ID); err != nil {
-			s.internalError(w, "project variable sets", err)
+		data.Grants, data.Groups = acc.ProjectGrants, acc.Groups
+	case sub == "variable-sets":
+		if data.Sets, err = s.App.ProjectVariableSets(ctx, a, p.Name); err != nil {
+			s.uiError(w, r, err)
 			return
 		}
 	}
-	s.render(w, r, http.StatusOK, "project.html", data)
+	s.render(w, r, status, "project.html", data)
 }
 
 // projectAccess grants an IdP group read or operate access to all of a project's workspaces
-// (level "" revokes). Admins only (enforced by the route).
+// (level "" revokes). Admins only.
 func (s *Server) projectAccess(w http.ResponseWriter, r *http.Request) {
-	p, ok := s.loadProject(w, r)
+	f, ok := readForm(w, r)
 	if !ok {
 		return
 	}
-	group, level, ok := grantFromForm(w, r)
-	if !ok {
+	project := r.PathValue("project")
+	err := s.App.SetProjectGrant(r.Context(), actor(r), project, f.Get("group"), f.Get("level"))
+	if s.failed(w, r, err, "access", f, s.onProjectPage(w, r, "access")) {
 		return
 	}
-	if err := s.Store.SetProjectGrant(r.Context(), p.ID, group, level); err != nil {
-		s.internalError(w, "set project grant", err)
-		return
-	}
-	s.Log.Info("project access", "project", p.Name, "group", group, "level", level, "user", auth.FromContext(r.Context()).Email)
-	http.Redirect(w, r, "/projects/"+p.Name+"/settings/access", http.StatusSeeOther)
+	http.Redirect(w, r, "/projects/"+project+"/settings/access", http.StatusSeeOther)
 }
 
 // projectSettings renames a project, sets its description and, with default=on, makes it the default.
 func (s *Server) projectSettings(w http.ResponseWriter, r *http.Request) {
-	p, ok := s.loadProject(w, r)
+	f, ok := readForm(w, r)
 	if !ok {
 		return
 	}
-	name, description, ok := projectFromForm(w, r)
-	if !ok {
+	set := app.ProjectSettings{Name: f.Get("name"), Description: f.Get("description"), Default: f.Get("default") != ""}
+	err := s.App.UpdateProject(r.Context(), actor(r), r.PathValue("project"), set)
+	if s.failed(w, r, err, "general", f, s.onProjectPage(w, r, "")) {
 		return
 	}
-	if err := s.Store.UpdateProject(r.Context(), p.ID, name, description); errors.Is(err, storage.ErrProjectNameTaken) {
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	} else if err != nil {
-		s.internalError(w, "update project", err)
-		return
-	}
-	if r.PostFormValue("default") != "" && !p.Default {
-		if err := s.Store.SetDefaultProject(r.Context(), p.ID); err != nil {
-			s.internalError(w, "default project", err)
-			return
-		}
-	}
-	s.Log.Info("project updated", "project", p.Name, "name", name, "user", auth.FromContext(r.Context()).Email)
-	http.Redirect(w, r, "/projects/"+name+"/settings", http.StatusSeeOther)
+	http.Redirect(w, r, "/projects/"+strings.TrimSpace(set.Name)+"/settings", http.StatusSeeOther)
 }
 
 func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
-	p, ok := s.loadProject(w, r)
-	if !ok {
+	if err := s.App.DeleteProject(r.Context(), actor(r), r.PathValue("project")); err != nil {
+		s.uiError(w, r, err)
 		return
 	}
-	if err := s.Store.DeleteProject(r.Context(), p.ID); errors.Is(err, storage.ErrProjectNotEmpty) || errors.Is(err, storage.ErrDefaultProject) {
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	} else if err != nil && !errors.Is(err, sql.ErrNoRows) { // gone meanwhile: deleted all the same
-		s.internalError(w, "delete project", err)
-		return
-	}
-	s.Log.Info("project deleted", "project", p.Name, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/projects", http.StatusSeeOther)
 }
 
-// moveWorkspace puts a workspace into another project, also during a run (see storage.MoveWorkspace).
+// moveWorkspace puts a workspace into another project, also during a run. Admins only.
 func (s *Server) moveWorkspace(w http.ResponseWriter, r *http.Request) {
-	ws, _, ok := s.loadWorkspace(w, r, levelOperate)
+	f, ok := readForm(w, r)
 	if !ok {
 		return
 	}
-	p, err := s.Store.Project(r.Context(), r.PostFormValue("project"))
-	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "no such project", http.StatusBadRequest)
+	err := s.App.MoveWorkspace(r.Context(), actor(r), r.PathValue("name"), f.Get("project"))
+	if s.failed(w, r, err, "project", f, s.onWorkspacePage(w, r, "settings", "")) {
 		return
 	}
-	if err != nil {
-		s.internalError(w, "get project", err)
-		return
-	}
-	if err := s.Store.MoveWorkspace(r.Context(), ws.ID, p.ID); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		s.internalError(w, "move workspace", err)
-		return
-	}
-	s.Log.Info("workspace moved", "workspace", ws.Name, "from", ws.ProjectName, "to", p.Name, "user", auth.FromContext(r.Context()).Email)
-	http.Redirect(w, r, "/workspaces/"+ws.Name+"/settings", http.StatusSeeOther)
+	http.Redirect(w, r, "/workspaces/"+r.PathValue("name")+"/settings", http.StatusSeeOther)
 }
 
-// newWorkspaceProject is the name of the project a new workspace goes into: picked, else the default.
-func (s *Server) newWorkspaceProject(ctx context.Context, picked string) (string, error) {
-	if picked != "" {
-		return picked, nil
-	}
-	p, err := s.Store.DefaultProject(ctx)
-	return p.Name, err
-}
-
-// projectLabel names a project in the VCS and variable set pickers; the default one says it's open to every user.
+// projectLabel names a project in the VCS and variable set pickers, the default one marked.
 func projectLabel(p storage.Project) string {
 	if p.Default {
-		return p.Name + " (default: every user may create workspaces here)"
+		return p.Name + " (default)"
 	}
 	return p.Name
 }
 
-// creatableProjects lists the projects the user may create workspaces in, to pick one.
-func (s *Server) creatableProjects(r *http.Request) ([]storage.Project, error) {
-	if s.Store == nil { // only the DB-less tests
-		return nil, nil
-	}
-	return s.Store.CreatableProjects(r.Context(), viewer(r))
+// canCreateWorkspaces: the user may create a workspace somewhere, for the "new workspace" entry points.
+func (s *Server) canCreateWorkspaces(r *http.Request) (bool, error) {
+	list, err := s.creatableProjects(r)
+	return len(list) > 0, err
 }
 
-// pickableProject checks a project name posted with a new workspace: "" (the default project) or a
-// project the user may create workspaces in. It writes a 400 or 500 and returns false otherwise.
-func (s *Server) pickableProject(w http.ResponseWriter, r *http.Request, name string) bool {
-	if name == "" {
-		return true
-	}
-	list, err := s.creatableProjects(r)
-	if err != nil {
-		s.internalError(w, "list projects", err)
-		return false
-	}
-	if !slices.ContainsFunc(list, func(p storage.Project) bool { return p.Name == name }) {
-		http.Error(w, "no such project", http.StatusBadRequest)
-		return false
-	}
-	return true
+// creatableProjects lists the projects the user may create workspaces in, to pick one.
+func (s *Server) creatableProjects(r *http.Request) ([]storage.Project, error) {
+	return s.App.CreatableProjects(r.Context(), actor(r))
 }

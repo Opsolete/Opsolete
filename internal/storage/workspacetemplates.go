@@ -2,11 +2,12 @@ package storage
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 
-	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/google/uuid"
+
+	"github.com/opsolete/opsolete/internal/storage/db"
 )
 
 // WorkspaceTemplate is a template added to a workspace: the module block module.<Name>, pinned to
@@ -19,122 +20,123 @@ type WorkspaceTemplate struct {
 	Inputs       map[string]any
 }
 
-// WorkspaceTemplates lists a workspace's added templates by name.
-func (s *Store) WorkspaceTemplates(ctx context.Context, workspaceID string) ([]WorkspaceTemplate, error) {
-	return workspaceTemplates(ctx, s.DB, workspaceID)
+// TemplateInputs is one added template's inputs as stored, for re-sealing them under a new SECRET_KEY.
+type TemplateInputs struct {
+	WorkspaceID uuid.UUID
+	Name        string
+	Inputs      []byte
 }
 
-func workspaceTemplates(ctx context.Context, q interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}, workspaceID string) ([]WorkspaceTemplate, error) {
-	rows, err := q.QueryContext(ctx, `SELECT name, template_id, module_source, module_ref, inputs FROM workspace_templates
-		WHERE workspace_id = ops_uuid($1) ORDER BY name`, workspaceID)
+func (s *Store) AllTemplateInputs(ctx context.Context) ([]TemplateInputs, error) {
+	rows, err := s.q.AllTemplateInputs(ctx)
+	out := make([]TemplateInputs, 0, len(rows))
+	for _, t := range rows {
+		out = append(out, TemplateInputs{WorkspaceID: t.WorkspaceID, Name: t.Name, Inputs: t.Inputs})
+	}
+	return out, err
+}
+
+// ResealInputs replaces an added template's inputs, unless they changed since they were read
+// (ErrNotFound).
+func (s *Store) ResealInputs(ctx context.Context, workspaceID uuid.UUID, name string, old, inputs []byte) error {
+	return affected(s.q.ResealInputs(ctx, db.ResealInputsParams{WorkspaceID: workspaceID, Name: name, Old: old, Inputs: inputs}))
+}
+
+// WorkspaceTemplates lists a workspace's added templates by name.
+func (s *Store) WorkspaceTemplates(ctx context.Context, workspaceID uuid.UUID) ([]WorkspaceTemplate, error) {
+	return workspaceTemplates(ctx, s.q, workspaceID)
+}
+
+func workspaceTemplates(ctx context.Context, q *db.Queries, workspaceID uuid.UUID) ([]WorkspaceTemplate, error) {
+	rows, err := q.ListWorkspaceTemplates(ctx, workspaceID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []WorkspaceTemplate
-	for rows.Next() {
-		var t WorkspaceTemplate
-		var raw []byte
-		if err := rows.Scan(&t.Name, &t.TemplateID, &t.ModuleSource, &t.ModuleRef, &raw); err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal(raw, &t.Inputs); err != nil {
+	out := make([]WorkspaceTemplate, 0, len(rows))
+	for _, r := range rows {
+		t := WorkspaceTemplate{Name: r.Name, TemplateID: r.TemplateID, ModuleSource: r.ModuleSource, ModuleRef: r.ModuleRef}
+		if err := json.Unmarshal(r.Inputs, &t.Inputs); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // SetWorkspaceTemplate adds a template to a workspace (add: ErrExists if the name is taken), or
-// changes an added one's module version and inputs, and queues the plan that applies it. Without a
-// free workspace (ErrRunActive) nothing changes.
-func (s *Store) SetWorkspaceTemplate(ctx context.Context, workspaceID string, t WorkspaceTemplate, add bool, createdBy string) (Run, error) {
+// changes an added one's module version and inputs (ErrNotFound if there is none), and queues the
+// plan that applies it. Without a free workspace (ErrRunActive) nothing changes.
+func (s *Store) SetWorkspaceTemplate(ctx context.Context, workspaceID uuid.UUID, t WorkspaceTemplate, add bool, createdBy uuid.UUID) (Run, error) {
 	raw, err := json.Marshal(t.Inputs)
 	if err != nil {
 		return Run{}, err
 	}
-	q := `UPDATE workspace_templates SET template_id = $3, module_source = $4, module_ref = $5, inputs = $6
-		WHERE workspace_id = $1::uuid AND name = $2`
-	if add {
-		q = `INSERT INTO workspace_templates (workspace_id, name, template_id, module_source, module_ref, inputs)
-			VALUES ($1::uuid, $2, $3, $4, $5, $6)`
+	change := func(q *db.Queries) (int64, error) {
+		if add {
+			return q.InsertWorkspaceTemplate(ctx, db.InsertWorkspaceTemplateParams{WorkspaceID: workspaceID, Name: t.Name,
+				TemplateID: t.TemplateID, ModuleSource: t.ModuleSource, ModuleRef: t.ModuleRef, Inputs: raw})
+		}
+		return q.UpdateWorkspaceTemplate(ctx, db.UpdateWorkspaceTemplateParams{WorkspaceID: workspaceID, Name: t.Name,
+			TemplateID: t.TemplateID, ModuleSource: t.ModuleSource, ModuleRef: t.ModuleRef, Inputs: raw})
 	}
-	return s.changeTemplates(ctx, workspaceID, t.Name, createdBy, q, workspaceID, t.Name, t.TemplateID, t.ModuleSource, t.ModuleRef, raw)
+	return s.changeTemplates(ctx, workspaceID, t.Name, createdBy, change)
 }
 
 // RemoveWorkspaceTemplate removes an added template. A template's module may configure its own
 // providers, so dropping its block before its resources are gone leaves Terraform unable to destroy
 // them ("Provider configuration not present"): if the state manages resources, a destroy run
 // targeting module.<name> is queued that removes the template once applied; if not, it is removed
-// right away and no run is queued (Run.ID "").
-func (s *Store) RemoveWorkspaceTemplate(ctx context.Context, workspaceID, name, createdBy string) (Run, error) {
-	tx, err := s.DB.BeginTx(ctx, nil)
+// right away and no run is queued (Run.ID uuid.Nil). ErrNotFound: no such template.
+func (s *Store) RemoveWorkspaceTemplate(ctx context.Context, workspaceID uuid.UUID, name string, createdBy uuid.UUID) (Run, error) {
+	var r Run
+	err := s.tx(ctx, func(q *db.Queries) error {
+		exists, err := q.LockWorkspaceTemplate(ctx, db.LockWorkspaceTemplateParams{WorkspaceID: workspaceID, Name: name})
+		if err != nil {
+			return notFound(err)
+		}
+		switch err := requireIdle(ctx, q, workspaceID); {
+		case !exists:
+			return ErrNotFound
+		case errors.Is(err, ErrHasResources):
+			if r, err = createRun(ctx, q, workspaceID, "destroy", createdBy); err != nil {
+				return err
+			}
+			return q.SetRunRemoveTemplate(ctx, db.SetRunRemoveTemplateParams{ID: r.ID, RemoveTemplate: name})
+		case err != nil:
+			return err
+		}
+		return q.DeleteWorkspaceTemplate(ctx, db.DeleteWorkspaceTemplateParams{WorkspaceID: workspaceID, Name: name})
+	})
 	if err != nil {
 		return Run{}, err
 	}
-	defer tx.Rollback()
-	// FOR UPDATE: templates can't be added meanwhile (their FK check waits for the lock).
-	var exists bool
-	if err := tx.QueryRowContext(ctx, `SELECT
-			EXISTS (SELECT 1 FROM workspace_templates t WHERE t.workspace_id = w.id AND t.name = $2)
-		FROM workspaces w WHERE w.id = $1::uuid FOR UPDATE`, workspaceID, name).Scan(&exists); err != nil {
-		return Run{}, err
-	}
-	switch err := requireIdle(ctx, tx, workspaceID); {
-	case !exists:
-		return Run{}, sql.ErrNoRows
-	case errors.Is(err, ErrHasResources):
-		r, err := createRun(ctx, tx, workspaceID, "destroy", createdBy)
-		if err != nil {
-			return Run{}, err
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE runs SET remove_template = $2 WHERE id = $1`, r.ID, name); err != nil {
-			return Run{}, err
-		}
-		return r, tx.Commit()
-	case err != nil:
-		return Run{}, err
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM workspace_templates WHERE workspace_id = $1::uuid AND name = $2`,
-		workspaceID, name); err != nil {
-		return Run{}, err
-	}
-	return Run{}, tx.Commit()
+	return r, nil
 }
 
-// changeTemplates runs q (which must change one row, added template name's, else sql.ErrNoRows) and
-// queues a plan, atomically; if the run ends before its apply, the change is undone (configChange).
-func (s *Store) changeTemplates(ctx context.Context, workspaceID, name, createdBy, q string, args ...any) (Run, error) {
-	tx, err := s.DB.BeginTx(ctx, nil)
+// changeTemplates runs change (which must change one row, added template name's, else ErrNotFound)
+// and queues a plan, atomically; if the run ends before its apply, the change is undone (configChange).
+func (s *Store) changeTemplates(ctx context.Context, workspaceID uuid.UUID, name string, createdBy uuid.UUID,
+	change func(q *db.Queries) (int64, error)) (Run, error) {
+	var r Run
+	err := s.tx(ctx, func(q *db.Queries) error {
+		before, err := configSnapshot(ctx, q, workspaceID, name)
+		if err != nil {
+			return err
+		}
+		err = affected(change(q))
+		if isUnique(err) {
+			return ErrExists
+		}
+		if err != nil {
+			return err
+		}
+		if r, err = createRun(ctx, q, workspaceID, "apply", createdBy); err != nil {
+			return err
+		}
+		return recordConfigChanges(ctx, q, r.ID, workspaceID, []configChange{{Module: name, Before: before}})
+	})
 	if err != nil {
 		return Run{}, err
 	}
-	defer tx.Rollback()
-	before, err := configSnapshot(ctx, tx, workspaceID, name)
-	if err != nil {
-		return Run{}, err
-	}
-	res, err := tx.ExecContext(ctx, q, args...)
-	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == "23505" {
-		return Run{}, ErrExists
-	}
-	if err != nil {
-		return Run{}, err
-	}
-	if n, err := res.RowsAffected(); err != nil {
-		return Run{}, err
-	} else if n == 0 {
-		return Run{}, sql.ErrNoRows
-	}
-	r, err := createRun(ctx, tx, workspaceID, "apply", createdBy)
-	if err != nil {
-		return Run{}, err
-	}
-	if err := recordConfigChanges(ctx, tx, r.ID, workspaceID, []configChange{{Module: name, Before: before}}); err != nil {
-		return Run{}, err
-	}
-	return r, tx.Commit()
+	return r, nil
 }

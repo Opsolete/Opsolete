@@ -1,28 +1,24 @@
 package httpserver
 
 import (
-	"context"
-	"database/sql"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
-	"path"
-	"regexp"
 	"slices"
 	"strings"
-	"time"
 
-	"github.com/opsolete/opsolete/internal/auth"
+	"github.com/google/uuid"
+
+	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/registry"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/vcs"
 )
 
 // VCS providers: an admin connects GitHub or Azure DevOps with an access token. A connection is a
-// credential that workspaces (within its workspace scope), registry modules (see vcs.Poll) and the
-// template catalog (see vcs.SyncCatalog) use.
-func (s *Server) vcsRoutes(mux *http.ServeMux) {
+// credential that workspaces (within its workspace scope), registry modules (see app.App.PollVCSModules) and the
+// template catalog (see app.App.PullCatalog) use.
+func (s *Server) vcsRoutes(mux routes) {
 	mux.HandleFunc("GET /vcs", s.admin(s.vcsPage))
 	mux.HandleFunc("GET /vcs/new", s.admin(s.newConnectionPage))
 	mux.HandleFunc("POST /vcs", s.admin(s.addConnection))
@@ -38,7 +34,9 @@ func (s *Server) vcsRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /registry/{ns}/{name}/{system}/unlink", s.admin(s.unlinkModule))
 }
 
+// vcsPage lists the VCS connections (vcs.html).
 type vcsPage struct {
+	Page
 	Connections []storage.VCSConnection
 	Error       string
 }
@@ -48,25 +46,26 @@ func (s *Server) vcsPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) renderVCS(w http.ResponseWriter, r *http.Request, status int, errMsg string) {
-	conns, err := s.Store.VCSConnections(r.Context())
+	conns, err := s.App.VCSConnections(r.Context(), actor(r))
 	if err != nil {
-		s.internalError(w, "list vcs connections", err)
+		s.uiError(w, r, err)
 		return
 	}
-	s.render(w, r, status, "vcs.html", vcsPage{Connections: conns, Error: errMsg})
+	s.render(w, r, status, "vcs.html", &vcsPage{Page: Page{Section: "vcs"}, Connections: conns, Error: errMsg})
 }
 
 // newConnection is the add-VCS-provider wizard: 1 choose a provider,
 // 2 set it up (name, URL, token), 3 advanced settings (which workspaces may link it) of the created connection.
 // Return is the page that sent the user here; finishing continues it with the new connection.
 type newConnection struct {
+	Page
 	Step      int
 	Edit      bool   // step 3 alone, as the connection's settings page
 	Token     bool   // on the settings page: the token was just replaced
 	Return    string // "workspace", "module", "catalog" or ""
 	Providers any    // vcs.Providers
 	Conn      storage.VCSConnection
-	Error     string
+	F         *formState // a refused submit
 	Form      map[string]string
 	Picker    picker       // the selected workspaces, in step 3
 	Projects  []pickerItem // the projects, selected ones checked, in step 3
@@ -102,26 +101,32 @@ func (s *Server) renderNewConnection(w http.ResponseWriter, r *http.Request, sta
 	p.Providers = vcs.Providers
 	if p.Step == 3 {
 		// shortcut: offers the 200 most recently active workspaces, as variable sets do; add search if there are more.
-		all, err := s.Store.ListWorkspaces(r.Context(), storage.Viewer{Admin: true}, "") // admin-only page
+		all, err := s.App.ListWorkspaces(r.Context(), actor(r), "") // an admin's: all of them
 		if err != nil {
 			s.internalError(w, "list workspaces", err)
 			return
 		}
-		p.Picker = workspacePicker("workspace", "Workspaces that may link this connection's repositories", p.Conn.Workspaces, all)
-		projects, err := s.Store.Projects(r.Context(), storage.Viewer{Admin: true})
+		selected, picked := p.Conn.Workspaces, p.Conn.Projects
+		if f := formOf(p.F, "scope"); f != nil { // as posted
+			selected, picked = f.Input["workspace"], f.Input["project"]
+		}
+		p.Picker = workspacePicker("workspace", "Workspaces that may link this connection's repositories", selected, all)
+		projects, err := s.App.Projects(r.Context(), actor(r))
 		if err != nil {
 			s.internalError(w, "list projects", err)
 			return
 		}
 		for _, pr := range projects {
-			p.Projects = append(p.Projects, pickerItem{pr.Name, projectLabel(pr), slices.Contains(p.Conn.Projects, pr.Name)})
+			p.Projects = append(p.Projects, pickerItem{pr.Name, projectLabel(pr), slices.Contains(picked, pr.Name)})
 		}
 	}
-	s.render(w, r, status, "vcsnew.html", p)
+	p.Page = Page{Section: "vcs"}
+	s.render(w, r, status, "vcsnew.html", &p)
 }
 
 // finishConnection continues the wizard that started the add-VCS-provider wizard, with the new connection.
-func finishConnection(ret, connID string) string {
+func finishConnection(ret string, id uuid.UUID) string {
+	connID := id.String()
 	switch ret {
 	case "workspace":
 		return "/workspaces/new?type=vcs&conn=" + url.QueryEscape(connID)
@@ -133,47 +138,21 @@ func finishConnection(ret, connID string) string {
 	return "/vcs"
 }
 
-// addConnection checks the token against the provider (by listing repos) before storing it sealed.
+// addConnection adds a connection (app.CreateVCSConnection) and continues with its advanced settings.
 func (s *Server) addConnection(w http.ResponseWriter, r *http.Request) {
-	form := map[string]string{}
-	for _, k := range []string{"name", "provider", "base_url"} {
-		form[k] = strings.TrimSpace(r.PostFormValue(k))
-	}
-	fail := func(msg string) {
-		s.renderNewConnection(w, r, http.StatusUnprocessableEntity, newConnection{Step: 2, Return: r.PostFormValue("return"), Error: msg, Form: form})
-	}
-	token := strings.TrimSpace(r.PostFormValue("token"))
-	if form["name"] == "" || len(form["name"]) > 64 || token == "" {
-		fail("name (up to 64 characters) and access token are required")
+	f, ok := readForm(w, r)
+	if !ok {
 		return
 	}
-	baseURL, err := vcs.NormalizeURL(form["provider"], form["base_url"])
-	if err != nil {
-		fail(err.Error())
+	form := trimmed(f, "name", "provider", "base_url")
+	id, err := s.App.CreateVCSConnection(r.Context(), actor(r), app.NewVCSConnection{Name: form["name"], Provider: form["provider"],
+		BaseURL: form["base_url"], Token: f.Get("token")})
+	if s.failed(w, r, err, "connection", f, func(status int, fs *formState) {
+		s.renderNewConnection(w, r, status, newConnection{Step: 2, Return: f.Get("return"), F: fs, Form: form})
+	}) {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-	if _, err := (vcs.Conn{Provider: form["provider"], BaseURL: baseURL, Token: token}).Repos(ctx); err != nil {
-		fail("connection check failed: " + err.Error())
-		return
-	}
-	conn := storage.VCSConnection{Name: form["name"], Provider: form["provider"], BaseURL: baseURL}
-	if conn.Token, err = vcs.Seal(s.SecretKey, token, vcs.TokenAD(conn)); err != nil {
-		s.internalError(w, "seal vcs token", err)
-		return
-	}
-	id, err := s.Store.CreateVCSConnection(r.Context(), conn)
-	if errors.Is(err, storage.ErrExists) {
-		fail("a connection with this name already exists")
-		return
-	}
-	if err != nil {
-		s.internalError(w, "create vcs connection", err)
-		return
-	}
-	s.Log.Info("vcs connection added", "name", form["name"], "provider", form["provider"], "url", baseURL, "user", auth.FromContext(r.Context()).Email)
-	http.Redirect(w, r, "/vcs/new?connection="+id+"&return="+url.QueryEscape(r.PostFormValue("return")), http.StatusSeeOther)
+	http.Redirect(w, r, "/vcs/new?connection="+id.String()+"&return="+url.QueryEscape(f.Get("return")), http.StatusSeeOther)
 }
 
 // connectionSettings shows a connection's scope (advanced settings): outside the wizard, as its settings page.
@@ -185,20 +164,19 @@ func (s *Server) connectionSettings(w http.ResponseWriter, r *http.Request) {
 	s.renderNewConnection(w, r, http.StatusOK, newConnection{Step: 3, Edit: true, Token: r.URL.Query().Has("token"), Conn: sc, Form: scopeFormOf(sc)})
 }
 
-// saveConnectionSettings sets the workspaces that may link a connection's repositories, with selected
-// workspaces exactly those (by name) in the workspace fields; runs of linked workspaces no longer
-// allowed fail when they start.
+// saveConnectionSettings sets the workspaces that may link a connection's repositories (app.SetVCSScope).
 // From the add-VCS-provider wizard (wizard=1) it finishes the wizard.
 func (s *Server) saveConnectionSettings(w http.ResponseWriter, r *http.Request) {
 	sc, ok := s.getConnection(w, r, r.PathValue("id"))
 	if !ok {
 		return
 	}
-	wizard, ret := r.PostFormValue("wizard") != "", r.PostFormValue("return")
-	form := map[string]string{}
-	for _, k := range []string{"workspaces", "workspace_scope"} {
-		form[k] = r.PostFormValue(k)
+	f, ok := readForm(w, r)
+	if !ok {
+		return
 	}
+	wizard, ret := f.Get("wizard") != "", f.Get("return")
+	form := trimmed(f, "workspaces", "workspace_scope")
 	scope := ""
 	if form["workspaces"] != "" {
 		scope = map[bool]string{true: "all", false: "selected"}[form["workspace_scope"] == "all"]
@@ -206,30 +184,17 @@ func (s *Server) saveConnectionSettings(w http.ResponseWriter, r *http.Request) 
 	var err error
 	switch {
 	case wizard && ret == "workspace" && scope == "":
-		err = errors.New("enable workspaces: your new workspace links a repository through this connection")
+		err = invalidScope("enable workspaces: your new workspace links a repository through this connection")
 	case wizard && ret == "workspace" && scope == "selected":
-		err = errors.New("allow all workspaces: your new workspace can't be selected before it exists")
+		err = invalidScope("allow all workspaces: your new workspace can't be selected before it exists")
+	default:
+		err = s.App.SetVCSScope(r.Context(), actor(r), sc.ID, app.VCSScope{Scope: scope, Workspaces: f["workspace"], Projects: f["project"]})
 	}
-	if err != nil {
-		s.renderNewConnection(w, r, http.StatusUnprocessableEntity, newConnection{Step: 3, Edit: !wizard, Return: ret, Conn: sc, Error: err.Error(), Form: form})
+	if s.failed(w, r, err, "scope", f, func(status int, fs *formState) {
+		s.renderNewConnection(w, r, status, newConnection{Step: 3, Edit: !wizard, Return: ret, Conn: sc, F: fs, Form: form})
+	}) {
 		return
 	}
-	if scope == "selected" { // else the hidden pickers' selection stays for later
-		err = s.Store.Select(r.Context(), sc.ID, storage.Pick{Selection: storage.ConnWorkspaces, Names: r.PostForm["workspace"]},
-			storage.Pick{Selection: storage.ConnProjects, Names: r.PostForm["project"]})
-	}
-	if errors.Is(err, sql.ErrNoRows) {
-		http.Error(w, "choose existing workspaces and projects", http.StatusBadRequest)
-		return
-	}
-	if err == nil {
-		err = s.Store.SetVCSScope(r.Context(), sc.ID, scope)
-	}
-	if err != nil {
-		s.internalError(w, "set vcs scope", err)
-		return
-	}
-	s.Log.Info("vcs connection scope", "id", sc.ID, "workspace_scope", scope, "workspaces", r.PostForm["workspace"], "projects", r.PostForm["project"], "user", auth.FromContext(r.Context()).Email)
 	next := "/vcs"
 	if wizard {
 		next = finishConnection(ret, sc.ID)
@@ -237,47 +202,29 @@ func (s *Server) saveConnectionSettings(w http.ResponseWriter, r *http.Request) 
 	http.Redirect(w, r, next, http.StatusSeeOther)
 }
 
-// replaceToken swaps a connection's access token once the provider accepts it (the connection check,
-// as when adding it). Everything that uses the connection uses the new token; the template catalog
-// reloads with it right away.
+// invalidScope is a scope the wizard's next step can't use.
+func invalidScope(msg string) error {
+	return &app.ValidationError{Fields: map[string]string{"workspace_scope": msg}}
+}
+
+// replaceToken swaps a connection's access token (app.ReplaceVCSToken). A refused token, or one
+// replaced meanwhile, shows the form again with why.
 func (s *Server) replaceToken(w http.ResponseWriter, r *http.Request) {
 	sc, ok := s.getConnection(w, r, r.PathValue("id"))
 	if !ok {
 		return
 	}
-	fail := func(msg string) {
-		s.renderNewConnection(w, r, http.StatusUnprocessableEntity, newConnection{Step: 3, Edit: true, Conn: sc, Error: msg, Form: scopeFormOf(sc)})
-	}
-	token := strings.TrimSpace(r.PostFormValue("token"))
-	if token == "" {
-		fail("paste the new access token")
+	f, ok := readForm(w, r)
+	if !ok {
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-	if _, err := (vcs.Conn{Provider: sc.Provider, BaseURL: sc.BaseURL, Token: token}).Repos(ctx); err != nil {
-		fail("connection check failed: " + err.Error())
+	_, err := s.App.ReplaceVCSToken(r.Context(), actor(r), sc.ID, f.Get("token"))
+	if s.failed(w, r, err, "token", f, func(status int, fs *formState) {
+		s.renderNewConnection(w, r, status, newConnection{Step: 3, Edit: true, Conn: sc, F: fs, Form: scopeFormOf(sc)})
+	}) {
 		return
 	}
-	sealed, err := vcs.Seal(s.SecretKey, token, vcs.TokenAD(sc))
-	if err == nil {
-		err = s.Store.ResealVCSToken(r.Context(), sc.ID, sc.Token, sealed)
-	}
-	if errors.Is(err, sql.ErrNoRows) {
-		fail("the token was replaced or the connection deleted meanwhile: reload and try again")
-		return
-	}
-	if err != nil {
-		s.internalError(w, "replace vcs token", err)
-		return
-	}
-	s.Log.Info("vcs token replaced", "connection", sc.Name, "user", auth.FromContext(r.Context()).Email)
-	if sc.Catalog && s.Features.Deployments {
-		if err := vcs.SyncCatalog(r.Context(), s.Store, s.SecretKey, s.Templates); err != nil {
-			s.Log.Warn("template catalog sync", "err", err) // shown on the Templates page as the sync error
-		}
-	}
-	http.Redirect(w, r, "/vcs/"+sc.ID+"/settings?token", http.StatusSeeOther)
+	http.Redirect(w, r, "/vcs/"+sc.ID.String()+"/settings?token", http.StatusSeeOther)
 }
 
 // scopeFormOf fills the advanced settings form from a connection.
@@ -289,33 +236,35 @@ func scopeFormOf(c storage.VCSConnection) map[string]string {
 	return f
 }
 
-// getConnection writes a 404 or 500 when it returns false.
+// getConnection writes the error when it returns false.
 func (s *Server) getConnection(w http.ResponseWriter, r *http.Request, id string) (storage.VCSConnection, bool) {
-	sc, err := s.Store.GetVCSConnection(r.Context(), id)
-	if errors.Is(err, sql.ErrNoRows) {
-		http.NotFound(w, r)
-		return sc, false
-	}
+	cid, _ := parseID(id) // not an id: not found
+	sc, err := s.App.VCSConnection(r.Context(), actor(r), cid)
 	if err != nil {
-		s.internalError(w, "get vcs connection", err)
+		s.uiError(w, r, err)
 		return sc, false
 	}
 	return sc, true
 }
 
+// deleteConnection deletes a connection; app.DeleteVCSConnection says what happens to what uses it.
 func (s *Server) deleteConnection(w http.ResponseWriter, r *http.Request) {
-	if err := s.Store.DeleteVCSConnection(r.Context(), r.PathValue("id")); errors.Is(err, storage.ErrInUse) {
-		s.renderVCS(w, r, http.StatusConflict, "The template catalog uses this connection: disconnect it in Settings → Templates first.")
-		return
-	} else if err != nil {
-		s.internalError(w, "delete vcs connection", err)
+	id, _ := pathID(r, "id") // not an id: deletes nothing, as for an unknown one
+	err := s.App.DeleteVCSConnection(r.Context(), actor(r), id)
+	if app.IsConflict(err) {
+		s.renderVCS(w, r, http.StatusConflict, err.Error())
 		return
 	}
-	s.Log.Info("vcs connection deleted", "id", r.PathValue("id"), "user", auth.FromContext(r.Context()).Email)
+	if err != nil {
+		s.uiError(w, r, err)
+		return
+	}
 	http.Redirect(w, r, "/vcs", http.StatusSeeOther)
 }
 
+// publishPage is the add-module wizard (publish.html).
 type publishPage struct {
+	Page
 	Type      string // "" choose a workflow, "vcs" or "upload"
 	VCS       bool   // workflows on offer
 	Upload    bool
@@ -325,7 +274,8 @@ type publishPage struct {
 	Conn      storage.VCSConnection
 	Repos     []string
 	Host      string
-	Error     string
+	Error     string     // listing the repositories failed
+	F         *formState // a refused submit
 	Form      map[string]string
 }
 
@@ -338,11 +288,11 @@ func (s *Server) publishPage(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case t == "vcs" && s.Features.VCS:
-		s.renderPublish(w, r, http.StatusOK, q.Get("connection"), "", map[string]string{"repo": strings.TrimSpace(q.Get("repo"))})
+		s.renderPublish(w, r, http.StatusOK, q.Get("connection"), nil, map[string]string{"repo": strings.TrimSpace(q.Get("repo"))})
 	case t == "upload" && s.canUpload(r):
-		s.renderUpload(w, r, http.StatusOK, "", map[string]string{})
+		s.renderUpload(w, r, http.StatusOK, nil, map[string]string{})
 	case t == "" && (s.Features.VCS || s.canUpload(r)):
-		s.render(w, r, http.StatusOK, "publish.html", publishPage{VCS: s.Features.VCS, Upload: s.canUpload(r), Host: s.Registry.PublicURL.Host})
+		s.render(w, r, http.StatusOK, "publish.html", &publishPage{Page: Page{Section: "registry"}, VCS: s.Features.VCS, Upload: s.canUpload(r), Host: s.App.Registry.PublicURL.Host})
 	default:
 		http.NotFound(w, r)
 	}
@@ -350,12 +300,12 @@ func (s *Server) publishPage(w http.ResponseWriter, r *http.Request) {
 
 // renderPublish shows the publish wizard: the step follows from what is chosen so far
 // (no connection: pick one; no repo: pick one; else confirm the module address).
-func (s *Server) renderPublish(w http.ResponseWriter, r *http.Request, status int, connID, errMsg string, form map[string]string) {
-	p := publishPage{Type: "vcs", Step: 1, Providers: vcs.Providers, Host: s.Registry.PublicURL.Host, Error: errMsg, Form: form}
+func (s *Server) renderPublish(w http.ResponseWriter, r *http.Request, status int, connID string, f *formState, form map[string]string) {
+	p := &publishPage{Page: Page{Section: "registry"}, Type: "vcs", Step: 1, Providers: vcs.Providers, Host: s.App.Registry.PublicURL.Host, F: f, Form: form}
 	if connID == "" {
-		conns, err := s.Store.VCSConnections(r.Context())
+		conns, err := s.App.VCSConnections(r.Context(), actor(r))
 		if err != nil {
-			s.internalError(w, "vcs connections", err)
+			s.uiError(w, r, err)
 			return
 		}
 		p.Conns = conns
@@ -375,104 +325,60 @@ func (s *Server) renderPublish(w http.ResponseWriter, r *http.Request, status in
 	}
 	// listing errors are shown; typing a repo still works
 	p.Step = 2
-	if c, err := vcs.ConnFor(s.SecretKey, sc); err != nil {
+	var err error
+	if p.Repos, err = s.App.VCSRepos(r.Context(), actor(r), sc.ID); err != nil {
 		p.Error = err.Error()
-	} else if p.Repos, err = c.Repos(r.Context()); err != nil && p.Error == "" {
-		p.Error = "could not list repositories: " + err.Error()
 	}
 	s.render(w, r, status, "publish.html", p)
 }
 
-// Terraform's module repo naming convention (terraform-<system>-<name>); used to fill in name and system when left empty.
-var tfRepoRe = regexp.MustCompile(`^terraform-([a-z0-9]+)-([a-z0-9][a-z0-9_-]*)$`)
-
-// fillFromRepo fills in what is left empty: the namespace is the repository's name, name and system follow its naming convention.
+// fillFromRepo fills in what is left empty with the address the repository suggests (app.RepoModuleAddress).
 func fillFromRepo(form map[string]string) {
-	if form["namespace"] == "" && form["repo"] != "" {
-		form["namespace"] = strings.ToLower(path.Base(form["repo"]))
-	}
-	if m := tfRepoRe.FindStringSubmatch(strings.ToLower(path.Base(form["repo"]))); m != nil {
-		if form["system"] == "" {
-			form["system"] = m[1]
-		}
-		if form["name"] == "" {
-			form["name"] = m[2]
+	ns, name, sys := app.RepoModuleAddress(form["repo"])
+	for k, v := range map[string]string{"namespace": ns, "name": name, "system": sys} {
+		if form[k] == "" {
+			form[k] = v
 		}
 	}
 }
 
-// publishModule links a repo to a registry module and publishes its tags right away.
+// publishModule links a repo to a registry module and publishes its tags right away (app.PublishVCSModule).
 func (s *Server) publishModule(w http.ResponseWriter, r *http.Request) {
-	form := map[string]string{}
-	for _, k := range []string{"repo", "dir", "namespace", "name", "system"} {
-		form[k] = strings.TrimSpace(r.PostFormValue(k))
-	}
-	connID := r.PostFormValue("connection")
-	if _, ok := s.getConnection(w, r, connID); !ok {
-		return
-	}
-	fail := func(msg string) { s.renderPublish(w, r, http.StatusUnprocessableEntity, connID, msg, form) }
-	fillFromRepo(form)
-	ns, name, sys, _, err := s.Registry.Address(form["namespace"], form["name"], form["system"])
-	if err != nil {
-		fail(err.Error())
-		return
-	}
-	if !strings.Contains(form["repo"], "/") {
-		fail("choose a repository")
-		return
-	}
-	dir, ok := repoDir(form["dir"])
+	f, ok := readForm(w, r)
 	if !ok {
-		fail(fmt.Sprintf("%q is not a folder of the repository", form["dir"]))
 		return
 	}
-	m := storage.VCSModule{Namespace: ns, Name: name, System: sys, ConnectionID: connID, Repo: form["repo"], Dir: dir}
-	if err := s.Store.LinkVCSModule(r.Context(), m); errors.Is(err, storage.ErrExists) {
-		fail(fmt.Sprintf("%s/%s/%s is already published from a repository", ns, name, sys))
-		return
-	} else if err != nil {
-		s.internalError(w, "link vcs module", err)
+	form := trimmed(f, "repo", "dir", "namespace", "name", "system")
+	connID := f.Get("connection")
+	cid, _ := parseID(connID) // not an id: not found
+	m, added, err := s.App.PublishVCSModule(r.Context(), actor(r), app.NewVCSModule{ConnectionID: cid, Repo: form["repo"], Dir: form["dir"],
+		Namespace: form["namespace"], Name: form["name"], System: form["system"]})
+	if s.failed(w, r, err, "module", f, func(status int, fs *formState) { s.renderPublish(w, r, status, connID, fs, form) }) {
 		return
 	}
-	s.Log.Info("module linked to vcs", "module", ns+"/"+name+"/"+sys, "repo", m.Repo, "dir", m.Dir, "user", auth.FromContext(r.Context()).Email)
-	s.syncAndRedirect(w, r, m)
+	redirectToVersion(w, r, m, added)
 }
 
 func (s *Server) syncModule(w http.ResponseWriter, r *http.Request) {
-	m, err := s.Store.GetVCSModule(r.Context(), r.PathValue("ns"), r.PathValue("name"), r.PathValue("system"))
-	if errors.Is(err, sql.ErrNoRows) {
-		http.NotFound(w, r)
-		return
-	}
+	m, added, err := s.App.SyncVCSModule(r.Context(), actor(r), r.PathValue("ns"), r.PathValue("name"), r.PathValue("system"))
 	if err != nil {
-		s.internalError(w, "get vcs module", err)
+		s.uiError(w, r, err)
 		return
 	}
-	s.syncAndRedirect(w, r, m)
+	redirectToVersion(w, r, m, added)
 }
 
-// unlinkModule stops publishing a module from its repository; its published versions stay.
-// Changing the repository or folder is unlinking and publishing again.
+// unlinkModule stops publishing a module from its repository (app.UnlinkVCSModule).
 func (s *Server) unlinkModule(w http.ResponseWriter, r *http.Request) {
-	ns, name, sys := r.PathValue("ns"), r.PathValue("name"), r.PathValue("system")
-	if err := s.Store.UnlinkVCSModule(r.Context(), ns, name, sys); errors.Is(err, sql.ErrNoRows) {
-		http.NotFound(w, r)
-		return
-	} else if err != nil {
-		s.internalError(w, "unlink vcs module", err)
+	if err := s.App.UnlinkVCSModule(r.Context(), actor(r), r.PathValue("ns"), r.PathValue("name"), r.PathValue("system")); err != nil {
+		s.uiError(w, r, err)
 		return
 	}
-	s.Log.Info("module unlinked from vcs", "module", ns+"/"+name+"/"+sys, "user", auth.FromContext(r.Context()).Email)
 	http.Redirect(w, r, "/registry", http.StatusSeeOther)
 }
 
-// syncAndRedirect goes to the newest version it published, else to the registry, which shows sync errors.
-func (s *Server) syncAndRedirect(w http.ResponseWriter, r *http.Request, m storage.VCSModule) {
-	added, err := vcs.Sync(r.Context(), s.Store, s.SecretKey, m)
-	if err != nil {
-		s.Log.Warn("vcs sync", "module", m.Namespace+"/"+m.Name+"/"+m.System, "err", err)
-	}
+// redirectToVersion goes to the newest version a sync added, else to the registry, which shows sync errors.
+func redirectToVersion(w http.ResponseWriter, r *http.Request, m storage.VCSModule, added []string) {
 	if len(added) == 0 {
 		http.Redirect(w, r, "/registry", http.StatusSeeOther)
 		return

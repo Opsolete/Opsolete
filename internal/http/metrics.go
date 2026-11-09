@@ -3,10 +3,11 @@ package httpserver
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
@@ -17,6 +18,12 @@ var httpDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 	Name: "opsolete_http_request_duration_seconds",
 	Help: "HTTP requests by route pattern. Log streams and runner long-polls land in the top bucket.",
 }, []string{"code", "method", "route"})
+
+// SchedulerLeader is set by main from app.Scheduler.OnLead.
+var SchedulerLeader = promauto.NewGauge(prometheus.GaugeOpts{
+	Name: "opsolete_scheduler_leader",
+	Help: "1 while this replica runs the background jobs (lease reaper, drift checks, rollouts, VCS polling, catalog sync), else 0.",
+})
 
 type routeKey struct{}
 
@@ -49,9 +56,9 @@ func (c dbStats) Describe(ch chan<- *prometheus.Desc) { ch <- runsDesc; ch <- qu
 func (c dbStats) Collect(ch chan<- prometheus.Metric) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	st, err := c.s.Store.Stats(ctx)
+	st, err := c.s.App.Stats(ctx)
 	if err != nil { // skip, don't fail the scrape: the runtime metrics still matter, and /readyz reports the database
-		c.s.Log.Error("metrics: read database stats", "err", err)
+		c.s.App.Log.Error("metrics: read database stats", "err", err)
 		return
 	}
 	for _, status := range runStatuses { // zeros too, so queue alerts don't depend on absent()
@@ -64,6 +71,48 @@ func (c dbStats) Collect(ch chan<- prometheus.Metric) {
 // MetricsHandler serves Prometheus metrics: Go runtime, process, HTTP requests, the database pool and runs.
 // Call it once: it registers on the default registry.
 func (s *Server) MetricsHandler() http.Handler {
-	prometheus.MustRegister(collectors.NewDBStatsCollector(s.Store.DB, "opsolete"), dbStats{s})
+	prometheus.MustRegister(poolStats{s.App.Store.Pool}, dbStats{s})
 	return promhttp.Handler()
+}
+
+// poolStats reports the connection pool under the names database/sql's collector used (go_sql_*).
+type poolStats struct{ p *pgxpool.Pool }
+
+var poolDescs = func() map[string]*prometheus.Desc {
+	m := map[string]*prometheus.Desc{}
+	for name, help := range map[string]string{
+		"max_open_connections":        "Maximum number of open connections to the database.",
+		"open_connections":            "The number of established connections both in use and idle.",
+		"in_use_connections":          "The number of connections currently in use.",
+		"idle_connections":            "The number of idle connections.",
+		"wait_count_total":            "The total number of connections waited for.",
+		"wait_duration_seconds_total": "The total time blocked waiting for a new connection.",
+		"max_idle_time_closed_total":  "The total number of connections closed due to idle time.",
+		"max_lifetime_closed_total":   "The total number of connections closed due to max connection lifetime.",
+	} {
+		m[name] = prometheus.NewDesc("go_sql_"+name, help, nil, prometheus.Labels{"db_name": "opsolete"})
+	}
+	return m
+}()
+
+func (c poolStats) Describe(ch chan<- *prometheus.Desc) {
+	for _, d := range poolDescs {
+		ch <- d
+	}
+}
+
+func (c poolStats) Collect(ch chan<- prometheus.Metric) {
+	st := c.p.Stat()
+	for name, v := range map[string]float64{
+		"max_open_connections": float64(st.MaxConns()), "open_connections": float64(st.TotalConns()),
+		"in_use_connections": float64(st.AcquiredConns()), "idle_connections": float64(st.IdleConns()),
+		"wait_count_total": float64(st.EmptyAcquireCount()), "wait_duration_seconds_total": st.EmptyAcquireWaitTime().Seconds(),
+		"max_idle_time_closed_total": float64(st.MaxIdleDestroyCount()), "max_lifetime_closed_total": float64(st.MaxLifetimeDestroyCount()),
+	} {
+		vt := prometheus.GaugeValue
+		if strings.HasSuffix(name, "_total") {
+			vt = prometheus.CounterValue
+		}
+		ch <- prometheus.MustNewConstMetric(poolDescs[name], vt, v)
+	}
 }

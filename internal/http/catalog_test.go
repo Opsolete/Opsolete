@@ -156,227 +156,268 @@ func TestTemplateCatalogInGit(t *testing.T) {
 	ctx := context.Background()
 	id := strings.ToLower(newID()[:8])
 	connName := "cat-" + id
-	t.Cleanup(func() {
-		store.DB.Exec(`DELETE FROM template_catalog`)
-		store.DB.Exec(`DELETE FROM vcs_connections WHERE name IN ($1, $2)`, connName, connName+"-b")
-	})
 	g := &fakeGitRepo{branches: map[string]string{}, commits: map[string]map[string]string{}}
 	g.commit("main", map[string]string{"catalog/web.json": tplJSON("web-"+id, "Web"), "README.md": "not a template"})
 	gh := httptest.NewTLSServer(g.handler(t))
 	defer gh.Close()
-	old := vcs.HTTPClient
-	vcs.HTTPClient = gh.Client()
-	t.Cleanup(func() { vcs.HTTPClient = old })
 
 	app := newApp(t, t.TempDir(), store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true, Registry: true, VCS: true})
+	app.App.VCS = vcs.NewClient(gh.Client())
 	h := app.Handler()
-	if rec := post(h, "/vcs", url.Values{"name": {connName}, "provider": {"github"}, "base_url": {gh.URL}, "token": {"pat"}}); rec.Code != http.StatusSeeOther {
-		t.Fatalf("connect: %d %s", rec.Code, rec.Body.String())
-	}
-	var connID string
-	store.DB.QueryRow(`SELECT id FROM vcs_connections WHERE name = $1`, connName).Scan(&connID)
-	if rec := get(h, "/templates/new"); rec.Code != http.StatusNotFound {
-		t.Fatalf("no editor before a catalog is set up: %d", rec.Code)
-	}
-	if page := get(h, "/catalog").Body.String(); !strings.Contains(page, `<select id="repo" name="repo" disabled>`) {
-		t.Fatalf("repo dropdown before choosing a connection: %s", page)
-	}
-	if page := get(h, "/catalog?connection="+connID).Body.String(); !strings.Contains(page, `<option value="acme/catalog">acme/catalog</option>`) {
-		t.Fatalf("repo dropdown: %s", page)
-	}
+	var (
+		connID string
+		set    url.Values // the catalog's settings
+		edit   url.Values // the builder's form for template web-<id>
+		other  *Server    // another instance
+	)
+	step(t, "a connection offers its repos for the catalog", func(t *testing.T) {
+		if rec := post(h, "/vcs", url.Values{"name": {connName}, "provider": {"github"}, "base_url": {gh.URL}, "token": {"pat"}}); rec.Code != http.StatusSeeOther {
+			t.Fatalf("connect: %d %s", rec.Code, rec.Body.String())
+		}
+		store.Pool.QueryRow(context.Background(), `SELECT id FROM vcs_connections WHERE name = $1`, connName).Scan(&connID)
+		if rec := get(h, "/templates/new"); rec.Code != http.StatusNotFound {
+			t.Fatalf("no editor before a catalog is set up: %d", rec.Code)
+		}
+		if page := get(h, "/catalog").Body.String(); !strings.Contains(page, `<select id="repo" name="repo" disabled>`) {
+			t.Fatalf("repo dropdown before choosing a connection: %s", page)
+		}
+		if page := get(h, "/catalog?connection="+connID).Body.String(); !strings.Contains(page, `<option value="acme/catalog">acme/catalog</option>`) {
+			t.Fatalf("repo dropdown: %s", page)
+		}
+	})
 
 	// Commit mode: the templates load from the folder, the builder commits to the branch.
-	set := url.Values{"connection": {connID}, "repo": {"acme/catalog"}, "branch": {"main"}, "dir": {"/catalog/"}, "mode": {"commit"}}
-	if rec := post(h, "/catalog", set); rec.Code != http.StatusSeeOther {
-		t.Fatalf("set up catalog: %d %s", rec.Code, rec.Body.String())
-	}
-	if _, ok := app.Templates.Get("web-" + id); !ok || len(app.Templates.List()) != 1 {
-		t.Fatalf("templates from git: %v", app.Templates.List())
-	}
-	if page := get(h, "/catalog").Body.String(); !strings.Contains(page, `<option value="acme/catalog" selected>`) {
-		t.Fatalf("the configured repo is selected: %s", page)
-	}
+	step(t, "commit mode loads the templates from the folder", func(t *testing.T) {
+		set = url.Values{"connection": {connID}, "repo": {"acme/catalog"}, "branch": {"main"}, "dir": {"/catalog/"}, "mode": {"commit"}}
+		if rec := post(h, "/catalog", set); rec.Code != http.StatusSeeOther {
+			t.Fatalf("set up catalog: %d %s", rec.Code, rec.Body.String())
+		}
+		if _, ok := app.App.Templates.Get("web-" + id); !ok || len(app.App.Templates.List()) != 1 {
+			t.Fatalf("templates from git: %v", app.App.Templates.List())
+		}
+		if page := get(h, "/catalog").Body.String(); !strings.Contains(page, `<option value="acme/catalog" selected>`) {
+			t.Fatalf("the configured repo is selected: %s", page)
+		}
+	})
 	// Switching to another connection drops the saved repo, branch and folder.
-	if rec := post(h, "/vcs", url.Values{"name": {connName + "-b"}, "provider": {"github"}, "base_url": {gh.URL}, "token": {"pat"}}); rec.Code != http.StatusSeeOther {
-		t.Fatalf("connect another: %d %s", rec.Code, rec.Body.String())
-	}
-	var otherID string
-	store.DB.QueryRow(`SELECT id FROM vcs_connections WHERE name = $1`, connName+"-b").Scan(&otherID)
-	if page := get(h, "/catalog?connection="+otherID).Body.String(); strings.Contains(page, `<option value="acme/catalog" selected>`) ||
-		strings.Contains(page, `id="dir" name="dir" value="catalog"`) {
-		t.Fatalf("saved settings carried to another connection: %s", page)
-	}
+	t.Run("switching to another connection drops the saved repo, branch and folder", func(t *testing.T) {
+		if rec := post(h, "/vcs", url.Values{"name": {connName + "-b"}, "provider": {"github"}, "base_url": {gh.URL}, "token": {"pat"}}); rec.Code != http.StatusSeeOther {
+			t.Fatalf("connect another: %d %s", rec.Code, rec.Body.String())
+		}
+		var otherID string
+		store.Pool.QueryRow(context.Background(), `SELECT id FROM vcs_connections WHERE name = $1`, connName+"-b").Scan(&otherID)
+		if page := get(h, "/catalog?connection="+otherID).Body.String(); strings.Contains(page, `<option value="acme/catalog" selected>`) ||
+			strings.Contains(page, `id="dir" name="dir" value="catalog"`) {
+			t.Fatalf("saved settings carried to another connection: %s", page)
+		}
+	})
 	// The connection shows what uses it; its token is replaced on its settings page: a token the
 	// provider refuses is kept out, a good one is sealed anew.
-	if page := get(h, "/vcs").Body.String(); !strings.Contains(page, `<a href="/catalog">Template catalog</a>`) {
-		t.Fatalf("used by: %s", page)
-	}
-	var before, after []byte
-	store.DB.QueryRow(`SELECT token FROM vcs_connections WHERE id = $1`, connID).Scan(&before)
-	if rec := post(h, "/vcs/"+connID+"/token", url.Values{"token": {"wrong"}}); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "connection check failed") {
-		t.Fatalf("bad token replaced: %d", rec.Code)
-	}
-	if rec := post(h, "/vcs/"+connID+"/token", url.Values{"token": {"pat"}}); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/vcs/"+connID+"/settings?token" {
-		t.Fatalf("replace token: %d %s", rec.Code, rec.Body.String())
-	}
-	store.DB.QueryRow(`SELECT token FROM vcs_connections WHERE id = $1`, connID).Scan(&after)
-	if bytes.Equal(before, after) || strings.Contains(string(after), "pat") {
-		t.Fatal("the new token must be stored sealed")
-	}
-	edit := url.Values{"name": {"Web site"}, "module_source": {"git::https://example.com/m.git"}, "module_ref": {"v2"}, "in_name": {"n"}, "in_type": {"string"}}
-	if rec := post(h, "/templates/web-"+id+"/edit", edit); rec.Code != http.StatusSeeOther {
-		t.Fatalf("save to git: %d %s", rec.Code, rec.Body.String())
-	}
-	g.mu.Lock()
-	saved := g.commits[g.branches["main"]]["catalog/web.json"]
-	g.mu.Unlock()
-	if !strings.Contains(saved, `"ref": "v2"`) {
-		t.Fatalf("committed file: %s", saved)
-	}
-	if tpl, _ := app.Templates.Get("web-" + id); tpl.Module.Ref != "v2" {
-		t.Fatalf("catalog must reload after the commit: %+v", tpl)
-	}
-	// Another instance: starts from the snapshot in Postgres, without the provider.
-	other := newApp(t, t.TempDir(), store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true, Registry: true, VCS: true})
-	if err := vcs.LoadCatalog(ctx, store, other.Templates); err != nil {
-		t.Fatal(err)
-	}
-	if tpl, _ := other.Templates.Get("web-" + id); tpl.Module.Ref != "v2" {
-		t.Fatalf("snapshot: %+v", tpl)
-	}
+	step(t, "the connection's token is replaced only by one the provider accepts, sealed", func(t *testing.T) {
+		if page := get(h, "/vcs").Body.String(); !strings.Contains(page, `<a href="/catalog">Template catalog</a>`) {
+			t.Fatalf("used by: %s", page)
+		}
+		var before, after []byte
+		store.Pool.QueryRow(context.Background(), `SELECT token FROM vcs_connections WHERE id = $1`, connID).Scan(&before)
+		if rec := post(h, "/vcs/"+connID+"/token", url.Values{"token": {"wrong"}}); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "connection check failed") {
+			t.Fatalf("bad token replaced: %d", rec.Code)
+		}
+		if rec := post(h, "/vcs/"+connID+"/token", url.Values{"token": {"pat"}}); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/vcs/"+connID+"/settings?token" {
+			t.Fatalf("replace token: %d %s", rec.Code, rec.Body.String())
+		}
+		store.Pool.QueryRow(context.Background(), `SELECT token FROM vcs_connections WHERE id = $1`, connID).Scan(&after)
+		if bytes.Equal(before, after) || strings.Contains(string(after), "pat") {
+			t.Fatal("the new token must be stored sealed")
+		}
+	})
+	step(t, "the builder commits edits to the branch; another instance loads the snapshot", func(t *testing.T) {
+		edit = url.Values{"name": {"Web site"}, "module_source": {"git::https://example.com/m.git"}, "module_ref": {"v2"}, "in_name": {"n"}, "in_type": {"string"}}
+		if rec := post(h, "/templates/web-"+id+"/edit", edit); rec.Code != http.StatusSeeOther {
+			t.Fatalf("save to git: %d %s", rec.Code, rec.Body.String())
+		}
+		g.mu.Lock()
+		saved := g.commits[g.branches["main"]]["catalog/web.json"]
+		g.mu.Unlock()
+		if !strings.Contains(saved, `"ref": "v2"`) {
+			t.Fatalf("committed file: %s", saved)
+		}
+		if tpl, _ := app.App.Templates.Get("web-" + id); tpl.Module.Ref != "v2" {
+			t.Fatalf("catalog must reload after the commit: %+v", tpl)
+		}
+		// Another instance: starts from the snapshot in Postgres, without the provider.
+		other = newApp(t, t.TempDir(), store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true, Registry: true, VCS: true})
+		other.App.VCS = vcs.NewClient(gh.Client()) // another replica: its own client
+		if err := other.App.LoadCatalog(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if tpl, _ := other.App.Templates.Get("web-" + id); tpl.Module.Ref != "v2" {
+			t.Fatalf("snapshot: %+v", tpl)
+		}
+	})
 
 	// Someone changes the file in Git: a save based on the old version is refused, not overwritten.
-	g.mu.Lock()
-	g.commit("main", map[string]string{"catalog/web.json": tplJSON("web-"+id, "Changed in git")})
-	g.mu.Unlock()
-	edit.Set("module_ref", "v3")
-	if rec := post(h, "/templates/web-"+id+"/edit", edit); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "review and save again") {
-		t.Fatalf("stale save: %d %s", rec.Code, rec.Body.String())
-	}
-	if tpl, _ := app.Templates.Get("web-" + id); tpl.Name != "Changed in git" {
-		t.Fatalf("a refused save reloads the catalog: %+v", tpl)
-	}
+	step(t, "a save based on an outdated file is refused and reloads", func(t *testing.T) {
+		g.mu.Lock()
+		g.commit("main", map[string]string{"catalog/web.json": tplJSON("web-"+id, "Changed in git")})
+		g.mu.Unlock()
+		edit.Set("module_ref", "v3")
+		if rec := post(h, "/templates/web-"+id+"/edit", edit); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "review and save again") {
+			t.Fatalf("stale save: %d %s", rec.Code, rec.Body.String())
+		}
+		if tpl, _ := app.App.Templates.Get("web-" + id); tpl.Name != "Changed in git" {
+			t.Fatalf("a refused save reloads the catalog: %+v", tpl)
+		}
+	})
 	// An earlier failure (say, the provider was down) clears once a sync finds the branch still at the loaded commit.
-	store.DB.Exec(`UPDATE template_catalog SET sync_error = 'provider unavailable'`)
-	if rec := post(h, "/catalog/sync", nil); rec.Code != http.StatusSeeOther {
-		t.Fatalf("sync: %d", rec.Code)
-	}
-	if page := get(h, "/catalog").Body.String(); strings.Contains(page, "Last sync failed") {
-		t.Fatalf("stale sync error: %s", page)
-	}
+	step(t, "a sync at the loaded commit clears an earlier error", func(t *testing.T) {
+		store.Pool.Exec(context.Background(), `UPDATE template_catalog SET sync_error = 'provider unavailable'`)
+		if rec := post(h, "/catalog/sync", nil); rec.Code != http.StatusSeeOther {
+			t.Fatalf("sync: %d", rec.Code)
+		}
+		if page := get(h, "/catalog").Body.String(); strings.Contains(page, "Last sync failed") {
+			t.Fatalf("stale sync error: %s", page)
+		}
+	})
 	// Two instances sync concurrently and the one that fetched the older commit finishes last:
 	// it must not replace the newer snapshot, and it serves the newer one too.
-	g.mu.Lock()
-	g.commit("main", map[string]string{"catalog/web.json": tplJSON("web-"+id, "Older")})
-	held, release := make(chan string), make(chan struct{})
-	g.held, g.release = held, release
-	g.mu.Unlock()
-	slow := make(chan error)
-	go func() { slow <- vcs.SyncCatalog(ctx, store, app.SecretKey, app.Templates) }()
-	older := <-held
-	g.mu.Lock()
-	g.commit("main", map[string]string{"catalog/web.json": tplJSON("web-"+id, "Newer")})
-	newer := g.branches["main"]
-	g.mu.Unlock()
-	if err := vcs.SyncCatalog(ctx, store, other.SecretKey, other.Templates); err != nil {
-		t.Fatal(err)
-	}
-	close(release)
-	if err := <-slow; err != nil {
-		t.Fatal(err)
-	}
-	stored, _ := store.GetTemplateCatalog(ctx)
-	tpl, _ := app.Templates.Get("web-" + id)
-	if _, loaded := app.Templates.Source(); stored.Commit != newer || loaded != newer || tpl.Name != "Newer" {
-		t.Fatalf("stale write: fetched %s, stored %s, loaded %s (%q), want %s", older, stored.Commit, loaded, tpl.Name, newer)
-	}
+	step(t, "a sync that fetched an older commit keeps the newer snapshot", func(t *testing.T) {
+		g.mu.Lock()
+		g.commit("main", map[string]string{"catalog/web.json": tplJSON("web-"+id, "Older")})
+		held, release := make(chan string), make(chan struct{})
+		g.held, g.release = held, release
+		g.mu.Unlock()
+		slow := make(chan error)
+		go func() { slow <- app.App.PullCatalog(ctx) }()
+		older := <-held
+		g.mu.Lock()
+		g.commit("main", map[string]string{"catalog/web.json": tplJSON("web-"+id, "Newer")})
+		newer := g.branches["main"]
+		g.mu.Unlock()
+		if err := other.App.PullCatalog(ctx); err != nil {
+			t.Fatal(err)
+		}
+		close(release)
+		if err := <-slow; err != nil {
+			t.Fatal(err)
+		}
+		stored, _ := store.GetTemplateCatalog(ctx)
+		tpl, _ := app.App.Templates.Get("web-" + id)
+		if _, loaded := app.App.Templates.Source(); stored.Commit != newer || loaded != newer || tpl.Name != "Newer" {
+			t.Fatalf("stale write: fetched %s, stored %s, loaded %s (%q), want %s", older, stored.Commit, loaded, tpl.Name, newer)
+		}
+	})
+	// Only the scheduler's leader syncs from Git; every other replica reloads the snapshot from Postgres.
+	step(t, "a replica that doesn't lead reloads the snapshot the leader synced", func(t *testing.T) {
+		g.mu.Lock()
+		g.commit("main", map[string]string{"catalog/web.json": tplJSON("web-"+id, "From the leader")})
+		g.mu.Unlock()
+		if err := app.App.PullCatalog(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if tpl, _ := other.App.Templates.Get("web-" + id); tpl.Name == "From the leader" {
+			t.Fatal("the follower has it before reloading")
+		}
+		if err := other.App.ReloadCatalog(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if tpl, _ := other.App.Templates.Get("web-" + id); tpl.Name != "From the leader" {
+			t.Fatalf("follower after reload: %+v", tpl)
+		}
+	})
 	// A commit with an invalid template isn't loaded: the last good one stays, the error is shown.
-	g.mu.Lock()
-	g.commit("main", map[string]string{"catalog/bad.json": `{"id":"bad"}`})
-	g.mu.Unlock()
-	if rec := post(h, "/catalog/sync", nil); rec.Code != http.StatusSeeOther {
-		t.Fatalf("sync: %d", rec.Code)
-	}
-	if page := get(h, "/catalog").Body.String(); !strings.Contains(page, "Last sync failed") || !strings.Contains(page, "bad.json") {
-		t.Fatalf("sync error: %s", page)
-	}
-	if _, ok := app.Templates.Get("web-" + id); !ok {
-		t.Fatal("the last good catalog must stay")
-	}
-	g.mu.Lock()
-	g.commit("main", map[string]string{"catalog/bad.json": tplJSON("fixed-"+id, "Fixed")})
-	g.mu.Unlock()
+	step(t, "a commit with an invalid template keeps the last good catalog", func(t *testing.T) {
+		g.mu.Lock()
+		g.commit("main", map[string]string{"catalog/bad.json": `{"id":"bad"}`})
+		g.mu.Unlock()
+		if rec := post(h, "/catalog/sync", nil); rec.Code != http.StatusSeeOther {
+			t.Fatalf("sync: %d", rec.Code)
+		}
+		if page := get(h, "/catalog").Body.String(); !strings.Contains(page, "Last sync failed") || !strings.Contains(page, "bad.json") {
+			t.Fatalf("sync error: %s", page)
+		}
+		if _, ok := app.App.Templates.Get("web-" + id); !ok {
+			t.Fatal("the last good catalog must stay")
+		}
+		g.mu.Lock()
+		g.commit("main", map[string]string{"catalog/bad.json": tplJSON("fixed-"+id, "Fixed")})
+		g.mu.Unlock()
+	})
 
 	// Deleting in commit mode removes the file on the branch and reloads the catalog.
-	if rec := post(h, "/templates/web-"+id+"/delete", nil); rec.Code != http.StatusSeeOther {
-		t.Fatalf("delete in git: %d %s", rec.Code, rec.Body.String())
-	}
-	g.mu.Lock()
-	_, onMain := g.commits[g.branches["main"]]["catalog/web.json"]
-	g.mu.Unlock()
-	if _, ok := app.Templates.Get("web-" + id); ok || onMain {
-		t.Fatalf("deleted template: loaded %v, on main %v", ok, onMain)
-	}
+	step(t, "deleting in commit mode removes the file on the branch", func(t *testing.T) {
+		if rec := post(h, "/templates/web-"+id+"/delete", nil); rec.Code != http.StatusSeeOther {
+			t.Fatalf("delete in git: %d %s", rec.Code, rec.Body.String())
+		}
+		g.mu.Lock()
+		_, onMain := g.commits[g.branches["main"]]["catalog/web.json"]
+		g.mu.Unlock()
+		if _, ok := app.App.Templates.Get("web-" + id); ok || onMain {
+			t.Fatalf("deleted template: loaded %v, on main %v", ok, onMain)
+		}
+	})
 
 	// Pull request mode: a new template goes to a new branch and a pull request; the catalog waits for the merge.
-	set.Set("mode", "pr")
-	if rec := post(h, "/catalog", set); rec.Code != http.StatusSeeOther {
-		t.Fatalf("pr mode: %d %s", rec.Code, rec.Body.String())
-	}
-	n := len(app.Templates.List())
-	rec := post(h, "/templates/new", url.Values{"name": {"Queue"}, "module_source": {"git::https://example.com/q.git"}, "module_ref": {"v1"}})
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "https://github.example/acme/catalog/pull/1") {
-		t.Fatalf("pull request: %d %s", rec.Code, rec.Body.String())
-	}
-	g.mu.Lock()
-	head := g.pulls[0].Head
-	var added string
-	for f, c := range g.commits[g.branches[head]] {
-		if strings.Contains(c, `"Queue"`) {
-			added = f
+	step(t, "pull request mode opens one pull request per new template", func(t *testing.T) {
+		set.Set("mode", "pr")
+		if rec := post(h, "/catalog", set); rec.Code != http.StatusSeeOther {
+			t.Fatalf("pr mode: %d %s", rec.Code, rec.Body.String())
 		}
-	}
-	mainHasIt := strings.Contains(fmt.Sprint(g.commits[g.branches["main"]]), `"Queue"`)
-	g.mu.Unlock()
-	if !strings.HasPrefix(head, "opsolete/template-") || !strings.HasPrefix(added, "catalog/") || mainHasIt || len(app.Templates.List()) != n {
-		t.Fatalf("pr branch %q file %q, on main %v, catalog %d -> %d", head, added, mainHasIt, n, len(app.Templates.List()))
-	}
-	// Saving the page again while its pull request is open adds a commit to it instead of opening another.
-	kept := regexp.MustCompile(`name="id" value="([^"]+)"`).FindStringSubmatch(rec.Body.String())
-	if kept == nil {
-		t.Fatalf("the page must keep the new template's id: %s", rec.Body.String())
-	}
-	// a lookalike pull request listed first, whose description names the template but whose branch isn't its own, is ignored
-	g.mu.Lock()
-	g.branches["opsolete/template-other-abcdef"] = g.branches["main"]
-	g.pulls = append([]fakePull{{"opsolete/template-other-abcdef", "Add template X\n\nSaved in Opsolete by x (template " + kept[1] + ")."}}, g.pulls...)
-	g.mu.Unlock()
-	rec = post(h, "/templates/new", url.Values{"id": {kept[1]}, "name": {"Queue v2"}, "module_source": {"git::https://example.com/q.git"}, "module_ref": {"v1"}})
-	g.mu.Lock()
-	onBranch, pulls := g.commits[g.branches[head]][added], len(g.pulls)
-	lookalike := g.branches["opsolete/template-other-abcdef"] != g.branches["main"]
-	g.mu.Unlock()
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "https://github.example/acme/catalog/pull/2") || pulls != 2 ||
-		!strings.Contains(onBranch, `"Queue v2"`) || lookalike {
-		t.Fatalf("update pull request: %d, %d pulls, file %s, lookalike changed %v", rec.Code, pulls, onBranch, lookalike)
-	}
+		n := len(app.App.Templates.List())
+		rec := post(h, "/templates/new", url.Values{"name": {"Queue"}, "module_source": {"git::https://example.com/q.git"}, "module_ref": {"v1"}})
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "https://github.example/acme/catalog/pull/1") {
+			t.Fatalf("pull request: %d %s", rec.Code, rec.Body.String())
+		}
+		g.mu.Lock()
+		head := g.pulls[0].Head
+		var added string
+		for f, c := range g.commits[g.branches[head]] {
+			if strings.Contains(c, `"Queue"`) {
+				added = f
+			}
+		}
+		mainHasIt := strings.Contains(fmt.Sprint(g.commits[g.branches["main"]]), `"Queue"`)
+		g.mu.Unlock()
+		if !strings.HasPrefix(head, "opsolete/template-") || !strings.HasPrefix(added, "catalog/") || mainHasIt || len(app.App.Templates.List()) != n {
+			t.Fatalf("pr branch %q file %q, on main %v, catalog %d -> %d", head, added, mainHasIt, n, len(app.App.Templates.List()))
+		}
+		// Saving the page again while its pull request is open adds a commit to it instead of opening another.
+		kept := regexp.MustCompile(`name="id" value="([^"]+)"`).FindStringSubmatch(rec.Body.String())
+		if kept == nil {
+			t.Fatalf("the page must keep the new template's id: %s", rec.Body.String())
+		}
+		// a lookalike pull request listed first, whose description names the template but whose branch isn't its own, is ignored
+		g.mu.Lock()
+		g.branches["opsolete/template-other-abcdef"] = g.branches["main"]
+		g.pulls = append([]fakePull{{"opsolete/template-other-abcdef", "Add template X\n\nSaved in Opsolete by x (template " + kept[1] + ")."}}, g.pulls...)
+		g.mu.Unlock()
+		rec = post(h, "/templates/new", url.Values{"id": {kept[1]}, "name": {"Queue v2"}, "module_source": {"git::https://example.com/q.git"}, "module_ref": {"v1"}})
+		g.mu.Lock()
+		onBranch, pulls := g.commits[g.branches[head]][added], len(g.pulls)
+		lookalike := g.branches["opsolete/template-other-abcdef"] != g.branches["main"]
+		g.mu.Unlock()
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "https://github.example/acme/catalog/pull/2") || pulls != 2 ||
+			!strings.Contains(onBranch, `"Queue v2"`) || lookalike {
+			t.Fatalf("update pull request: %d, %d pulls, file %s, lookalike changed %v", rec.Code, pulls, onBranch, lookalike)
+		}
+	})
 
 	// The connection can't be deleted from under the catalog; disconnecting goes back to TEMPLATES_DIR.
-	if rec := post(h, "/vcs/"+connID+"/delete", nil); rec.Code != http.StatusConflict {
-		t.Fatalf("delete a connection in use: %d", rec.Code)
-	}
-	if rec := post(h, "/catalog/delete", nil); rec.Code != http.StatusSeeOther || len(app.Templates.List()) != 0 {
-		t.Fatalf("disconnect: %d, %d templates", rec.Code, len(app.Templates.List()))
-	}
-	if mode, _ := app.Templates.Source(); mode != "" {
-		t.Fatalf("mode after disconnect: %q", mode)
-	}
+	step(t, "the connection can't be deleted under the catalog; disconnecting empties it", func(t *testing.T) {
+		if rec := post(h, "/vcs/"+connID+"/delete", nil); rec.Code != http.StatusConflict {
+			t.Fatalf("delete a connection in use: %d", rec.Code)
+		}
+		if rec := post(h, "/catalog/delete", nil); rec.Code != http.StatusSeeOther || len(app.App.Templates.List()) != 0 {
+			t.Fatalf("disconnect: %d, %d templates", rec.Code, len(app.App.Templates.List()))
+		}
+		if mode, _ := app.App.Templates.Source(); mode != "" {
+			t.Fatalf("mode after disconnect: %q", mode)
+		}
+	})
 }
 
 // Module uploads are an organization setting (formerly TEMPLATE_EDITOR).
 func TestModuleUploadsSetting(t *testing.T) {
 	store := testStore(t)
-	t.Cleanup(func() { store.SetModuleUploads(context.Background(), false) })
 	h := newServer(t, t.TempDir(), false, store)
 	if rec := upload(h, map[string]string{"namespace": "x"}, nil); rec.Code != http.StatusForbidden {
 		t.Fatalf("upload while off: %d", rec.Code)

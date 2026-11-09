@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/opsolete/opsolete/internal/runnerapi"
 )
 
@@ -21,7 +22,7 @@ func TestRunConfigRestore(t *testing.T) {
 	root := func() string {
 		t.Helper()
 		var ref string
-		if err := s.DB.QueryRow(`SELECT module_ref FROM workspace_templates WHERE workspace_id = $1 AND name = 'main'`, w.ID).Scan(&ref); err != nil {
+		if err := s.Pool.QueryRow(context.Background(), `SELECT module_ref FROM workspace_templates WHERE workspace_id = $1 AND name = 'main'`, w.ID).Scan(&ref); err != nil {
 			t.Fatal(err)
 		}
 		return ref
@@ -29,7 +30,7 @@ func TestRunConfigRestore(t *testing.T) {
 	configure := func(ref string) Run {
 		t.Helper()
 		r, err := s.SetWorkspaceTemplate(ctx, w.ID, WorkspaceTemplate{Name: "main", TemplateID: "job-test", ModuleSource: "git::x", ModuleRef: ref,
-			Inputs: map[string]any{"n": 2.0}}, false, "")
+			Inputs: map[string]any{"n": 2.0}}, false, uuid.Nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -48,7 +49,7 @@ func TestRunConfigRestore(t *testing.T) {
 	}
 	changes := func(r Run) bool {
 		var ok bool
-		s.DB.QueryRow(`SELECT config_changes IS NOT NULL FROM runs WHERE id = $1`, r.ID).Scan(&ok)
+		s.Pool.QueryRow(context.Background(), `SELECT config_changes IS NOT NULL FROM runs WHERE id = $1`, r.ID).Scan(&ok)
 		return ok
 	}
 
@@ -81,12 +82,12 @@ func TestRunConfigRestore(t *testing.T) {
 	// changed since the run's change: left alone
 	r = configure("v2")
 	plan(r, true)
-	s.DB.Exec(`UPDATE workspace_templates SET module_ref = 'v9' WHERE workspace_id = $1 AND name = 'main'`, w.ID)
+	s.Pool.Exec(context.Background(), `UPDATE workspace_templates SET module_ref = 'v9' WHERE workspace_id = $1 AND name = 'main'`, w.ID)
 	s.DiscardRun(ctx, r.ID, "x")
 	if got := root(); got != "v9" {
 		t.Fatalf("a later change was overwritten: %s", got)
 	}
-	s.DB.Exec(`UPDATE workspace_templates SET module_ref = 'v1' WHERE workspace_id = $1 AND name = 'main'`, w.ID)
+	s.Pool.Exec(context.Background(), `UPDATE workspace_templates SET module_ref = 'v1' WHERE workspace_id = $1 AND name = 'main'`, w.ID)
 	// no changes to make: the new version stays
 	r = configure("v2")
 	plan(r, false)
@@ -96,7 +97,7 @@ func TestRunConfigRestore(t *testing.T) {
 	// the apply started, then failed: the new version stays
 	r = configure("v3")
 	plan(r, true)
-	if err := s.ConfirmRun(ctx, r.ID, "", "x"); err != nil {
+	if err := s.ConfirmRun(ctx, r.ID, uuid.Nil, "x"); err != nil {
 		t.Fatal(err)
 	}
 	j = claim(t, s, "apply")
@@ -109,28 +110,28 @@ func TestRunConfigRestore(t *testing.T) {
 
 	// an added template whose first plan is discarded is removed again; a changed one goes back
 	add := WorkspaceTemplate{Name: "extra", TemplateID: "job-test", ModuleSource: "git::x", ModuleRef: "v1", Inputs: map[string]any{}}
-	r, err := s.SetWorkspaceTemplate(ctx, w.ID, add, true, "")
+	r, err := s.SetWorkspaceTemplate(ctx, w.ID, add, true, uuid.Nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	plan(r, true)
 	s.DiscardRun(ctx, r.ID, "x")
 	var n int
-	s.DB.QueryRow(`SELECT count(*) FROM workspace_templates WHERE workspace_id = $1 AND name = 'extra'`, w.ID).Scan(&n)
+	s.Pool.QueryRow(context.Background(), `SELECT count(*) FROM workspace_templates WHERE workspace_id = $1 AND name = 'extra'`, w.ID).Scan(&n)
 	if n != 0 {
 		t.Fatal("a discarded added template must be removed again")
 	}
-	s.DB.Exec(`INSERT INTO workspace_templates (workspace_id, name, template_id, module_source, module_ref, inputs)
+	s.Pool.Exec(context.Background(), `INSERT INTO workspace_templates (workspace_id, name, template_id, module_source, module_ref, inputs)
 		VALUES ($1, 'extra', 'job-test', 'git::x', 'v1', '{}')`, w.ID)
 	add.ModuleRef = "v2"
-	if r, err = s.SetWorkspaceTemplate(ctx, w.ID, add, false, ""); err != nil {
+	if r, err = s.SetWorkspaceTemplate(ctx, w.ID, add, false, uuid.Nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.CancelRun(ctx, r.ID, "x", false); err != nil {
 		t.Fatal(err)
 	}
 	var ref string
-	s.DB.QueryRow(`SELECT module_ref FROM workspace_templates WHERE workspace_id = $1 AND name = 'extra'`, w.ID).Scan(&ref)
+	s.Pool.QueryRow(context.Background(), `SELECT module_ref FROM workspace_templates WHERE workspace_id = $1 AND name = 'extra'`, w.ID).Scan(&ref)
 	if ref != "v1" {
 		t.Fatalf("a changed added template after cancel: %s", ref)
 	}

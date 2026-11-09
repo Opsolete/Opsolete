@@ -6,3 +6,9 @@ vulnerabilities:
       - "nix/store/*-infracost-*/bin/infracost"
     statement: go-jose v4.1.4 vendored in terraform 1.17.0 and infracost 0.10.47 (no fixed release yet); DoS only when parsing attacker-supplied JWKs. Bump the pins in flake.nix when fixed releases ship.
     expired_at: 2026-12-31
+  - id: CVE-2026-78661
+    paths:
+      - "nix/store/*-terraform-*/bin/terraform"
+      - "nix/store/*-infracost-*/bin/infracost"
+    statement: golang.org/x/net v0.60.0 vendored in terraform 1.17.0 and infracost 0.10.47 (fixed in 0.62.0, no release with it yet); DoS only when parsing attacker-supplied HTML, which neither does in the runner. Bump the pins in flake.nix when fixed releases ship.
+    expired_at: 2026-12-31

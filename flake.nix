@@ -24,7 +24,7 @@
         pname = "opsolete";
         version = "0.5.1"; # x-release-please-version
         src = self;
-        vendorHash = "sha256-XaNF4mq1bRgzHMbkGwdIf2As8XFRvh4YtkQWNWxw3AU="; # update after go.mod changes
+        vendorHash = "sha256-nHxF/UejuATwrxduOhgDgNQKJmceYzI1F+1UWqFaQQw="; # update after go.mod changes
         subPackages = ["cmd/opsolete"];
         # DB tests skip themselves without TEST_DATABASE_URL; the rest use catalog/ from src. The package
         # ships no templates: they come from a Git repository (Settings → Templates), or TEMPLATES_DIR.
@@ -140,7 +140,7 @@
       # postgres runs project-local on a unix socket in .devdata/ (no port clash); see justfile.
     in {
       default = pkgs.mkShell {
-        packages = with pkgs; [go gopls gotools postgresql_17 just curl docker-client terraform infracost hugo];
+        packages = with pkgs; [go gopls gotools sqlc postgresql_17 just curl docker-client terraform infracost hugo];
         shellHook = ''
           export PGHOST="$PWD/.devdata"
           export PGDATA="$PGHOST/pg"

@@ -179,18 +179,23 @@ func TestResolve(t *testing.T) {
 		{Variable: tfconfig.Variable{Name: "count_x", Type: "number", Default: 1}},
 		{Variable: tfconfig.Variable{Name: "secret", Type: "string", Sensitive: true}},
 		{Variable: tfconfig.Variable{Name: "zone", Type: "string", Default: "a"}, Pattern: "^[a-c]$"},
+		{Variable: tfconfig.Variable{Name: "vm", Type: "string", Description: "VM name: 1-64 letters: or digits."}},
+		{Variable: tfconfig.Variable{Name: "size", Type: "string", Description: "Size: small or large."}},
 	}
 	overrides := []templates.Input{
 		{Name: "location", Label: "Region", Type: "select", Options: []templates.Option{{Value: "westeurope"}, {Value: "northeurope"}}},
 		{Name: "gone", Type: "string", Required: true},      // no longer in the module
 		{Name: "name", Type: "number", Pattern: "^[a-z]+$"}, // wrong type in the JSON
+		{Name: "size", Label: "VM size", Help: "Pick one."},
 	}
 	got := Resolve(overrides, vars)
 	want := []templates.Input{
 		{Name: "location", Label: "Region", Type: "select", Options: []templates.Option{{Value: "westeurope"}, {Value: "northeurope"}}, Default: "westeurope"},
 		{Name: "name", Label: "name", Type: "string", Required: true, Pattern: "^[a-z]+$"},
+		{Name: "size", Label: "VM size", Help: "Pick one.", Type: "string"},
 		{Name: "count_x", Label: "count_x", Type: "number", Default: "1"},
-		{Name: "zone", Label: "zone", Type: "string", Default: "a", Pattern: "^[a-c]$"}, // the module's pattern
+		{Name: "zone", Label: "zone", Type: "string", Default: "a", Pattern: "^[a-c]$"},  // the module's pattern
+		{Name: "vm", Label: "VM name", Help: "1-64 letters: or digits.", Type: "string"}, // the description split once
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got  %+v\nwant %+v", got, want)

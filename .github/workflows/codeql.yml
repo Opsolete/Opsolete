@@ -38,6 +38,13 @@ jobs:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
           queries: security-extended
+          # go/weak-sensitive-data-hashing: its only hit is secrets.derive, which hashes SECRET_KEY (a
+          # random server key, not a user password) into an AES key; a slow KDF would change every key
+          # id and leave the values already sealed undecryptable.
+          config: |
+            query-filters:
+              - exclude:
+                  id: go/weak-sensitive-data-hashing
       - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           category: /language:${{ matrix.language }}

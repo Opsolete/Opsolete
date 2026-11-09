@@ -1,4 +1,4 @@
-{{template "top"}}
+{{template "top" .Page}}
 {{with .Configure}}
 <a class="back" href="/workspaces/{{.Name}}">← {{.Name}}</a>
 <div class="page-head">
@@ -26,21 +26,18 @@
 </div>
 {{if .Preview}}<div class="alert" role="status">Preview: the form end users get with this template, as it is in the builder. It can't be submitted; close this tab to go back to the builder.</div>{{end}}
 {{end}}
-{{with $.Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
-{{if .Errors}}<div class="alert error" role="alert"><strong>Fix {{len .Errors}} field{{if ne (len .Errors) 1}}s{{end}}:</strong>
-  <ul>{{with index .Errors "ops-workspace"}}<li><a href="#ops-workspace">Workspace name</a>: {{.}}</li>{{end}}
-  {{range .T.Inputs}}{{$in := .}}{{with index $.Errors .Name}}<li><a href="#{{$in.Name}}">{{$in.Title}}</a>: {{.}}</li>{{end}}{{end}}</ul></div>{{end}}
+{{template "formerror" .F}}
 <form method="post" class="card form-rows" id="template-form">
-{{$v := .Values}}{{$e := .Errors}}
+{{$v := .Values}}
 {{if not .Configure}}
   <div class="rows-head"><h2>Workspace</h2><p class="hint"><span class="req" aria-hidden="true">*</span> Required</p></div>
   <div class="rows">
-    <div class="row{{if index $e "ops-workspace"}} invalid{{end}}">
+    <div class="row{{if fieldError .F "ops-workspace"}} invalid{{end}}">
       <label for="ops-workspace">Workspace name <span class="req" aria-hidden="true">*</span></label>
       <input id="ops-workspace" name="ops-workspace" value="{{.Workspace}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}"
-        placeholder="{{.NamePlaceholder}}" autocomplete="off" spellcheck="false" aria-describedby="ops-workspace-hint"{{if index $e "ops-workspace"}} aria-invalid="true"{{end}}>
+        placeholder="{{.NamePlaceholder}}" autocomplete="off" spellcheck="false"{{aria .F "ops-workspace" "ops-workspace-hint"}}>
       <p class="hint" id="ops-workspace-hint">Lowercase letters, digits and dashes. It holds this deployment's state and runs.</p>
-      {{with index $e "ops-workspace"}}<p class="err">{{.}}</p>{{end}}
+      {{template "fielderror" (dict "F" .F "N" "ops-workspace")}}
     </div>
     {{if .Projects}}<div class="row">{{template "projectpick" .}}</div>{{end}}
     <div class="row">
@@ -53,28 +50,28 @@
 {{if .T.Inputs}}
   <div class="rows-head"><h2>Settings</h2>{{if .Configure}}<p class="hint"><span class="req" aria-hidden="true">*</span> Required</p>{{end}}</div>
   <div class="rows">
-{{range .T.Inputs}}{{$err := index $e .Name}}
+{{range .T.Inputs}}{{$err := fieldError $.F .Name}}{{$help := and .Help (print .Name "-help")}}
   <!-- a fieldset per row: disabling it keeps a hidden show_if field from being posted -->
   <fieldset class="row{{if .ShowIf}} show-if{{end}}{{if $err}} invalid{{end}}"{{with .ShowIf}} data-show-if="{{json .}}"{{if not ($.T.Match . $v)}} hidden disabled{{end}}{{end}}>
     <label for="{{.Name}}">{{.Title}}{{if .Required}} <span class="req" aria-hidden="true">*</span>{{end}}</label>
   {{if eq .Type "bool"}}
-    <input type="checkbox" id="{{.Name}}" name="{{.Name}}"{{if eq (index $v .Name) "on" "true"}} checked{{end}}{{if .Help}} aria-describedby="{{.Name}}-help"{{end}}>
+    <input type="checkbox" id="{{.Name}}" name="{{.Name}}"{{if eq (index $v .Name) "on" "true"}} checked{{end}}{{aria $.F .Name $help}}>
   {{else if eq .Type "select"}}
-    <select id="{{.Name}}" name="{{.Name}}"{{if .Help}} aria-describedby="{{.Name}}-help"{{end}}{{if $err}} aria-invalid="true"{{end}}>
+    <select id="{{.Name}}" name="{{.Name}}"{{aria $.F .Name $help}}>
       {{$cur := index $v .Name}}
       {{range .Options}}<option value="{{.Value}}"{{if eq .Value $cur}} selected{{end}}>{{.Text}}</option>{{end}}
     </select>
   {{else if .Sensitive}}{{$set := index $.Set .Name}}
     <!-- never filled in: the stored value is sealed; left empty, it's kept -->
     <input id="{{.Name}}" name="secret.{{.Name}}" type="password" autocomplete="new-password"
-      {{if .Pattern}} pattern="{{.Pattern}}"{{with .Help}} title="{{.}}"{{end}}{{end}}{{if and .Required (not $set)}} required{{end}} aria-describedby="{{.Name}}-hint{{if .Help}} {{.Name}}-help{{end}}"{{if $err}} aria-invalid="true"{{end}}>
+      {{if .Pattern}} pattern="{{.Pattern}}"{{with .Help}} title="{{.}}"{{end}}{{end}}{{if and .Required (not $set)}} required{{end}}{{aria $.F .Name (print .Name "-hint") $help}}>
     <p class="hint" id="{{.Name}}-hint">Sensitive: stored encrypted and never shown.{{if $set}} A value is set; leave empty to keep it.{{end}}</p>
   {{else}}
     <input id="{{.Name}}" name="{{.Name}}" value="{{index $v .Name}}" autocomplete="off" spellcheck="false"
-      {{if eq .Type "number"}}type="number" step="any" inputmode="decimal"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{with .Help}} title="{{.}}"{{end}}{{end}}{{if .Required}} required{{end}}{{if .Help}} aria-describedby="{{.Name}}-help"{{end}}{{if $err}} aria-invalid="true"{{end}}>
+      {{if eq .Type "number"}}type="number" step="any" inputmode="decimal"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{with .Help}} title="{{.}}"{{end}}{{end}}{{if .Required}} required{{end}}{{aria $.F .Name $help}}>
   {{end}}
     {{if .Help}}<p class="hint" id="{{.Name}}-help">{{.Help}}</p>{{end}}
-    {{with $err}}<p class="err">{{.}}</p>{{end}}
+    {{template "fielderror" (dict "F" $.F "N" .Name)}}
   </fieldset>
 {{end}}
   </div>
@@ -85,42 +82,12 @@
       {{with .Configure}}
       <button type="submit">{{if $.Adding}}Add template{{else}}Save configuration{{end}} &amp; start plan</button>
       <a class="btn secondary" href="/workspaces/{{.Name}}">Cancel</a>
-      {{else}}
+      {{else}}{{if or .Projects .Preview}}
       <button type="submit"{{if .Preview}} disabled{{end}}>Create workspace &amp; plan</button>
       <a class="btn secondary" href="/">Cancel</a>
-      {{end}}
+      {{else}}{{template "nocreate"}}
+      {{end}}{{end}}
     </div>
   </div>
 </form>
-<script>
-  // show_if: hide and disable the fields whose dropdown above doesn't have one of their values (disabled
-  // ones aren't posted); the server applies the same rules. Document order puts each dropdown first.
-  (() => {
-    const form = document.getElementById("template-form");
-    const update = () => {
-      for (const el of form.querySelectorAll("[data-show-if]")) {
-        const c = JSON.parse(el.dataset.showIf), src = form.elements[c.input];
-        const v = src?.type === "checkbox" ? String(src.checked) : src?.value;
-        el.hidden = el.disabled = !src || src.matches(":disabled") || !c.equals.includes(v);
-      }
-    };
-    form.addEventListener("change", update);
-    update(); // the browser may have restored other values
-    // Browsers compile pattern with the v flag, which rejects e.g. [a-z0-9-] and then skip the check:
-    // check those with the u flag instead. Go-only syntax fails both; the server still checks it.
-    for (const el of form.querySelectorAll("input[pattern]")) {
-      const p = el.getAttribute("pattern");
-      try { new RegExp(p, "v"); continue; } catch {}
-      let re;
-      try { re = new RegExp("^(?:" + p + ")$", "u"); } catch { continue; }
-      const check = () => el.setCustomValidity(el.value && !re.test(el.value) ? el.title || "Doesn't have the expected format: " + p : "");
-      el.addEventListener("input", check);
-      check();
-    }
-    // one click, one plan: lock the button while the request runs; unlock when Back restores the page
-    const btn = form.querySelector("button[type=submit]"), text = btn.textContent;
-    form.addEventListener("submit", () => { btn.disabled = true; btn.textContent = "Starting plan…"; });
-    addEventListener("pageshow", () => { btn.disabled = false; btn.textContent = text; });
-  })();
-</script>
 {{template "bottom"}}

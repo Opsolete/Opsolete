@@ -15,16 +15,18 @@
 </table>
 </div>
 {{end}}
-{{if .CanEdit}}
-<details class="add">
+{{if .CanEdit}}{{$f := .F}}{{$c := value $f "category" "env"}}
+<details class="add"{{if $f}} open{{end}}>
 <summary class="btn secondary">+ Add variable</summary>
 <form method="post" action="{{.Base}}/variables" class="card inline">
-  <select name="category" aria-label="category" style="flex:0 0 8rem"><option value="env">env</option><option value="terraform">terraform</option></select>
-  <input name="key" aria-label="key" placeholder="ARM_CLIENT_SECRET" required maxlength="128">
-  <input name="value" type="password" aria-label="value" placeholder="value" autocomplete="off">
-  <label style="margin:0;font-weight:normal"><input type="checkbox" name="sensitive" checked> Sensitive</label>
+  <select name="category" aria-label="category" class="flex-8"{{aria $f "category"}}><option value="env"{{if eq $c "env"}} selected{{end}}>env</option><option value="terraform"{{if eq $c "terraform"}} selected{{end}}>terraform</option></select>
+  <input name="key" aria-label="key" placeholder="ARM_CLIENT_SECRET" required maxlength="128" value="{{value $f "key" ""}}"{{aria $f "key"}}>
+  <!-- the value isn't echoed back: it may be a secret -->
+  <input name="value" type="password" aria-label="value" placeholder="value" autocomplete="off"{{aria $f "value"}}>
+  <label class="plain"><input type="checkbox" name="sensitive"{{if checked $f "sensitive" true}} checked{{end}}> Sensitive</label>
   <button type="submit">Save variable</button>
 </form>
+{{template "fielderror" (dict "F" $f "N" "category")}}{{template "fielderror" (dict "F" $f "N" "key")}}{{template "fielderror" (dict "F" $f "N" "value")}}
 <p class="hint">Saving a key that exists (same category) replaces it. Sensitive values can't be read back, only replaced.</p>
 </details>
 {{end}}

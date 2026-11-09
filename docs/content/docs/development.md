@@ -10,7 +10,7 @@ Set up a local environment first: see [Getting started]({{< relref "getting-star
 ```sh
 just test                                                     # in the nix dev shell: gofmt, vet, all tests incl. DB tests
 go test ./...
-TEST_DATABASE_URL=$DATABASE_URL go test ./internal/storage   # database tests
+TEST_DATABASE_URL=$DATABASE_URL go test ./internal/storage   # database tests: each creates and drops its own database there (needs CREATEDB)
 ```
 
 ## Documentation

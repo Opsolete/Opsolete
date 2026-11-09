@@ -1,5 +1,5 @@
-{{define "vcsbranch"}}
-{{$f := .Form}}
+{{define "vcsbranch"}}<!-- a vcsForm's trigger settings -->
+{{$f := .Form}}{{$e := .F}}
 <p class="field">VCS trigger type</p>
 <div class="radio-cards">
   <label class="radio-card">
@@ -21,8 +21,9 @@
 </div>
 <div class="branch-only">
   <label for="vcs_branch">Branch</label>
-  <input id="vcs_branch" name="vcs_branch" value="{{index $f "vcs_branch"}}" placeholder="main">
-  <p class="hint">Runs plan the Terraform configuration at the repository root, at the branch's latest commit.</p>
+  <input id="vcs_branch" name="vcs_branch" value="{{index $f "vcs_branch"}}" placeholder="main"{{aria $e "vcs_branch" "vcs_branch-hint"}}>
+  {{template "fielderror" (dict "F" $e "N" "vcs_branch")}}
+  <p class="hint" id="vcs_branch-hint">Runs plan the Terraform configuration at the repository root, at the branch's latest commit.</p>
   <label class="check"><input type="checkbox" name="vcs_trigger" value="1"{{if index $f "vcs_trigger"}} checked{{end}}>
     <span>Start a run on every new commit on the branch<small>Checked every minute. The run plans that commit and is applied like any other: with auto-apply, or after confirmation.</small></span></label>
   <label class="check"><input type="checkbox" name="vcs_pull_requests" value="1"{{if index $f "vcs_pull_requests"}} checked{{end}}>
@@ -39,21 +40,22 @@
     <span>Version contains a suffix<small>e.g. <code>12.33.4456-v</code></small></span></label>
   <label class="check"><input type="radio" name="vcs_tag_format" value="custom"{{if eq $t "custom"}} checked{{end}}>
     <span>Custom regular expression</span></label>
-  <input name="vcs_tags_regex" class="tags-regex" value="{{index $f "vcs_tags_regex"}}" maxlength="255" aria-label="Tag regular expression" placeholder="^v\d+\.\d+\.\d+$">
+  <input name="vcs_tags_regex" class="tags-regex" value="{{index $f "vcs_tags_regex"}}" maxlength="255" aria-label="Tag regular expression" placeholder="^v\d+\.\d+\.\d+$"{{aria $e "vcs_tags_regex"}}>
+  {{template "fielderror" (dict "F" $e "N" "vcs_tags_regex")}}
   <p class="hint">Checked every minute: a new matching tag starts a run of its commit, and manual runs plan the newest matching tag, by the version number in its name. Pull requests get no speculative plans. Anyone who can push a tag runs code with the workspace's credentials: protect tags (GitHub tag rulesets, Azure DevOps tag permissions).</p>
 </div>
 {{end}}
-{{template "top" .}}
+{{template "top" .Page}}
 {{$w := .W}}{{$f := .VCS.Form}}{{$t := index $f "type"}}{{$conn := .Conn}}
-{{$base := printf "/workspaces/%s/vcs" $w.Name}}{{$cancel := $base}}{{if not $w.VCSConnectionID}}{{$cancel = printf "/workspaces/%s/settings" $w.Name}}{{end}}
-<nav class="back" aria-label="breadcrumb">{{template "wscrumb" $w}} / <a href="/workspaces/{{$w.Name}}/settings">Settings</a> / {{if and .Edit $w.VCSConnectionID}}<a href="{{$base}}">Version control</a> / Edit{{else}}Version control{{end}}</nav>
+{{$base := printf "/workspaces/%s/vcs" $w.Name}}{{$cancel := $base}}{{if not $w.VCSLinked}}{{$cancel = printf "/workspaces/%s/settings" $w.Name}}{{end}}
+<nav class="back" aria-label="breadcrumb">{{template "wscrumb" $w}} / <a href="/workspaces/{{$w.Name}}/settings">Settings</a> / {{if and .Edit $w.VCSLinked}}<a href="{{$base}}">Version control</a> / Edit{{else}}Version control{{end}}</nav>
 <div class="page-head">
   <div>
     <h1>{{if .Edit}}Edit version control{{else}}Version control{{end}}</h1>
     <p class="muted">Where {{$w.Name}}'s runs get their Terraform configuration.</p>
   </div>
 </div>
-{{with .VCS.Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
+{{template "formerror" .VCS.F}}
 
 {{if not .Edit}}
 {{if .Health}}<h2 class="vcs-health bad"><svg aria-hidden="true" viewBox="0 0 16 16"><circle cx="8" cy="8" r="8"/><path d="m5.5 5.5 5 5m0-5-5 5"/></svg>Not connected to VCS</h2>
@@ -92,7 +94,7 @@
 
 {{else if eq $t "cli"}}
 <h2>CLI-driven workflow</h2>
-{{if $w.VCSConnectionID}}
+{{if $w.VCSLinked}}
 <form method="post" action="{{$base}}" class="settings">
   <input type="hidden" name="type" value="cli">
   <p>Disconnects <code>{{$w.VCSRepo}}</code>: runs no longer start on new commits, and come from the Terraform CLI instead.</p>
@@ -122,7 +124,7 @@
   <button type="submit">Continue</button>
 </form>
 {{with .VCS.Repos}}
-<div class="runlist" style="margin-top:1rem">
+<div class="runlist mt-1">
   {{range .}}<a class="runrow" href="{{$base}}/edit?type=vcs&conn={{$conn.ID}}&repo={{.}}">{{.}}</a>{{end}}
 </div>
 {{end}}

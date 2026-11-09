@@ -1,4 +1,4 @@
-{{template "top"}}
+{{template "top" .Page}}
 {{$p := index .Form "provider"}}{{$ret := .Return}}
 {{$back := "/vcs"}}{{if eq $ret "workspace"}}{{$back = "/workspaces/new?type=vcs"}}{{else if eq $ret "module"}}{{$back = "/registry/publish?type=vcs"}}{{else if eq $ret "catalog"}}{{$back = "/catalog"}}{{end}}
 <nav class="back" aria-label="breadcrumb"><a href="/vcs">VCS providers</a> / {{if .Edit}}{{.Conn.Name}}{{else}}Add VCS provider{{end}}</nav>
@@ -10,7 +10,7 @@
       {{if eq $ret "workspace"}}Afterwards you continue creating your workspace.{{else if eq $ret "module"}}Afterwards you continue publishing your module.{{else if eq $ret "catalog"}}Afterwards you continue setting up the template catalog.{{end}}</p>{{end}}
   </div>
 </div>
-{{with .Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
+{{template "formerror" .F}}
 {{if .Token}}<p class="alert" role="status">Access token replaced.</p>{{end}}
 
 {{if not .Edit}}
@@ -55,18 +55,22 @@
   <input type="hidden" name="provider" value="{{$p}}">
   <input type="hidden" name="return" value="{{$ret}}">
   <label for="name">Name <span class="req" aria-hidden="true">*</span></label>
-  <input id="name" name="name" value="{{index .Form "name"}}" required maxlength="64" placeholder="{{if eq $p "github"}}github-acme{{else}}azure-acme{{end}}">
+  <input id="name" name="name" value="{{index .Form "name"}}" required maxlength="64" placeholder="{{if eq $p "github"}}github-acme{{else}}azure-acme{{end}}"{{aria .F "name"}}>
+  {{template "fielderror" (dict "F" .F "N" "name")}}
   {{if eq $p "github"}}
   <label for="base_url">API URL</label>
-  <input id="base_url" name="base_url" value="{{index .Form "base_url"}}" aria-describedby="base_url-hint" placeholder="https://api.github.com">
+  <input id="base_url" name="base_url" value="{{index .Form "base_url"}}" placeholder="https://api.github.com"{{aria .F "base_url" "base_url-hint"}}>
   <p class="hint" id="base_url-hint">Leave empty for github.com, or <code>https://github.example.com/api/v3</code> for Enterprise Server.</p>
   {{else}}
   <label for="base_url">Organization URL <span class="req" aria-hidden="true">*</span></label>
-  <input id="base_url" name="base_url" value="{{index .Form "base_url"}}" required placeholder="https://dev.azure.com/<organization>">
+  <input id="base_url" name="base_url" value="{{index .Form "base_url"}}" required placeholder="https://dev.azure.com/<organization>"{{aria .F "base_url"}}>
   {{end}}
+  {{template "fielderror" (dict "F" .F "N" "base_url")}}
   <label for="token">Personal access token <span class="req" aria-hidden="true">*</span></label>
-  <input id="token" name="token" type="password" required autocomplete="off" aria-describedby="token-hint">
+  <!-- the token isn't echoed back: it's a secret -->
+  <input id="token" name="token" type="password" required autocomplete="off"{{aria .F "token" "token-hint"}}>
   <p class="hint" id="token-hint">Checked now, stored encrypted and never shown again.</p>
+  {{template "fielderror" (dict "F" .F "N" "token")}}
   <div class="actions"><a href="?return={{$ret}}">‹ Previous</a><button type="submit">Connect and continue</button><a class="btn secondary" href="{{$back}}">Cancel</a></div>
 </form>
 
@@ -91,13 +95,14 @@
         <span>All workspaces<small>Any workspace may link a repository the token can read.</small></span></label>
       <label class="check"><input type="radio" name="workspace_scope" value="selected"{{if eq (index $f "workspace_scope") "selected"}} checked{{end}}>
         <span>Selected workspaces and projects<small>Only the workspaces you attach below, and every workspace of the projects you select, new ones too.</small></span></label>
+      {{template "fielderror" (dict "F" (formOf $.F "scope") "N" "workspace_scope")}}
       <div class="selected-ws indent">
         <p class="field">Projects</p>
         <div role="group" aria-label="Projects whose workspaces may link this connection's repositories">
         {{range .Projects}}<label class="check"><input type="checkbox" name="project" value="{{.Value}}"{{if .Selected}} checked{{end}}><span>{{.Name}}</span></label>
         {{else}}<p class="hint">There are no projects.</p>{{end}}
         </div>
-        <p class="hint">Anyone with operate access to a selected project, and every user for the default project, may create a workspace there that links this connection's repositories. A workspace moved out of the project loses it.</p>
+        <p class="hint">Admins and anyone with operate access to a selected project (the default one too) may create a workspace there that links this connection's repositories. A workspace moved out of the project loses it.</p>
         <p class="field">Workspaces</p>
         {{template "picker" .Picker}}
         <p class="hint">A selected workspace links its repository under its own Settings → Version control. Runs of a deselected workspace that links a repository through this connection fail when they start.</p>
@@ -117,8 +122,10 @@
   <h3 id="token">Access token</h3>
   <p class="muted">Everything that uses this connection (its workspaces, modules and the template catalog) switches to the new token.</p>
   <label for="new-token">New personal access token</label>
-  <input id="new-token" name="token" type="password" required autocomplete="off" aria-describedby="new-token-hint">
+  {{$tf := formOf .F "token"}}
+  <input id="new-token" name="token" type="password" required autocomplete="off"{{aria $tf "token" "new-token-hint"}}>
   <p class="hint" id="new-token-hint">Checked now, as when adding the connection, stored encrypted and never shown again.{{if .Conn.Catalog}} Saving templates to Git needs write access (Settings → Templates).{{end}}</p>
+  {{template "fielderror" (dict "F" $tf "N" "token")}}
   <div class="actions"><button type="submit" class="secondary">Replace token</button></div>
 </form>
 {{end}}

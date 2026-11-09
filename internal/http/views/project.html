@@ -1,15 +1,16 @@
-{{template "top" .}}
-{{$p := .P}}{{$tab := tab}}{{$pg := .Page}}
+{{template "top" .Page}}
+{{$p := .P}}{{$tab := .Tab}}{{$pg := .Sub}}
 <nav class="back" aria-label="breadcrumb"><a href="/projects">Projects</a> / <a href="/projects/{{$p.Name}}">{{$p.Name}}</a> / {{if eq $tab "workspaces"}}Workspaces{{else if eq $tab "settings"}}<a href="/projects/{{$p.Name}}/settings">Settings</a> / {{if eq $pg "access"}}Team access{{else if eq $pg "variable-sets"}}Variable sets{{else}}General{{end}}{{else}}Overview{{end}}</nav>
 
+{{template "formerror" .F}}
 {{if ne $tab "settings"}}
 <div class="page-head">
   <div>
     <h1>{{$p.Name}}{{if $p.Default}} <span class="tag" title="new workspaces go here unless another project is picked">default</span>{{end}}</h1>
     <p class="id">ID <code>{{$p.ID}}</code>
-      <button type="button" class="copy" aria-label="Copy ID" title="Copy ID" onclick="navigator.clipboard.writeText('{{$p.ID}}')">⧉</button></p>
-    {{with $p.Description}}<p class="muted">{{.}}</p>{{else}}{{if (user).Admin}}<p><a href="/projects/{{$p.Name}}/settings">Add project description</a></p>{{end}}{{end}}
-    <p class="meta"><span><a href="/projects/{{$p.Name}}/settings/access">Teams {{$p.Grants}}</a></span><span><a href="/projects/{{$p.Name}}/workspaces">Workspaces {{$p.Workspaces}}</a></span></p>
+      <button type="button" class="copy" aria-label="Copy ID" title="Copy ID" data-copy="{{$p.ID}}">⧉</button></p>
+    {{with $p.Description}}<p class="muted">{{.}}</p>{{else}}{{if $.User.Admin}}<p><a href="/projects/{{$p.Name}}/settings">Add project description</a></p>{{end}}{{end}}
+    <p class="meta"><span>{{if $.User.Admin}}<a href="/projects/{{$p.Name}}/settings/access">Teams {{$p.Grants}}</a>{{else}}Teams {{$p.Grants}}{{end}}</span><span><a href="/projects/{{$p.Name}}/workspaces">Workspaces {{$p.Workspaces}}</a></span></p>
   </div>
   {{if .CanCreate}}<a class="btn" href="/workspaces/new?project={{$p.Name}}">+ New workspace</a>{{end}}
 </div>
@@ -24,7 +25,7 @@
 {{range .Workspaces}}
 <tr>
   <td><a href="/workspaces/{{.Name}}"><strong>{{.Name}}</strong></a>{{if .Drifted}} <span class="status drifted">drifted</span>{{end}}</td>
-  <td>{{if .VCSConnectionID}}<code>{{.VCSRepo}}</code>{{if .Templates}} + {{end}}{{end}}{{with .Templates}}{{.}} template{{if ne . 1}}s{{end}}{{end}}{{if not (or .VCSConnectionID .Templates)}}<span class="muted">none</span>{{end}}</td>
+  <td>{{if .VCSLinked}}<code>{{.VCSRepo}}</code>{{if .Templates}} + {{end}}{{end}}{{with .Templates}}{{.}} template{{if ne . 1}}s{{end}}{{end}}{{if not (or .VCSLinked .Templates)}}<span class="muted">none</span>{{end}}</td>
   <td>{{with .Latest}}<span class="status {{.Status}}">{{status .Status}}</span>{{if eq .Action "destroy"}} <small>destroy</small>{{end}}{{else}}<span class="muted">none</span>{{end}}</td>
   <td>{{.CreatedBy}}</td>
   <td class="nowrap">{{with .Latest}}<span title="{{.UpdatedAt.Format "2006-01-02 15:04"}}">{{ago .UpdatedAt}}</span>{{else}}<span title="{{.CreatedAt.Format "2006-01-02 15:04"}}">{{ago .CreatedAt}}</span>{{end}}</td>
@@ -41,20 +42,22 @@
 <div class="settings">
 <div class="field">ID</div>
 <p class="id"><code>{{$p.ID}}</code>
-  <button type="button" class="copy" aria-label="Copy ID" title="Copy ID" onclick="navigator.clipboard.writeText('{{$p.ID}}')">⧉</button></p>
-{{if (user).Admin}}
+  <button type="button" class="copy" aria-label="Copy ID" title="Copy ID" data-copy="{{$p.ID}}">⧉</button></p>
+{{$gf := formOf .F "general"}}
 <form method="post" action="/projects/{{$p.Name}}/settings"
-  onsubmit="return !this.elements.default.checked || this.elements.default.disabled || opsConfirm(event, 'Make {{$p.Name}} the default? Every user may then create workspaces in it, and those get its variable sets and may link the VCS connections selected for it.')">
+  data-confirm-when="default" data-confirm="Make {{$p.Name}} the default? New workspaces then go there unless another project is picked: they get its variable sets and may link the VCS connections selected for it.">
   <label for="name">Project name <span class="req" aria-hidden="true">*</span></label>
-  <input id="name" name="name" value="{{$p.Name}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}" aria-describedby="name-hint">
+  <input id="name" name="name" value="{{value $gf "name" $p.Name}}" required pattern="[a-z0-9][a-z0-9\-]{1,62}"{{aria $gf "name" "name-hint"}}>
   <p class="hint" id="name-hint">Lowercase letters, digits and dashes. Renaming changes the project's URL; its workspaces keep theirs.</p>
+  {{template "fielderror" (dict "F" $gf "N" "name")}}
   <label for="description">Project description <span class="muted">(optional)</span></label>
-  <textarea id="description" name="description" maxlength="1000" rows="3">{{$p.Description}}</textarea>
+  <textarea id="description" name="description" maxlength="1000" rows="3"{{aria $gf "description"}}>{{value $gf "description" $p.Description}}</textarea>
+  {{template "fielderror" (dict "F" $gf "N" "description")}}
   <fieldset>
     <legend>Default project</legend>
-    <label class="check"><input type="checkbox" name="default"{{if $p.Default}} checked disabled{{end}}>
+    <label class="check"><input type="checkbox" name="default"{{if $p.Default}} checked disabled{{else if checked $gf "default" false}} checked{{end}}>
       <span>New workspaces go here<small>unless another project is picked. To change it, make another project the default.
-        Every user may create workspaces in the default project: they get its variable sets and may link the VCS connections selected for it.</small></span></label>
+        Only admins and groups with operate on it create workspaces in it, as in any project: they get its variable sets and may link the VCS connections selected for it.</small></span></label>
   </fieldset>
   <div class="actions"><button type="submit">Update project</button></div>
 </form>
@@ -63,14 +66,9 @@
 <p class="muted">Permanently delete an empty project, with its team access and variable set attachments.</p>
 {{if $p.Default}}<p class="muted">This project is the default. The default can't be deleted.</p>{{end}}
 {{if $p.Workspaces}}<p class="muted">This project isn't empty: {{$p.Name}} contains {{$p.Workspaces}} workspace{{if ne $p.Workspaces 1}}s{{end}}. Move or delete them first.</p>{{end}}
-<form method="post" action="/projects/{{$p.Name}}/delete" onsubmit="return opsConfirm(event, 'Delete the project {{$p.Name}}?')">
+<form method="post" action="/projects/{{$p.Name}}/delete" data-confirm="Delete the project {{$p.Name}}?">
   <button type="submit" class="danger"{{if or $p.Default $p.Workspaces}} disabled{{end}}>Delete project</button>
 </form>
-{{else}}
-<div class="field">Project name</div><p>{{$p.Name}}</p>
-<div class="field">Description</div><p>{{or $p.Description "None"}}</p>
-<div class="field">Default project</div><p>{{if $p.Default}}Yes: new workspaces go here unless another project is picked{{else}}No{{end}}</p>
-{{end}}
 </div>
 
 {{else if eq $pg "access"}}
@@ -80,35 +78,27 @@
 <div class="card">
   {{with .Grants}}
   <table>
-  <tr><th>Group</th><th>Access</th>{{if (user).Admin}}<th></th>{{end}}</tr>
+  <tr><th>Group</th><th>Access</th><th></th></tr>
   {{range .}}<tr><td><code>{{.Group}}</code></td><td>{{.Level}}</td>
-    {{if (user).Admin}}<td><form method="post" action="/projects/{{$p.Name}}/access"><input type="hidden" name="group" value="{{.Group}}">
-      <button type="submit" class="secondary small">Revoke</button></form></td>{{end}}</tr>{{end}}
+    <td><form method="post" action="/projects/{{$p.Name}}/access"><input type="hidden" name="group" value="{{.Group}}">
+      <button type="submit" class="secondary small">Revoke</button></form></td></tr>{{end}}
   </table>
-  {{else}}<p class="muted" style="margin:0">No groups have access through the project.</p>
+  {{else}}<p class="muted m-0">No groups have access through the project.</p>
   {{end}}
-  {{if (user).Admin}}
-  <form method="post" action="/projects/{{$p.Name}}/access" class="inline" style="margin-top:1rem">
-    <!-- datalist, not select: a group may be granted before any of its members has logged in -->
-    <input name="group" list="known-groups" aria-label="group" placeholder="IdP group (e.g. Entra group object id)" required>
-    <datalist id="known-groups">{{range .Groups}}<option value="{{.}}">{{end}}</datalist>
-    <select name="level" aria-label="access level" style="flex:0 0 9rem"><option>read</option><option>operate</option></select>
-    <button type="submit" class="secondary">Grant</button>
-  </form>
-  {{end}}
+  {{template "grantform" dict "Action" (print "/projects/" $p.Name "/access") "Groups" .Groups "F" (formOf .F "access")}}
 </div>
 
 {{else}}
 <h1>Variable sets</h1>
 <p class="muted">These sets apply to every workspace in the project except those linked to a repository: whoever operates one could link it to any code.
   A workspace's own variables and the sets attached to it override them; they override global sets.
-  {{if (user).Admin}}Create one for this project below, or attach an existing set on <a href="/variable-sets">its page</a>.{{end}}</p>
+  Create one for this project below, or attach an existing set on <a href="/variable-sets">its page</a>.</p>
 <div class="card flush">
 <table>
 <tr><th>Set</th><th>Description</th></tr>
 {{range .Sets}}
 <tr>
-  <td>{{if (user).Admin}}<a href="/variable-sets/{{.Name}}"><strong>{{.Name}}</strong></a>{{else}}<strong>{{.Name}}</strong>{{end}}{{if .Global}} <span class="tag">global</span>{{end}}</td>
+  <td><a href="/variable-sets/{{.Name}}"><strong>{{.Name}}</strong></a>{{if .Global}} <span class="tag">global</span>{{end}}</td>
   <td>{{.Description}}</td>
 </tr>
 {{else}}
@@ -116,7 +106,6 @@
 {{end}}
 </table>
 </div>
-{{if (user).Admin}}
 <h2>Create a variable set for this project</h2>
 <form method="post" action="/variable-sets" class="card">
   <input type="hidden" name="project" value="{{$p.Name}}">
@@ -126,6 +115,5 @@
   <input id="set-description" name="description" class="wide" maxlength="500">
   <div class="actions"><button type="submit">Create and attach</button></div>
 </form>
-{{end}}
 {{end}}
 {{template "bottom"}}

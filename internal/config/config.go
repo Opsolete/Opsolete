@@ -28,6 +28,7 @@ type Config struct {
 	AuthDevUser                                string
 	AuthDevGroups                              []string
 	AdminEmails                                []string
+	AdminGroups                                []string
 	// StateStore is where workspace state files are kept: a gocloud.dev/blob URL such as
 	// azblob://tfstate, s3://tfstate?region=eu-west-1, gs://tfstate or file:///var/lib/opsolete/state.
 	// Required by the server when deployments are on (checked there, so `token` works without it).
@@ -38,6 +39,10 @@ type Config struct {
 	// SecretKey encrypts VCS access tokens and variables in Postgres, and state files and saved plans
 	// in STATE_STORE, and signs the audit log. Required.
 	SecretKey string
+	// SecretKeyPrevious is the SECRET_KEY being replaced: the server still opens values sealed with
+	// it (`opsolete rotate-key` re-seals them) and verifies the audit entries signed before the
+	// rotation with it. Optional.
+	SecretKeyPrevious string
 	// RunnerToken authenticates runners (their OPS_RUNNER_TOKEN). The operator generates it, so it
 	// exists before the first deploy. Required by the server when deployments are on.
 	RunnerToken string
@@ -46,28 +51,35 @@ type Config struct {
 	// StaleLockTimeout: a rollback's state lock older than this is released as orphaned (its server
 	// died mid-rollback). Run locks go with the run's lease; CLI and UI locks never expire.
 	StaleLockTimeout time.Duration
+	// RunLogRetentionDays: run logs are deleted this many days after the run ended; 0 keeps them forever.
+	RunLogRetentionDays int
 }
 
 func Load() (Config, error) {
 	c := Config{
-		Addr:             getenv("ADDR", ":8080"),
-		MetricsAddr:      os.Getenv("METRICS_ADDR"),
-		DatabaseURL:      os.Getenv("DATABASE_URL"),
-		TemplatesDir:     getenv("TEMPLATES_DIR", "catalog"),
-		TemplateEditor:   os.Getenv("TEMPLATE_EDITOR") == "1",
-		OIDCIssuer:       os.Getenv("OIDC_ISSUER"),
-		OIDCClientID:     os.Getenv("OIDC_CLIENT_ID"),
-		OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"),
-		AuthDevUser:      os.Getenv("AUTH_DEV_USER"),
-		AuthDevGroups:    strings.FieldsFunc(os.Getenv("AUTH_DEV_GROUPS"), func(r rune) bool { return r == ',' }),
-		StateStore:       os.Getenv("STATE_STORE"),
-		AdminEmails:      strings.Split(os.Getenv("ADMIN_EMAILS"), ","),
-		SecretKey:        os.Getenv("SECRET_KEY"),
-		RunnerToken:      os.Getenv("RUNNER_TOKEN"),
-		Organization:     getenv("ORGANIZATION", "opsolete"),
+		Addr:              getenv("ADDR", ":8080"),
+		MetricsAddr:       os.Getenv("METRICS_ADDR"),
+		DatabaseURL:       os.Getenv("DATABASE_URL"),
+		TemplatesDir:      getenv("TEMPLATES_DIR", "catalog"),
+		TemplateEditor:    os.Getenv("TEMPLATE_EDITOR") == "1",
+		OIDCIssuer:        os.Getenv("OIDC_ISSUER"),
+		OIDCClientID:      os.Getenv("OIDC_CLIENT_ID"),
+		OIDCClientSecret:  os.Getenv("OIDC_CLIENT_SECRET"),
+		AuthDevUser:       os.Getenv("AUTH_DEV_USER"),
+		AuthDevGroups:     strings.FieldsFunc(os.Getenv("AUTH_DEV_GROUPS"), func(r rune) bool { return r == ',' }),
+		StateStore:        os.Getenv("STATE_STORE"),
+		AdminEmails:       strings.Split(os.Getenv("ADMIN_EMAILS"), ","),
+		AdminGroups:       strings.FieldsFunc(os.Getenv("ADMIN_GROUPS"), func(r rune) bool { return r == ',' }),
+		SecretKey:         os.Getenv("SECRET_KEY"),
+		SecretKeyPrevious: os.Getenv("SECRET_KEY_PREVIOUS"),
+		RunnerToken:       os.Getenv("RUNNER_TOKEN"),
+		Organization:      getenv("ORGANIZATION", "opsolete"),
 	}
 	for i, g := range c.AuthDevGroups { // "a, b": group names must match the IdP's exactly
 		c.AuthDevGroups[i] = strings.TrimSpace(g)
+	}
+	for i, g := range c.AdminGroups {
+		c.AdminGroups[i] = strings.TrimSpace(g)
 	}
 	if c.DatabaseURL == "" {
 		return c, errors.New("DATABASE_URL is required")
@@ -75,9 +87,15 @@ func Load() (Config, error) {
 	if len(c.SecretKey) < 32 {
 		return c, errors.New("SECRET_KEY is required and must be at least 32 characters (e.g. openssl rand -base64 32)")
 	}
+	if c.SecretKeyPrevious != "" && (len(c.SecretKeyPrevious) < 32 || c.SecretKeyPrevious == c.SecretKey) {
+		return c, errors.New("SECRET_KEY_PREVIOUS, when set, must be at least 32 characters and differ from SECRET_KEY")
+	}
 	var err error
 	if c.StaleLockTimeout, err = time.ParseDuration(getenv("STALE_LOCK_TIMEOUT", "15m")); err != nil || c.StaleLockTimeout <= 0 {
 		return c, errors.New("STALE_LOCK_TIMEOUT must be a duration like 15m")
+	}
+	if c.RunLogRetentionDays, err = strconv.Atoi(getenv("RUN_LOG_RETENTION_DAYS", "90")); err != nil || c.RunLogRetentionDays < 0 || c.RunLogRetentionDays > 36500 {
+		return c, errors.New("RUN_LOG_RETENTION_DAYS must be a whole number of days up to 36500 (0 keeps run logs forever)")
 	}
 	if c.Deployments, err = getbool("DEPLOYMENTS_ENABLED"); err != nil {
 		return c, err
@@ -129,7 +147,8 @@ type Runner struct {
 	Token      string        // the server's RUNNER_TOKEN
 	Name       string        // shown on deployments; defaults to the hostname (pod name)
 	Terraform  string        // terraform binary
-	JobTimeout time.Duration // hard limit per deployment
+	JobTimeout time.Duration // limit per run phase; then Terraform is interrupted
+	JobGrace   time.Duration // after any interrupt, how long Terraform may take to stop before it's killed
 	// Cost estimation with Infracost; off without an API key.
 	Infracost       string // infracost binary
 	InfracostAPIKey string
@@ -159,6 +178,11 @@ func LoadRunner() (Runner, error) {
 	}
 	if c.JobTimeout, err = time.ParseDuration(getenv("OPS_JOB_TIMEOUT", "1h")); err != nil || c.JobTimeout <= 0 {
 		return c, errors.New("OPS_JOB_TIMEOUT must be a duration like 45m")
+	}
+	// 10m: in-flight resource operations (a database being created) can take minutes, and killing
+	// Terraform before they finish can leave real resources missing from state.
+	if c.JobGrace, err = time.ParseDuration(getenv("OPS_JOB_GRACE", "10m")); err != nil || c.JobGrace <= 0 {
+		return c, errors.New("OPS_JOB_GRACE must be a duration like 10m")
 	}
 	if c.InfracostAPIKey = os.Getenv("OPS_INFRACOST_API_KEY"); c.InfracostAPIKey != "" {
 		if c.Infracost = os.Getenv("OPS_INFRACOST"); c.Infracost == "" {

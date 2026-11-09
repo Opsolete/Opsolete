@@ -17,7 +17,9 @@ weight: 6
 | `GET\|POST /workspaces/{name}/vcs` | Version control settings |
 | `POST /workspaces/{name}/state-versions/{id}/rollback` | Roll back state |
 | `POST /workspaces/{name}/runs` | `action=apply\|destroy\|refresh\|assess`, `replace=<address>` for apply |
-| `POST /workspaces/{name}/settings` | Name, auto-apply, drift detection |
+| `POST /workspaces/{name}/settings` | General: name, execution mode, auto-apply |
+| `POST /workspaces/{name}/settings/remote-state` | Remote state sharing: `remote_state=all\|specific`, `remote_state_consumers` |
+| `POST /workspaces/{name}/settings/health` | Health: drift detection |
 | `POST /workspaces/{name}/delete` | Delete a workspace |
 | `POST /workspaces/{name}/access` | Grants (admins) |
 | `/workspaces/{name}/deploy` | Pick a template to add |

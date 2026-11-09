@@ -1,4 +1,4 @@
-{{template "top"}}
+{{template "top" .Page}}
 <a class="back" href="/">← Templates</a>
 <div class="page-head">
   <div>
@@ -6,7 +6,7 @@
     {{if .Editing}}<p class="muted">ID <code>{{.T.ID}}</code></p>{{else}}<p class="muted">A template turns a Terraform module into a simple form: pick the module, then design the fields end users fill in.</p>{{end}}
   </div>
   {{if .Editing}}<form method="post" action="/templates/{{.T.ID}}/delete"
-    onsubmit="return opsConfirm(event, 'Delete this template? Workspaces using it keep their module, but can no longer be configured from it.')">
+    data-confirm="Delete this template? Workspaces using it keep their module, but can no longer be configured from it.">
     <button type="submit" class="danger">Delete</button></form>{{end}}
 </div>
 {{with .PullRequest}}<p class="alert" role="status">Pull request: <a href="{{.}}" target="_blank" rel="noopener">{{.}}</a>. The catalog changes once it's merged; saving again while it's open adds a commit to it.</p>{{end}}
@@ -28,7 +28,7 @@
 </form>
 {{end}}
 
-{{with .Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
+{{template "formerror" .F}}
 {{with .Warning}}<div class="alert warn" role="status">{{.}}</div>{{end}}
 <form method="post" id="builder">
   <input type="hidden" name="selected" value="{{.Selected}}">
@@ -70,8 +70,10 @@
           <span class="fnum" aria-hidden="true"></span>
           <label class="f"><span class="f-head">Variable{{template "tip" "The Terraform variable this field sets: lowercase letters, digits and underscores. Clear it to remove the field."}}</span>
             <input name="in_name" value="{{.Name}}" class="mono" placeholder="admin_password" autocomplete="off" spellcheck="false"></label>
-          <label class="f grow"><span class="f-head">Label{{template "tip" "The question end users see. Leave empty to show the variable name. Text after the first ': ' is help shown under the field, and the error when the pattern doesn't match, e.g. VM name: 1-64 letters or digits."}}</span>
+          <label class="f grow"><span class="f-head">Label{{template "tip" "The question end users see. Leave empty to show the variable name."}}</span>
             <input name="in_label" value="{{.Label}}" placeholder="Admin password"></label>
+          <label class="f grow"><span class="f-head">Help{{template "tip" "Optional. Shown under the field, and as the hint when the pattern doesn't match, e.g. 1-64 letters or digits."}}</span>
+            <input name="in_help" value="{{.Help}}" placeholder="At least 12 characters"></label>
           <label class="f"><span class="f-head">Type{{template "tip" "Text, Number, a Yes / no checkbox, or a Dropdown of fixed options. Only dropdowns and Yes / no fields can show or hide other fields."}}</span>
             <select name="in_type" class="ftype">
               <option value="string">Text</option>
@@ -96,8 +98,15 @@
             </div>
             <button type="button" class="icon opt-add" data-act="opt-add" hidden>+ Add option</button>
           </div>
-          <label class="f"><span class="f-head">Default{{template "tip" "Filled in when the form opens. A dropdown's default is one of its option values; a Yes / no default is true or false."}}</span>
-            <input name="in_default" value="{{.Default}}" placeholder="none" autocomplete="off"><datalist></datalist></label>
+          <label class="f not-bool"><span class="f-head">Default{{template "tip" "Filled in when the form opens. A dropdown's default is one of its option values."}}</span>
+            <input name="in_default" value="{{if ne .Type "bool"}}{{.Default}}{{end}}"{{if eq .Type "number"}} type="number" step="any"{{end}} placeholder="none" autocomplete="off"><datalist></datalist></label>
+          <!-- every card posts one in_default and one in_bool_default; the type picks which counts -->
+          <label class="f only-bool"><span class="f-head">Default{{template "tip" "Whether the box is ticked when the form opens."}}</span>
+            <select name="in_bool_default">
+              <option value="">none (no)</option>
+              <option value="true"{{if and (eq .Type "bool") (eq .Default "true")}} selected{{end}}>yes (true)</option>
+              <option value="false"{{if and (eq .Type "bool") (eq .Default "false")}} selected{{end}}>no (false)</option>
+            </select></label>
           <label class="f only-string"><span class="f-head">Pattern{{template "tip" "A regular expression the whole value must match, for example [a-z0-9]{3,24}. Leave empty to accept any text."}}</span>
             <input name="in_pattern" value="{{.Pattern}}" class="mono" placeholder="[a-z0-9]{3,24}" spellcheck="false"></label>
           <div class="f checks">
@@ -128,105 +137,5 @@
     <a class="btn secondary" href="{{if .Editing}}/templates/{{.T.ID}}{{else}}/{{end}}">Cancel</a>
   </div>
 </form>
-<script>
-  // Progressive enhancement: without JS the last card is the blank one to fill in, and you clear a
-  // variable name to remove a field. The server checks everything again on save.
-  (() => {
-    const list = document.getElementById("fields"), add = document.getElementById("add-field");
-    const cards = () => [...list.querySelectorAll(".fcard")];
-    const split = s => s.split(",").map(v => v.trim()).filter(Boolean);
-    const optionValues = card => card.querySelector(".ftype").value === "bool" ? ["true", "false"] :
-      [...card.querySelectorAll(".opt-row [aria-label='Option value']")].map(el => el.value.trim()).filter(Boolean);
-    // Renumber the checkboxes and option rows (they post their card's index), offer each card the
-    // dropdowns above it, and show the chosen dropdown's values as chips to click.
-    // "Module name from" follows its card through renames; a card that can't be the key drops it.
-    const key = document.getElementById("key"), nameOf = card => card.querySelector("[name=in_name]").value.trim();
-    let keyCard = cards().find(c => key.value && nameOf(c) === key.value);
-    key.onchange = () => keyCard = cards().find(c => nameOf(c) === key.value);
-    const refresh = () => {
-      const keys = cards().filter(c => {
-        const t = c.querySelector(".ftype").value;
-        return nameOf(c) && t !== "bool" && !(t !== "select" && c.querySelector("[name=in_sensitive]").checked);
-      });
-      if (!keys.includes(keyCard)) keyCard = undefined;
-      key.replaceChildren(new Option("the template's name", ""), ...keys.map(c => new Option(nameOf(c), nameOf(c), c === keyCard, c === keyCard)));
-      const above = new Map();
-      cards().forEach((card, i) => {
-        for (const box of card.querySelectorAll("[type=checkbox]")) box.value = i;
-        for (const el of card.querySelectorAll(".opt-row input")) el.name = el.name.replace(/\d*$/, i);
-        const sel = card.querySelector(".show-input"), cur = sel.value, names = [...above.keys()];
-        if (cur && !names.includes(cur)) names.push(cur); // keep a stale choice: the save explains it
-        if (sel.options.length !== names.length + 1 || names.some((n, j) => sel.options[j + 1].value !== n))
-          sel.replaceChildren(new Option("always", ""), ...names.map(n => new Option("when " + n + " is", n, n === cur, n === cur)));
-        const eq = card.querySelector(".show-equals"), picked = split(eq.value);
-        card.querySelector(".show-chips").replaceChildren(...(above.has(cur) ? optionValues(above.get(cur)) : []).map(v => {
-          const b = document.createElement("button");
-          b.type = "button"; b.className = "chip"; b.textContent = b.dataset.v = v;
-          b.setAttribute("aria-pressed", picked.includes(v));
-          return b;
-        }));
-        // the default suggests the values a dropdown or Yes / no field accepts
-        const type = card.querySelector(".ftype").value, def = card.querySelector("[name=in_default]"), dl = def.nextElementSibling;
-        dl.id = "defaults-" + i;
-        def.setAttribute("list", dl.id);
-        def.placeholder = {bool: "false (true or false)", select: "the first option"}[type] ?? "none";
-        const vals = type === "select" || type === "bool" ? optionValues(card) : [];
-        if (dl.options.length !== vals.length || vals.some((v, j) => dl.options[j].value !== v)) dl.replaceChildren(...vals.map(v => new Option(v, v)));
-        const name = card.querySelector("[name=in_name]").value.trim();
-        if (name && (type === "select" || type === "bool")) above.set(name, card);
-      });
-    };
-    list.addEventListener("click", e => {
-      const chip = e.target.closest(".chip"), act = e.target.closest("[data-act]");
-      if (chip) {
-        const eq = chip.parentElement.parentElement.querySelector(".show-equals"), vs = split(eq.value), v = chip.dataset.v;
-        eq.value = (vs.includes(v) ? vs.filter(x => x !== v) : [...vs, v]).join(", ");
-      } else if (act?.dataset.act === "opt-add") {
-        const rows = act.previousElementSibling, row = rows.lastElementChild.cloneNode(true);
-        for (const el of row.querySelectorAll("input")) el.value = "";
-        rows.append(row);
-        row.querySelector("input").focus();
-      } else if (act?.dataset.act === "opt-remove") {
-        const row = act.closest(".opt-row"), rows = row.parentElement;
-        if (rows.children.length > 1) row.remove(); else for (const el of row.querySelectorAll("input")) el.value = "";
-        rows.querySelector("input").focus();
-      } else if (act) {
-        const card = act.closest(".fcard");
-        if (act.dataset.act === "up") card.previousElementSibling?.before(card);
-        if (act.dataset.act === "down") card.nextElementSibling?.after(card);
-        if (act.dataset.act === "remove") {
-          if (cards().length > 1) card.remove(); else reset(card);
-        } else act.focus();
-      } else return;
-      refresh();
-    });
-    const reset = card => {
-      for (const row of [...card.querySelectorAll(".opt-row")].slice(1)) row.remove();
-      for (const el of card.querySelectorAll("input")) el.type === "checkbox" ? el.checked = false : el.value = "";
-      for (const el of card.querySelectorAll("select")) el.selectedIndex = 0;
-    };
-    add.onclick = () => {
-      const card = list.lastElementChild.cloneNode(true);
-      reset(card);
-      list.append(card);
-      refresh();
-      card.querySelector("[name=in_name]").focus();
-    };
-    // picking a registry module reloads the page: carry the typed name and description along, and
-    // confirm before its variables replace the fields
-    const pick = document.getElementById("from-module"), builder = document.getElementById("builder");
-    pick?.addEventListener("submit", e => {
-      if (cards().some(nameOf) && !opsConfirm(e, "Replace the form fields below with the module's variables? Unsaved field changes are lost.")) return e.preventDefault();
-      for (const n of ["name", "description"])
-        (pick.elements[n] ?? pick.appendChild(Object.assign(document.createElement("input"), {type: "hidden", name: n}))).value = builder.elements[n].value;
-    });
-    list.addEventListener("input", refresh);
-    list.addEventListener("change", refresh);
-    for (const el of [add, ...document.querySelectorAll(".fcard-tools, [data-act^=opt]")]) el.hidden = false;
-    // "+ Add field" replaces the blank card the page ends with for use without JS
-    if (cards().length > 1 && !nameOf(list.lastElementChild)) list.lastElementChild.remove();
-    refresh();
-  })();
-</script>
 {{template "bottom"}}
 {{define "tip"}}<span class="tip" aria-hidden="true">?</span><span class="tip-text">{{.}}</span>{{end}}

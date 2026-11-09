@@ -12,8 +12,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/opsolete/opsolete/internal/auth"
 	"github.com/opsolete/opsolete/internal/registry/registrytest"
 	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage"
@@ -24,14 +26,8 @@ import (
 func TestBlankAndVCSWorkspaces(t *testing.T) {
 	store := testStore(t)
 	ctx := context.Background()
-	claimWait = 100 * time.Millisecond
-	store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`)
 	id := strings.ToLower(newID()[:8])
 	blank, linked, connName := "bl-"+id, "vc-"+id, "gh-"+id
-	t.Cleanup(func() {
-		store.DB.Exec(`DELETE FROM workspaces WHERE name IN ($1, $2)`, blank, linked)
-		store.DB.Exec(`DELETE FROM vcs_connections WHERE name = $1`, connName)
-	})
 
 	var mu sync.Mutex
 	head := "sha1"
@@ -58,101 +54,16 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 		}
 	}))
 	defer gh.Close()
-	old := vcs.HTTPClient
-	vcs.HTTPClient = gh.Client()
-	t.Cleanup(func() { vcs.HTTPClient = old })
 
 	app := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true, Registry: true, VCS: true})
+	app.App.VCS = vcs.NewClient(gh.Client())
 	h := app.Handler()
-	// Add-VCS-provider wizard started from the new-workspace wizard: it ends back there with the new connection.
-	if page := get(h, "/vcs/new?provider=github&return=workspace").Body.String(); !strings.Contains(page, `name="return" value="workspace"`) {
-		t.Fatalf("set up provider step: %s", page)
-	}
-	rec := post(h, "/vcs", url.Values{"name": {connName}, "provider": {"github"}, "base_url": {gh.URL}, "token": {"pat"}, "return": {"workspace"}})
-	loc := rec.Header().Get("Location")
-	if rec.Code != http.StatusSeeOther || !strings.HasPrefix(loc, "/vcs/new?connection=") || !strings.HasSuffix(loc, "&return=workspace") {
-		t.Fatalf("connect: %d %q %s", rec.Code, loc, rec.Body.String())
-	}
-	connID := strings.TrimSuffix(strings.TrimPrefix(loc, "/vcs/new?connection="), "&return=workspace")
-	if page := get(h, loc).Body.String(); !strings.Contains(page, `action="/vcs/`+connID+`/settings"`) || strings.Contains(page, "Skip and") {
-		t.Fatalf("advanced settings step: %s", page)
-	}
-
-	// A new connection only publishes modules until an admin allows workspaces.
-	if page := get(h, "/workspaces/new?type=vcs").Body.String(); strings.Contains(page, connName) {
-		t.Fatalf("a modules-only connection must not be offered: %s", page)
-	}
-	refused := url.Values{"name": {linked}, "vcs_connection": {connID}, "vcs_repo": {"acme/infra"}, "vcs_branch": {"main"}}
-	if rec := post(h, "/workspaces/new", refused); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "may not link") {
-		t.Fatalf("linking through a connection closed to workspaces: %d", rec.Code)
-	}
-	wizard := url.Values{"wizard": {"1"}, "return": {"workspace"}, "workspace_scope": {"selected"}}
-	if rec := post(h, "/vcs/"+connID+"/settings", wizard); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "enable workspaces") {
-		t.Fatalf("the workspace flow needs workspaces enabled: %d", rec.Code)
-	}
-	wizard.Set("workspaces", "1")
-	if rec := post(h, "/vcs/"+connID+"/settings", wizard); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "allow all workspaces") {
-		t.Fatalf("a new workspace can't be selected yet: %d", rec.Code)
-	}
-	wizard.Set("workspace_scope", "all")
-	if rec := post(h, "/vcs/"+connID+"/settings", wizard); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/workspaces/new?type=vcs&conn="+connID {
-		t.Fatalf("allow workspaces and continue: %d %q %s", rec.Code, rec.Header().Get("Location"), rec.Body.String())
-	}
-
-	// Blank: no template, no run, nothing to plan.
-	if page := get(h, "/workspaces/new?type=vcs").Body.String(); !strings.Contains(page, `href="?type=vcs&conn=`+connID+`"`) || !strings.Contains(page, connName) {
-		t.Fatalf("new workspace wizard must offer the connection: %s", page)
-	}
-	if page := get(h, "/workspaces/new?type=vcs&other=1").Body.String(); !strings.Contains(page, `href="/vcs/new?provider=github&return=workspace"`) {
-		t.Fatalf("connect to a different VCS must offer the providers: %s", page)
-	}
-	if page := get(h, "/vcs/new?provider=azure-devops").Body.String(); !strings.Contains(page, `name="provider" value="azure-devops"`) || !strings.Contains(page, "Organization URL") {
-		t.Fatalf("the add-VCS wizard must set up the chosen provider: %s", page)
-	}
-	if page := get(h, "/workspaces/new?type=vcs&conn="+connID).Body.String(); !strings.Contains(page, `<option value="acme/infra">`) {
-		t.Fatalf("new workspace wizard must offer the connection's repos: %s", page)
-	}
-	if page := get(h, "/workspaces/new?type=vcs&conn="+connID+"&repo=acme/infra").Body.String(); !strings.Contains(page, `value="infra"`) ||
-		!strings.Contains(page, `name="vcs_repo" value="acme/infra"`) {
-		t.Fatalf("new workspace wizard settings step: %s", page)
-	}
-	if rec := post(h, "/workspaces/new", url.Values{"name": {"new"}}); rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf(`"new" is reserved: %d`, rec.Code)
-	}
-	if rec := post(h, "/workspaces/new", url.Values{"name": {blank}}); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/workspaces/"+blank {
-		t.Fatalf("create blank: %d %s", rec.Code, rec.Body.String())
-	}
-	if page := get(h, "/workspaces/"+blank).Body.String(); strings.Contains(page, "New run") {
-		t.Fatalf("blank workspace page: %s", page)
-	}
-	if rec := post(h, "/workspaces/"+blank+"/runs", url.Values{"action": {"apply"}}); rec.Code != http.StatusConflict {
-		t.Fatalf("a blank workspace has nothing to plan: %d", rec.Code)
-	}
-
-	// VCS: the branch is checked on link; runs plan its head and apply the same commit.
-	form := url.Values{"name": {linked}, "vcs_connection": {connID}, "vcs_repo": {"acme/infra"}, "vcs_branch": {"nope"}}
-	if rec := post(h, "/workspaces/new", form); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "branch nope") {
-		t.Fatalf("unknown branch: %d", rec.Code)
-	}
-	form.Set("vcs_branch", "main")
-	if rec := post(h, "/workspaces/new", form); rec.Code != http.StatusSeeOther {
-		t.Fatalf("create linked: %d %s", rec.Code, rec.Body.String())
-	}
-	if rec := post(h, "/workspaces/"+linked+"/runs", url.Values{"action": {"apply"}}); rec.Code != http.StatusSeeOther {
-		t.Fatalf("start run: %d %s", rec.Code, rec.Body.String())
-	}
 	runnerTok := testRunnerToken
-	req := httptest.NewRequest("POST", runnerapi.Prefix+"/jobs/claim", strings.NewReader(`{"runner":"r1"}`))
-	req.Header.Set("Authorization", "Bearer "+runnerTok)
-	rec = do(h, req)
-	var job runnerapi.Job
-	if json.Unmarshal(rec.Body.Bytes(), &job); rec.Code != 200 || !strings.HasPrefix(job.ModuleSource, "/v1/vcs-archives/"+job.RunID+".tar.gz?") {
-		t.Fatalf("claim: %d %s", rec.Code, rec.Body.String())
-	}
-	mu.Lock()
-	head = "sha2" // pushed after the plan started: the run stays on sha1
-	mu.Unlock()
-	fetch := func(src string) string {
+	var (
+		connID string            // the GitHub connection
+		lw     storage.Workspace // the linked workspace
+	)
+	fetch := func(t *testing.T, src string) string {
 		t.Helper()
 		rec := get(h, src)
 		zr, err := gzip.NewReader(rec.Body)
@@ -162,26 +73,9 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 		b, _ := io.ReadAll(zr)
 		return string(b)
 	}
-	if tar := fetch(job.ModuleSource); !strings.Contains(tar, "# at sha1") {
-		t.Fatalf("archive is not the pinned commit: %q", tar)
-	}
-	if rec := get(h, strings.Replace(job.ModuleSource, "sig=", "sig=0", 1)); rec.Code != http.StatusForbidden {
-		t.Fatalf("tampered archive link: %d", rec.Code)
-	}
-	if rec := post(h, "/workspaces/"+linked+"/vcs", url.Values{}); rec.Code != http.StatusConflict {
-		t.Fatalf("relinking during a run: %d", rec.Code)
-	}
-	store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE id = $1`, job.RunID)
-
-	// VCS events: a new commit queues an apply run of it, an open pull request a speculative plan.
-	if rec := post(h, "/workspaces/"+linked+"/vcs", url.Values{"vcs_connection": {connID}, "vcs_repo": {"acme/infra"}, "vcs_branch": {"main"},
-		"vcs_trigger": {"1"}, "vcs_pull_requests": {"1"}}); rec.Code != http.StatusSeeOther {
-		t.Fatalf("turn on vcs triggers: %d %s", rec.Code, rec.Body.String())
-	}
-	lw, _ := store.GetWorkspace(ctx, linked)
-	claimVCS := func(wantAction, wantTar string) {
+	claimVCS := func(t *testing.T, wantAction, wantTar string) {
 		t.Helper()
-		if err := vcs.TriggerRuns(ctx, store, app.SecretKey, []storage.Workspace{lw}); err != nil {
+		if err := app.App.TriggerVCSRuns(ctx, []storage.Workspace{lw}); err != nil {
 			t.Fatal(err)
 		}
 		mu.Lock()
@@ -193,109 +87,234 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 		if rec := do(h, req); json.Unmarshal(rec.Body.Bytes(), &job) != nil || job.Action != wantAction {
 			t.Fatalf("claim %s: %d %s", wantAction, rec.Code, rec.Body.String())
 		}
-		if tar := fetch(job.ModuleSource); !strings.Contains(tar, wantTar) {
+		if tar := fetch(t, job.ModuleSource); !strings.Contains(tar, wantTar) {
 			t.Fatalf("%s run archive: %q, want %s", wantAction, tar, wantTar)
 		}
-		store.DB.Exec(`UPDATE runs SET status = 'errored' WHERE id = $1`, job.RunID)
-	}
-	claimVCS("apply", "# at sha2")
-	claimVCS("apply", "# at sha3")
-	claimVCS("plan", "# at pr9") // the branch's commits all had their run
-
-	// The version control page checks the connection: its "Connected to VCS" mark.
-	if page := get(h, "/workspaces/"+linked+"/vcs").Body.String(); !strings.Contains(page, `class="vcs-health ok"`) {
-		t.Fatalf("a working link must show as connected: %s", page)
-	}
-	// Tag-based: the newest semver tag (1.10.0, not v9.0.0 nor the string-wise larger 1.2.0) is the
-	// baseline, which never runs: only tags pushed later do. Pull requests get no plans.
-	tagForm := url.Values{"vcs_connection": {connID}, "vcs_repo": {"acme/infra"}, "vcs_branch": {"main"}, "vcs_trigger_type": {"tag"},
-		"vcs_tag_format": {"custom"}, "vcs_tags_regex": {"("}, "vcs_pull_requests": {"1"}}
-	if rec := post(h, "/workspaces/"+linked+"/vcs", tagForm); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "not a tag pattern") {
-		t.Fatalf("a bad tag pattern: %d", rec.Code)
-	}
-	tagForm.Set("vcs_tag_format", "semantic")
-	if rec := post(h, "/workspaces/"+linked+"/vcs", tagForm); rec.Code != http.StatusSeeOther {
-		t.Fatalf("tag-based triggers: %d %s", rec.Code, rec.Body.String())
-	}
-	if lw, _ = store.GetWorkspace(ctx, linked); lw.VCSTagsRegex != `^\d+\.\d+\.\d+$` || !lw.VCSTrigger || lw.VCSPullRequests || lw.VCSTagBaseline != "tag1100" {
-		t.Fatalf("tag-based workspace: %+v", lw)
-	}
-	if page := get(h, "/workspaces/"+linked+"/vcs").Body.String(); !strings.Contains(page, `name="vcs_trigger_type" value="tag" checked`) ||
-		!strings.Contains(page, `name="vcs_tag_format" value="semantic" checked`) {
-		t.Fatalf("the page must show the tag format: %s", page)
-	}
-	if err := vcs.TriggerRuns(ctx, store, app.SecretKey, []storage.Workspace{lw}); err != nil {
-		t.Fatal(err)
-	}
-	if runs, _ := store.Runs(ctx, lw.ID, 1); runs[0].Active() {
-		t.Fatalf("switching to tags must not run an existing tag: %+v", runs[0])
-	}
-	mu.Lock()
-	newTag = `{"name":"1.11.0","commit":{"sha":"tag1110"}},`
-	mu.Unlock()
-	claimVCS("apply", "# at tag1110")
-
-	// The admin narrows the connection to selected workspaces: selected ones keep linking, the
-	// deselected workspace's next run fails instead of planning.
-	if page := get(h, "/vcs/"+connID+"/settings").Body.String(); !strings.Contains(page, `name="workspace" value="`+linked+`">`) {
-		t.Fatalf("every existing workspace must be selectable: %s", page)
+		store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE id = $1`, job.RunID)
 	}
 	selected := func(ws ...string) int {
 		return post(h, "/vcs/"+connID+"/settings", url.Values{"workspaces": {"1"}, "workspace_scope": {"selected"}, "workspace": ws}).Code
 	}
-	if code := selected(linked, "no-such-ws"); code != http.StatusBadRequest {
-		t.Fatalf("select an unknown workspace: %d", code)
-	}
-	if c, _ := store.GetVCSConnection(ctx, connID); len(c.Workspaces) != 0 {
-		t.Fatalf("a rejected selection must change nothing: %v", c.Workspaces)
-	}
-	if code := selected(linked); code != http.StatusSeeOther {
-		t.Fatalf("select: %d", code)
-	}
-	if page := get(h, "/vcs/"+connID+"/settings").Body.String(); !strings.Contains(page, `name="workspace" value="`+linked+`" checked>`) || !strings.Contains(page, "1 selected") {
-		t.Fatalf("settings page must show the selected workspace: %s", page)
-	}
+
+	// Add-VCS-provider wizard started from the new-workspace wizard: it ends back there with the new connection.
+	step(t, "the add-VCS wizard started from a new workspace returns to it", func(t *testing.T) {
+		if page := get(h, "/vcs/new?provider=github&return=workspace").Body.String(); !strings.Contains(page, `name="return" value="workspace"`) {
+			t.Fatalf("set up provider step: %s", page)
+		}
+		rec := post(h, "/vcs", url.Values{"name": {connName}, "provider": {"github"}, "base_url": {gh.URL}, "token": {"pat"}, "return": {"workspace"}})
+		loc := rec.Header().Get("Location")
+		if rec.Code != http.StatusSeeOther || !strings.HasPrefix(loc, "/vcs/new?connection=") || !strings.HasSuffix(loc, "&return=workspace") {
+			t.Fatalf("connect: %d %q %s", rec.Code, loc, rec.Body.String())
+		}
+		connID = strings.TrimSuffix(strings.TrimPrefix(loc, "/vcs/new?connection="), "&return=workspace")
+		if page := get(h, loc).Body.String(); !strings.Contains(page, `action="/vcs/`+connID+`/settings"`) || strings.Contains(page, "Skip and") {
+			t.Fatalf("advanced settings step: %s", page)
+		}
+	})
+
+	// A new connection only publishes modules until an admin allows workspaces.
+	step(t, "a new connection links workspaces only once an admin allows them", func(t *testing.T) {
+		if page := get(h, "/workspaces/new?type=vcs").Body.String(); strings.Contains(page, connName) {
+			t.Fatalf("a modules-only connection must not be offered: %s", page)
+		}
+		refused := url.Values{fieldWorkspace: {linked}, "vcs_connection": {connID}, "vcs_repo": {"acme/infra"}, "vcs_branch": {"main"}}
+		if rec := post(h, "/workspaces/new", refused); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "may not link") {
+			t.Fatalf("linking through a connection closed to workspaces: %d", rec.Code)
+		}
+		wizard := url.Values{"wizard": {"1"}, "return": {"workspace"}, "workspace_scope": {"selected"}}
+		if rec := post(h, "/vcs/"+connID+"/settings", wizard); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "enable workspaces") {
+			t.Fatalf("the workspace flow needs workspaces enabled: %d", rec.Code)
+		}
+		wizard.Set("workspaces", "1")
+		if rec := post(h, "/vcs/"+connID+"/settings", wizard); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "allow all workspaces") {
+			t.Fatalf("a new workspace can't be selected yet: %d", rec.Code)
+		}
+		wizard.Set("workspace_scope", "all")
+		if rec := post(h, "/vcs/"+connID+"/settings", wizard); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/workspaces/new?type=vcs&conn="+connID {
+			t.Fatalf("allow workspaces and continue: %d %q %s", rec.Code, rec.Header().Get("Location"), rec.Body.String())
+		}
+	})
+
+	// Blank: no template, no run, nothing to plan.
+	step(t, "a blank workspace has no template, no run, nothing to plan", func(t *testing.T) {
+		if page := get(h, "/workspaces/new?type=vcs").Body.String(); !strings.Contains(page, `href="?type=vcs&conn=`+connID+`"`) || !strings.Contains(page, connName) {
+			t.Fatalf("new workspace wizard must offer the connection: %s", page)
+		}
+		if page := get(h, "/workspaces/new?type=vcs&other=1").Body.String(); !strings.Contains(page, `href="/vcs/new?provider=github&return=workspace"`) {
+			t.Fatalf("connect to a different VCS must offer the providers: %s", page)
+		}
+		if page := get(h, "/vcs/new?provider=azure-devops").Body.String(); !strings.Contains(page, `name="provider" value="azure-devops"`) || !strings.Contains(page, "Organization URL") {
+			t.Fatalf("the add-VCS wizard must set up the chosen provider: %s", page)
+		}
+		if page := get(h, "/workspaces/new?type=vcs&conn="+connID).Body.String(); !strings.Contains(page, `<option value="acme/infra">`) {
+			t.Fatalf("new workspace wizard must offer the connection's repos: %s", page)
+		}
+		if page := get(h, "/workspaces/new?type=vcs&conn="+connID+"&repo=acme/infra").Body.String(); !strings.Contains(page, `value="infra"`) ||
+			!strings.Contains(page, `name="vcs_repo" value="acme/infra"`) {
+			t.Fatalf("new workspace wizard settings step: %s", page)
+		}
+		if rec := post(h, "/workspaces/new", url.Values{fieldWorkspace: {"new"}}); rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf(`"new" is reserved: %d`, rec.Code)
+		}
+		if rec := post(h, "/workspaces/new", url.Values{fieldWorkspace: {blank}}); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/workspaces/"+blank {
+			t.Fatalf("create blank: %d %s", rec.Code, rec.Body.String())
+		}
+		if page := get(h, "/workspaces/"+blank).Body.String(); strings.Contains(page, "New run") {
+			t.Fatalf("blank workspace page: %s", page)
+		}
+		if rec := post(h, "/workspaces/"+blank+"/runs", url.Values{"action": {"apply"}}); rec.Code != http.StatusConflict {
+			t.Fatalf("a blank workspace has nothing to plan: %d", rec.Code)
+		}
+	})
+
+	// VCS: the branch is checked on link; runs plan its head and apply the same commit.
+	step(t, "a linked workspace plans its branch head and applies that commit", func(t *testing.T) {
+		form := url.Values{fieldWorkspace: {linked}, "vcs_connection": {connID}, "vcs_repo": {"acme/infra"}, "vcs_branch": {"nope"}}
+		if rec := post(h, "/workspaces/new", form); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "branch nope") {
+			t.Fatalf("unknown branch: %d", rec.Code)
+		}
+		form.Set("vcs_branch", "main")
+		if rec := post(h, "/workspaces/new", form); rec.Code != http.StatusSeeOther {
+			t.Fatalf("create linked: %d %s", rec.Code, rec.Body.String())
+		}
+		if rec := post(h, "/workspaces/"+linked+"/runs", url.Values{"action": {"apply"}}); rec.Code != http.StatusSeeOther {
+			t.Fatalf("start run: %d %s", rec.Code, rec.Body.String())
+		}
+		req := httptest.NewRequest("POST", runnerapi.Prefix+"/jobs/claim", strings.NewReader(`{"runner":"r1"}`))
+		req.Header.Set("Authorization", "Bearer "+runnerTok)
+		rec := do(h, req)
+		var job runnerapi.Job
+		if json.Unmarshal(rec.Body.Bytes(), &job); rec.Code != 200 || !strings.HasPrefix(job.ModuleSource, "/v1/vcs-archives/"+job.RunID+".tar.gz?") {
+			t.Fatalf("claim: %d %s", rec.Code, rec.Body.String())
+		}
+		mu.Lock()
+		head = "sha2" // pushed after the plan started: the run stays on sha1
+		mu.Unlock()
+		if tar := fetch(t, job.ModuleSource); !strings.Contains(tar, "# at sha1") {
+			t.Fatalf("archive is not the pinned commit: %q", tar)
+		}
+		if rec := get(h, strings.Replace(job.ModuleSource, "sig=", "sig=0", 1)); rec.Code != http.StatusForbidden {
+			t.Fatalf("tampered archive link: %d", rec.Code)
+		}
+		if rec := post(h, "/workspaces/"+linked+"/vcs", url.Values{}); rec.Code != http.StatusConflict {
+			t.Fatalf("relinking during a run: %d", rec.Code)
+		}
+		store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE id = $1`, job.RunID)
+	})
+
+	// VCS events: a new commit queues an apply run of it, an open pull request a speculative plan.
+	step(t, "commits queue apply runs, pull requests speculative plans", func(t *testing.T) {
+		if rec := post(h, "/workspaces/"+linked+"/vcs", url.Values{"vcs_connection": {connID}, "vcs_repo": {"acme/infra"}, "vcs_branch": {"main"},
+			"vcs_trigger": {"1"}, "vcs_pull_requests": {"1"}}); rec.Code != http.StatusSeeOther {
+			t.Fatalf("turn on vcs triggers: %d %s", rec.Code, rec.Body.String())
+		}
+		lw, _ = store.GetWorkspace(ctx, linked)
+		claimVCS(t, "apply", "# at sha2")
+		claimVCS(t, "apply", "# at sha3")
+		claimVCS(t, "plan", "# at pr9") // the branch's commits all had their run
+	})
+
+	// The version control page checks the connection: its "Connected to VCS" mark.
+	t.Run("a working link shows as connected", func(t *testing.T) {
+		if page := get(h, "/workspaces/"+linked+"/vcs").Body.String(); !strings.Contains(page, `class="vcs-health ok"`) {
+			t.Fatalf("a working link must show as connected: %s", page)
+		}
+	})
+	// Tag-based: the newest semver tag (1.10.0, not v9.0.0 nor the string-wise larger 1.2.0) is the
+	// baseline, which never runs: only tags pushed later do. Pull requests get no plans.
+	step(t, "tag triggers run only tags pushed after the newest semver baseline", func(t *testing.T) {
+		tagForm := url.Values{"vcs_connection": {connID}, "vcs_repo": {"acme/infra"}, "vcs_branch": {"main"}, "vcs_trigger_type": {"tag"},
+			"vcs_tag_format": {"custom"}, "vcs_tags_regex": {"("}, "vcs_pull_requests": {"1"}}
+		if rec := post(h, "/workspaces/"+linked+"/vcs", tagForm); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "not a tag pattern") {
+			t.Fatalf("a bad tag pattern: %d", rec.Code)
+		}
+		tagForm.Set("vcs_tag_format", "semantic")
+		if rec := post(h, "/workspaces/"+linked+"/vcs", tagForm); rec.Code != http.StatusSeeOther {
+			t.Fatalf("tag-based triggers: %d %s", rec.Code, rec.Body.String())
+		}
+		if lw, _ = store.GetWorkspace(ctx, linked); lw.VCSTagsRegex != `^\d+\.\d+\.\d+$` || !lw.VCSTrigger || lw.VCSPullRequests || lw.VCSTagBaseline != "tag1100" {
+			t.Fatalf("tag-based workspace: %+v", lw)
+		}
+		if page := get(h, "/workspaces/"+linked+"/vcs").Body.String(); !strings.Contains(page, `name="vcs_trigger_type" value="tag" checked`) ||
+			!strings.Contains(page, `name="vcs_tag_format" value="semantic" checked`) {
+			t.Fatalf("the page must show the tag format: %s", page)
+		}
+		if err := app.App.TriggerVCSRuns(ctx, []storage.Workspace{lw}); err != nil {
+			t.Fatal(err)
+		}
+		if runs, _ := store.Runs(ctx, lw.ID, 1); runs[0].Active() {
+			t.Fatalf("switching to tags must not run an existing tag: %+v", runs[0])
+		}
+		mu.Lock()
+		newTag = `{"name":"1.11.0","commit":{"sha":"tag1110"}},`
+		mu.Unlock()
+		claimVCS(t, "apply", "# at tag1110")
+	})
+
+	// The admin narrows the connection to selected workspaces: selected ones keep linking, the
+	// deselected workspace's next run fails instead of planning.
+	step(t, "an admin narrows the connection to selected workspaces", func(t *testing.T) {
+		if page := get(h, "/vcs/"+connID+"/settings").Body.String(); !strings.Contains(page, `name="workspace" value="`+linked+`">`) {
+			t.Fatalf("every existing workspace must be selectable: %s", page)
+		}
+		if code := selected(linked, "no-such-ws"); code != http.StatusUnprocessableEntity {
+			t.Fatalf("select an unknown workspace: %d", code)
+		}
+		if c, _ := store.GetVCSConnection(ctx, uuid.MustParse(connID)); len(c.Workspaces) != 0 {
+			t.Fatalf("a rejected selection must change nothing: %v", c.Workspaces)
+		}
+		if code := selected(linked); code != http.StatusSeeOther {
+			t.Fatalf("select: %d", code)
+		}
+		if page := get(h, "/vcs/"+connID+"/settings").Body.String(); !strings.Contains(page, `name="workspace" value="`+linked+`" checked>`) || !strings.Contains(page, "1 selected") {
+			t.Fatalf("settings page must show the selected workspace: %s", page)
+		}
+	})
 	// Workspace level: a linked workspace shows its source; Change source is a wizard.
-	if page := get(h, "/workspaces/"+linked+"/vcs").Body.String(); !strings.Contains(page, "Connected to VCS") ||
-		!strings.Contains(page, "acme/infra") || !strings.Contains(page, `href="/workspaces/`+linked+`/vcs/edit"`) || strings.Contains(page, "no longer allows") {
-		t.Fatalf("linked workspace vcs page: %s", page)
-	}
-	if page := get(h, "/workspaces/"+linked+"/vcs/edit").Body.String(); !strings.Contains(page, "Choose your workflow") {
-		t.Fatalf("change source: %s", page)
-	}
-	if page := get(h, "/workspaces/"+linked+"/vcs/edit?type=vcs").Body.String(); !strings.Contains(page, `href="/workspaces/`+linked+`/vcs/edit?type=vcs&conn=`+connID+`"`) {
-		t.Fatalf("an attached workspace must be offered the connection: %s", page)
-	}
-	if page := get(h, "/workspaces/"+linked+"/vcs/edit?type=vcs&conn="+connID).Body.String(); !strings.Contains(page, `<option value="acme/infra">`) {
-		t.Fatalf("change source must offer the connection's repos: %s", page)
-	}
-	if page := get(h, "/workspaces/"+linked+"/vcs/edit?type=vcs&conn="+connID+"&repo=acme/infra").Body.String(); !strings.Contains(page, `name="vcs_repo" value="acme/infra"`) {
-		t.Fatalf("change source settings step: %s", page)
-	}
-	if page := get(h, "/workspaces/"+blank+"/vcs?type=vcs").Body.String(); strings.Contains(page, "conn="+connID) {
-		t.Fatalf("an unselected workspace must not be offered the connection: %s", page)
-	}
-	if code := selected(); code != http.StatusSeeOther {
-		t.Fatalf("deselect: %d", code)
-	}
-	if rec := post(h, "/workspaces/"+linked+"/runs", url.Values{"action": {"apply"}}); rec.Code != http.StatusSeeOther {
-		t.Fatalf("start run: %d %s", rec.Code, rec.Body.String())
-	}
-	req = httptest.NewRequest("POST", runnerapi.Prefix+"/jobs/claim", strings.NewReader(`{"runner":"r1"}`))
-	req.Header.Set("Authorization", "Bearer "+runnerTok)
-	do(h, req)
-	if runs, _ := store.Runs(ctx, lw.ID, 1); len(runs) == 0 || runs[0].Status != storage.Errored {
-		t.Fatalf("a run of a detached workspace must fail: %+v", runs)
-	}
-	if page := get(h, "/workspaces/"+linked+"/vcs").Body.String(); !strings.Contains(page, "no longer allows") || !strings.Contains(page, `class="vcs-health bad"`) {
-		t.Fatalf("a detached workspace must be warned: %s", page)
-	}
-	if rec := post(h, "/workspaces/"+linked+"/vcs", url.Values{"type": {"cli"}}); rec.Code != http.StatusSeeOther {
-		t.Fatalf("unlink: %d %s", rec.Code, rec.Body.String())
-	}
-	if ws, _ := store.GetWorkspace(ctx, linked); ws.HasConfig() {
-		t.Fatal("unlinked workspace still has configuration")
-	}
+	t.Run("a linked workspace shows its source; change source is a wizard", func(t *testing.T) {
+		if page := get(h, "/workspaces/"+linked+"/vcs").Body.String(); !strings.Contains(page, "Connected to VCS") ||
+			!strings.Contains(page, "acme/infra") || !strings.Contains(page, `href="/workspaces/`+linked+`/vcs/edit"`) || strings.Contains(page, "no longer allows") {
+			t.Fatalf("linked workspace vcs page: %s", page)
+		}
+		if page := get(h, "/workspaces/"+linked+"/vcs/edit").Body.String(); !strings.Contains(page, "Choose your workflow") {
+			t.Fatalf("change source: %s", page)
+		}
+		if page := get(h, "/workspaces/"+linked+"/vcs/edit?type=vcs").Body.String(); !strings.Contains(page, `href="/workspaces/`+linked+`/vcs/edit?type=vcs&conn=`+connID+`"`) {
+			t.Fatalf("an attached workspace must be offered the connection: %s", page)
+		}
+		if page := get(h, "/workspaces/"+linked+"/vcs/edit?type=vcs&conn="+connID).Body.String(); !strings.Contains(page, `<option value="acme/infra">`) {
+			t.Fatalf("change source must offer the connection's repos: %s", page)
+		}
+		if page := get(h, "/workspaces/"+linked+"/vcs/edit?type=vcs&conn="+connID+"&repo=acme/infra").Body.String(); !strings.Contains(page, `name="vcs_repo" value="acme/infra"`) {
+			t.Fatalf("change source settings step: %s", page)
+		}
+		if page := get(h, "/workspaces/"+blank+"/vcs?type=vcs").Body.String(); strings.Contains(page, "conn="+connID) {
+			t.Fatalf("an unselected workspace must not be offered the connection: %s", page)
+		}
+	})
+	step(t, "a deselected workspace's run fails and it unlinks", func(t *testing.T) {
+		if code := selected(); code != http.StatusSeeOther {
+			t.Fatalf("deselect: %d", code)
+		}
+		if rec := post(h, "/workspaces/"+linked+"/runs", url.Values{"action": {"apply"}}); rec.Code != http.StatusSeeOther {
+			t.Fatalf("start run: %d %s", rec.Code, rec.Body.String())
+		}
+		req := httptest.NewRequest("POST", runnerapi.Prefix+"/jobs/claim", strings.NewReader(`{"runner":"r1"}`))
+		req.Header.Set("Authorization", "Bearer "+runnerTok)
+		do(h, req)
+		if runs, _ := store.Runs(ctx, lw.ID, 1); len(runs) == 0 || runs[0].Status != storage.Errored {
+			t.Fatalf("a run of a detached workspace must fail: %+v", runs)
+		}
+		if page := get(h, "/workspaces/"+linked+"/vcs").Body.String(); !strings.Contains(page, "no longer allows") || !strings.Contains(page, `class="vcs-health bad"`) {
+			t.Fatalf("a detached workspace must be warned: %s", page)
+		}
+		if rec := post(h, "/workspaces/"+linked+"/vcs", url.Values{"type": {"cli"}}); rec.Code != http.StatusSeeOther {
+			t.Fatalf("unlink: %d %s", rec.Code, rec.Body.String())
+		}
+		if ws, _ := store.GetWorkspace(ctx, linked); ws.HasConfig() {
+			t.Fatal("unlinked workspace still has configuration")
+		}
+	})
 }
 
 // A connection scoped to projects: every workspace of a selected project may link its repositories,
@@ -305,11 +324,6 @@ func TestVCSProjectScope(t *testing.T) {
 	id := strings.ToLower(newID()[:8])
 	prj, other, connName, group := "vp-"+id, "vq-"+id, "gh-p-"+id, "grp-vp-"+id
 	inPrj, outside := "vp-ws-"+id, "vd-ws-"+id
-	t.Cleanup(func() {
-		store.DB.Exec(`DELETE FROM workspaces WHERE name IN ($1, $2)`, inPrj, outside)
-		store.DB.Exec(`DELETE FROM projects WHERE name IN ($1, $2)`, prj, other)
-		store.DB.Exec(`DELETE FROM vcs_connections WHERE name = $1`, connName)
-	})
 	gh := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/user/repos":
@@ -321,13 +335,15 @@ func TestVCSProjectScope(t *testing.T) {
 		}
 	}))
 	defer gh.Close()
-	old := vcs.HTTPClient
-	vcs.HTTPClient = gh.Client()
-	t.Cleanup(func() { vcs.HTTPClient = old })
 
 	f := Features{Deployments: true, Registry: true, VCS: true}
-	h := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), f).Handler()
-	member := newApp(t, "../../catalog", store, devAuth(t, store, "vp-member-"+id+"@example.com", false, group), f).Handler()
+	handler := func(a *auth.Auth) http.Handler {
+		s := newApp(t, "../../catalog", store, a, f)
+		s.App.VCS = vcs.NewClient(gh.Client())
+		return s.Handler()
+	}
+	h := handler(devAuth(t, store, "admin@example.com", true))
+	member := handler(devAuth(t, store, "vp-member-"+id+"@example.com", false, group))
 	rec := post(h, "/vcs", url.Values{"name": {connName}, "provider": {"github"}, "base_url": {gh.URL}, "token": {"pat"}})
 	connID := strings.TrimSuffix(strings.TrimPrefix(rec.Header().Get("Location"), "/vcs/new?connection="), "&return=")
 	for _, p := range []string{prj, other} {
@@ -336,12 +352,13 @@ func TestVCSProjectScope(t *testing.T) {
 		}
 	}
 	post(h, "/projects/"+prj+"/access", url.Values{"group": {group}, "level": {"operate"}})
+	operateDefault(t, store, group) // the member may create workspaces in the default project too, not link the connection there
 
 	scope := url.Values{"workspaces": {"1"}, "workspace_scope": {"selected"}, "project": {prj, "nope-" + id}}
-	if rec := post(h, "/vcs/"+connID+"/settings", scope); rec.Code != http.StatusBadRequest {
+	if rec := post(h, "/vcs/"+connID+"/settings", scope); rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("an unknown project: %d", rec.Code)
 	}
-	if c, _ := store.GetVCSConnection(t.Context(), connID); c.WorkspaceScope != "" || len(c.Projects) != 0 {
+	if c, _ := store.GetVCSConnection(t.Context(), uuid.MustParse(connID)); c.WorkspaceScope != "" || len(c.Projects) != 0 {
 		t.Fatalf("a rejected form must change nothing: %+v", c)
 	}
 	scope["project"] = []string{prj}
@@ -350,8 +367,8 @@ func TestVCSProjectScope(t *testing.T) {
 	}
 	if page := get(h, "/vcs/"+connID+"/settings").Body.String(); !strings.Contains(page, `name="project" value="`+prj+`" checked>`) {
 		t.Fatal("the settings page shows the selected project")
-	} else if !strings.Contains(page, "(default: every user may create workspaces here)") {
-		t.Fatal("the picker must say the default project is open to every user")
+	} else if !strings.Contains(page, "(default)") {
+		t.Fatal("the picker must mark the default project")
 	}
 
 	// a new workspace: offered and allowed in the selected project, not in the default one
@@ -361,13 +378,13 @@ func TestVCSProjectScope(t *testing.T) {
 	if page := get(member, "/workspaces/new?type=vcs").Body.String(); strings.Contains(page, connName) {
 		t.Fatal("the wizard offers the connection in the default project")
 	}
-	outsider := newApp(t, "../../catalog", store, devAuth(t, store, "vp-outsider-"+id+"@example.com", false), f).Handler()
+	outsider := handler(devAuth(t, store, "vp-outsider-"+id+"@example.com", false))
 	if page := get(outsider, "/workspaces/new?type=vcs&conn="+connID+"&project="+prj).Body.String(); strings.Contains(page, connName) ||
 		strings.Contains(page, "acme/infra") {
 		t.Fatal("?project= of a project the user can't create in must not list its connections or their repos")
 	}
 	link := func(name, project string) *httptest.ResponseRecorder {
-		return post(member, "/workspaces/new", url.Values{"name": {name}, fieldProject: {project}, "vcs_connection": {connID},
+		return post(member, "/workspaces/new", url.Values{fieldWorkspace: {name}, fieldProject: {project}, "vcs_connection": {connID},
 			"vcs_repo": {"acme/infra"}, "vcs_branch": {"main"}})
 	}
 	if rec := link(outside, ""); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "may not link") {

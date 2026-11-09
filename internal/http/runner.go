@@ -1,42 +1,26 @@
 package httpserver
 
 import (
-	"cmp"
 	"context"
 	"crypto/subtle"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
-	"slices"
 	"strings"
-	"time"
 
-	"gocloud.dev/gcerrors"
-
+	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/runnerapi"
-	"github.com/opsolete/opsolete/internal/storage"
-	"github.com/opsolete/opsolete/internal/templates"
 )
 
-// claimWait is the long-poll window, below typical proxy idle timeouts (a var for tests).
-var claimWait = 20 * time.Second
-
-const (
-	leaseTTL        = 2 * time.Minute  // runners heartbeat well within this
-	maxLogBytes     = 10 << 20         // per run
-	maxLogChunk     = 256 << 10        // per request
-	maxArtifactSize = 256 << 20        // saved plans embed the configuration; generous
-	runnerSrcTTL    = 15 * time.Minute // signed archive URL handed to the runner; it downloads right away
-)
+const maxLogChunk = 256 << 10 // per request
 
 // Runner API: runners pull work over HTTPS with the shared RUNNER_TOKEN, so they need no
-// database access and no inbound connectivity.
-func (s *Server) runnerRoutes(mux *http.ServeMux) {
+// database access and no inbound connectivity. The protocol's rules are app's (jobs.go).
+func (s *Server) runnerRoutes(mux routes) {
 	mux.Handle("POST "+runnerapi.Prefix+"/jobs/claim", s.requireRunner(s.claimJob))
+	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/ack", s.requireRunner(s.jobAck))
 	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/logs", s.requireRunner(s.jobLogs))
 	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/heartbeat", s.requireRunner(s.jobHeartbeat))
 	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/finish", s.requireRunner(s.jobFinish))
@@ -63,128 +47,37 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 		writeErrors(w, http.StatusBadRequest, `body must be {"runner": "<name>"}`)
 		return
 	}
-	deadline := time.After(claimWait)
-	tick := time.NewTicker(time.Second)
-	defer tick.Stop()
+	wait, cancel := context.WithTimeout(r.Context(), s.ClaimWait)
+	defer cancel()
+	jobs := s.App.Notify.Jobs() // before the first try: a job queued during it still wakes us
+	defer jobs.Close()
 	for {
-		j, ok, err := s.Store.ClaimJob(r.Context(), req.Runner, leaseTTL)
+		body, ok, err := s.App.ClaimJob(r.Context(), req.Runner)
 		if err != nil {
-			s.Log.Error("claim job", "err", err)
-			writeErrors(w, http.StatusInternalServerError, "internal error")
+			s.runnerError(w, r, err)
 			return
 		}
 		if ok {
-			env, vars, err := s.runVariables(r.Context(), j.WorkspaceID)
-			var src, currency string
-			if err == nil {
-				src, err = s.jobSource(r.Context(), j)
-			}
-			if err == nil {
-				currency, err = s.Store.Currency(r.Context())
-			}
-			var mods []runnerapi.Module
-			for _, m := range j.Modules {
-				in, oerr := s.openInputs(m.Inputs, j.WorkspaceID, m.Name)
-				err = cmp.Or(err, oerr)
-				if err == nil {
-					in, err = s.withWorkspaceVars(r.Context(), m.TemplateID, m.ModuleSource, m.ModuleRef, in, vars)
-				}
-				mods = append(mods, runnerapi.Module{Name: m.Name, Inputs: in,
-					Source: s.Registry.RunnerSource(templates.Module{Source: m.ModuleSource, Ref: m.ModuleRef}, runnerSrcTTL)})
-			}
-			var body []byte
-			if err == nil {
-				body, err = json.Marshal(runnerapi.Job{
-					RunID: j.RunID, WorkspaceID: j.WorkspaceID, Phase: j.Phase, Action: j.Action, Replace: j.Replace, Target: j.Target, LeaseID: j.LeaseID,
-					LeaseSeconds: int(leaseTTL.Seconds()), StateToken: s.stateToken(j.WorkspaceID, j.RunID), Vars: vars, Env: env,
-					ModuleSource: src, Modules: mods, Currency: currency,
-				})
-			}
-			if err == nil && len(body) > runnerapi.MaxJobSize {
-				err = fmt.Errorf("the job's variables and inputs are %d bytes, over the runner limit of %d", len(body), runnerapi.MaxJobSize)
-			}
-			if err != nil {
-				// The job is claimed: fail it rather than leave it to the lease reaper.
-				s.Log.Error("job variables", "run", j.RunID, "err", err)
-				if _, ferr := s.Store.FinishJob(r.Context(), j.RunID, j.LeaseID, "failed", err.Error(), nil, nil, nil); ferr != nil {
-					s.Log.Error("fail job", "run", j.RunID, "err", ferr)
-				} else {
-					s.DeleteArtifacts(context.WithoutCancel(r.Context()), j.RunID) // an apply phase's saved plan will never be applied
-				}
-				continue
-			}
-			s.Log.Info("job claimed", "run", j.RunID, "phase", j.Phase, "action", j.Action, "runner", req.Runner)
 			w.Header().Set("Content-Type", "application/json")
 			w.Write(body)
 			return
 		}
-		select {
-		case <-r.Context().Done():
+		if !jobs.Wait(wait) {
+			if r.Context().Err() == nil { // ClaimWait is over, the runner is still there
+				w.WriteHeader(http.StatusNoContent)
+			}
 			return
-		case <-deadline:
-			w.WriteHeader(http.StatusNoContent)
-			return
-		case <-tick.C:
 		}
 	}
 }
 
-// withWorkspaceVars adds to an added template's inputs the workspace's Terraform variables (vars, from
-// the workspace and its variable sets) that its module declares, under its own inputs: as a root module
-// gets them through tfvars, but only declared ones, since an unknown module argument fails the run.
-// shortcut: registry modules only (their variables are stored); external sources such as git:: get
-// none, as the server can't read their variables. Publish them to the registry (e.g. via VCS) to get
-// them, as HCP Terraform's no-code modules must be. To upgrade: the runner has every module on disk
-// after init (writeOutputs reads them there) and could add the declared ones itself, if the job also
-// lists the inputs each template's form asks, which keep winning. Inputs the template (by id) asks for are left alone, also when
-// hidden or empty: its form decided those, and the module's default applies.
-func (s *Server) withWorkspaceVars(ctx context.Context, templateID, source, ref string, in, vars map[string]any) (map[string]any, error) {
-	if !s.Features.Registry || len(vars) == 0 {
-		return in, nil
+func (s *Server) jobAck(w http.ResponseWriter, r *http.Request) {
+	id, _ := pathID(r, "id") // not an id: no such lease, as for an unknown run
+	if err := s.App.AckJob(r.Context(), id, r.Header.Get(runnerapi.LeaseHeader)); err != nil {
+		s.runnerError(w, r, err)
+		return
 	}
-	ns, name, sys, ok := s.Registry.ParseSource(source)
-	if !ok {
-		return in, nil
-	}
-	m, err := s.Store.GetModule(ctx, ns, name, sys, ref)
-	if errors.Is(err, sql.ErrNoRows) { // the run fails at terraform init anyway
-		return in, nil
-	}
-	if err != nil {
-		return in, fmt.Errorf("module variables: %w", err)
-	}
-	t, _ := s.Templates.Get(templateID) // a deleted template: only its stored inputs are known
-	out := maps.Clone(in)
-	if out == nil {
-		out = map[string]any{}
-	}
-	for _, v := range m.Variables {
-		if val, ok := vars[v.Name]; ok {
-			asked := slices.ContainsFunc(t.Inputs, func(in templates.Input) bool { return in.Name == v.Name })
-			if _, own := out[v.Name]; !own && !asked {
-				out[v.Name] = val
-			}
-		}
-	}
-	return out, nil
-}
-
-// jobSource is where the runner fetches the run's root configuration: this server's archive of the
-// VCS commit the run plans (pinned at the plan phase, reused by the apply), or none when added
-// templates are the whole configuration.
-func (s *Server) jobSource(ctx context.Context, j storage.Job) (string, error) {
-	switch {
-	case j.VCS:
-		if j.Phase == "plan" {
-			if err := s.pinCommit(ctx, j); err != nil {
-				return "", err
-			}
-		}
-		return s.Registry.SignedArchiveURL(vcsArchivePath(j.RunID), runnerSrcTTL), nil
-	case len(j.Modules) > 0:
-		return "", nil
-	}
-	return "", errors.New("the workspace has no configuration: add a template or link a repository")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) jobLogs(w http.ResponseWriter, r *http.Request) {
@@ -196,23 +89,28 @@ func (s *Server) jobLogs(w http.ResponseWriter, r *http.Request) {
 		writeErrors(w, http.StatusBadRequest, "reading the log chunk failed")
 		return
 	}
-	cancel, err := s.Store.AppendLog(r.Context(), r.PathValue("id"), r.Header.Get(runnerapi.LeaseHeader), strings.ReplaceAll(strings.ToValidUTF8(string(b), "\uFFFD"), "\x00", "\uFFFD"), leaseTTL, maxLogBytes)
-	s.liveResult(w, cancel, err)
+	id, _ := pathID(r, "id") // not an id: no such lease, as for an unknown run
+	cancel, err := s.App.AppendLog(r.Context(), id, r.Header.Get(runnerapi.LeaseHeader), b)
+	s.liveResult(w, r, cancel, err)
 }
 
 func (s *Server) jobHeartbeat(w http.ResponseWriter, r *http.Request) {
-	cancel, err := s.Store.Heartbeat(r.Context(), r.PathValue("id"), r.Header.Get(runnerapi.LeaseHeader), leaseTTL)
-	s.liveResult(w, cancel, err)
+	id, _ := pathID(r, "id") // not an id: no such lease, as for an unknown run
+	cancel, err := s.App.Heartbeat(r.Context(), id, r.Header.Get(runnerapi.LeaseHeader))
+	s.liveResult(w, r, cancel, err)
 }
 
 // liveResult answers a log post or heartbeat: 202 asks the runner to cancel gracefully (it keeps
 // its lease, so Terraform can still save state), 409 means the lease is gone.
-func (s *Server) liveResult(w http.ResponseWriter, cancel bool, err error) {
-	if err == nil && cancel {
+func (s *Server) liveResult(w http.ResponseWriter, r *http.Request, cancel bool, err error) {
+	switch {
+	case err != nil:
+		s.runnerError(w, r, err)
+	case cancel:
 		w.WriteHeader(runnerapi.StatusCancel)
-		return
+	default:
+		w.WriteHeader(http.StatusNoContent)
 	}
-	s.leaseResult(w, err)
 }
 
 func (s *Server) jobFinish(w http.ResponseWriter, r *http.Request) {
@@ -222,45 +120,27 @@ func (s *Server) jobFinish(w http.ResponseWriter, r *http.Request) {
 		writeErrors(w, http.StatusBadRequest, fmt.Sprintf("invalid finish request (at most %d MB): %v", runnerapi.MaxJobSize>>20, err))
 		return
 	}
-	if req.Status != "succeeded" && req.Status != "failed" && req.Status != "canceled" {
-		writeErrors(w, http.StatusBadRequest, "status must be succeeded, failed or canceled")
+	id, _ := pathID(r, "id") // not an id: no such lease, as for an unknown run
+	if _, err := s.App.FinishJob(r.Context(), id, r.Header.Get(runnerapi.LeaseHeader), req); err != nil {
+		s.runnerError(w, r, err)
 		return
 	}
-	id := r.PathValue("id")
-	// not canceled on SIGTERM: a job's result must survive a server restart
-	status, err := s.Store.FinishJob(context.WithoutCancel(r.Context()), id, r.Header.Get(runnerapi.LeaseHeader), req.Status, req.Message,
-		req.Outputs, req.Plan, req.Resources)
-	if err == nil {
-		s.Log.Info("job finished", "run", id, "result", req.Status, "status", status)
-		if status != storage.NeedsConfirmation && status != storage.ApplyQueued {
-			s.DeleteArtifacts(context.WithoutCancel(r.Context()), id) // the saved plan has been applied, or will never be
-		}
-		s.dropIntermediateStates(context.WithoutCancel(r.Context()), id)
-	}
-	s.leaseResult(w, err)
+	w.WriteHeader(http.StatusNoContent)
 }
-
-// Saved plans and lock files live in the state store: a plan holds variable values and is as
-// sensitive as state. They exist from the plan phase until the run ends.
-func artifactKey(runID, name string) string { return "runs/" + runID + "/" + name }
 
 // putArtifact stores a plan phase's output; only the planning run may write its own artifacts.
 func (s *Server) putArtifact(w http.ResponseWriter, r *http.Request) {
-	id, name := r.PathValue("id"), r.PathValue("name")
-	if !s.artifactAccess(w, r, storage.Planning) {
-		return
-	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxArtifactSize))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, app.MaxArtifactSize))
 	if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
-		writeErrors(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("artifacts are limited to %d MB", maxArtifactSize>>20))
+		writeErrors(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("artifacts are limited to %d MB", app.MaxArtifactSize>>20))
 		return
 	} else if err != nil {
 		writeErrors(w, http.StatusBadRequest, "reading the artifact failed")
 		return
 	}
-	if err := s.writeBlob(context.WithoutCancel(r.Context()), artifactKey(id, name), body); err != nil {
-		s.Log.Error("write artifact", "err", err)
-		writeErrors(w, http.StatusInternalServerError, "internal error")
+	id, _ := pathID(r, "id") // not an id: no such lease, as for an unknown run
+	if err := s.App.PutArtifact(r.Context(), id, r.Header.Get(runnerapi.LeaseHeader), r.PathValue("name"), body); err != nil {
+		s.runnerError(w, r, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -268,72 +148,12 @@ func (s *Server) putArtifact(w http.ResponseWriter, r *http.Request) {
 
 // getArtifact hands the saved plan to the run's apply phase.
 func (s *Server) getArtifact(w http.ResponseWriter, r *http.Request) {
-	if !s.artifactAccess(w, r, storage.Applying) {
-		return
-	}
-	b, err := s.readBlob(r.Context(), artifactKey(r.PathValue("id"), r.PathValue("name")))
-	if gcerrors.Code(err) == gcerrors.NotFound {
-		writeErrors(w, http.StatusNotFound, "no such artifact")
-		return
-	}
+	id, _ := pathID(r, "id") // not an id: no such lease, as for an unknown run
+	b, err := s.App.Artifact(r.Context(), id, r.Header.Get(runnerapi.LeaseHeader), r.PathValue("name"))
 	if err != nil {
-		s.Log.Error("read artifact", "err", err)
-		writeErrors(w, http.StatusInternalServerError, "internal error")
+		s.runnerError(w, r, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Write(b)
-}
-
-func (s *Server) artifactAccess(w http.ResponseWriter, r *http.Request, phase string) bool {
-	if name := r.PathValue("name"); name != runnerapi.ArtifactPlan && name != runnerapi.ArtifactLockfile {
-		writeErrors(w, http.StatusNotFound, "no such artifact")
-		return false
-	}
-	ok, err := s.Store.HoldsLease(r.Context(), r.PathValue("id"), r.Header.Get(runnerapi.LeaseHeader), phase)
-	if err != nil {
-		s.Log.Error("check lease", "err", err)
-		writeErrors(w, http.StatusInternalServerError, "internal error")
-		return false
-	}
-	if !ok {
-		writeErrors(w, http.StatusConflict, "job lease lost")
-	}
-	return ok
-}
-
-// DeleteArtifacts deletes a run's saved plan and lock file; failures only leave a stale file behind.
-func (s *Server) DeleteArtifacts(ctx context.Context, runID string) {
-	for _, name := range []string{runnerapi.ArtifactPlan, runnerapi.ArtifactLockfile} {
-		if err := s.StateStore.Delete(ctx, artifactKey(runID, name)); err != nil && gcerrors.Code(err) != gcerrors.NotFound {
-			s.Log.Warn("delete artifact", "run", runID, "name", name, "err", err)
-		}
-	}
-}
-
-// dropIntermediateStates deletes the intermediate state snapshots of a finished run; failures only
-// leave them listed (or a stale file behind).
-func (s *Server) dropIntermediateStates(ctx context.Context, runID string) {
-	keys, err := s.Store.DropIntermediateStates(ctx, runID)
-	if err != nil {
-		s.Log.Warn("drop intermediate states", "run", runID, "err", err)
-	}
-	for _, k := range keys {
-		if err := s.StateStore.Delete(ctx, k); err != nil && gcerrors.Code(err) != gcerrors.NotFound {
-			s.Log.Warn("delete intermediate state", "run", runID, "key", k, "err", err)
-		}
-	}
-}
-
-// leaseResult answers 409 when the runner lost its lease, so it stops working on the job.
-func (s *Server) leaseResult(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, storage.ErrLeaseLost):
-		writeErrors(w, http.StatusConflict, "job lease lost")
-	case err != nil:
-		s.Log.Error("runner job update", "err", err)
-		writeErrors(w, http.StatusInternalServerError, "internal error")
-	default:
-		w.WriteHeader(http.StatusNoContent)
-	}
 }

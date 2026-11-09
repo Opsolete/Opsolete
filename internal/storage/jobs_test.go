@@ -3,49 +3,54 @@ package storage
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"errors"
+	"fmt"
 	"maps"
-	"os"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/opsolete/opsolete/internal/runnerapi"
+	"github.com/opsolete/opsolete/internal/testdb"
 )
 
+// testStore returns a migrated store on a database of t's own (testdb), or skips without TEST_DATABASE_URL.
 func testStore(t *testing.T) *Store {
-	url := os.Getenv("TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("TEST_DATABASE_URL not set")
-	}
-	s, err := Open(context.Background(), url)
+	s, err := Open(context.Background(), testdb.URL(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.DB.Close() })
-	s.AuditKey = []byte("test-audit-key") // the same in every test package: they share the log
+	t.Cleanup(s.Close)
+	s.AuditKey = []byte("test-audit-key")
 	if err := s.Migrate(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	// Leftovers from earlier runs would be claimed first.
-	if _, err := s.DB.Exec(`UPDATE runs SET status = 'errored'
-		WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')`); err != nil {
 		t.Fatal(err)
 	}
 	return s
 }
 
+// step runs one step of a scenario test as a subtest; a failed step ends the scenario, a filtered
+// out one skips the rest: the steps after it need its state. (A copy of httpserver's.)
+func step(t *testing.T, name string, f func(t *testing.T)) {
+	t.Helper()
+	ran := false
+	if !t.Run(name, func(t *testing.T) { ran = true; f(t) }) {
+		t.Fatalf("step %q failed: the steps after it need its state", name)
+	}
+	if !ran {
+		t.Skipf("step %q was filtered out: the steps after it need its state", name)
+	}
+}
+
 func newWorkspace(t *testing.T, s *Store, autoApply bool) (Workspace, Run) {
 	ctx := context.Background()
-	name := "t-" + strings.ToLower(rand.Text()[:10]) // the test DB is reused
-	w, run, err := s.CreateWorkspace(ctx, "", name, "", testTemplate(map[string]any{"n": 1.0}), autoApply, "")
+	name := "t-" + strings.ToLower(rand.Text()[:10]) // several per test
+	w, run, err := s.CreateWorkspace(ctx, uuid.Nil, name, "", testTemplate(map[string]any{"n": 1.0}), autoApply, uuid.Nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.DB.Exec(`DELETE FROM workspaces WHERE id=$1`, w.ID) })
 	return w, run
 }
 
@@ -60,10 +65,19 @@ func claim(t *testing.T, s *Store, phase string) Job {
 	if err != nil || !ok || j.Phase != phase {
 		t.Fatalf("claim %s: %+v %v %v", phase, j, ok, err)
 	}
+	ack(t, s, j)
 	return j
 }
 
-func status(t *testing.T, s *Store, runID string) string {
+// ack acknowledges a claimed job, as its runner does before anything else.
+func ack(t *testing.T, s *Store, j Job) {
+	t.Helper()
+	if err := s.AckJob(context.Background(), j.RunID, j.LeaseID, time.Minute); err != nil {
+		t.Fatalf("ack %s: %v", j.RunID, err)
+	}
+}
+
+func status(t *testing.T, s *Store, runID uuid.UUID) string {
 	t.Helper()
 	r, _, err := s.GetRun(context.Background(), runID)
 	if err != nil {
@@ -102,6 +116,17 @@ func TestRunLifecycle(t *testing.T) {
 		t.Fatalf("claims: %+v", won)
 	}
 	plan := won[0]
+	if _, err := s.Heartbeat(ctx, run.ID, plan.LeaseID, time.Minute); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("a heartbeat before the ack must be refused, got %v", err)
+	}
+	if _, err := s.FinishJob(ctx, run.ID, plan.LeaseID, "failed", "", nil, nil, nil); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("a finish before the ack must be refused, got %v", err)
+	}
+	if _, _, _, err := s.WorkingRun(ctx, w.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("state credentials before the ack: %v", err)
+	}
+	ack(t, s, plan)
+	ack(t, s, plan) // a retried ack is harmless
 	if working, _, _, err := s.WorkingRun(ctx, w.ID); err != nil || working != run.ID {
 		t.Fatalf("the planning run must hold the workspace's state: %q %v", working, err)
 	}
@@ -133,13 +158,13 @@ func TestRunLifecycle(t *testing.T) {
 	if _, ok, _ := s.ClaimJob(ctx, "r", time.Minute); ok {
 		t.Fatal("a plan waiting for confirmation must not be claimed")
 	}
-	if _, err := s.CreateRun(ctx, w.ID, "apply", "", nil); !errors.Is(err, ErrRunActive) {
+	if _, err := s.CreateRun(ctx, w.ID, "apply", uuid.Nil, nil); !errors.Is(err, ErrRunActive) {
 		t.Fatalf("second run while one is active: %v", err)
 	}
-	if err := s.ConfirmRun(ctx, run.ID, "", "alice@example.com"); err != nil {
+	if err := s.ConfirmRun(ctx, run.ID, uuid.Nil, "alice@example.com"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.ConfirmRun(ctx, run.ID, "", "alice@example.com"); !errors.Is(err, ErrNotConfirmable) {
+	if err := s.ConfirmRun(ctx, run.ID, uuid.Nil, "alice@example.com"); !errors.Is(err, ErrNotConfirmable) {
 		t.Fatalf("confirming twice: %v", err)
 	}
 
@@ -155,7 +180,7 @@ func TestRunLifecycle(t *testing.T) {
 		{Address: "azurerm_storage_account.this", Type: "azurerm_storage_account", Name: "this", Provider: "registry.terraform.io/hashicorp/azurerm"},
 		{Address: "module.net.azurerm_subnet.a[0]", Type: "azurerm_subnet", Name: "a", Provider: "registry.terraform.io/hashicorp/azurerm", Module: "module.net"},
 	}
-	if err := s.AddStateVersion(ctx, w.ID, "", "", StateVersion{Serial: 3, Lineage: "lin", BlobKey: "k/" + w.ID, MD5: "m", Size: 1, Outputs: map[string]any{"id": "abc"}}); err != nil {
+	if err := s.AddStateVersion(ctx, w.ID, uuid.Nil, "", StateVersion{Serial: 3, Lineage: "lin", BlobKey: "k/" + w.ID.String(), MD5: "m", Size: 1, Outputs: map[string]any{"id": "abc"}}); err != nil {
 		t.Fatal(err)
 	}
 	if st, err := s.FinishJob(ctx, run.ID, apply.LeaseID, "succeeded", "", map[string]any{"id": "abc"}, nil, res); err != nil || st != Applied {
@@ -179,7 +204,7 @@ func TestRunLifecycle(t *testing.T) {
 	}
 
 	// A plan without changes ends the run right away.
-	again, err := s.CreateRun(ctx, w.ID, "apply", "", nil)
+	again, err := s.CreateRun(ctx, w.ID, "apply", uuid.Nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +232,7 @@ func TestAutoApplyAndDiscard(t *testing.T) {
 	}
 
 	// Destroys ask even with auto-apply; a discarded plan frees the workspace.
-	d, err := s.CreateRun(ctx, w.ID, "destroy", "", nil)
+	d, err := s.CreateRun(ctx, w.ID, "destroy", uuid.Nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +246,7 @@ func TestAutoApplyAndDiscard(t *testing.T) {
 	if err := s.DiscardRun(ctx, d.ID, "bob@example.com"); err != nil || status(t, s, d.ID) != Discarded {
 		t.Fatalf("discard: %v", err)
 	}
-	if _, err := s.CreateRun(ctx, w.ID, "apply", "", nil); err != nil {
+	if _, err := s.CreateRun(ctx, w.ID, "apply", uuid.Nil, nil); err != nil {
 		t.Fatalf("a discarded run must free the workspace: %v", err)
 	}
 }
@@ -235,7 +260,8 @@ func TestFinishKeepsForeignStateLock(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("claim: %v %v", ok, err)
 	}
-	if _, ok, err := s.LockState(ctx, w.ID, "rb", "", []byte(`{"ID":"rb","OpsoleteRun":"`+run.ID+`"}`)); !ok || err != nil {
+	ack(t, s, j)
+	if _, ok, err := s.LockState(ctx, w.ID, "rb", uuid.Nil, []byte(`{"ID":"rb","OpsoleteRun":"`+run.ID.String()+`"}`)); !ok || err != nil {
 		t.Fatalf("lock: %v %v", ok, err)
 	}
 	// The run saw the lock's ID in a 423: that alone must not let it take over, use or release the lock.
@@ -245,7 +271,7 @@ func TestFinishKeepsForeignStateLock(t *testing.T) {
 	if ok, err := s.StateLockedBy(ctx, w.ID, "rb", run.ID); ok || err != nil {
 		t.Fatalf("a run may write under a rollback's lock: %v %v", ok, err)
 	}
-	if ok, err := s.StateLockedBy(ctx, w.ID, "rb", ""); !ok || err != nil {
+	if ok, err := s.StateLockedBy(ctx, w.ID, "rb", uuid.Nil); !ok || err != nil {
 		t.Fatalf("the rollback's own lock: %v %v", ok, err)
 	}
 	if err := s.UnlockState(ctx, w.ID, "rb", run.ID); err != nil {
@@ -275,14 +301,18 @@ func TestReleaseOrphanedLocks(t *testing.T) {
 	oldRB, _ := newWorkspace(t, s, false)
 	newRB, _ := newWorkspace(t, s, false)
 	cli, _ := newWorkspace(t, s, false)
-	for _, l := range []struct{ ws, id, run string }{
-		{working.ID, "l1", run.ID}, {queued.ID, "l2", queuedRun.ID}, {oldRB.ID, "rb1", ""}, {newRB.ID, "rb2", ""}, {cli.ID, CloudLockPrefix + "x", ""},
+	for _, l := range []struct {
+		ws  uuid.UUID
+		id  string
+		run uuid.UUID
+	}{
+		{working.ID, "l1", run.ID}, {queued.ID, "l2", queuedRun.ID}, {oldRB.ID, "rb1", uuid.Nil}, {newRB.ID, "rb2", uuid.Nil}, {cli.ID, CloudLockPrefix + "x", uuid.Nil},
 	} {
 		if _, ok, err := s.LockState(ctx, l.ws, l.id, l.run, []byte(`{"ID":"`+l.id+`"}`)); !ok || err != nil {
 			t.Fatalf("lock %s: %v %v", l.id, ok, err)
 		}
 	}
-	if _, err := s.DB.ExecContext(ctx, `UPDATE workspaces SET state_locked_at = now() - interval '1 hour'
+	if _, err := s.Pool.Exec(ctx, `UPDATE workspaces SET state_locked_at = now() - interval '1 hour'
 		WHERE id IN ($1, $2, $3)`, working.ID, oldRB.ID, cli.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +320,7 @@ func TestReleaseOrphanedLocks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for ws, want := range map[string]string{working.ID: "l1", queued.ID: "", oldRB.ID: "", newRB.ID: "rb2", cli.ID: CloudLockPrefix + "x"} {
+	for ws, want := range map[uuid.UUID]string{working.ID: "l1", queued.ID: "", oldRB.ID: "", newRB.ID: "rb2", cli.ID: CloudLockPrefix + "x"} {
 		if lock, _ := s.StateLockID(ctx, ws); lock != want {
 			t.Errorf("workspace %s: lock %q, want %q", ws, lock, want)
 		}
@@ -308,11 +338,11 @@ func TestStateWriteFenced(t *testing.T) {
 	if _, ok, err := s.ClaimJob(ctx, "r", time.Minute); err != nil || !ok {
 		t.Fatalf("claim: %v %v", ok, err)
 	}
-	v := StateVersion{Serial: 1, Lineage: "lin", BlobKey: "fence/" + w.ID, MD5: "m", Size: 1}
+	v := StateVersion{Serial: 1, Lineage: "lin", BlobKey: "fence/" + w.ID.String(), MD5: "m", Size: 1}
 	if err := s.AddStateVersion(ctx, w.ID, run.ID, "", v); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("a planning run must not record state: %v", err)
 	}
-	if _, err := s.DB.ExecContext(ctx, `UPDATE runs SET status = 'applying' WHERE id = $1`, run.ID); err != nil {
+	if _, err := s.Pool.Exec(ctx, `UPDATE runs SET status = 'applying' WHERE id = $1`, run.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.AddStateVersion(ctx, w.ID, run.ID, "", v); err != nil {
@@ -321,7 +351,7 @@ func TestStateWriteFenced(t *testing.T) {
 	if _, err := s.CancelRun(ctx, run.ID, "a@b.c", true); err != nil {
 		t.Fatal(err)
 	}
-	v.Serial, v.BlobKey = 2, "fence2/"+w.ID
+	v.Serial, v.BlobKey = 2, "fence2/"+w.ID.String()
 	if err := s.AddStateVersion(ctx, w.ID, run.ID, "", v); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("a force-canceled run must not record state: %v", err)
 	}
@@ -334,36 +364,36 @@ func TestCloudStateWriteFenced(t *testing.T) {
 	ctx := context.Background()
 	w, _ := newWorkspace(t, s, false)
 	lockID := CloudLockPrefix + "x"
-	if _, ok, err := s.LockState(ctx, w.ID, lockID, "", []byte(`{"ID":"`+lockID+`","UserID":"u1"}`)); !ok || err != nil {
+	if _, ok, err := s.LockState(ctx, w.ID, lockID, uuid.Nil, []byte(`{"ID":"`+lockID+`","UserID":"u1"}`)); !ok || err != nil {
 		t.Fatalf("lock: %v %v", ok, err)
 	}
-	v := StateVersion{Serial: 1, Lineage: "lin", BlobKey: "cloud1/" + w.ID, MD5: "m1", Size: 1}
-	if err := s.AddStateVersion(ctx, w.ID, "", "u2", v); !errors.Is(err, ErrNotCloudLocked) {
+	v := StateVersion{Serial: 1, Lineage: "lin", BlobKey: "cloud1/" + w.ID.String(), MD5: "m1", Size: 1}
+	if err := s.AddStateVersion(ctx, w.ID, uuid.Nil, "u2", v); !errors.Is(err, ErrNotCloudLocked) {
 		t.Fatalf("another user's lock: %v", err)
 	}
-	if err := s.AddStateVersion(ctx, w.ID, "", "u1", v); err != nil {
+	if err := s.AddStateVersion(ctx, w.ID, uuid.Nil, "u1", v); err != nil {
 		t.Fatalf("own lock: %v", err)
 	}
 
 	// A force-unlock is under way (uncommitted) when the upload is recorded: the insert waits for it.
-	tx, err := s.DB.BeginTx(ctx, nil)
+	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `UPDATE workspaces SET state_lock = NULL WHERE id = $1`, w.ID); err != nil {
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `UPDATE workspaces SET state_lock = NULL, state_locked_at = NULL WHERE id = $1`, w.ID); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)
 	go func() {
-		done <- s.AddStateVersion(ctx, w.ID, "", "u1", StateVersion{Serial: 2, Lineage: "lin", BlobKey: "cloud2/" + w.ID, MD5: "m2", Size: 1})
+		done <- s.AddStateVersion(ctx, w.ID, uuid.Nil, "u1", StateVersion{Serial: 2, Lineage: "lin", BlobKey: "cloud2/" + w.ID.String(), MD5: "m2", Size: 1})
 	}()
 	select {
 	case err := <-done:
 		t.Fatalf("the upload didn't wait for the unlock: %v", err)
 	case <-time.After(200 * time.Millisecond):
 	}
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-done; !errors.Is(err, ErrNotCloudLocked) {
@@ -378,14 +408,20 @@ func TestExpiredLeaseIsErrored(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	w, run := newWorkspace(t, s, false)
-	j, ok, err := s.ClaimJob(ctx, "r", 10*time.Millisecond)
+	j, ok, err := s.ClaimJob(ctx, "r", time.Minute)
 	if err != nil || !ok {
 		t.Fatalf("claim: %v %v", ok, err)
+	}
+	if err := s.AckJob(ctx, run.ID, j.LeaseID, 10*time.Millisecond); err != nil {
+		t.Fatal(err)
 	}
 	if _, ok, err := s.LockState(ctx, w.ID, "l1", run.ID, []byte(`{"ID":"l1"}`)); !ok || err != nil {
 		t.Fatalf("lock: %v %v", ok, err)
 	}
 	time.Sleep(50 * time.Millisecond)
+	if u, err := s.UnclaimJobs(ctx); err != nil || len(u) != 0 {
+		t.Fatalf("an acknowledged job must never be unclaimed: %v %v", u, err)
+	}
 	ids, err := s.ReapExpiredLeases(ctx)
 	if err != nil || len(ids) != 1 || ids[0] != run.ID {
 		t.Fatalf("reap: %v %v", ids, err)
@@ -403,76 +439,101 @@ func TestExpiredLeaseIsErrored(t *testing.T) {
 	}
 }
 
+// A claim not acknowledged within its lease (the ack window) goes back to the queue, plan and apply
+// phase alike, and the late runner is fenced off; an acknowledged one stays.
+func TestUnclaim(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	_, run := newWorkspace(t, s, false)
+	unclaim := func(want ...uuid.UUID) {
+		t.Helper()
+		time.Sleep(50 * time.Millisecond)
+		u, err := s.UnclaimJobs(ctx)
+		if err != nil || len(u) != len(want) {
+			t.Fatalf("unclaim: %+v %v, want %v", u, err, want)
+		}
+		for i := range want {
+			if u[i].RunID != want[i] || u[i].Runner != "lost" {
+				t.Fatalf("unclaimed %+v, want %v", u[i], want[i])
+			}
+		}
+	}
+	listen, err := s.Pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listen.Release()
+	if _, err := listen.Exec(ctx, "LISTEN "+JobsChannel); err != nil {
+		t.Fatal(err)
+	}
+
+	j, ok, err := s.ClaimJob(ctx, "lost", 10*time.Millisecond)
+	if err != nil || !ok {
+		t.Fatalf("claim: %v %v", ok, err)
+	}
+	unclaim(run.ID)
+	if st := status(t, s, run.ID); st != PlanQueued {
+		t.Fatalf("status %s, want plan_queued", st)
+	}
+	if r, hist, _ := s.GetRun(ctx, run.ID); r.Runner != nil || !strings.Contains(*hist[len(hist)-1].Message, "not acknowledged by runner lost") {
+		t.Fatalf("runner %v, history %+v", r.Runner, hist[len(hist)-1])
+	}
+	wait, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if _, err := listen.Conn().WaitForNotification(wait); err != nil {
+		t.Fatalf("unclaim must wake claimers: %v", err)
+	}
+	if err := s.AckJob(ctx, run.ID, j.LeaseID, time.Minute); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("a late ack must find the lease gone: %v", err)
+	}
+
+	// another runner takes it; the plan needs confirmation, then its apply phase is lost the same way
+	plan := claim(t, s, "plan")
+	if _, err := s.FinishJob(ctx, run.ID, plan.LeaseID, "succeeded", "", nil, &runnerapi.Plan{Add: 1}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ConfirmRun(ctx, run.ID, uuid.Nil, "a@b.c"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := s.ClaimJob(ctx, "lost", 10*time.Millisecond); err != nil || !ok {
+		t.Fatalf("claim apply: %v %v", ok, err)
+	}
+	unclaim(run.ID)
+	if st := status(t, s, run.ID); st != ApplyQueued {
+		t.Fatalf("status %s, want apply_queued", st)
+	}
+	apply := claim(t, s, "apply")
+	if err := s.AckJob(ctx, run.ID, apply.LeaseID, 10*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	unclaim()
+	if st := status(t, s, run.ID); st != Applying {
+		t.Fatalf("an acknowledged job was unclaimed: %s", st)
+	}
+}
+
 // TestRunVariables: a workspace's own variables win over attached sets, attached sets over
 // global ones, and between sets of one kind the first by name.
 func TestRunVariables(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	name := "t-" + strings.ToLower(rand.Text()[:10])
-	w, _, err := s.CreateWorkspace(ctx, "", name, "", testTemplate(nil), false, "")
+	w, _, err := s.CreateWorkspace(ctx, uuid.Nil, name, "", testTemplate(nil), false, uuid.Nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	other, _, err := s.CreateWorkspace(ctx, "", name+"-other", "", testTemplate(nil), false, "")
+	other, _, err := s.CreateWorkspace(ctx, uuid.Nil, name+"-other", "", testTemplate(nil), false, uuid.Nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		s.DB.Exec(`DELETE FROM workspaces WHERE id IN ($1, $2)`, w.ID, other.ID)
-		s.DB.Exec(`DELETE FROM variable_sets WHERE name LIKE $1`, name+"%")
-	})
-	set := func(o VarOwner, cat, key, val string) {
+	set := func(t *testing.T, o VarOwner, cat, key, val string) {
 		if err := s.SetVariable(ctx, o, Variable{Category: cat, Key: key, Value: []byte(val)}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	sets := map[string]string{}
-	for _, n := range []string{"a-global", "b-attached", "c-attached"} {
-		if err := s.CreateVariableSet(ctx, name+n, "", n == "a-global"); err != nil {
-			t.Fatal(err)
-		}
-		vs, err := s.GetVariableSet(ctx, name+n)
-		if err != nil {
-			t.Fatal(err)
-		}
-		sets[n] = vs.ID
-	}
-	if err := s.CreateVariableSet(ctx, name+"a-global", "", false); !errors.Is(err, ErrExists) {
-		t.Fatalf("duplicate set name: %v", err)
-	}
-	for _, n := range []string{"b-attached", "c-attached"} {
-		if err := s.AttachVariableSet(ctx, sets[n], w.Name, true); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := s.AttachVariableSet(ctx, sets["b-attached"], "no-such-workspace", true); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("attach to an unknown workspace: %v", err)
-	}
-	// Select makes the selection exactly its names; an unknown name changes nothing, not even the other picks.
-	attached := func() []string { vs, _ := s.GetVariableSet(ctx, name+"c-attached"); return vs.Workspaces }
-	if err := s.Select(ctx, sets["c-attached"], Pick{SetWorkspaces, nil}, Pick{SetProjects, []string{"no-such-project"}}); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("select an unknown project: %v", err)
-	}
-	if a := attached(); !slices.Equal(a, []string{w.Name}) {
-		t.Fatalf("a failed select changed the selection: %v", a)
-	}
-	if err := s.Select(ctx, sets["c-attached"], Pick{SetWorkspaces, nil}); err != nil || len(attached()) != 0 {
-		t.Fatalf("deselect all: %v %v", err, attached())
-	}
-	if err := s.Select(ctx, sets["c-attached"], Pick{SetWorkspaces, []string{w.Name}}); err != nil || !slices.Equal(attached(), []string{w.Name}) {
-		t.Fatalf("select: %v %v", err, attached())
-	}
+	sets := map[string]uuid.UUID{}
 	k := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
-	set(VarOwner{SetID: sets["a-global"]}, "env", k+"_G", "global")
-	set(VarOwner{SetID: sets["a-global"]}, "env", k+"_X", "global")
-	set(VarOwner{SetID: sets["c-attached"]}, "env", k+"_X", "c")
-	set(VarOwner{SetID: sets["b-attached"]}, "env", k+"_X", "b")
-	set(VarOwner{SetID: sets["b-attached"]}, "env", k+"_W", "b")
-	set(VarOwner{WorkspaceID: w.ID}, "env", k+"_W", "old")
-	set(VarOwner{WorkspaceID: w.ID}, "env", k+"_W", "workspace") // replaces
-	set(VarOwner{WorkspaceID: w.ID}, "terraform", k+"_W", "tf")  // other category, no clash
-
-	got := func(id string) map[string]string {
+	got := func(t *testing.T, id uuid.UUID) map[string]string {
 		vars, err := s.RunVariables(ctx, id)
 		if err != nil {
 			t.Fatal(err)
@@ -485,72 +546,121 @@ func TestRunVariables(t *testing.T) {
 		}
 		return m
 	}
-	want := map[string]string{"env:" + k + "_G": "global", "env:" + k + "_X": "b", "env:" + k + "_W": "workspace", "terraform:" + k + "_W": "tf"}
-	if m := got(w.ID); !maps.Equal(m, want) {
-		t.Fatalf("got %v, want %v", m, want)
-	}
-	if m := got(other.ID); !maps.Equal(m, map[string]string{"env:" + k + "_G": "global", "env:" + k + "_X": "global"}) {
-		t.Fatalf("a workspace without attachments gets only global sets: %v", m)
-	}
-	if err := s.AttachVariableSet(ctx, sets["b-attached"], w.Name, false); err != nil {
-		t.Fatal(err)
-	}
-	if m := got(w.ID); m["env:"+k+"_X"] != "c" {
-		t.Fatalf("after detaching b, c must win: %v", m)
-	}
+	var ps VariableSet // the project's set
+	step(t, "variable sets attach to workspaces and select exactly their names", func(t *testing.T) {
+		for _, n := range []string{"a-global", "b-attached", "c-attached"} {
+			if err := s.CreateVariableSet(ctx, name+n, "", n == "a-global"); err != nil {
+				t.Fatal(err)
+			}
+			vs, err := s.GetVariableSet(ctx, name+n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sets[n] = vs.ID
+		}
+		if err := s.CreateVariableSet(ctx, name+"a-global", "", false); !errors.Is(err, ErrExists) {
+			t.Fatalf("duplicate set name: %v", err)
+		}
+		for _, n := range []string{"b-attached", "c-attached"} {
+			if err := s.AttachVariableSet(ctx, sets[n], w.Name, true); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := s.AttachVariableSet(ctx, sets["b-attached"], "no-such-workspace", true); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("attach to an unknown workspace: %v", err)
+		}
+		// Select makes the selection exactly its names; an unknown name changes nothing, not even the other picks.
+		attached := func() []string { vs, _ := s.GetVariableSet(ctx, name+"c-attached"); return vs.Workspaces }
+		if err := s.Select(ctx, sets["c-attached"], Pick{SetWorkspaces, nil}, Pick{SetProjects, []string{"no-such-project"}}); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("select an unknown project: %v", err)
+		}
+		if a := attached(); !slices.Equal(a, []string{w.Name}) {
+			t.Fatalf("a failed select changed the selection: %v", a)
+		}
+		if err := s.Select(ctx, sets["c-attached"], Pick{SetWorkspaces, nil}); err != nil || len(attached()) != 0 {
+			t.Fatalf("deselect all: %v %v", err, attached())
+		}
+		if err := s.Select(ctx, sets["c-attached"], Pick{SetWorkspaces, []string{w.Name}}); err != nil || !slices.Equal(attached(), []string{w.Name}) {
+			t.Fatalf("select: %v %v", err, attached())
+		}
+	})
+	step(t, "attached sets win over global ones, the workspace's own variables over both", func(t *testing.T) {
+		set(t, VarOwner{SetID: sets["a-global"]}, "env", k+"_G", "global")
+		set(t, VarOwner{SetID: sets["a-global"]}, "env", k+"_X", "global")
+		set(t, VarOwner{SetID: sets["c-attached"]}, "env", k+"_X", "c")
+		set(t, VarOwner{SetID: sets["b-attached"]}, "env", k+"_X", "b")
+		set(t, VarOwner{SetID: sets["b-attached"]}, "env", k+"_W", "b")
+		set(t, VarOwner{WorkspaceID: w.ID}, "env", k+"_W", "old")
+		set(t, VarOwner{WorkspaceID: w.ID}, "env", k+"_W", "workspace") // replaces
+		set(t, VarOwner{WorkspaceID: w.ID}, "terraform", k+"_W", "tf")  // other category, no clash
+
+		want := map[string]string{"env:" + k + "_G": "global", "env:" + k + "_X": "b", "env:" + k + "_W": "workspace", "terraform:" + k + "_W": "tf"}
+		if m := got(t, w.ID); !maps.Equal(m, want) {
+			t.Fatalf("got %v, want %v", m, want)
+		}
+		if m := got(t, other.ID); !maps.Equal(m, map[string]string{"env:" + k + "_G": "global", "env:" + k + "_X": "global"}) {
+			t.Fatalf("a workspace without attachments gets only global sets: %v", m)
+		}
+		if err := s.AttachVariableSet(ctx, sets["b-attached"], w.Name, false); err != nil {
+			t.Fatal(err)
+		}
+		if m := got(t, w.ID); m["env:"+k+"_X"] != "c" {
+			t.Fatalf("after detaching b, c must win: %v", m)
+		}
+	})
 
 	// Project sets rank between the workspace's attached sets and global ones, whatever their names:
 	// "a-project" sorts before every set but "a-global".
-	p, err := s.CreateProject(ctx, name, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { // before the workspaces' own cleanups: RESTRICT keeps a project with workspaces
-		s.DB.Exec(`DELETE FROM workspaces WHERE project_id = $1`, p.ID)
-		s.DB.Exec(`DELETE FROM projects WHERE id = $1`, p.ID)
+	step(t, "project sets rank between attached and global sets", func(t *testing.T) {
+		p, err := s.CreateProject(ctx, name, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.MoveWorkspace(ctx, w.ID, p.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.CreateVariableSet(ctx, name+"a-project", "", false); err != nil {
+			t.Fatal(err)
+		}
+		ps, _ = s.GetVariableSet(ctx, name+"a-project")
+		if err := s.AttachVariableSetProject(ctx, ps.ID, p.Name, true); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.AttachVariableSetProject(ctx, ps.ID, "no-such-project", true); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("attach to an unknown project: %v", err)
+		}
+		if ps, _ = s.GetVariableSet(ctx, ps.Name); !slices.Equal(ps.Projects, []string{p.Name}) {
+			t.Fatalf("set's projects: %v", ps.Projects)
+		}
+		for _, key := range []string{"_G", "_X", "_P", "_W"} {
+			set(t, VarOwner{SetID: ps.ID}, "env", k+key, "project")
+		}
+		want := map[string]string{"env:" + k + "_G": "project", "env:" + k + "_X": "c", "env:" + k + "_P": "project",
+			"env:" + k + "_W": "workspace", "terraform:" + k + "_W": "tf"}
+		if m := got(t, w.ID); !maps.Equal(m, want) {
+			t.Fatalf("with a project set: got %v, want %v", m, want)
+		}
+		if m := got(t, other.ID); m["env:"+k+"_P"] != "" {
+			t.Fatalf("a workspace of another project gets the set: %v", m)
+		}
 	})
-	if err := s.MoveWorkspace(ctx, w.ID, p.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.CreateVariableSet(ctx, name+"a-project", "", false); err != nil {
-		t.Fatal(err)
-	}
-	ps, _ := s.GetVariableSet(ctx, name+"a-project")
-	if err := s.AttachVariableSetProject(ctx, ps.ID, p.Name, true); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.AttachVariableSetProject(ctx, ps.ID, "no-such-project", true); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("attach to an unknown project: %v", err)
-	}
-	if ps, _ = s.GetVariableSet(ctx, ps.Name); !slices.Equal(ps.Projects, []string{p.Name}) {
-		t.Fatalf("set's projects: %v", ps.Projects)
-	}
-	for _, key := range []string{"_G", "_X", "_P", "_W"} {
-		set(VarOwner{SetID: ps.ID}, "env", k+key, "project")
-	}
-	want = map[string]string{"env:" + k + "_G": "project", "env:" + k + "_X": "c", "env:" + k + "_P": "project",
-		"env:" + k + "_W": "workspace", "terraform:" + k + "_W": "tf"}
-	if m := got(w.ID); !maps.Equal(m, want) {
-		t.Fatalf("with a project set: got %v, want %v", m, want)
-	}
-	if m := got(other.ID); m["env:"+k+"_P"] != "" {
-		t.Fatalf("a workspace of another project gets the set: %v", m)
-	}
 
 	// A VCS-linked workspace gets neither project nor global sets, only those attached to it.
-	if _, err := s.CreateVCSConnection(ctx, VCSConnection{Name: name, Provider: "github", Token: []byte("x")}); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { s.DB.Exec(`DELETE FROM vcs_connections WHERE name = $1`, name) })
-	if _, err := s.DB.Exec(`UPDATE workspaces SET vcs_connection_id = (SELECT id FROM vcs_connections WHERE name = $2) WHERE id = $1`, w.ID, name); err != nil {
-		t.Fatal(err)
-	}
-	if m := got(w.ID); m["env:"+k+"_P"] != "" || m["env:"+k+"_G"] != "" || m["env:"+k+"_X"] != "c" {
-		t.Fatalf("VCS-linked: %v", m)
-	}
-	if shown, _ := s.WorkspaceVariableSets(ctx, w.ID); slices.ContainsFunc(shown, func(vs VariableSet) bool { return vs.ID == ps.ID }) {
-		t.Fatal("a VCS-linked workspace lists the project set")
-	}
+	step(t, "a VCS-linked workspace gets only the sets attached to it", func(t *testing.T) {
+		if _, err := s.CreateVCSConnection(ctx, VCSConnection{Name: name, Provider: "github", Token: []byte("x")}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Pool.Exec(context.Background(), `INSERT INTO workspace_vcs (workspace_id, connection_id, repo, branch)
+			SELECT $1, id, 'acme/infra', 'main' FROM vcs_connections WHERE name = $2`, w.ID, name); err != nil {
+			t.Fatal(err)
+		}
+		if m := got(t, w.ID); m["env:"+k+"_P"] != "" || m["env:"+k+"_G"] != "" || m["env:"+k+"_X"] != "c" {
+			t.Fatalf("VCS-linked: %v", m)
+		}
+		if shown, _ := s.WorkspaceVariableSets(ctx, w.ID); slices.ContainsFunc(shown, func(vs VariableSet) bool { return vs.ID == ps.ID }) {
+			t.Fatal("a VCS-linked workspace lists the project set")
+		}
+	})
 }
 
 func TestAccess(t *testing.T) {
@@ -560,13 +670,12 @@ func TestAccess(t *testing.T) {
 	member, _ := s.UpsertUser(ctx, "", "member@example.com", "user", []string{"team-a", "team-b"})
 	outsider, _ := s.UpsertUser(ctx, "", "outsider@example.com", "user", []string{"team-c"})
 	name := "t-" + strings.ToLower(rand.Text()[:10])
-	w, _, err := s.CreateWorkspace(ctx, "", name, "", testTemplate(nil), false, creator)
+	w, _, err := s.CreateWorkspace(ctx, uuid.Nil, name, "", testTemplate(nil), false, creator)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.DB.Exec(`DELETE FROM workspaces WHERE id=$1`, w.ID) })
 
-	sees := func(user string, admin bool) bool {
+	sees := func(user uuid.UUID, admin bool) bool {
 		list, err := s.ListWorkspaces(ctx, Viewer{UserID: user, Admin: admin}, "")
 		if err != nil {
 			t.Fatal(err)
@@ -578,14 +687,14 @@ func TestAccess(t *testing.T) {
 		}
 		return false
 	}
-	level := func(user string) string {
+	level := func(user uuid.UUID) string {
 		l, err := s.Access(ctx, w.ID, user)
 		if err != nil {
 			t.Fatal(err)
 		}
 		return l
 	}
-	if !sees(creator, false) || level(creator) != "operate" || sees(member, false) || level(member) != "" || !sees("", true) {
+	if !sees(creator, false) || level(creator) != "operate" || sees(member, false) || level(member) != "" || !sees(uuid.Nil, true) {
 		t.Fatal("before grants: only the creator and admins")
 	}
 	s.SetGrant(ctx, w.ID, "team-a", "read")
@@ -610,12 +719,8 @@ func TestAccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { // before the workspaces' own cleanups: RESTRICT keeps a project with workspaces
-		s.DB.Exec(`DELETE FROM workspaces WHERE project_id = $1`, p.ID)
-		s.DB.Exec(`DELETE FROM projects WHERE id = $1`, p.ID)
-	})
 	sibling, _ := newWorkspace(t, s, false)
-	for _, id := range []string{w.ID, sibling.ID} {
+	for _, id := range []uuid.UUID{w.ID, sibling.ID} {
 		if err := s.MoveWorkspace(ctx, id, p.ID); err != nil {
 			t.Fatal(err)
 		}
@@ -648,19 +753,19 @@ func TestAccess(t *testing.T) {
 	}
 
 	other, _ := newWorkspace(t, s, false)
-	if err := s.SaveSettings(ctx, w.ID, Settings{Name: other.Name, AutoApply: true, ExecutionMode: "local"}); !errors.Is(err, ErrNameTaken) {
+	if err := s.SaveGeneral(ctx, w.ID, General{Name: other.Name, AutoApply: true, ExecutionMode: "local"}); !errors.Is(err, ErrNameTaken) {
 		t.Fatalf("rename onto a taken name: %v", err)
 	}
 	if got, _ := s.GetWorkspaceByID(ctx, w.ID); got.AutoApply || got.ExecutionMode != "remote" {
 		t.Fatalf("a failed save changed settings: %+v", got)
 	}
-	if err := s.SaveSettings(ctx, w.ID, Settings{Name: name + "-new"}); err != nil {
+	if err := s.SaveGeneral(ctx, w.ID, General{Name: name + "-new", ExecutionMode: "remote"}); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.GetWorkspace(ctx, name+"-new"); err != nil || got.ID != w.ID {
 		t.Fatalf("renamed: %+v %v", got, err)
 	}
-	if err := s.SaveSettings(ctx, "00000000-0000-0000-0000-000000000000", Settings{Name: name + "-gone"}); !errors.Is(err, sql.ErrNoRows) {
+	if err := s.SaveGeneral(ctx, uuid.New(), General{Name: name + "-gone", ExecutionMode: "remote"}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("rename of an unknown workspace: %v", err)
 	}
 }
@@ -680,7 +785,7 @@ func TestCancel(t *testing.T) {
 
 	// Running: asked to stop; the runner keeps its lease (Terraform must still save state) and
 	// hears about it on its next heartbeat or log post.
-	run2, err := s.CreateRun(ctx, w.ID, "apply", "", nil)
+	run2, err := s.CreateRun(ctx, w.ID, "apply", uuid.Nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -702,7 +807,7 @@ func TestCancel(t *testing.T) {
 	}
 
 	// The plan finishes before the cancel reaches Terraform: the run ends, its apply is never queued.
-	run4, _ := s.CreateRun(ctx, w.ID, "apply", "", nil)
+	run4, _ := s.CreateRun(ctx, w.ID, "apply", uuid.Nil, nil)
 	j = claim(t, s, "plan")
 	if _, err := s.CancelRun(ctx, run4.ID, "a@b.c", false); err != nil {
 		t.Fatal(err)
@@ -713,7 +818,7 @@ func TestCancel(t *testing.T) {
 	}
 
 	// Force: cut off right away; the runner's lease and state lock are gone.
-	run3, _ := s.CreateRun(ctx, w.ID, "apply", "", nil)
+	run3, _ := s.CreateRun(ctx, w.ID, "apply", uuid.Nil, nil)
 	j = claim(t, s, "plan")
 	s.LockState(ctx, w.ID, "l1", run3.ID, []byte(`{"ID":"l1"}`))
 	if st, err := s.CancelRun(ctx, run3.ID, "a@b.c", true); err != nil || st != Canceled {
@@ -732,11 +837,11 @@ func TestRunMetrics(t *testing.T) {
 	ctx := context.Background()
 	w, run := newWorkspace(t, s, false)
 	// planning for 90s, then errored; the trailing errored entry has no end and is ignored
-	if _, err := s.DB.Exec(`INSERT INTO run_status_history (run_id, status, created_at) VALUES
+	if _, err := s.Pool.Exec(context.Background(), `INSERT INTO run_status_history (run_id, status, created_at) VALUES
 		($1, 'planning', now() + interval '1 hour'), ($1, 'errored', now() + interval '1 hour 90 seconds')`, run.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DB.Exec(`UPDATE runs SET status = 'errored' WHERE id = $1`, run.ID); err != nil {
+	if _, err := s.Pool.Exec(context.Background(), `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE id = $1`, run.ID); err != nil {
 		t.Fatal(err)
 	}
 	m, err := s.RunMetrics(ctx, w.ID)
@@ -751,20 +856,14 @@ func TestVCSWorkspaceVariableSets(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	name := "t-" + strings.ToLower(rand.Text()[:10])
-	w, err := s.CreateEmptyWorkspace(ctx, name, "", false, "")
+	w, err := s.CreateEmptyWorkspace(ctx, EmptyWorkspace{Name: name})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateVCSConnection(ctx, VCSConnection{Name: name, Provider: "github", Token: []byte("x")}); err != nil {
+	conn, err := s.CreateVCSConnection(ctx, VCSConnection{Name: name, Provider: "github", Token: []byte("x")})
+	if err != nil {
 		t.Fatal(err)
 	}
-	var conn string
-	s.DB.QueryRow(`SELECT id FROM vcs_connections WHERE name = $1`, name).Scan(&conn)
-	t.Cleanup(func() {
-		s.DB.Exec(`DELETE FROM workspaces WHERE id = $1`, w.ID)
-		s.DB.Exec(`DELETE FROM variable_sets WHERE name LIKE $1`, name+"%")
-		s.DB.Exec(`DELETE FROM vcs_connections WHERE id = $1`, conn)
-	})
 	k := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
 	for _, n := range []string{"global", "attached"} {
 		if err := s.CreateVariableSet(ctx, name+n, "", n == "global"); err != nil {
@@ -836,19 +935,14 @@ func TestQueueVCSRun(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	name := "t-" + strings.ToLower(rand.Text()[:10])
-	w, err := s.CreateEmptyWorkspace(ctx, name, "", false, "")
+	w, err := s.CreateEmptyWorkspace(ctx, EmptyWorkspace{Name: name})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateVCSConnection(ctx, VCSConnection{Name: name, Provider: "github", Token: []byte("x")}); err != nil {
+	conn, err := s.CreateVCSConnection(ctx, VCSConnection{Name: name, Provider: "github", Token: []byte("x")})
+	if err != nil {
 		t.Fatal(err)
 	}
-	var conn string
-	s.DB.QueryRow(`SELECT id FROM vcs_connections WHERE name = $1`, name).Scan(&conn)
-	t.Cleanup(func() {
-		s.DB.Exec(`DELETE FROM workspaces WHERE id = $1`, w.ID)
-		s.DB.Exec(`DELETE FROM vcs_connections WHERE id = $1`, conn)
-	})
 	if err := s.SetWorkspaceVCS(ctx, w.ID, conn, "org/repo", "main", "", "", true, true); err != nil {
 		t.Fatal(err)
 	}
@@ -864,7 +958,7 @@ func TestQueueVCSRun(t *testing.T) {
 	finish := func(want string) {
 		t.Helper()
 		j := claim(t, s, "plan")
-		if j.RunID == "" || j.VCSCommit == "" {
+		if j.RunID == uuid.Nil || j.VCSCommit == "" {
 			t.Fatalf("job without pinned commit: %+v", j)
 		}
 		got, err := s.FinishJob(ctx, j.RunID, j.LeaseID, "succeeded", "", nil, &runnerapi.Plan{Add: 1}, nil)
@@ -904,7 +998,7 @@ func TestConcurrentTriggers(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := s.CreateRun(ctx, w.ID, "apply", "", nil)
+			_, err := s.CreateRun(ctx, w.ID, "apply", uuid.Nil, nil)
 			if err != nil && !errors.Is(err, ErrRunActive) {
 				t.Error(err)
 			}
@@ -918,5 +1012,50 @@ func TestConcurrentTriggers(t *testing.T) {
 	wg.Wait()
 	if won != 1 {
 		t.Fatalf("%d runs created, want 1", won)
+	}
+}
+
+// A rollback is recorded only while its own lock is still the workspace's: one released under it
+// (STALE_LOCK_TIMEOUT, force-unlock) and maybe taken by someone else changes nothing.
+func TestRollbackWriteFenced(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	w, _ := newWorkspace(t, s, false)
+	v := StateVersion{Serial: 1, Lineage: "lin", BlobKey: "base/" + w.ID.String(), MD5: "m0", Size: 1}
+	if err := s.AddStateVersion(ctx, w.ID, uuid.Nil, "", v); err != nil {
+		t.Fatal(err)
+	}
+	vs, _ := s.StateVersions(ctx, w.ID, 1)
+	lock := func(id string) {
+		t.Helper()
+		if _, ok, err := s.LockState(ctx, w.ID, id, uuid.Nil, []byte(`{"ID":"`+id+`"}`)); !ok || err != nil {
+			t.Fatalf("lock %s: %v %v", id, ok, err)
+		}
+	}
+	copyOf := func(n int64) StateVersion {
+		return StateVersion{Serial: n, Lineage: "lin", BlobKey: fmt.Sprintf("rb%d/%s", n, w.ID), MD5: "m", Size: 1}
+	}
+
+	lock("rollback-1")
+	// The orphaned-lock release ran meanwhile (timeout 0: every rollback lock is stale).
+	if _, err := s.ReleaseOrphanedLocks(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddRollbackVersion(ctx, w.ID, vs[0].ID, "rollback-1", copyOf(2)); !errors.Is(err, ErrLockLost) {
+		t.Fatalf("a rollback whose lock was released: %v", err)
+	}
+	lock("someone-else")
+	if err := s.AddRollbackVersion(ctx, w.ID, vs[0].ID, "rollback-1", copyOf(2)); !errors.Is(err, ErrLockLost) {
+		t.Fatalf("a rollback whose lock someone else holds now: %v", err)
+	}
+	if err := s.UnlockState(ctx, w.ID, "someone-else", uuid.Nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.StateVersions(ctx, w.ID, 10); len(got) != 1 {
+		t.Fatalf("a fenced-off rollback recorded a version: %d versions", len(got))
+	}
+	lock("rollback-2")
+	if err := s.AddRollbackVersion(ctx, w.ID, vs[0].ID, "rollback-2", copyOf(2)); err != nil {
+		t.Fatalf("a rollback holding its lock: %v", err)
 	}
 }

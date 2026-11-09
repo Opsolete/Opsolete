@@ -1,4 +1,4 @@
-{{template "top"}}
+{{template "top" .Page}}
 {{$conn := .Conn}}{{$repo := index .Form "repo"}}
 <nav class="back" aria-label="breadcrumb"><a href="/registry">Registry</a> / Publish module</nav>
 <div class="page-head">
@@ -8,6 +8,7 @@
   </div>
 </div>
 {{with .Error}}<div class="alert error" role="alert">{{.}}</div>{{end}}
+{{template "formerror" .F}}
 
 {{if .Type}}
 <ol class="stepper">
@@ -46,15 +47,20 @@
 <h2>Upload module</h2>
 <form method="post" action="/registry" enctype="multipart/form-data" class="settings">
   <label for="namespace">Namespace <span class="req" aria-hidden="true">*</span></label>
-  <input id="namespace" name="namespace" value="{{index .Form "namespace"}}" required placeholder="platform">
+  <input id="namespace" name="namespace" value="{{index .Form "namespace"}}" required placeholder="platform"{{aria $.F "namespace"}}>
+  {{template "fielderror" (dict "F" $.F "N" "namespace")}}
   <label for="name">Module name <span class="req" aria-hidden="true">*</span></label>
-  <input id="name" name="name" value="{{index .Form "name"}}" required placeholder="storage-account">
+  <input id="name" name="name" value="{{index .Form "name"}}" required placeholder="storage-account"{{aria $.F "name"}}>
+  {{template "fielderror" (dict "F" $.F "N" "name")}}
   <label for="system">Provider name <span class="req" aria-hidden="true">*</span></label>
-  <input id="system" name="system" value="{{index .Form "system"}}" required placeholder="azurerm">
+  <input id="system" name="system" value="{{index .Form "system"}}" required placeholder="azurerm"{{aria $.F "system"}}>
+  {{template "fielderror" (dict "F" $.F "N" "system")}}
   <label for="version">Version <span class="req" aria-hidden="true">*</span></label>
-  <input id="version" name="version" value="{{index .Form "version"}}" required placeholder="1.0.0">
+  <input id="version" name="version" value="{{index .Form "version"}}" required placeholder="1.0.0"{{aria $.F "version"}}>
+  {{template "fielderror" (dict "F" $.F "N" "version")}}
   <label for="archive">Module archive (.tar.gz, module files at the root) <span class="req" aria-hidden="true">*</span></label>
-  <input id="archive" name="archive" type="file" accept=".tar.gz,.tgz,application/gzip" required>
+  <input id="archive" name="archive" type="file" accept=".tar.gz,.tgz,application/gzip" required{{aria $.F "archive"}}>
+  {{template "fielderror" (dict "F" $.F "N" "archive")}}
   <p class="hint">Create one with <code>tar czf module.tar.gz -C path/to/module .</code> Published as <code>{{.Host}}/&lt;namespace&gt;/&lt;name&gt;/&lt;provider&gt;</code>; versions are immutable.</p>
   <div class="actions"><a href="/registry/publish">‹ Previous</a><button type="submit">Upload module</button><a class="btn secondary" href="/registry">Cancel</a></div>
 </form>
@@ -83,7 +89,7 @@
   <button type="submit">Next</button>
 </form>
 {{with .Repos}}
-<div class="runlist" style="margin-top:1rem">
+<div class="runlist mt-1">
   {{range .}}<a class="runrow" href="?connection={{$conn.ID}}&repo={{.}}">{{.}}</a>{{end}}
 </div>
 {{end}}
@@ -96,14 +102,18 @@
   <input type="hidden" name="repo" value="{{$repo}}">
   <p>Repository: <code>{{$repo}}</code> via {{$conn.Name}}</p>
   <label for="dir">Folder</label>
-  <input id="dir" name="dir" value="{{index .Form "dir"}}" placeholder="modules/storage-account" aria-describedby="dir-hint">
+  <input id="dir" name="dir" value="{{index .Form "dir"}}" placeholder="modules/storage-account"{{aria $.F "dir" "dir-hint"}}>
+  {{template "fielderror" (dict "F" $.F "N" "dir")}}
   <p class="hint" id="dir-hint">Folder of the module's <code>.tf</code> files, for a repository with several modules. Empty: the repository root.</p>
   <label for="namespace">Namespace <span class="req" aria-hidden="true">*</span></label>
-  <input id="namespace" name="namespace" value="{{index .Form "namespace"}}" required placeholder="platform">
+  <input id="namespace" name="namespace" value="{{index .Form "namespace"}}" required placeholder="platform"{{aria $.F "namespace"}}>
+  {{template "fielderror" (dict "F" $.F "N" "namespace")}}
   <label for="name">Module name <span class="req" aria-hidden="true">*</span></label>
-  <input id="name" name="name" value="{{index .Form "name"}}" required placeholder="storage-account">
+  <input id="name" name="name" value="{{index .Form "name"}}" required placeholder="storage-account"{{aria $.F "name"}}>
+  {{template "fielderror" (dict "F" $.F "N" "name")}}
   <label for="system">Provider name <span class="req" aria-hidden="true">*</span></label>
-  <input id="system" name="system" value="{{index .Form "system"}}" required placeholder="azurerm">
+  <input id="system" name="system" value="{{index .Form "system"}}" required placeholder="azurerm"{{aria $.F "system"}}>
+  {{template "fielderror" (dict "F" $.F "N" "system")}}
   <p class="hint">The namespace defaults to the repository name; name and provider are filled in from a <code>terraform-&lt;provider&gt;-&lt;name&gt;</code> repository name. Published as <code>{{.Host}}/&lt;namespace&gt;/&lt;name&gt;/&lt;provider&gt;</code>.</p>
   <div class="actions"><a href="?connection={{$conn.ID}}">‹ Previous</a><button type="submit">Publish module</button><a class="btn secondary" href="/registry">Cancel</a></div>
 </form>

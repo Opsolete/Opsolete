@@ -8,6 +8,10 @@ const (
 	StatePrefix = "/api/state/v1"    // Terraform http state backend: StatePrefix + "/<workspace id>"
 	LeaseHeader = "X-Opsolete-Lease" // fencing token returned by claim; required on every job update
 
+	// A claimed job is acknowledged (POST Prefix/jobs/<run>/ack with the lease, 204) before any other
+	// call for it, which the server refuses (409) until then; one not acknowledged within 30 s of its
+	// claim is queued again for any runner. 409 on the ack: the lease is gone, drop the job.
+
 	// StatusCancel answers a log post or heartbeat when a user canceled the run: interrupt
 	// Terraform (it may still save state), then finish as canceled. 409 means the lease is gone.
 	StatusCancel = 202
@@ -46,6 +50,9 @@ type Job struct {
 	// Env is set for Terraform on top of the runner's own environment: the workspace's
 	// environment variables, typically cloud credentials (ARM_CLIENT_SECRET, ...).
 	Env map[string]string `json:"env,omitempty"`
+	// Secrets are the values of sensitive variables and inputs: the runner masks them (internal/mask) in the log and outputs, as
+	// a module may print them (local-exec, or a variable its module doesn't mark sensitive).
+	Secrets []string `json:"secrets,omitempty"`
 	// Currency of the cost estimate (ISO 4217, e.g. EUR); "" is Infracost's default, USD.
 	Currency string `json:"currency,omitempty"`
 }

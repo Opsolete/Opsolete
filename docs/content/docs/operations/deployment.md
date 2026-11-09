@@ -31,7 +31,16 @@ helm install opsolete opsolete/opsolete --set secrets.existingSecret=opsolete \
 - Scale runners with `replicas`, one job each at a time.
 - Point `OPS_SERVER_URL` at the app's Service, so registry downloads stay inside the cluster.
 - Optionally mount a volume at `TF_PLUGIN_CACHE_DIR` to keep providers between restarts.
-- Set the runner pods' `terminationGracePeriodSeconds` to cover a job (see [Shutdown]({{< relref "runners#how-it-works" >}})).
+- Set the runner pods' `terminationGracePeriodSeconds` to at least `OPS_JOB_TIMEOUT` + `OPS_JOB_GRACE` + 5 minutes (see [Shutdown]({{< relref "runners#how-it-works" >}})).
+- Scale the app with `replicas` too; background work runs on one of them (below).
+
+## Background work
+
+Background work runs on one app replica at a time, the leader: failing jobs of lost runners (every 15 s), releasing orphaned state locks, queueing rollout batches and drift checks (every 15 s), queueing VCS-triggered runs and syncing the template catalog from Git (every minute), publishing registry module versions from VCS (every 5 minutes), and [retention]({{< relref "/docs/usage/runs#retention" >}}): deleting expired run logs, drift checks and speculative plans, and expired sessions (hourly, at most 1000 runs per statement). The leader holds a PostgreSQL session advisory lock on a connection of its own; the other replicas try to take it every 5 seconds. When the leader stops or loses its database connection, Postgres releases the lock and another replica takes over within about 5 seconds (up to ~30 s if the leader's node vanishes without closing its connection); a job the old leader was running is cancelled. Every replica reloads the template catalog from Postgres every 10 seconds.
+
+Every replica also keeps one more connection of its own, `LISTEN`ing for queued jobs and new log lines (application name `opsolete-notify`), so runner claims and live logs don't poll. If it breaks, the replica logs it and reconnects (backoff up to 30 s); meanwhile claims and log streams look every 5 seconds. Count two connections per replica beside the pool: this one and the leader lock's.
+
+`opsolete_scheduler_leader` (see `METRICS_ADDR`) is 1 on the leader and 0 on the others: alert if `sum` isn't 1. The lock and `LISTEN` need a session: connect through a transaction-pooling proxy (PgBouncer `pool_mode=transaction`) and the leader isn't exclusive, and notifications are lost.
 
 ## NixOS
 
@@ -48,4 +57,4 @@ services.opsolete = {
 };
 ```
 
-Create registry tokens with `sudo opsolete-admin token <name>`. A runner on another host sets `runner.tokenFile` to the same secret. The runner runs as PID 1 of its own PID namespace, so it cleans up after jobs like in a container. It reads its secret files as root and then drops to its user, so module code (which runs as that user) can't read them. Test: `nix build .#checks.x86_64-linux.nixos` (NixOS VM, needs kvm).
+Create registry tokens with `sudo opsolete-admin token <name>`. A runner on another host sets `runner.tokenFile` to the same secret. The runner runs in its own PID namespace, so jobs see no other processes of the host. It reads its secret files as root and then drops to its user, so module code (which runs as that user) can't read them. Test: `nix build .#checks.x86_64-linux.nixos` (NixOS VM, needs kvm).

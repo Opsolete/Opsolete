@@ -2,11 +2,12 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
 func TestLoad(t *testing.T) {
-	for _, k := range []string{"ADDR", "PUBLIC_URL", "DEPLOYMENTS_ENABLED", "REGISTRY_ENABLED", "TEMPLATE_EDITOR"} {
+	for _, k := range []string{"ADDR", "PUBLIC_URL", "DEPLOYMENTS_ENABLED", "REGISTRY_ENABLED", "TEMPLATE_EDITOR", "RUN_LOG_RETENTION_DAYS"} {
 		t.Setenv(k, "")
 	}
 	t.Setenv("DATABASE_URL", "")
@@ -20,6 +21,13 @@ func TestLoad(t *testing.T) {
 		t.Fatal("expected error without SECRET_KEY")
 	}
 	t.Setenv("SECRET_KEY", "test-secret-key-of-at-least-32-chars")
+	for _, bad := range []string{"short", "test-secret-key-of-at-least-32-chars"} {
+		t.Setenv("SECRET_KEY_PREVIOUS", bad)
+		if _, err := Load(); err == nil {
+			t.Errorf("SECRET_KEY_PREVIOUS %q should be rejected", bad)
+		}
+	}
+	t.Setenv("SECRET_KEY_PREVIOUS", "")
 	c, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -51,6 +59,21 @@ func TestLoad(t *testing.T) {
 	}
 	t.Setenv("PUBLIC_URL", "")
 
+	if c.RunLogRetentionDays != 90 {
+		t.Fatalf("RUN_LOG_RETENTION_DAYS default: %d", c.RunLogRetentionDays)
+	}
+	t.Setenv("RUN_LOG_RETENTION_DAYS", "0")
+	if c, err := Load(); err != nil || c.RunLogRetentionDays != 0 {
+		t.Fatalf("RUN_LOG_RETENTION_DAYS=0 keeps logs forever: %d %v", c.RunLogRetentionDays, err)
+	}
+	for _, bad := range []string{"-1", "90d", "1.5", "36501"} {
+		t.Setenv("RUN_LOG_RETENTION_DAYS", bad)
+		if _, err := Load(); err == nil {
+			t.Errorf("RUN_LOG_RETENTION_DAYS %q should be rejected", bad)
+		}
+	}
+	t.Setenv("RUN_LOG_RETENTION_DAYS", "")
+
 	t.Setenv("TEMPLATE_EDITOR", "1")
 	t.Setenv("TEMPLATES_DIR", t.TempDir())
 	if _, err := Load(); err != nil {
@@ -66,6 +89,7 @@ func TestLoadRunner(t *testing.T) {
 	t.Setenv("OPS_SERVER_URL", "http://opsolete:8080")
 	t.Setenv("OPS_RUNNER_TOKEN", "")
 	t.Setenv("OPS_TERRAFORM", "/bin/terraform")
+	t.Setenv("OPS_JOB_GRACE", "")
 	if _, err := LoadRunner(); err == nil {
 		t.Fatal("expected error without token")
 	}
@@ -74,10 +98,19 @@ func TestLoadRunner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Token != "secret" || c.JobTimeout.String() != "1h0m0s" {
+	if c.Token != "secret" || c.JobTimeout.String() != "1h0m0s" || c.JobGrace.String() != "10m0s" {
 		t.Fatalf("runner config: %+v", c)
 	}
 	if _, set := os.LookupEnv("OPS_RUNNER_TOKEN"); set {
 		t.Fatal("token must be removed from the environment")
+	}
+	for _, v := range []string{"0", "-1m", "10"} {
+		for k, val := range map[string]string{"OPS_SERVER_URL": "http://opsolete:8080", "OPS_RUNNER_TOKEN": "secret", "OPS_TERRAFORM": "/bin/terraform"} {
+			t.Setenv(k, val) // LoadRunner unsets them
+		}
+		t.Setenv("OPS_JOB_GRACE", v)
+		if _, err := LoadRunner(); err == nil || !strings.Contains(err.Error(), "OPS_JOB_GRACE") {
+			t.Fatalf("OPS_JOB_GRACE=%s: err = %v", v, err)
+		}
 	}
 }

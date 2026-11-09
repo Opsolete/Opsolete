@@ -3,6 +3,8 @@ package vcs
 import (
 	"archive/zip"
 	"bytes"
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -13,7 +15,6 @@ import (
 
 	"github.com/opsolete/opsolete/internal/registry"
 	"github.com/opsolete/opsolete/internal/registry/registrytest"
-	"github.com/opsolete/opsolete/internal/storage"
 )
 
 const mainTF = `variable "name" { type = string }`
@@ -96,14 +97,13 @@ func fakeVCS(t *testing.T) *httptest.Server {
 	}))
 	srv := httptest.NewTLSServer(mux)
 	t.Cleanup(srv.Close)
-	old := HTTPClient
-	HTTPClient = srv.Client()
-	t.Cleanup(func() { HTTPClient = old })
 	return srv
 }
 
 func TestProviders(t *testing.T) {
+	t.Parallel()
 	srv := fakeVCS(t)
+	cl := NewClient(srv.Client())
 	ctx := t.Context()
 	for _, tc := range []struct {
 		conn       Conn
@@ -113,10 +113,10 @@ func TestProviders(t *testing.T) {
 		head       string
 		prs        []PullRequest // forks left out
 	}{
-		{Conn{Provider: GitHub, BaseURL: srv.URL + "/gh", Token: "gh-token"}, "acme/terraform-azurerm-storage", "v1.1.0", []string{"README.md", "main.tf"}, false, "abc123", []PullRequest{{Number: 3, Commit: "pr3"}}},
-		{Conn{Provider: AzureDevOps, BaseURL: srv.URL + "/org", Token: "az-pat"}, "Platform Team/storage", "2.0.0", []string{"main.tf", "sub/x.tf"}, false, "def456", []PullRequest{{Number: 12, Commit: "pr12", URL: srv.URL + "/org/Platform%20Team/_git/storage/pullrequest/12"}}},
-		{Conn{Provider: GitHub, BaseURL: srv.URL + "/gh", Token: "wrong"}, "", "", nil, true, "", nil},
-		{Conn{Provider: AzureDevOps, BaseURL: srv.URL + "/org", Token: "wrong"}, "", "", nil, true, "", nil},
+		{cl.Conn(GitHub, srv.URL+"/gh", "gh-token"), "acme/terraform-azurerm-storage", "v1.1.0", []string{"README.md", "main.tf"}, false, "abc123", []PullRequest{{Number: 3, Commit: "pr3"}}},
+		{cl.Conn(AzureDevOps, srv.URL+"/org", "az-pat"), "Platform Team/storage", "2.0.0", []string{"main.tf", "sub/x.tf"}, false, "def456", []PullRequest{{Number: 12, Commit: "pr12", URL: srv.URL + "/org/Platform%20Team/_git/storage/pullrequest/12"}}},
+		{cl.Conn(GitHub, srv.URL+"/gh", "wrong"), "", "", nil, true, "", nil},
+		{cl.Conn(AzureDevOps, srv.URL+"/org", "wrong"), "", "", nil, true, "", nil},
 	} {
 		repos, err := tc.conn.Repos(ctx)
 		if tc.wantDenied {
@@ -138,7 +138,7 @@ func TestProviders(t *testing.T) {
 		if err != nil || !slices.ContainsFunc(tags, func(t Tag) bool { return t.Name == tc.tag && t.Commit != "" }) {
 			t.Fatalf("%s tags: %v %v", tc.conn.Provider, tags, err)
 		}
-		archive, err := tc.conn.Archive(ctx, tc.repo, tc.tag, "tag", "")
+		archive, err := tc.conn.Archive(ctx, tc.repo, tc.tag, "tag", "", 1<<20)
 		if err != nil {
 			t.Fatalf("%s archive: %v", tc.conn.Provider, err)
 		}
@@ -156,59 +156,18 @@ func TestProviders(t *testing.T) {
 			t.Errorf("%s files: %v, want %v", tc.conn.Provider, names, tc.wantFiles)
 		}
 		// a module in a folder: that folder at the archive root; a missing folder is an error
-		if sub, err := tc.conn.Archive(ctx, tc.repo, tc.tag, "tag", "sub"); tc.conn.Provider == AzureDevOps {
+		if sub, err := tc.conn.Archive(ctx, tc.repo, tc.tag, "tag", "sub", 1<<20); tc.conn.Provider == AzureDevOps {
 			if files, _ := readTarGz(sub); err != nil || len(files) != 1 || files[0].name != "x.tf" {
 				t.Errorf("%s folder sub: %v %v", tc.conn.Provider, files, err)
 			}
 		}
-		if _, err := tc.conn.Archive(ctx, tc.repo, tc.tag, "tag", "nope"); err == nil {
+		if _, err := tc.conn.Archive(ctx, tc.repo, tc.tag, "tag", "nope", 1<<20); err == nil {
 			t.Errorf("%s: a missing folder must fail", tc.conn.Provider)
 		}
 	}
 }
 
-// TestLatestTag: tag-based workspaces run the matching tag with the highest version, not the newest-listed.
-func TestLatestTag(t *testing.T) {
-	tags := []Tag{{"1.2.0", "a"}, {"1.10.0-rc", "f"}, {"1.10.0", "b"}, {"v-2.0.0", "c"}, {"1.9.0-rc", "d"}, {"release", "e"}}
-	for _, c := range []struct{ pattern, want string }{
-		{`^\d+\.\d+\.\d+$`, "1.10.0"}, // semantic versioning: 1.10.0 beats 1.2.0 (not a string compare)
-		{`\d+\.\d+\.\d+$`, "v-2.0.0"}, // with a prefix
-		{`^\d+\.\d+\.\d+`, "1.10.0"},  // with a suffix: 1.10.0-rc, listed first, is lower
-		{`-rc$`, "1.10.0-rc"},
-		{`^release$`, ""}, // no version number: never picked
-		{`(`, ""},         // bad pattern
-	} {
-		got, ok := LatestTag(tags, c.pattern)
-		if got.Name != c.want || ok != (c.want != "") {
-			t.Errorf("LatestTag(%q) = %q %v, want %q", c.pattern, got.Name, ok, c.want)
-		}
-	}
-}
-
-func TestSealAndValidation(t *testing.T) {
-	sealed, err := Seal(Key("s1"), "tok", "here")
-	if err != nil || bytes.Contains(sealed, []byte("tok")) {
-		t.Fatal("token not sealed", err)
-	}
-	if got, err := Open(Key("s1"), sealed, "here"); err != nil || got != "tok" {
-		t.Fatalf("open: %q %v", got, err)
-	}
-	if _, err := Open(Key("s2"), sealed, "here"); err == nil {
-		t.Fatal("opened with another key")
-	}
-	if _, err := Open(Key("s1"), sealed, "elsewhere"); err == nil {
-		t.Fatal("opened where it wasn't sealed for (a copied row)")
-	}
-	if _, err := OpenLegacy(Key("s1"), sealed); err == nil {
-		t.Fatal("a sealed value must not open without its associated data")
-	}
-	// A sensitive value copied into a non-sensitive row doesn't open there.
-	v := storage.Variable{Category: "env", Key: "K", Sensitive: true, Owner: storage.VarOwner{SetID: "s"}}
-	sv, _ := Seal(Key("s1"), "secret", VariableAD(v))
-	v.Sensitive = false
-	if _, err := Open(Key("s1"), sv, VariableAD(v)); err == nil {
-		t.Fatal("sensitivity is not bound to the value")
-	}
+func TestValidation(t *testing.T) {
 	if u, err := NormalizeURL(GitHub, ""); err != nil || u != "https://api.github.com" {
 		t.Fatalf("github default: %q %v", u, err)
 	}
@@ -227,6 +186,7 @@ func TestSealAndValidation(t *testing.T) {
 // Polled GitHub endpoints are conditional requests: an unchanged branch is answered from the cache
 // with a 304, which costs no rate limit. Retry-After pauses polling of that provider.
 func TestConditionalRequestsAndPause(t *testing.T) {
+	t.Parallel()
 	var full, notModified int
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("If-None-Match") == `"v1"` {
@@ -239,10 +199,8 @@ func TestConditionalRequestsAndPause(t *testing.T) {
 		w.Write([]byte(`{"commit":{"sha":"abc"}}`))
 	}))
 	defer srv.Close()
-	old := HTTPClient
-	HTTPClient = srv.Client()
-	defer func() { HTTPClient = old }()
-	c := Conn{Provider: GitHub, BaseURL: srv.URL, Token: "t"}
+	cl := NewClient(srv.Client())
+	c := cl.Conn(GitHub, srv.URL, "t")
 	for range 3 {
 		if head, err := c.Head(t.Context(), "acme/infra", "main"); err != nil || head != "abc" {
 			t.Fatalf("head: %q %v", head, err)
@@ -251,24 +209,18 @@ func TestConditionalRequestsAndPause(t *testing.T) {
 	if full != 1 || notModified != 2 {
 		t.Fatalf("%d full and %d 304 responses, want 1 and 2", full, notModified)
 	}
-	other := Conn{Provider: GitHub, BaseURL: srv.URL, Token: "other"}
+	other := cl.Conn(GitHub, srv.URL, "other")
 	if _, err := other.Head(t.Context(), "acme/infra", "main"); err != nil || full != 2 {
 		t.Fatalf("another token must not get the cached answer: %v, %d full", err, full)
 	}
 	// A full cache drops one entry for a new one, not every entry.
-	t.Cleanup(func() { cacheMu.Lock(); clear(cache); cacheMu.Unlock() })
-	cacheMu.Lock()
-	for i := len(cache); i < maxCached; i++ {
-		cache["filler"+strconv.Itoa(i)] = cachedResponse{}
+	for i := len(cl.cache); i < maxCached; i++ {
+		cl.cache["filler"+strconv.Itoa(i)] = cachedResponse{}
 	}
-	cacheMu.Unlock()
 	if _, err := c.Head(t.Context(), "acme/other", "main"); err != nil {
 		t.Fatal(err)
 	}
-	cacheMu.Lock()
-	n := len(cache)
-	cacheMu.Unlock()
-	if n != maxCached {
+	if n := len(cl.cache); n != maxCached {
 		t.Fatalf("full cache holds %d entries after one more, want %d", n, maxCached)
 	}
 
@@ -288,5 +240,40 @@ func TestConditionalRequestsAndPause(t *testing.T) {
 	}
 	if !other.pausedUntil().IsZero() {
 		t.Fatal("another token's rate limit paused this one")
+	}
+	if err := c.Paused(); err == nil {
+		t.Fatal("a paused connection must skip its round")
+	}
+	// a pause that is over is forgotten when the next one is noted
+	cl.pauses["old"] = time.Now().Add(-time.Second)
+	other.notePause(resp)
+	if _, ok := cl.pauses["old"]; ok || len(cl.pauses) != 2 {
+		t.Fatalf("pauses: %v", cl.pauses)
+	}
+}
+
+// A 403 with an exhausted rate limit, seen on a real request, pauses that token.
+func TestRateLimitedResponsePauses(t *testing.T) {
+	t.Parallel()
+	reset := time.Now().Add(time.Hour).Unix()
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(reset, 10))
+		http.Error(w, "rate limited", http.StatusForbidden)
+	}))
+	defer srv.Close()
+	c := NewClient(srv.Client()).Conn(GitHub, srv.URL, "t")
+	if _, err := c.Head(t.Context(), "acme/infra", "main"); err == nil {
+		t.Fatal("a 403 must fail")
+	}
+	if until := c.pausedUntil(); until.Unix() != reset {
+		t.Fatalf("paused until %v, want %v", until, time.Unix(reset, 0))
+	}
+}
+
+// A Conn built as a literal has no client: requests fail with an error instead of panicking.
+func TestConnWithoutClient(t *testing.T) {
+	if _, err := (Conn{Provider: GitHub, BaseURL: "https://api.github.com"}).Repos(context.Background()); !errors.Is(err, errNoClient) {
+		t.Fatalf("got %v", err)
 	}
 }

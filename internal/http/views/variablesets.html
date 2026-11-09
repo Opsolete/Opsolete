@@ -1,4 +1,4 @@
-{{template "top"}}
+{{template "top" .Page}}
 <div class="page-head">
   <div>
     <h1>Variable sets</h1>
@@ -11,7 +11,7 @@
 <div class="card flush">
 <table>
 <tr><th>Name</th><th>Description</th><th>Applies to</th></tr>
-{{range .}}
+{{range .Sets}}
 <tr>
   <td><a href="/variable-sets/{{.Name}}"><strong>{{.Name}}</strong></a></td>
   <td>{{.Description}}</td>
@@ -23,13 +23,17 @@
 </table>
 </div>
 
-<h2>Create a variable set</h2>
-<form method="post" class="card">
+<h2 id="create">Create a variable set</h2>
+{{$f := .F}}{{template "formerror" $f}}
+<form method="post" action="/variable-sets" class="card">
+  {{with value $f "project" ""}}<input type="hidden" name="project" value="{{.}}"><p class="muted">Attached to project <strong>{{.}}</strong>.</p>{{end}}
+  {{with value $f "workspace" ""}}<input type="hidden" name="workspace" value="{{.}}"><p class="muted">Attached to workspace <strong>{{.}}</strong>.</p>{{end}}
   <label for="name">Name <span class="req" aria-hidden="true">*</span></label>
-  <input id="name" name="name" required pattern="[a-z0-9][a-z0-9\-]{1,62}" placeholder="azure-prod">
+  <input id="name" name="name" required pattern="[a-z0-9][a-z0-9\-]{1,62}" placeholder="azure-prod" value="{{value $f "name" ""}}"{{aria $f "name"}}>
+  {{template "fielderror" (dict "F" $f "N" "name")}}
   <label for="description">Description</label>
-  <input id="description" name="description" class="wide" maxlength="500">
-  <label for="global"><input type="checkbox" id="global" name="global"> Global: apply to every workspace not linked to a repository</label>
+  <input id="description" name="description" class="wide" maxlength="500" value="{{value $f "description" ""}}">
+  <label for="global"><input type="checkbox" id="global" name="global"{{if checked $f "global" false}} checked{{end}}> Global: apply to every workspace not linked to a repository</label>
   <div class="actions"><button type="submit">Create</button></div>
 </form>
 {{template "bottom"}}

@@ -1,68 +1,92 @@
 package httpserver
 
 import (
-	"encoding/json"
 	"net/http"
 
+	"github.com/google/uuid"
+
 	"github.com/opsolete/opsolete/internal/auth"
+	"github.com/opsolete/opsolete/internal/storage"
 )
 
-// Account settings: the signed-in user's profile and `terraform login`
-// tokens. Login is OIDC, so there are no passwords or second factors here; sessions are signed
-// cookies, so there is no session list either.
-func (s *Server) accountRoutes(mux *http.ServeMux) {
+// Account settings: the signed-in user's profile, browser sessions and `terraform login`
+// tokens. Login is OIDC, so there are no passwords or second factors here.
+func (s *Server) accountRoutes(mux routes) {
 	mux.Handle("GET /account", http.RedirectHandler("/account/profile", http.StatusFound))
 	mux.HandleFunc("GET /account/{page}", s.accountPage)
 	mux.HandleFunc("POST /account/tokens/{id}/revoke", s.revokeToken)
 	mux.HandleFunc("POST /account/tokens/revoke", s.revokeTokens)
+	mux.HandleFunc("POST /account/sessions/revoke", s.endSessions)
+	mux.HandleFunc("POST /users/{id}/sessions/revoke", s.admin(s.endSessions)) // from the audit log: there is no users page
+}
+
+// accountPage is account.html: Page.Sub is "profile", "sessions" or "tokens".
+type accountPage struct {
+	Page
+	Groups []string // profile: recorded at the last login, they decide team access
+	Tokens []storage.UserToken
+	// sessions: the user's browser sessions, Current the one of this request (zero for AUTH_DEV_USER)
+	Sessions []storage.UserSession
+	Current  uuid.UUID
+	Host     string // tokens: for `terraform login`
 }
 
 func (s *Server) accountPage(w http.ResponseWriter, r *http.Request) {
-	u := auth.FromContext(r.Context())
-	data := map[string]any{"Page": r.PathValue("page")}
-	switch r.PathValue("page") {
-	case "profile": // the groups recorded at the last login decide team access
-		raw, err := s.Store.UserGroups(r.Context(), u.ID)
-		var groups []string
-		if err == nil {
-			err = json.Unmarshal(raw, &groups)
-		}
-		if err != nil {
-			s.internalError(w, "user groups", err)
-			return
-		}
-		data["Groups"] = groups
+	p := &accountPage{Page: Page{Section: "account", Sub: r.PathValue("page")}}
+	var err error
+	switch p.Sub {
+	case "profile":
+		p.Groups, err = s.App.UserGroups(r.Context(), actor(r))
+	case "sessions":
+		p.Sessions, err = s.App.UserSessions(r.Context(), actor(r))
+		p.Current = auth.FromContext(r.Context()).Session
 	case "tokens":
-		tokens, err := s.Store.UserTokens(r.Context(), u.ID)
-		if err != nil {
-			s.internalError(w, "user tokens", err)
-			return
-		}
-		data["Tokens"], data["Host"] = tokens, s.Registry.PublicURL.Host
+		p.Tokens, err = s.App.UserTokens(r.Context(), actor(r))
+		p.Host = s.App.Registry.PublicURL.Host
 	default:
 		http.NotFound(w, r)
 		return
 	}
-	s.render(w, r, http.StatusOK, "account.html", data)
+	if err != nil {
+		s.uiError(w, r, err)
+		return
+	}
+	s.render(w, r, http.StatusOK, "account.html", p)
 }
 
 // revokeToken revokes one of the user's own tokens; at once, since every request checks it.
 func (s *Server) revokeToken(w http.ResponseWriter, r *http.Request) {
-	u := auth.FromContext(r.Context())
-	if err := s.Store.RevokeUserToken(r.Context(), u.ID, r.PathValue("id")); err != nil {
-		s.internalError(w, "revoke token", err)
+	id, _ := pathID(r, "id") // not an id: revokes nothing, as for an unknown one
+	if err := s.App.RevokeUserToken(r.Context(), actor(r), id); err != nil {
+		s.uiError(w, r, err)
 		return
 	}
-	s.Log.Info("token revoked", "id", r.PathValue("id"), "user", u.Email)
 	http.Redirect(w, r, "/account/tokens", http.StatusSeeOther)
 }
 
 func (s *Server) revokeTokens(w http.ResponseWriter, r *http.Request) {
-	u := auth.FromContext(r.Context())
-	if err := s.Store.RevokeUserTokens(r.Context(), u.ID); err != nil {
-		s.internalError(w, "revoke tokens", err)
+	if err := s.App.RevokeUserTokens(r.Context(), actor(r)); err != nil {
+		s.uiError(w, r, err)
 		return
 	}
-	s.Log.Info("all tokens revoked", "user", u.Email)
 	http.Redirect(w, r, "/account/tokens", http.StatusSeeOther)
+}
+
+// endSessions ends every browser session of the user in the path (an admin, from the audit log) or
+// of the signed-in user (log out everywhere, this browser included).
+func (s *Server) endSessions(w http.ResponseWriter, r *http.Request) {
+	user, to := actor(r).UserID, "/"
+	if r.PathValue("id") != "" {
+		var ok bool
+		if user, ok = pathID(r, "id"); !ok {
+			http.NotFound(w, r)
+			return
+		}
+		to = "/audit"
+	}
+	if err := s.App.EndSessions(r.Context(), actor(r), user); err != nil {
+		s.uiError(w, r, err)
+		return
+	}
+	http.Redirect(w, r, to, http.StatusSeeOther)
 }
