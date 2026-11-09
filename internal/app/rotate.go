@@ -54,6 +54,21 @@ func RotateKey(ctx context.Context, st *storage.Store, bucket *blob.Bucket, keys
 		return err
 	}
 
+	// the signing key (see SigningKey): re-sealed, its value kept, so credentials in flight stay valid
+	signing, err := st.SigningKey(ctx)
+	if err != nil {
+		return n, err
+	}
+	if !secrets.IsSealed(signing) {
+		// not converted yet: SigningKey seals it (rotate-key's command does before calling this)
+	} else if sealed, err := reseal("signing key", signing, signingKeyAD); err != nil {
+		return n, err
+	} else if sealed != nil {
+		if err := stored(st.ReplaceSigningKey(ctx, signing, sealed)); err != nil {
+			return n, err
+		}
+	}
+
 	vars, err := st.AllVariables(ctx)
 	if err != nil {
 		return n, err

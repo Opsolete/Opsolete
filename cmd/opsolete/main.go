@@ -7,9 +7,8 @@
 package main
 
 import (
+	"cmp"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -109,6 +108,10 @@ func rotateKey(log *slog.Logger) error {
 		}
 		defer state.Close()
 	}
+	// a signing key no server converted yet (still as 0.6.0 stored it) was derived with the old key
+	if _, err := app.SigningKey(ctx, store, keys, cfg.SecretKeyPrevious); err != nil {
+		return fmt.Errorf("signing key: %w", err)
+	}
 	n, err := app.RotateKey(ctx, store, state, keys, log)
 	if err != nil {
 		return fmt.Errorf("re-sealed %d values, then: %w (fix it and run rotate-key again)", n, err)
@@ -180,15 +183,17 @@ func serve(log *slog.Logger) error {
 		return err
 	}
 	defer store.Close()
-
-	key, err := store.SigningKey(ctx)
+	keys, err := secrets.New(cfg.SecretKey, cfg.SecretKeyPrevious)
 	if err != nil {
 		return err
 	}
-	// a database dump alone must not forge state credentials, signed URLs or login codes (sessions are hashed random tokens)
-	m := hmac.New(sha256.New, []byte(cfg.SecretKey))
-	m.Write(key)
-	key = m.Sum(nil)
+
+	// sealed in the database, unchanged by key rotations: state credentials, signed URLs and login codes
+	// survive a restart with a new SECRET_KEY (sessions are hashed random tokens, not signed)
+	key, err := app.SigningKey(ctx, store, keys, cmp.Or(cfg.SecretKeyPrevious, cfg.SecretKey))
+	if err != nil {
+		return fmt.Errorf("signing key: %w", err)
+	}
 	reg := &registry.Registry{PublicURL: cfg.PublicURL, Key: key}
 
 	// Same key as the registry: the login-state cookie's MAC is domain-separated from signed archive URLs.
@@ -226,10 +231,6 @@ func serve(log *slog.Logger) error {
 	}
 
 	vcsOn := cfg.Registry || cfg.Deployments // modules for the registry, workspaces and the catalog for deployments
-	keys, err := secrets.New(cfg.SecretKey, cfg.SecretKeyPrevious)
-	if err != nil {
-		return err
-	}
 	ops := &app.App{Store: store, Blobs: state, Secrets: keys, Templates: tpls, Registry: reg, Log: log,
 		VCS:             vcs.NewClient(nil),
 		RunLogRetention: time.Duration(cfg.RunLogRetentionDays) * 24 * time.Hour,

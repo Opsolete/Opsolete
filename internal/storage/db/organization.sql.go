@@ -33,6 +33,24 @@ func (q *Queries) ModuleUploads(ctx context.Context) (bool, error) {
 	return module_uploads, err
 }
 
+const replaceSigningKey = `-- name: ReplaceSigningKey :execrows
+UPDATE organization SET signing_key = $1::bytea WHERE signing_key = $2::bytea
+`
+
+type ReplaceSigningKeyParams struct {
+	New []byte
+	Old []byte
+}
+
+// only if it is still old: replicas converting it at the same start agree on one value
+func (q *Queries) ReplaceSigningKey(ctx context.Context, arg ReplaceSigningKeyParams) (int64, error) {
+	result, err := q.db.Exec(ctx, replaceSigningKey, arg.New, arg.Old)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setCurrency = `-- name: SetCurrency :exec
 UPDATE organization SET currency = $1::text
 `

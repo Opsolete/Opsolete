@@ -100,6 +100,9 @@ func (k *Keyring) Open(sealed []byte, ad string) (string, error) {
 	return string(b), nil
 }
 
+// IsSealed tells whether b has the sealed format (by any key).
+func IsSealed(b []byte) bool { _, _, ok := split(b); return ok }
+
 // NeedsReseal tells whether sealed isn't sealed with the current key (rotate-key re-seals it).
 func (k *Keyring) NeedsReseal(sealed []byte) bool {
 	id, _, ok := split(sealed)
