@@ -280,9 +280,15 @@ func (c *Catalog) Save(t Template, overwrite bool) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	path := filepath.Join(c.Dir, t.ID+".json")
+	if !idRe.MatchString(t.ID) { // Encode validates too; checked here so the path can't escape c.Dir
+		return fmt.Errorf("invalid template id %q", t.ID)
+	}
+	path := filepath.Join(c.Dir, filepath.Base(t.ID)+".json")
 	if p, ok := c.paths[t.ID]; ok {
 		path = p // a hand-written file may be named otherwise
+	}
+	if rel, err := filepath.Rel(c.Dir, path); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return fmt.Errorf("template path %q is outside the catalog", path)
 	}
 	if err := os.Rename(tmp.Name(), path); err != nil {
 		return err

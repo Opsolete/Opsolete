@@ -165,7 +165,7 @@ func (a *App) StartRollout(ctx context.Context, actor Actor, id string, in NewRo
 	if in.Source != t.Module.Source || in.Ref != t.Module.Ref {
 		return ro, reason{ErrChanged, "the template moved to " + t.Module.Ref + " meanwhile: reload the page and check again"}
 	}
-	if in.BatchSize < 0 {
+	if in.BatchSize < 0 || in.BatchSize > 10000 {
 		return ro, invalid("batch", "the batch size is a whole number, 0 for all at once")
 	}
 	projectID, err := a.rolloutProject(ctx, actor, in.Project)

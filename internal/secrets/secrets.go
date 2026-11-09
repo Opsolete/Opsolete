@@ -22,6 +22,9 @@ const prefix = "opsolete:1:"
 // idLen is the key id's length in hex.
 const idLen = 16
 
+// maxPlain bounds a sealed value (and so the allocation in Seal): 64 MiB.
+const maxPlain = 64 << 20
+
 type key struct {
 	id   string
 	aead cipher.AEAD
@@ -61,6 +64,9 @@ func derive(secret string) key {
 // Seal encrypts plain with the current key, bound to ad.
 func (k *Keyring) Seal(plain, ad string) ([]byte, error) {
 	g := k.current.aead
+	if len(plain) > maxPlain {
+		return nil, fmt.Errorf("can't seal: value larger than %d bytes", maxPlain)
+	}
 	out := make([]byte, 0, len(prefix)+idLen+1+g.NonceSize()+len(plain)+g.Overhead())
 	out = append(append(append(out, prefix...), k.current.id...), ':')
 	nonce := make([]byte, g.NonceSize())

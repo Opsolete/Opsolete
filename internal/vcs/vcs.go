@@ -222,7 +222,20 @@ func (c Conn) get(ctx context.Context, u string, limit int64, conditional bool) 
 	if c.client == nil {
 		return nil, errNoClient
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	// Only ever call the connection's own API root (https, validated by NormalizeURL): a URL
+	// built from a repo, ref or path can't escape to another host.
+	base, err := NormalizeURL(c.Provider, c.BaseURL)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.HasPrefix(u, base+"/") {
+		return nil, fmt.Errorf("vcs: refusing request outside %s", base)
+	}
+	target, err := url.Parse(u)
+	if err != nil || target.Scheme != "https" || target.User != nil {
+		return nil, fmt.Errorf("vcs: refusing request outside %s", base)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
 	if err != nil {
 		return nil, err
 	}

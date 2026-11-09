@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
@@ -134,6 +136,9 @@ func toRollout(o db.RolloutList) Rollout {
 // CreateRollout starts a rollout; ErrExists if the template has an open one. Its first turn is the
 // caller's (ticked_at now): DueRollouts doesn't hand it out meanwhile, so the batch limit holds.
 func (s *Store) CreateRollout(ctx context.Context, o Rollout) (Rollout, error) {
+	if o.BatchSize < 0 || o.BatchSize > math.MaxInt32 {
+		return Rollout{}, fmt.Errorf("batch size %d out of range", o.BatchSize)
+	}
 	id, err := s.q.CreateRollout(ctx, db.CreateRolloutParams{TemplateID: o.TemplateID, ModuleSource: o.ModuleSource, ModuleRef: o.ModuleRef,
 		ProjectID: optID(o.ProjectID), BatchSize: int32(o.BatchSize), CreatedBy: optID(o.CreatedBy)})
 	if isUnique(err) {
