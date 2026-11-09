@@ -127,7 +127,7 @@ test-linux:
     #!/usr/bin/env bash
     set -euo pipefail
     go=$(awk '$1 == "toolchain" {sub("go", "", $2); print $2}' go.mod)
-    tf=$(awk '/terraform_version:/ {print $2}' .github/workflows/ci.yml)
+    tf=$(cat .terraform-version)
     arch=$(docker version --format '{{{{.Server.Arch}}')
     bin=.devdata/linux/terraform-$tf-$arch
     if [ ! -x "$bin" ]; then

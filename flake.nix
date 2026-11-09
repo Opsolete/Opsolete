@@ -12,15 +12,8 @@
   in {
     packages = forEachSystem (system: let
       pkgs = pkgsFor system;
-      # shortcut: nixos-26.05 still ships go 1.26.8 (stdlib CVEs fixed in 1.26.10); drop this once `nix flake update` brings >= 1.26.10.
-      go = pkgs.go.overrideAttrs (_: rec {
-        version = "1.26.10";
-        src = pkgs.fetchurl {
-          url = "https://go.dev/dl/go${version}.src.tar.gz";
-          sha256 = "fd63e883ba2f2bfca93c1646b31ebef63e2b1e4d2b317c9789d976a68d81f36f";
-        };
-      });
-      opsolete = (pkgs.buildGoModule.override {inherit go;}) {
+      # nixpkgs' go, prebuilt on cache.nixos.org: keep flake.lock fresh so it has the stdlib security fixes.
+      opsolete = pkgs.buildGoModule {
         pname = "opsolete";
         version = "0.6.0"; # x-release-please-version
         src = self;
@@ -39,9 +32,11 @@
           system
         };
       # HashiCorp's release binary pinned by checksum: nixpkgs' terraform lags behind the version CI tests with.
-      terraform = pkgs.runCommand "terraform-1.17.0" {
+      # The version is .terraform-version (also read by CI and `just test-linux`); update the checksums with it.
+      tfVersion = pkgs.lib.trim (builtins.readFile ./.terraform-version);
+      terraform = pkgs.runCommand "terraform-${tfVersion}" {
         src = pkgs.fetchurl {
-          url = "https://releases.hashicorp.com/terraform/1.17.0/terraform_1.17.0_linux_${arch}.zip";
+          url = "https://releases.hashicorp.com/terraform/${tfVersion}/terraform_${tfVersion}_linux_${arch}.zip";
           sha256 =
             {
               amd64 = "c168cab7c637a8769fdb90089ddd19de701bc6ff8aca64dc2e2185fe46f59f67";
