@@ -128,7 +128,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	if foreign != "" {
-		return fmt.Errorf("this database was created by Opsolete 0.x (it has migration %s): Opsolete 1.0 needs a new, empty database", foreign)
+		return fmt.Errorf("this database was created by Opsolete 0.5 or earlier (it has migration %s): this version needs a new, empty database (see Upgrading to 0.6)", foreign)
 	}
 	for _, f := range files {
 		var done bool

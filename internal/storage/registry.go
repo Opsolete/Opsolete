@@ -25,7 +25,7 @@ type Module struct {
 
 // ModuleDocs is the generated documentation of one module version.
 type ModuleDocs struct {
-	Module *tfconfig.Module // nil for versions uploaded before docs existed
+	Module *tfconfig.Module // every upload and VCS publish stores it; nil only if the column is empty
 	Readme string
 }
 

@@ -554,6 +554,4 @@ Checked page by page against the code in Phase 8 step 4: the mismatches listed h
 Remaining, code rather than docs (not changed):
 
 - Run state credentials and signed URLs are an HMAC under `SECRET_KEY` only (`cmd/opsolete/main.go` serve, `app.StateToken`), not the keyring: a restart for a key rotation breaks runs under way and plans waiting for confirmation. `secret-key.md` says to rotate without active runs.
-- `views/module.html` "uploaded before docs existed" notice: every upload and VCS publish stores docs, so it looks unreachable.
-- `storage.Migrate` and the 0.x-database message say "Opsolete 1.0" while the release is 0.6.
 - NixOS has no option for `METRICS_ADDR` or `SECRET_KEY_PREVIOUS` (documented: use `environment` / `secretFiles`).
