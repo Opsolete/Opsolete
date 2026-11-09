@@ -105,7 +105,8 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 		if page := get(h, "/registry/publish?type=vcs").Body.String(); !strings.Contains(page, `href="?connection=`+connID+`"`) {
 			t.Fatalf("connection step: %s", page)
 		}
-		if page := get(h, "/registry/publish?connection="+connID).Body.String(); !strings.Contains(page, `<option value="acme/terraform-aws-rds">`) {
+		if page := get(h, "/registry/publish?connection="+connID).Body.String(); !strings.Contains(page, `data-filter-item="acme/terraform-aws-rds"`) ||
+			!strings.Contains(page, `data-filter="repos"`) {
 			t.Fatalf("repo picker: %s", page)
 		}
 		if page := get(h, "/registry/publish?connection="+connID+"&repo=acme/terraform-aws-rds").Body.String(); !strings.Contains(page, `id="name" name="name" value="rds"`) ||

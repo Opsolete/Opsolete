@@ -120,6 +120,15 @@
 <p class="hint" id="ops-project-hint">The project's grants and variable sets apply to the workspace.</p>
 {{template "fielderror" (dict "F" .F "N" "ops-project")}}
 {{end}}
+{{define "repolist"}}<!-- searchable repositories (dict "ID" list id, "Repos" names, and "Href" a link prefix the name
+is appended to, or "Field" a radio group's name with "Selected"); its search box: data-filter="<ID>", see app.js -->
+<div class="runlist repolist mt-1" id="{{.ID}}">
+  {{if .Href}}{{range .Repos}}<a class="runrow" href="{{$.Href}}{{.}}" data-filter-item="{{.}}">{{.}}</a>{{end}}
+  {{else}}{{range .Repos}}<label class="runrow" data-filter-item="{{.}}"><input type="radio" name="{{$.Field}}" value="{{.}}"{{if eq . $.Selected}} checked{{end}} required> {{.}}</label>{{end}}{{end}}
+</div>
+<p class="muted" id="{{.ID}}-empty" hidden>No repository matches{{if .Href}}: press Enter to use the name as typed{{end}}.</p>
+{{end}}
+
 {{define "picker"}}<!-- searchable multi-select (a picker value from Go): checkboxes in a dropdown; closed <details> still submit their boxes -->
 <details class="menu picker">
   <summary><span>{{with .Selected}}{{.}} selected{{else}}Select workspaces{{end}}</span></summary>

@@ -146,7 +146,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 		if page := get(h, "/vcs/new?provider=azure-devops").Body.String(); !strings.Contains(page, `name="provider" value="azure-devops"`) || !strings.Contains(page, "Organization URL") {
 			t.Fatalf("the add-VCS wizard must set up the chosen provider: %s", page)
 		}
-		if page := get(h, "/workspaces/new?type=vcs&conn="+connID).Body.String(); !strings.Contains(page, `<option value="acme/infra">`) {
+		if page := get(h, "/workspaces/new?type=vcs&conn="+connID).Body.String(); !strings.Contains(page, `data-filter-item="acme/infra"`) {
 			t.Fatalf("new workspace wizard must offer the connection's repos: %s", page)
 		}
 		if page := get(h, "/workspaces/new?type=vcs&conn="+connID+"&repo=acme/infra").Body.String(); !strings.Contains(page, `value="infra"`) ||
@@ -282,7 +282,7 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 		if page := get(h, "/workspaces/"+linked+"/vcs/edit?type=vcs").Body.String(); !strings.Contains(page, `href="/workspaces/`+linked+`/vcs/edit?type=vcs&conn=`+connID+`"`) {
 			t.Fatalf("an attached workspace must be offered the connection: %s", page)
 		}
-		if page := get(h, "/workspaces/"+linked+"/vcs/edit?type=vcs&conn="+connID).Body.String(); !strings.Contains(page, `<option value="acme/infra">`) {
+		if page := get(h, "/workspaces/"+linked+"/vcs/edit?type=vcs&conn="+connID).Body.String(); !strings.Contains(page, `data-filter-item="acme/infra"`) {
 			t.Fatalf("change source must offer the connection's repos: %s", page)
 		}
 		if page := get(h, "/workspaces/"+linked+"/vcs/edit?type=vcs&conn="+connID+"&repo=acme/infra").Body.String(); !strings.Contains(page, `name="vcs_repo" value="acme/infra"`) {

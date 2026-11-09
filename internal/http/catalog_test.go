@@ -181,7 +181,8 @@ func TestTemplateCatalogInGit(t *testing.T) {
 		if page := get(h, "/catalog").Body.String(); !strings.Contains(page, `<select id="repo" name="repo" disabled>`) {
 			t.Fatalf("repo dropdown before choosing a connection: %s", page)
 		}
-		if page := get(h, "/catalog?connection="+connID).Body.String(); !strings.Contains(page, `<option value="acme/catalog">acme/catalog</option>`) {
+		if page := get(h, "/catalog?connection="+connID).Body.String(); !strings.Contains(page, `<input type="radio" name="repo" value="acme/catalog" required>`) ||
+			!strings.Contains(page, `data-filter="repo-list"`) {
 			t.Fatalf("repo dropdown: %s", page)
 		}
 	})
@@ -195,7 +196,7 @@ func TestTemplateCatalogInGit(t *testing.T) {
 		if _, ok := app.App.Templates.Get("web-" + id); !ok || len(app.App.Templates.List()) != 1 {
 			t.Fatalf("templates from git: %v", app.App.Templates.List())
 		}
-		if page := get(h, "/catalog").Body.String(); !strings.Contains(page, `<option value="acme/catalog" selected>`) {
+		if page := get(h, "/catalog").Body.String(); !strings.Contains(page, `<input type="radio" name="repo" value="acme/catalog" checked required>`) {
 			t.Fatalf("the configured repo is selected: %s", page)
 		}
 	})
@@ -206,7 +207,7 @@ func TestTemplateCatalogInGit(t *testing.T) {
 		}
 		var otherID string
 		store.Pool.QueryRow(context.Background(), `SELECT id FROM vcs_connections WHERE name = $1`, connName+"-b").Scan(&otherID)
-		if page := get(h, "/catalog?connection="+otherID).Body.String(); strings.Contains(page, `<option value="acme/catalog" selected>`) ||
+		if page := get(h, "/catalog?connection="+otherID).Body.String(); strings.Contains(page, `<input type="radio" name="repo" value="acme/catalog" checked required>`) ||
 			strings.Contains(page, `id="dir" name="dir" value="catalog"`) {
 			t.Fatalf("saved settings carried to another connection: %s", page)
 		}

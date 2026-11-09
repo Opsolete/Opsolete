@@ -119,15 +119,11 @@
 <p class="muted">Repositories of <strong>{{$conn.Name}}</strong>.</p>
 <form method="get" action="{{$base}}/edit" class="inline">
   <input type="hidden" name="type" value="vcs"><input type="hidden" name="conn" value="{{$conn.ID}}">
-  <input name="repo" list="vcs-repos" required aria-label="repository" placeholder="owner/repo or project/repo">
-  <datalist id="vcs-repos">{{range .VCS.Repos}}<option value="{{.}}">{{end}}</datalist>
+  <input type="search" name="repo" required autocomplete="off" aria-label="repository" class="mw-24"
+    placeholder="{{with .VCS.Repos}}Search {{len .}} repositories, or {{end}}type owner/repo or project/repo"{{with .VCS.Repos}} data-filter="vcs-repos" aria-controls="vcs-repos"{{end}}>
   <button type="submit">Continue</button>
 </form>
-{{with .VCS.Repos}}
-<div class="runlist mt-1">
-  {{range .}}<a class="runrow" href="{{$base}}/edit?type=vcs&conn={{$conn.ID}}&repo={{.}}">{{.}}</a>{{end}}
-</div>
-{{end}}
+{{with .VCS.Repos}}{{template "repolist" (dict "ID" "vcs-repos" "Repos" . "Href" (print $base "/edit?type=vcs&conn=" $conn.ID "&repo="))}}{{end}}
 <div class="actions"><a href="{{$base}}/edit?type=vcs">‹ Previous</a><a class="btn secondary" href="{{$cancel}}">Cancel</a></div>
 
 {{else}}

@@ -32,7 +32,7 @@ func TestProjectPages(t *testing.T) {
 	if body := get(user, "/projects").Body.String(); strings.Contains(body, proj) || !strings.Contains(body, "default") {
 		t.Fatal("a user lists only the default project")
 	}
-	if body := get(h, "/projects").Body.String(); !strings.Contains(body, `<tr data-name="`+proj+`">`) || !strings.Contains(body, `id="new-project"`) ||
+	if body := get(h, "/projects").Body.String(); !strings.Contains(body, `<tr data-filter-item="`+proj+`">`) || !strings.Contains(body, `id="new-project"`) ||
 		!strings.Contains(body, `href="/projects/`+proj+`/settings">Edit project`) {
 		t.Fatal("an admin's projects list: searchable rows, the New project dialog and Edit project actions")
 	}
