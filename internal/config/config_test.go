@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -111,6 +112,27 @@ func TestLoadRunner(t *testing.T) {
 		t.Setenv("OPS_JOB_GRACE", v)
 		if _, err := LoadRunner(); err == nil || !strings.Contains(err.Error(), "OPS_JOB_GRACE") {
 			t.Fatalf("OPS_JOB_GRACE=%s: err = %v", v, err)
+		}
+	}
+}
+
+// TestDocumented: every environment variable config.go reads is in the configuration page.
+func TestDocumented(t *testing.T) {
+	src, err := os.ReadFile("config.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := os.ReadFile("../../docs/content/docs/operations/configuration.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vars := regexp.MustCompile(`(?:Getenv|getenv|getbool)\("([A-Z0-9_]+)"`).FindAllSubmatch(src, -1)
+	if len(vars) < 20 {
+		t.Fatalf("found only %d env vars in config.go: did the way it reads them change?", len(vars))
+	}
+	for _, m := range vars {
+		if !strings.Contains(string(doc), "`"+string(m[1])+"`") {
+			t.Errorf("%s is read by internal/config but not documented in docs/content/docs/operations/configuration.md", m[1])
 		}
 	}
 }

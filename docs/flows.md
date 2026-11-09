@@ -549,25 +549,11 @@ Closed alongside P2: `opsolete token` (`cmd/opsolete/main_test.go:TestCreateToke
 
 ## Docs vs implementation
 
-### Documented, but not (or no longer) what the code does
+Checked page by page against the code in Phase 8 step 4: the mismatches listed here before are fixed in the docs. `internal/config` `TestDocumented` (env vars in `operations/configuration.md`) and `internal/http` `TestEndpointsDocumented` (routes in `operations/endpoints.md`, both ways) keep the two reference pages from drifting.
 
-- `usage/terraform-cli.md`: "An existing one needs operate access (read access is a 404 for the state…)". A reader gets **403** on `current-state-version`, `…-outputs`, `download`, `lock` (`http/access_test.go:TestAccessMatrix` cloud rows: reader = 403); a 404 is for no access at all.
-- `operations/authentication.md`: "**Users** can create workspaces from templates…". Since the November 2026 decision they need `operate` on a project (the default one too); only `projects.md`/`workspaces.md` say so.
-- `usage/variables.md` "Upgrading from runner pools" (queued runs errored by the migration): 1.0 starts from one fresh schema; nothing implements it.
-- `usage/projects.md` "Existing workspaces were put into a project named `default` when projects arrived": 0.x migration wording; 1.0 creates `default` in the schema (unverified wording only).
-- `catalog/vcs-providers.md` "Connections that limited repositories by pattern before this setting existed keep the workspaces already linked through them": no repository pattern exists in the 1.0 schema.
-- `catalog/module-registry.md` "Versions uploaded before docs existed show a notice": a 0.x case; with a fresh 1.0 schema every version has docs (the notice in `views/module.html` is unreachable, unverified).
-- `operations/authentication.md` "Workspaces created before login existed have no creator": 0.x wording (unverified whether creator-less workspaces still arise, e.g. via VCS or store-level creation).
-- `operations/endpoints.md`: `POST /workspaces/{name}/runs` lists `action=apply|destroy|refresh|assess`; the code also takes `plan`. The rollout form also needs `source` and `ref` (stale version → 409), not only `project`, `batch`. `/workspaces/{name}` is described as "Overview, runs, outputs, resources, state versions"; runs and states are separate routes (`/runs`, `/states`).
-- `getting-started.md`: `just smoke` "create a workspace end-to-end" — it only creates and lists one; no runner, no plan.
-- `usage/workspaces.md` "Rename a workspace from its page": it is in Settings › General.
+Remaining, code rather than docs (not changed):
 
-### Implemented, but not documented
-
-- **UI workspace lock** (Settings › Locking: lock with a reason ≤ 300 chars, unlock by the holder, force unlock by any operator; runs wait, drift checks still run). Only a passing mention in the `STALE_LOCK_TIMEOUT` row of `configuration.md`.
-- **Force delete** of a workspace whose state still manages resources (`force=1`, hidden field); `workspaces.md` says deletion needs an empty state.
-- **Removing a template with nothing deployed** removes it at once, without a run.
-- **Speculative plan by hand** (`action=plan`, "Plan only", status `planned`): not in `runs.md`'s kinds of runs or its status list (`planned`, `drifted` missing there); `state.md` mentions a "Plan only" run.
-- **Execution mode** (remote/local) switch in Settings › General is listed but its effect on the UI (runs refused) is not explained in `workspaces.md`.
-- **Endpoints missing from `endpoints.md`**: `/projects…`, `/variable-sets…`, `/catalog…`, `/organization`, `/audit`, `/account…`, `/templates/new`, `/templates/{id}/edit|delete`, `/registry/{ns}/{name}/{system}/{version}[/docs.md]`, `…/sync|unlink|delete`, `/vcs/{id}/token|delete`, `/workspaces/{name}/lock|project|variables|states|settings/{page}|deploy|vcs/edit|access`, `…/runs/{id}/logs/stream`, `/static/…`, `/.well-known/terraform.json`, `/v1/archives/…`, `/api/v2/ping`.
-- **Runner API log post limit** of 256 KB per request (413).
+- Run state credentials and signed URLs are an HMAC under `SECRET_KEY` only (`cmd/opsolete/main.go` serve, `app.StateToken`), not the keyring: a restart for a key rotation breaks runs under way and plans waiting for confirmation. `secret-key.md` says to rotate without active runs.
+- `views/module.html` "uploaded before docs existed" notice: every upload and VCS publish stores docs, so it looks unreachable.
+- `storage.Migrate` and the 0.x-database message say "Opsolete 1.0" while the release is 0.6.
+- NixOS has no option for `METRICS_ADDR` or `SECRET_KEY_PREVIOUS` (documented: use `environment` / `secretFiles`).

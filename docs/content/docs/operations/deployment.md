@@ -3,7 +3,7 @@ title: Deployment
 weight: 4
 ---
 
-The app and the runner are the same binary, shipped as two images: `ghcr.io/opsolete/opsolete-app` and `ghcr.io/opsolete/opsolete-runner`. Settings are under [Configuration]({{< relref "configuration" >}}) and [Runners]({{< relref "runners#settings" >}}).
+The app and the runner are the same binary, shipped as two images: `ghcr.io/opsolete/opsolete-app` and `ghcr.io/opsolete/opsolete-runner`. Settings for both are under [Configuration]({{< relref "configuration" >}}).
 
 ## Containers
 
@@ -30,7 +30,7 @@ helm install opsolete opsolete/opsolete --set secrets.existingSecret=opsolete \
 - Put the runner token in one Secret (`kubectl create secret generic opsolete-runner --from-literal=token=$(openssl rand -hex 32)`, or from sops / External Secrets). Map it to `RUNNER_TOKEN` in the app and to `OPS_RUNNER_TOKEN` in the runners with `secretKeyRef`. Start order doesn't matter: runners retry until the app is up. Cloud credentials come from [variables]({{< relref "/docs/usage/variables" >}}).
 - Scale runners with `replicas`, one job each at a time.
 - Point `OPS_SERVER_URL` at the app's Service, so registry downloads stay inside the cluster.
-- Optionally mount a volume at `TF_PLUGIN_CACHE_DIR` to keep providers between restarts.
+- Optionally mount a volume at `TF_PLUGIN_CACHE_DIR` (`/home/runner/.terraform.d/plugin-cache` in the image) to keep providers between restarts.
 - Set the runner pods' `terminationGracePeriodSeconds` to at least `OPS_JOB_TIMEOUT` + `OPS_JOB_GRACE` + 5 minutes (see [Shutdown]({{< relref "runners#how-it-works" >}})).
 - Scale the app with `replicas` too; background work runs on one of them (below).
 
@@ -44,7 +44,7 @@ Every replica also keeps one more connection of its own, `LISTEN`ing for queued 
 
 ## NixOS
 
-Add this flake as an input and import `opsolete.nixosModules.default` ([nix/module.nix](https://github.com/Opsolete/Opsolete/blob/master/nix/module.nix) lists every option). Each env var is an option; secrets are `*File` options taking a path (e.g. `config.sops.secrets.<name>.path`), passed in through systemd credentials, so they never reach the Nix store. By default it creates a local Postgres database with peer auth.
+Add this flake as an input and import `opsolete.nixosModules.default` ([nix/module.nix](https://github.com/Opsolete/Opsolete/blob/master/nix/module.nix) lists every option; [Configuration]({{< relref "configuration" >}}) maps them to the env vars). Settings without an option (`METRICS_ADDR`, `SECRET_KEY_PREVIOUS`, cloud credentials) go in `environment`, secret ones in `secretFiles`. Secrets are `*File` options taking a path (e.g. `config.sops.secrets.<name>.path`), passed in through systemd credentials, so they never reach the Nix store. By default it creates a local Postgres database with peer auth.
 
 ```nix
 services.opsolete = {
@@ -57,4 +57,4 @@ services.opsolete = {
 };
 ```
 
-Create registry tokens with `sudo opsolete-admin token <name>`. A runner on another host sets `runner.tokenFile` to the same secret. The runner runs in its own PID namespace, so jobs see no other processes of the host. It reads its secret files as root and then drops to its user, so module code (which runs as that user) can't read them. Test: `nix build .#checks.x86_64-linux.nixos` (NixOS VM, needs kvm).
+`opsolete-admin` runs any subcommand with the server's settings: create registry tokens with `sudo opsolete-admin token <name>`, rotate the key with `sudo opsolete-admin rotate-key`. A runner on another host sets `runner.tokenFile` to the same secret. The runner runs in its own PID namespace, so jobs see no other processes of the host. It reads its secret files as root and then drops to its user, so module code (which runs as that user) can't read them. Test: `nix build .#checks.x86_64-linux.nixos` (NixOS VM, needs kvm).

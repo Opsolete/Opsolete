@@ -5,7 +5,7 @@ weight: 2
 
 A **project** groups [workspaces]({{< relref "workspaces" >}}). Team access and [variable sets]({{< relref "variables" >}}) given to a project reach all of its workspaces.
 
-- **Every workspace is in exactly one project.** New workspaces go into the project picked when creating them, or the **default project**. Existing workspaces were put into a project named `default` when projects arrived.
+- **Every workspace is in exactly one project.** New workspaces go into the project picked when creating them, or the **default project**. A new installation has one project, `default`, which is the default.
 - **Workspace names stay unique across all projects**, so a workspace's URL, its state address and Terraform's `cloud` block don't change when it moves. Projects group workspaces; they don't add a namespace.
 
 ## The project menu

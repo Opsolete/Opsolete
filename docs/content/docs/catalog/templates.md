@@ -74,7 +74,7 @@ Fields generated from a [registry]({{< relref "module-registry" >}}) module's va
 
 ## Converting 0.x templates
 
-Opsolete 1.0 reads only the 1.0 format; there is no compatibility mode. Three things changed:
+Since Opsolete 0.6, only format 1.0 loads; there is no compatibility mode. Three things changed from the 0.5 format:
 
 1. **`default` and `show_if.equals` are typed** by the input's type: a number is a JSON number, a yes / no value a JSON boolean. Strings stay strings.
 2. **`help` is its own field.** A `label` is no longer split at `: `; a 0.x label like `"Account name: 3-24 lowercase letters"` would show whole as the label, so move the text after `: ` into `help`.
@@ -96,7 +96,7 @@ Before (0.x):
 }
 ```
 
-After (1.0):
+After (format 1.0):
 
 ```json
 {

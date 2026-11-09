@@ -9,10 +9,11 @@ Pick a template, name a **workspace** and fill in a form generated from JSON. A 
 
 ```sh
 nix develop        # or `direnv allow`
+just reseed        # wipe the dev database and load the examples (stops postgres: run it first)
 just run           # postgres + app on :8080
 just runner        # in a 2nd terminal: a runner on this machine
-just reseed        # load the examples
+just check         # tests and smoke test, before committing
 just docs          # preview the documentation
 ```
 
-Without Nix, configuration, deployment, CI and releases: see the [documentation](https://opsolete.github.io/Opsolete/). Changes are in [CHANGELOG.md](CHANGELOG.md).
+Without Nix, configuration, deployment, CI and releases: see the [documentation](https://opsolete.github.io/Opsolete/). Changes are in [CHANGELOG.md](CHANGELOG.md); 0.6 needs a fresh install, see [Upgrading to 0.6](https://opsolete.github.io/Opsolete/docs/operations/upgrading/).

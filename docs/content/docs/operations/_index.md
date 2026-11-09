@@ -3,7 +3,7 @@ title: Deployment and operations
 weight: 4
 ---
 
-Running Opsolete for real: its settings, login and access, the runners that execute Terraform, deploying to containers, Kubernetes or NixOS, and keeping `SECRET_KEY` safe.
+Running Opsolete for real: its settings, login and access, the runners that execute Terraform, deploying to containers, Kubernetes or NixOS, keeping `SECRET_KEY` safe, every endpoint, and upgrading to 0.6.
 
 {{< cards >}}
   {{< card link="configuration" title="Configuration" >}}
@@ -12,4 +12,5 @@ Running Opsolete for real: its settings, login and access, the runners that exec
   {{< card link="deployment" title="Deployment" >}}
   {{< card link="secret-key" title="Backing up SECRET_KEY" >}}
   {{< card link="endpoints" title="Endpoints" >}}
+  {{< card link="upgrading" title="Upgrading to 0.6" >}}
 {{< /cards >}}

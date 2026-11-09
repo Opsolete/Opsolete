@@ -3,7 +3,7 @@ title: Runners
 weight: 3
 ---
 
-`opsolete runner` executes runs, one phase (plan or apply) at a time. It's the same binary as the server, packaged as the `runner` image (built with nix): git, ssh, coreutils and Terraform 1.17.0 pinned by checksum, running as a non-root user. See [Deployment]({{< relref "deployment" >}}) for how to run it.
+`opsolete runner` executes runs, one phase (plan or apply) at a time. It's the same binary as the server, packaged as the `runner` image (built with nix): git, ssh, coreutils and Terraform 1.17.0 pinned by checksum, running as a non-root user. See [Deployment]({{< relref "deployment" >}}) for how to run it and [Configuration]({{< relref "configuration#runner" >}}) for its settings.
 
 ## How it works
 
@@ -14,23 +14,10 @@ weight: 3
 - **Isolation.** One job at a time per runner, in a fresh temp directory with its own `HOME`, both removed afterwards, so a job can't leave a `.terraformrc`, `.gitconfig` or provider mirror behind for the next one. The runner runs `init -from-module`, then `plan -out` and `apply <plan>` itself, with Terraform's colors on (the run page shows them) and `-compact-warnings` (unless the workspace sets the env variable `OPS_DEBUG=1`), and reads `show -json`/`output -json` itself (never logged). Each run phase is capped by `OPS_JOB_TIMEOUT`.
 - **Jobs can't attack the runner or each other** (Linux). Module code runs as the runner's user, so the runner makes itself non-dumpable: jobs can't read its `/proc/<pid>/environ` or memory, which still hold the runner token. Every process a job starts stays the runner's child, even one that daemonizes (the runner is a child subreaper), and after each job the runner kills them all (e.g. a backgrounded `local-exec`) before it claims the next one, so nothing can watch the next job's credentials. This works the same as a container's PID 1, under an init such as `tini` or `docker run --init`, or as a service; a runner that can't become a subreaper refuses to start. On other systems than Linux (development) there is no such cleanup and the runner warns at startup. The provider plugin cache is shared between jobs; Terraform only uses a cached provider that matches the lock file's checksums.
 - **Plans between phases.** The plan phase uploads the plan file and `.terraform.lock.hcl` to the server, which keeps them in `STATE_STORE` (a plan holds variable values, so it's as sensitive as state). The apply phase downloads both and restores the lock file before `init`, so it uses exactly the providers the plan used. Both files are deleted when the run ends.
-- **Logs.** Output is shipped about once a second, cut at line ends, and capped at 10 MB per run. The run page follows it live via Server-Sent Events, woken by each new chunk (or every 5 seconds), resuming with `Last-Event-ID` after reconnects. A user may follow at most 8 logs at once per server replica; more get `429 Too Many Requests`. `…/runs/<id>/logs` serves the raw log.
+- **Logs.** Output is shipped about once a second, cut at line ends, at most 256 KB per post, and capped at 10 MB per run. The run page follows it live via Server-Sent Events, woken by each new chunk (or every 5 seconds), resuming with `Last-Event-ID` after reconnects. A user may follow at most 8 logs at once per server replica; more get `429 Too Many Requests`. `…/runs/<id>/logs` serves the raw log.
 - **Secrets.** Sensitive outputs are shown as `(sensitive)` and never leave the runner. The `output -json` call isn't streamed, and signed module URLs are redacted from logs. Values of sensitive variables and sensitive template inputs are shown as `***` in the log, and an output containing one is reported as `(sensitive)` ([masking rules and limits]({{< relref "/docs/usage/variables" >}})). The runner reads its `OPS_*` settings and then removes them from its environment, so Terraform, providers and module code never see the runner token.
 - **Interrupts.** A phase that hits `OPS_JOB_TIMEOUT`, a cancel by a user, a lost lease and a runner shutdown all stop Terraform the same way: SIGINT, so it starts nothing new, finishes the operations in flight, saves its state and releases its lock; if it hasn't exited `OPS_JOB_GRACE` later, its process group is killed. A phase therefore never runs longer than `OPS_JOB_TIMEOUT` + `OPS_JOB_GRACE`; after that the runner stops sending heartbeats and log posts, so if it can't report the result the lease runs out and the server fails the job. The result says what happened: `timed out after …`, `canceled by a user`, or `runner was shut down during the run`, each followed by `Terraform was interrupted and saved its state`, or, when it was killed, that the state may be missing resources it was changing (check them before the next apply), or, when the interrupt came between Terraform commands (e.g. while downloading the plan), `no Terraform command was running at the time`.
 - **Shutdown.** The first SIGTERM stops claiming and lets the current job finish; a claim already waiting completes (up to 20 seconds), and a job it returns is acknowledged and run like the current one, so scaling down never strands a job. A second one interrupts the current job as above, and it ends as `canceled`. Set the pod's `terminationGracePeriodSeconds` to at least `OPS_JOB_TIMEOUT` + `OPS_JOB_GRACE` + 5 minutes (for the claim in flight and reporting the result), or a long phase is killed without the grace.
-
-## Settings
-
-| Env var | Default | Purpose |
-|---|---|---|
-| `OPS_SERVER_URL` | required | How the runner reaches Opsolete (in k8s: the Service URL). Registry modules are fetched from here too |
-| `OPS_RUNNER_TOKEN` | required | The server's `RUNNER_TOKEN` |
-| `OPS_JOB_TIMEOUT` | `1h` | Limit per run phase; then Terraform is interrupted |
-| `OPS_JOB_GRACE` | `10m` | After any interrupt (timeout, cancel, shutdown), how long Terraform may take to finish in-flight operations and save state before it's killed. In-flight operations such as creating a database can take minutes; a kill can leave real resources missing from state |
-| `OPS_TERRAFORM` | `terraform` on `PATH` | Terraform binary |
-| `OPS_RUNNER_NAME` | hostname | Shown on runs; the pod name in k8s |
-| `OPS_INFRACOST_API_KEY` | off | Turns on cost estimation (get a key with `infracost auth login`) |
-| `OPS_INFRACOST` | `infracost` on `PATH` | Infracost binary (the runner image ships 0.10.47) |
 
 ## Credentials
 
