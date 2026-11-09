@@ -128,6 +128,14 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	if foreign != "" {
+		// every 0.6+ database has the first file (001_schema.sql), no 0.x one does: the rest is from a newer Opsolete
+		var newer bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1)`, files[0]).Scan(&newer); err != nil {
+			return err
+		}
+		if newer {
+			return fmt.Errorf("this database was migrated by a newer Opsolete (it has migration %s, which this version doesn't know): run that version again; going back to an older one needs the database backup taken before the upgrade", foreign)
+		}
 		return fmt.Errorf("this database was created by Opsolete 0.5 or earlier (it has migration %s): this version needs a new, empty database (see Upgrading to 0.6)", foreign)
 	}
 	for _, f := range files {

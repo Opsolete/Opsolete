@@ -4,12 +4,31 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/opsolete/opsolete/internal/auth"
 )
+
+// A database with a migration this version doesn't know is refused, and the message tells a newer
+// Opsolete's database (never to be wiped) from a 0.x one.
+func TestMigrateRefusesUnknownMigrations(t *testing.T) {
+	s, ctx := testStore(t), context.Background()
+	if _, err := s.Pool.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ('migrations/999_future.sql')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Migrate(ctx); err == nil || !strings.Contains(err.Error(), "newer Opsolete") || strings.Contains(err.Error(), "empty database") {
+		t.Fatalf("a newer version's database: %v", err)
+	}
+	if _, err := s.Pool.Exec(ctx, `DELETE FROM schema_migrations; INSERT INTO schema_migrations (version) VALUES ('migrations/001_init.sql')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Migrate(ctx); err == nil || !strings.Contains(err.Error(), "0.5 or earlier") {
+		t.Fatalf("a 0.x database: %v", err)
+	}
+}
 
 // Requires a real PostgreSQL: TEST_DATABASE_URL=postgres://... go test ./...
 func TestWorkspaceRoundTrip(t *testing.T) {
