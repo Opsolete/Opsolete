@@ -131,6 +131,21 @@ func TestReapAfterOutage(t *testing.T) {
 	}
 }
 
+// While a run is active the execution mode stays (the rest of the General settings still save).
+func TestExecutionModeDuringRun(t *testing.T) {
+	a, ctx := testApp(t), context.Background()
+	ws, _ := configured(t, a) // its first plan is queued
+	if _, err := a.SaveGeneralSettings(ctx, admin, ws.Name, GeneralSettings{Name: ws.Name, ExecutionMode: "local"}); !isValidation(err) {
+		t.Fatalf("to local during a run: %v", err)
+	}
+	if got, _, _ := a.Workspace(ctx, admin, ws.Name, LevelRead); got.ExecutionMode != "remote" {
+		t.Fatalf("the mode changed anyway: %q", got.ExecutionMode)
+	}
+	if _, err := a.SaveGeneralSettings(ctx, admin, ws.Name, GeneralSettings{Name: ws.Name + "-x", ExecutionMode: "remote"}); err != nil {
+		t.Fatalf("a rename during a run: %v", err)
+	}
+}
+
 func TestStartRun(t *testing.T) {
 	a, ctx := testApp(t), context.Background()
 	group := uniq("grp-")
