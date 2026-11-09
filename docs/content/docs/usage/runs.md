@@ -7,22 +7,31 @@ Every change to a workspace is a run:
 
 `plan_queued` → `planning` → `needs_confirmation` → (confirm) `apply_queued` → `applying` → `applied`
 
-A run can also end as `no_changes`, `discarded` (plan not confirmed), `errored` or `canceled`. Each status change lands in the run's history.
+A run can also end as `no_changes`, `discarded` (plan not confirmed), `errored` or `canceled`; a plan-only run that found changes ends as `planned`, a drift check that found drift as `drifted`. Each status change lands in the run's history.
 
 ## Plan, then apply
 
 The plan phase saves a plan file and reports what it will do (`+2 ~1 −0`, plus the resource addresses, never values). Confirming queues the apply phase, which may run on any runner and applies exactly the saved plan. Terraform refuses the apply if the state changed since the plan, so a stale plan can't be applied.
 
-- **Auto-apply** (per workspace, off by default) applies plans without confirmation. **Destroy runs and [template rollout]({{< relref "workspaces#update-to-a-new-module-version" >}}) runs always ask.**
-- **One active run per workspace.** A new run waits until the current one is applied, discarded or finished.
+- **Auto-apply** (per workspace, off by default) applies plans without confirmation. **Destroy, refresh-only and [template rollout]({{< relref "workspaces#update-to-a-new-module-version" >}}) runs always ask.**
+- **One active run per workspace.** Starting a run while another is active (queued, planning, waiting for confirmation or applying) is refused: confirm or discard it, or wait for it to finish. A plan waiting for confirmation holds the workspace until then.
+- **Remote execution only.** A workspace set to local execution (*Settings › General*) is run by the [Terraform CLI]({{< relref "terraform-cli" >}}) on your machine: its runs, drift checks, VCS triggers and rollouts don't start in Opsolete.
+- **A held state lock** (a CLI, or *Settings › Locking*) keeps queued runs waiting until it's released; see [Locking]({{< relref "state#locking" >}}).
 - **Cost estimation:** when the runners have an Infracost key, the run page shows the estimated monthly cost before anyone confirms. See [Cost estimation]({{< relref "/docs/operations/runners#cost-estimation" >}}).
 
 ## Kinds of runs
 
-- **New run** re-plans with the workspace's inputs, for example to revert drift.
-- **Refresh state only** runs `terraform plan -refresh-only` instead: it shows what changed outside Terraform, and once confirmed (always, even with auto-apply) updates the state to match without changing infrastructure.
+**New run** on a workspace's Overview offers:
+
+- **Plan and apply** re-plans with the workspace's configuration, for example to revert drift.
+- **Refresh state** runs `terraform plan -refresh-only` instead: it shows what changed outside Terraform, and once confirmed (always, even with auto-apply) updates the state to match without changing infrastructure.
+- **Plan only** is a speculative plan that can't be applied (`planned` or `no_changes`). It runs even while the workspace is locked.
+- **Check for drift** queues a [drift check](#drift-detection) now.
+
+Elsewhere:
+
 - **Replace** resources: tick them in the workspace's resource list and choose **Plan replacing selected** (`-replace=<address>`; only addresses in the current state are accepted).
-- **Destroy…** plans `terraform plan -destroy`; once confirmed and applied, the workspace is marked destroyed. A new run can recreate it.
+- **Queue destroy plan** (*Settings › Destruction and deletion*) plans `terraform plan -destroy`; once confirmed and applied, the workspace is marked destroyed. A new run can recreate it.
 
 ## Drift detection
 

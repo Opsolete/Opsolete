@@ -133,7 +133,7 @@ func reservedEnv(key string) bool {
 			return true
 		}
 	}
-	// TF_VAR_*: use a Terraform variable instead (terraform-exec drops them from the environment).
+	// TF_VAR_*: use a Terraform variable instead (the runner's tfexec.CleanEnv drops them from the environment).
 	return strings.HasPrefix(k, "TF_")
 }
 

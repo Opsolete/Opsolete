@@ -3,38 +3,198 @@ title: Endpoints
 weight: 6
 ---
 
-| Endpoint | Purpose |
-|---|---|
-| `/healthz` | Liveness |
-| `/readyz` | Readiness (checks the DB) |
-| `/` | Templates |
-| `/templates/{id}` | Form, creates a workspace |
-| `GET\|POST /templates/{id}/rollout` | Roll out the template's module version to the workspaces using it (admins); `?project=` filters, the form takes `project`, `batch` |
-| `POST /templates/{id}/rollout/{pause\|resume\|stop}` | Pause, resume or stop the template's open rollout (admins) |
-| `/workspaces` | Workspace list |
-| `/workspaces/new` | Blank, VCS-linked or from a template |
-| `/workspaces/{name}` | Overview, runs, outputs, resources, state versions |
-| `GET\|POST /workspaces/{name}/vcs` | Version control settings |
-| `POST /workspaces/{name}/state-versions/{id}/rollback` | Roll back state |
-| `POST /workspaces/{name}/runs` | `action=apply\|destroy\|refresh\|assess`, `replace=<address>` for apply |
-| `POST /workspaces/{name}/settings` | General: name, execution mode, auto-apply |
-| `POST /workspaces/{name}/settings/remote-state` | Remote state sharing: `remote_state=all\|specific`, `remote_state_consumers` |
-| `POST /workspaces/{name}/settings/health` | Health: drift detection |
-| `POST /workspaces/{name}/delete` | Delete a workspace |
-| `POST /workspaces/{name}/access` | Grants (admins) |
-| `/workspaces/{name}/deploy` | Pick a template to add |
-| `GET\|POST /workspaces/{name}/templates/new?template={id}` | Add a template |
-| `/workspaces/{name}/templates/{module}` | Configure an added template |
-| `POST /workspaces/{name}/templates/{module}/remove` | Remove an added template |
-| `/workspaces/{name}/runs/{id}` | Plan, confirm/discard/cancel, live log, history |
-| `/workspaces/{name}/runs/{id}/logs` | Raw log |
-| `/auth/login`, `/auth/callback`, `/auth/logout` | Login |
-| `/registry`, `/registry/publish` | Module registry |
-| `/vcs`, `/vcs/new` | VCS providers, add-provider wizard |
-| `GET\|POST /vcs/{id}/settings` | Connection scope (admins) |
-| `/v1/modules/…` | Registry protocol |
-| `/v1/vcs-archives/…` | Signed, for runners |
-| `/api/runner/v1/…` | Runner API |
-| `/api/state/v1/{id}` | Terraform state backend |
-| `/api/v2/…` | Cloud block API, user tokens |
-| `/oauth/authorization`, `/oauth/token` | `terraform login` |
+Every route the server registers. A test (`TestEndpointsDocumented`) fails when a route is missing here, and `TestAccessMatrix` checks who may call each one.
+
+**Access:** *public* needs nothing; *user* is any signed-in user; *read* / *operate* is that level on the workspace or project (as its creator, through a group grant on it or on its project, or as an admin); *admin* is the admin role. In the browser, a page without a session redirects to the login (`302`) and a form post without one is `401`. A workspace or project you can't see is `404`, as if it didn't exist; too little access to one you can see, or a non-admin on an admin route, is `403`.
+
+**Components:** with `DEPLOYMENTS_ENABLED=false` only health, login, account, organization, audit, the registry and VCS routes exist (`/` redirects to `/registry`); with `REGISTRY_ENABLED=false` the `/registry` and `/v1/modules`, `/v1/archives` routes don't. The VCS and catalog routes exist when deployments or the registry are on.
+
+## Public
+
+| Endpoint | Access | Purpose |
+|---|---|---|
+| `GET /healthz` | public | Liveness |
+| `GET /readyz` | public | Readiness (checks the database) |
+| `GET /static/{file}` | public | CSS and JavaScript, `<name>.<hash>.<ext>`, cached immutable |
+| `GET /.well-known/terraform.json` | public | Terraform service discovery (`modules.v1`, `tfe.v2`, `login.v1`) |
+| `GET /auth/login` | public | Starts the OIDC login |
+| `GET /auth/callback` | public | OIDC redirect URI (`PUBLIC_URL/auth/callback`) |
+| `POST /auth/logout` | public | Ends the session |
+
+## Templates and the catalog
+
+| Endpoint | Access | Purpose |
+|---|---|---|
+| `GET /{$}` | user | The template catalog (`/`) |
+| `GET /templates/{id}` | user | A template's form |
+| `POST /templates/{id}` | operate on the chosen project | Creates a workspace from the template (`ops-workspace`, `ops-project`, the inputs) and queues its plan |
+| `GET /templates/new` | admin, builder on | Template builder |
+| `POST /templates/new` | admin, builder on | Saves a new template, or `preview=1` shows its form |
+| `GET /templates/{id}/edit` | admin, builder on | Builder for an existing template |
+| `POST /templates/{id}/edit` | admin, builder on | Saves it (or `preview=1`) |
+| `POST /templates/{id}/delete` | admin, builder on | Removes the template (a pull request or commit with a Git catalog) |
+| `GET /templates/{id}/rollout` | admin | Workspaces using the template and its open rollout; `?project=` filters |
+| `POST /templates/{id}/rollout` | admin | Starts a rollout: `project` (empty: all), `batch` (`0`: all at once), and the template's current `source` and `ref` (`409` if the template moved meanwhile) |
+| `POST /templates/{id}/rollout/{action}` | admin | `pause`, `resume` or `stop` the open rollout |
+| `GET /catalog` | admin | Settings → Templates: the Git catalog |
+| `POST /catalog` | admin | Sets its connection, repository, branch, folder and save mode |
+| `POST /catalog/sync` | admin | Sync now |
+| `POST /catalog/delete` | admin | Disconnect: back to `TEMPLATES_DIR` |
+
+## Workspaces
+
+| Endpoint | Access | Purpose |
+|---|---|---|
+| `GET /workspaces` | user | Workspace list |
+| `GET /workspaces/new` | user | New workspace: blank, VCS-linked or from a template |
+| `POST /workspaces/new` | operate on the chosen project | Creates a blank or VCS-linked workspace |
+| `GET /workspaces/{name}` | read | Overview: latest run, outputs, resources, settings summary |
+| `GET /workspaces/{name}/runs` | read | Run list |
+| `GET /workspaces/{name}/states` | read | State versions |
+| `GET /workspaces/{name}/states/{version}` | operate | A state version and its diff (values) |
+| `POST /workspaces/{name}/state-versions/{version}/rollback` | operate | Roll back state to this version |
+| `GET /workspaces/{name}/variables` | read | Variables and the variable sets that apply |
+| `POST /workspaces/{name}/variables` | operate | Sets a variable: `category` (`env` or `terraform`), `key`, `value`, `sensitive` |
+| `POST /workspaces/{name}/variables/{id}/delete` | operate | Deletes a variable |
+| `GET /workspaces/{name}/deploy` | read | Templates to add |
+| `GET /workspaces/{name}/templates/new` | operate | Form to add `?template={id}` |
+| `POST /workspaces/{name}/templates/new` | operate | Adds it and queues a plan |
+| `GET /workspaces/{name}/templates/{module}` | operate | Configure an added template (or update it to the template's version) |
+| `POST /workspaces/{name}/templates/{module}` | operate | Saves it and queues a plan |
+| `POST /workspaces/{name}/templates/{module}/remove` | operate | Removes it: a plan destroying its resources, or at once if nothing is deployed |
+| `GET /workspaces/{name}/vcs` | operate | Version control settings |
+| `GET /workspaces/{name}/vcs/edit` | operate | Change the linked repository or branch |
+| `POST /workspaces/{name}/vcs` | operate | Links, changes or unlinks a repository branch and its triggers |
+| `GET /workspaces/{name}/settings` | operate | Settings › General |
+| `GET /workspaces/{name}/settings/{page}` | operate | Settings pages: `health`, `lock`, `access`, `deletion` |
+| `POST /workspaces/{name}/settings` | operate | General: `name`, `execution_mode` (`remote` or `local`), `auto_apply` |
+| `POST /workspaces/{name}/settings/remote-state` | operate | Remote state sharing: `remote_state=all\|specific`, `remote_state_consumers` |
+| `POST /workspaces/{name}/settings/health` | operate | Health: `drift_detection` |
+| `POST /workspaces/{name}/lock` | operate | `action=lock` (optional `reason`, at most 300 characters), `unlock` or `force-unlock` |
+| `POST /workspaces/{name}/access` | admin | Grants a group `read` or `operate` (`group`, `level`; empty level revokes) |
+| `POST /workspaces/{name}/project` | admin | Moves the workspace to `project` |
+| `POST /workspaces/{name}/delete` | operate | Deletes the workspace; refused while its state manages resources unless `force=1` |
+
+## Runs
+
+| Endpoint | Access | Purpose |
+|---|---|---|
+| `POST /workspaces/{name}/runs` | operate | Starts a run: `action=apply\|plan\|destroy\|refresh\|assess`, `replace=<address>` (apply only, repeatable); `409` while another run is active |
+| `GET /workspaces/{name}/runs/{run}` | read | Plan, confirm / discard / cancel, live log, history |
+| `POST /workspaces/{name}/runs/{run}/confirm` | operate | Queues the apply of a plan waiting for confirmation |
+| `POST /workspaces/{name}/runs/{run}/discard` | operate | Ends it without applying |
+| `POST /workspaces/{name}/runs/{run}/cancel` | operate | Cancels; `force=1` cuts off a runner that doesn't react |
+| `GET /workspaces/{name}/runs/{run}/logs` | read | Raw log |
+| `GET /workspaces/{name}/runs/{run}/logs/stream` | read | Live log (Server-Sent Events); at most 8 streams per user per replica, else `429` |
+
+## Projects
+
+| Endpoint | Access | Purpose |
+|---|---|---|
+| `GET /projects` | user | Projects you can see |
+| `POST /projects` | admin | Creates a project (`name`, `description`) |
+| `GET /projects/{project}` | read, or any user for the default project | Overview |
+| `GET /projects/{project}/workspaces` | same | Its workspaces |
+| `GET /projects/{project}/settings` | admin | Settings › General |
+| `GET /projects/{project}/settings/{page}` | admin | `access` (team access), `variable-sets` |
+| `POST /projects/{project}/settings` | admin | `name`, `description`, `default` |
+| `POST /projects/{project}/access` | admin | Grants a group `read` or `operate` |
+| `POST /projects/{project}/delete` | admin | Deletes an empty, non-default project |
+
+## Variable sets
+
+| Endpoint | Access | Purpose |
+|---|---|---|
+| `GET /variable-sets` | admin | List |
+| `POST /variable-sets` | admin | Creates one (`name`, `description`, `global`; optionally attached to `workspace` or `project`) |
+| `GET /variable-sets/{set}` | admin | A set: variables, workspaces, projects |
+| `POST /variable-sets/{set}` | admin | `description`, `global` |
+| `POST /variable-sets/{set}/variables` | admin | Sets a variable |
+| `POST /variable-sets/{set}/variables/{id}/delete` | admin | Deletes a variable |
+| `POST /variable-sets/{set}/workspaces` | admin | The workspaces it's attached to (`workspace`, repeated) |
+| `POST /variable-sets/{set}/projects` | admin | The projects it's attached to (`project`, repeated) |
+| `POST /variable-sets/{set}/delete` | admin | Deletes the set |
+
+## Registry
+
+| Endpoint | Access | Purpose |
+|---|---|---|
+| `GET /registry` | user | Modules |
+| `GET /registry/{ns}/{name}/{system}/{version}` | user | Generated docs of a version |
+| `GET /registry/{ns}/{name}/{system}/{version}/docs.md` | user | The same as Markdown |
+| `POST /registry` | admin, uploads on | Uploads a version (multipart: `namespace`, `name`, `system`, `version`, `archive`) |
+| `GET /registry/publish` | admin | Publish wizard |
+| `POST /registry/publish` | admin | Publishes a module from a VCS repository (`connection`, repository, folder) |
+| `POST /registry/{ns}/{name}/{system}/sync` | admin | Sync now |
+| `POST /registry/{ns}/{name}/{system}/unlink` | admin | Unlinks it from its repository |
+| `POST /registry/{ns}/{name}/{system}/delete` | admin | Deletes every version (refused while a template uses it) |
+| `GET /v1/modules/{ns}/{name}/{system}/versions` | registry or `terraform login` token | Registry protocol: versions |
+| `GET /v1/modules/{ns}/{name}/{system}/{version}/download` | registry or `terraform login` token | Registry protocol: `X-Terraform-Get` with a signed archive URL (10 minutes) |
+| `GET /v1/archives/{ns}/{name}/{system}/{file}` | signed URL | Module archive |
+| `GET /v1/vcs-archives/{file}` | signed URL | A run's repository archive, for runners (15 minutes) |
+
+## VCS providers
+
+| Endpoint | Access | Purpose |
+|---|---|---|
+| `GET /vcs` | admin | Connections and what uses them |
+| `GET /vcs/new` | admin | Add-provider wizard |
+| `POST /vcs` | admin | Adds a connection (the token is checked by listing repositories) |
+| `GET /vcs/{id}/settings` | admin | Workspace scope |
+| `POST /vcs/{id}/settings` | admin | Saves it: `workspaces` on, `workspace_scope=all` or the selected `workspace` and `project` values |
+| `POST /vcs/{id}/token` | admin | Replaces the token |
+| `POST /vcs/{id}/delete` | admin | Deletes a connection: refused while the template catalog uses it or a linked workspace has an active run; linked workspaces and modules are unlinked |
+
+## Account, organization, audit
+
+| Endpoint | Access | Purpose |
+|---|---|---|
+| `GET /account` | user | Redirects to `/account/profile` |
+| `GET /account/{page}` | user | `profile`, `sessions`, `tokens` |
+| `POST /account/sessions/revoke` | user | Log out everywhere |
+| `POST /account/tokens/{id}/revoke` | user | Revokes one of your `terraform login` tokens |
+| `POST /account/tokens/revoke` | user | Revokes all of them |
+| `POST /users/{id}/sessions/revoke` | admin | Ends a user's sessions (from the audit log) |
+| `GET /organization` | admin | Settings → Organization |
+| `POST /organization` | admin | `currency` (Infracost), `module_uploads` |
+| `GET /audit` | admin | Audit log; `?show=access` for sign-ins and refused requests |
+
+## Terraform CLI
+
+`terraform login` and the [`cloud` block]({{< relref "/docs/usage/terraform-cli" >}}). The `/api/v2` routes take a `terraform login` token; `{org}` must be `ORGANIZATION`.
+
+| Endpoint | Access | Purpose |
+|---|---|---|
+| `GET /oauth/authorization` | user | "Authorize Terraform CLI" page |
+| `POST /oauth/authorization` | user | Issues the login code |
+| `POST /oauth/token` | public (code + PKCE) | Exchanges the code for a token (30 days) |
+| `GET /api/v2/ping` | public | API check |
+| `GET /api/v2/organizations/{org}/entitlement-set` | token | Entitlements |
+| `GET /api/v2/organizations/{org}/workspaces/{name}` | read | A workspace |
+| `POST /api/v2/organizations/{org}/workspaces` | operate on the project | Creates a local-execution workspace (`422` without access to the project) |
+| `GET /api/v2/organizations/{org}/projects` | token | Projects you can see (`filter[names]`) |
+| `POST /api/v2/organizations/{org}/projects` | admin | Creates a project |
+| `PATCH /api/v2/workspaces/{id}` | operate | Terraform's workspace update: returns the workspace, changes nothing |
+| `POST /api/v2/workspaces/{id}/actions/{action}` | operate | `lock`, `unlock`, `force-unlock` (local-execution workspaces) |
+| `GET /api/v2/workspaces/{id}/current-state-version` | operate | Current state version |
+| `GET /api/v2/workspaces/{id}/current-state-version-outputs` | operate | Its outputs |
+| `GET /api/v2/workspaces/{id}/state-versions/{version}/download` | operate | The state file |
+| `POST /api/v2/workspaces/{id}/state-versions` | operate | Saves a state version (local execution, while holding the lock) |
+
+## Runners and the state backend
+
+| Endpoint | Access | Purpose |
+|---|---|---|
+| `POST /api/runner/v1/jobs/claim` | runner token | Long-polls for a job (up to 20 s); `204` if none |
+| `POST /api/runner/v1/jobs/{id}/ack` | runner token + lease | Acknowledges a claim (within 30 s) |
+| `POST /api/runner/v1/jobs/{id}/logs` | runner token + lease | Appends log output (at most 256 KB per request, else `413`); doubles as a heartbeat |
+| `POST /api/runner/v1/jobs/{id}/heartbeat` | runner token + lease | Keeps the lease |
+| `POST /api/runner/v1/jobs/{id}/artifacts/{name}` | runner token + lease | Uploads the saved plan or lock file |
+| `GET /api/runner/v1/jobs/{id}/artifacts/{name}` | runner token + lease | Downloads it for the apply phase |
+| `POST /api/runner/v1/jobs/{id}/finish` | runner token + lease | Reports the phase's result |
+| `GET /api/state/v1/{id}` | run's state credential | Terraform `http` backend: read state (also a shared workspace's) |
+| `POST /api/state/v1/{id}` | run's state credential | Write state (apply phase, holding the lock) |
+| `LOCK /api/state/v1/{id}` | run's state credential | Take the state lock (`423` with the holder if taken) |
+| `UNLOCK /api/state/v1/{id}` | run's state credential | Release it |
+
+`METRICS_ADDR` serves Prometheus metrics on its own listener, outside these routes.

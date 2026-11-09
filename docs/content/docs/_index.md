@@ -15,7 +15,7 @@ Pick a template, name a **workspace** and fill in a form generated from JSON. A 
 
 Runners never touch the database or the state store directly. The server holds read/write access to the state store, and cloud credentials only as sealed variables it never uses itself.
 
-Opsolete is one Go binary (server and runner modes) with PostgreSQL as its only required external dependency. Kubernetes is the target platform: the server and the runners run as separate Deployments of the same image.
+Opsolete is one Go binary (server and runner modes) that needs PostgreSQL and, for state, a blob store (Azure Blob, S3, GCS, or a local folder). Kubernetes is the target platform: the server and the runners run as separate Deployments, from the `app` and `runner` images of that binary; a NixOS module runs both as services.
 
 ## Where to go next
 

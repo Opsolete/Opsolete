@@ -3,6 +3,15 @@ title: Roadmap
 weight: 6
 ---
 
+## Done in 0.6
+
+0.6.0 rebuilt Opsolete on one database schema, a service layer with one access rule, a scheduler that runs background work on one replica, `LISTEN`/`NOTIFY` instead of polling, two-phase job claims, job timeouts with a grace period for Terraform to save state, key rotation without downtime, retention, and template format 1.0. See [Upgrading to 0.6]({{< relref "/docs/operations/upgrading" >}}).
+
+## Next: 1.0
+
+- **Real end-to-end runs:** a real Terraform job through server, runner and Postgres in `just smoke`, the NixOS VM test in CI, and GitHub and Azure DevOps against real accounts.
+- **1.0 release:** release notes, and release-please moved to 1.0.0.
+
 ## Under consideration
 
 ### Dynamic cloud credentials (OIDC workload identity federation)

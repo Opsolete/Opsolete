@@ -8,9 +8,15 @@ Set up a local environment first: see [Getting started]({{< relref "getting-star
 ## Tests
 
 ```sh
-just test                                                     # in the nix dev shell: gofmt, vet, all tests incl. DB tests
-go test ./...
-TEST_DATABASE_URL=$DATABASE_URL go test ./internal/storage   # database tests: each creates and drops its own database there (needs CREATEDB)
+just test                                    # in the nix dev shell: sqlc diff, gofmt, vet, all tests incl. DB tests
+just test-linux                              # the non-DB tests on Linux in docker, plain and with --init
+TEST_DATABASE_URL=postgres://… go test ./... # each DB test creates and drops its own database there (needs CREATEDB)
+```
+
+Some tests keep the docs honest: `internal/config` fails when an env var it reads is missing from [Configuration]({{< relref "/docs/operations/configuration" >}}), and `internal/http` when a route is missing from (or extra in) [Endpoints]({{< relref "/docs/operations/endpoints" >}}). `TestAccessMatrix` needs a row for every route.
+
+```sh
+go test -run 'TestDocumented|TestEndpointsDocumented' ./internal/config ./internal/http
 ```
 
 ## Documentation
@@ -21,9 +27,11 @@ This site lives in `docs/` (Hugo with the [Hextra](https://imfing.github.io/hext
 
 `.github/workflows/ci.yml` runs on every PR and every push to `master`:
 
-- **`test`:** gofmt, vet, and all tests against a Postgres service, with Terraform 1.17.0 for the runner tests.
-- **`nix`:** `nix build`, which also catches a stale `vendorHash`. On Dependabot PRs, `vendorhash.yml` fixes it and pushes to the PR branch.
-- **`images`:** builds the `app` and `runner` images. They're pushed **only when a release is created**.
+- **`test`:** gofmt, vet, all tests against a Postgres 17 service with Terraform 1.17.0 for the runner tests, and `govulncheck`.
+- **`nix`:** `sqlc diff` (generated code current) and `nix build`, which also catches a stale `vendorHash`. On Dependabot PRs, `vendorhash.yml` fixes it and pushes to the PR branch.
+- **`images`:** builds the `app` and `runner` images and scans them with Trivy. They're pushed **only when a release is created**.
+
+`codeql.yml` runs CodeQL on PRs, pushes to `master` and weekly; findings land under *Security › Code scanning*.
 
 `.github/workflows/docs.yml` builds this site on PRs that touch `docs/` and publishes it to GitHub Pages (https://opsolete.github.io/Opsolete/) on every push to `master` that touches `docs/`.
 
@@ -31,14 +39,14 @@ This site lives in `docs/` (Hugo with the [Hextra](https://imfing.github.io/hext
 
 [Conventional Commits](https://www.conventionalcommits.org) → SemVer, via [release-please](https://github.com/googleapis/release-please):
 
-| Commit (= PR title, squash-merged) | Next version from 0.4.2 | Once ≥ 1.0.0 |
+| Commit (= PR title, squash-merged) | Next version from 0.6.0 | Once ≥ 1.0.0 |
 |---|---|---|
-| `fix: …`, `perf: …` | 0.4.3 | patch |
-| `feat: …` | 0.5.0 | minor |
-| `feat!: …` or a `BREAKING CHANGE:` footer | 0.5.0 (pre-1.0, breaking bumps minor) | major |
+| `fix: …`, `perf: …` | 0.6.1 | patch |
+| `feat: …` | 0.7.0 | minor |
+| `feat!: …` or a `BREAKING CHANGE:` footer | 0.7.0 (pre-1.0, breaking bumps minor) | major |
 | `docs:`, `chore:`, `ci:`, `test:`, `refactor:`, … | no release | no release |
 
-After each merge, release-please keeps a **release PR** open. It holds the next version and the [`CHANGELOG.md`](https://github.com/Opsolete/Opsolete/blob/master/CHANGELOG.md) entries. Merging that PR tags `vX.Y.Z`, creates the GitHub release, and pushes `ghcr.io/opsolete/opsolete-app` and `-runner` tagged `X.Y.Z`, `X.Y` and `latest`.
+After each push to `master` whose `ci` run passed, `release.yml` runs release-please, which keeps a **release PR** open. It holds the next version and the [`CHANGELOG.md`](https://github.com/Opsolete/Opsolete/blob/master/CHANGELOG.md) entries. Merging that PR tags `vX.Y.Z`, creates the GitHub release, and pushes `ghcr.io/opsolete/opsolete-app` and `-runner` (linux/amd64) tagged `X.Y.Z`, `X.Y`, `latest` and the commit's `sha-…`.
 
 **Beta:** the first release is 0.1.0 (`initial-version`). Until 1.0.0, breaking changes only bump the minor version, and GitHub releases are marked *pre-release*. To go stable, remove `"prerelease": true` from `release-please-config.json` in a commit with a `Release-As: 1.0.0` footer.
 

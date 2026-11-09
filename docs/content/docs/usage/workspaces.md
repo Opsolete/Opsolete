@@ -31,7 +31,7 @@ A workspace still has one active run at a time, so VCS runs wait their turn; if 
 
 Add any number of templates (**Deploy…** in a workspace's menu, operate access). Each becomes a module block, `module.<name>`, next to the workspace's own configuration (its branch, or nothing), in the same state; add one template several times under different names.
 
-- Adding, configuring or removing one starts a plan; removing one plans the destruction of its resources.
+- Adding, configuring or removing one starts a plan; removing one plans the destruction of its resources. While the workspace's state manages no resources, it's removed at once, without a run.
 - Removing the last one (the workspace's only configuration) starts a destroy run instead, and the template goes once that destroy is applied.
 - Their outputs show as `<name>__<output>`. Terraform keeps all outputs after a destroy limited to one template, so once that destroy is applied, the same run plans the configuration without the template (`-refresh=false`) and applies that plan if it changes only outputs. Otherwise the log says so, and the next apply removes them.
 - Workspace variables and variable sets reach every template: env variables (credentials) as the environment, Terraform variables as the variables of a linked branch's configuration and as inputs of each template whose module declares them and whose form doesn't ask for them (inputs the form asks keep their value, and a hidden or empty one the module's default). Templates on external sources (e.g. `git::`) get no Terraform variables, only environment variables: publish their module to the registry (it can sync from VCS). HCP Terraform's no-code provisioning has the same rule: only private registry modules.
@@ -59,10 +59,15 @@ The rollout moves each workspace to the template's version, with its current inp
 
 A rollout of its own that errors, is discarded or is canceled **pauses** the rollout: check it, then **Resume**. A workspace whose plan ended before its apply is back on its previous version, so resuming retries it; to skip it, **Stop** the rollout. **Stop** ends a rollout; plans it already queued stay. If the template moves to another version meanwhile, the rollout stops: start a new one. A rollout is **done** when no workspace in its scope is left to upgrade and its plans have ended. A template has at most one open rollout. Each upgrade is recorded in the audit log.
 
-## Rename and delete
+## Settings
 
-- **Rename** a workspace from its page. State, runs and grants are keyed by its id and stay put.
-- **Delete** a workspace from its page once its state manages no resources (destroy them first): runs, variables, grants and state files go with it.
+A workspace's *Settings* need `operate`:
+
+- **General:** its project (admins move it), **name** (state, runs and grants are keyed by its id and stay put), **execution mode** and **auto-apply**, and [remote state sharing]({{< relref "state#remote-state-sharing" >}}). *Remote* (the default) runs plans and applies on Opsolete's runners. *Local* is for the [Terraform CLI]({{< relref "terraform-cli" >}}): Terraform runs on your machine and Opsolete only keeps the state, so runs, drift checks, VCS triggers and rollouts don't start here. Changing the mode doesn't stop a run or a CLI lock already under way.
+- **Health:** [drift detection]({{< relref "runs#drift-detection" >}}).
+- **Locking:** lock the workspace's state by hand, with an optional reason; see [Locking]({{< relref "state#locking" >}}).
+- **Team access:** the grants below (admins change them).
+- **Destruction and deletion:** **Queue destroy plan** destroys the infrastructure (confirmed as usual). **Delete workspace** removes its runs, variables, grants and state files; it's refused while a run is active or the state is locked. Destroy the resources first: if its state still lists resources (or isn't indexed), the button says **Delete workspace anyway**, and any resources that still exist are no longer managed by Terraform and must be cleaned up by hand.
 
 ## Access
 
