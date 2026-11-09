@@ -34,7 +34,7 @@ self: {
     # it read the token as root and dropped to its user; jobs (same user) find no credentials directory
     machine.succeed("test $(stat -c %U /proc/$(systemctl show -p MainPID --value opsolete-runner)) = opsolete-runner")
     machine.fail("test -e /run/credentials/opsolete-runner.service")
-    # a stop waits for the current job: its timeout plus time to save state
-    machine.succeed("systemctl show -p TimeoutStopUSec --value opsolete-runner | grep -x '2h 5min'")
+    # a stop waits for the current job: its timeout (1h), OPS_JOB_GRACE to save state (10m) and 5 minutes to report
+    machine.succeed("systemctl show -p TimeoutStopUSec --value opsolete-runner | grep -x '1h 15min'")
   '';
 }

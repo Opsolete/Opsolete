@@ -1,5 +1,7 @@
 name: ci
 
+# Every pull request and every push to master. On master, once every check passed, the release jobs
+# at the end keep the release PR up to date, or cut the release and publish the images.
 on:
   pull_request:
   push:
@@ -13,8 +15,52 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Pull requests are merged with merge commits, so Release Please reads every commit, not the PR title:
+  # each commit must be a Conventional Commit (merge commits are skipped).
+  commits:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          re='^(feat|fix|perf|refactor|docs|test|build|ci|chore|revert|style)(\([a-z0-9._/-]+\))?!?: [^ ].*'
+          bad=0
+          while IFS=$'\t' read -r sha subject; do
+            if [[ ! "$subject" =~ $re ]]; then
+              echo "::error::commit ${sha:0:8} is not a Conventional Commit: $subject"
+              bad=1
+            fi
+          done < <(git log --no-merges --format='%H%x09%s' "$BASE..$HEAD")
+          [ "$bad" = 0 ] || { echo "Reword them (git rebase -i), e.g. 'feat(runner): …', 'fix: …', 'feat!: …' for breaking changes."; exit 1; }
+
+  # gofmt, vet and govulncheck: no database, in parallel with the tests.
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # Latest patch, so govulncheck judges the stdlib we ship (the images use nixpkgs' go: keep flake.lock fresh).
+          go-version: 1.26.x
+          check-latest: true
+      - run: test -z "$(gofmt -l .)" || { gofmt -l .; echo "::error::run gofmt -w ."; exit 1; }
+      - run: go vet ./...
+      # Reports only vulnerabilities in code paths the binary actually calls.
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:17
@@ -24,6 +70,7 @@ jobs:
         ports: ["5432:5432"]
         options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     env:
+      # each DB test creates its own database (internal/testdb): the service user is a superuser
       TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/opsolete_test?sslmode=disable
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -31,35 +78,153 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # Latest patch, so govulncheck judges the stdlib we ship (images use flake.nix's go: keep its pinned version fresh).
-          go-version: 1.26.x
-          check-latest: true # otherwise the runner image's preinstalled (possibly older) 1.26 is used
-      # Same version as the runner image; the wrapper would break the runner's parsing of show/output JSON.
+          go-version-file: go.mod
+          cache: false # setup-go saves its cache only when the go.sum key misses: race builds would never be cached
+      # Saved on every run, restored from the newest: the race-instrumented build stays incremental.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-test-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-test-${{ hashFiles('go.sum') }}-
+            go-test-
+      - id: tf
+        run: echo "version=$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
+      # The runner image's version; the wrapper would break the runner's parsing of show/output JSON.
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
-          terraform_version: 1.17.0
+          terraform_version: ${{ steps.tf.outputs.version }}
           terraform_wrapper: false
-      - run: test -z "$(gofmt -l .)" || { gofmt -l .; echo "::error::run gofmt -w ."; exit 1; }
-      - run: go vet ./...
-      - run: go test -count=1 ./... # each DB test creates its own database (internal/testdb): the service user is a superuser
-      # Reports only vulnerabilities in code paths the binary actually calls.
-      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - run: go test -race -count=1 ./...
 
-  # The nix package is what `just build`/`just smoke` use; this also catches a stale vendorHash.
+  # The runner kills every process a job leaves behind (a child subreaper): prove it on Linux as a
+  # container's PID 1 and under tini (docker --init), the two ways the runner image runs.
+  runner-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod # the recipe mounts this module cache into the container
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
+      - run: go mod download
+      - run: nix run --inputs-from . nixpkgs#just -- test-linux
+
+  # What `nix build` ships: generated code current, the package and both images built once (they share
+  # the package), and the images scanned.
   nix:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
-      - run: nix develop -c sqlc diff # internal/storage/db is stale: run `just sqlc` and commit it
-      - run: nix build -L
+      # only sqlc (prebuilt on cache.nixos.org), not the dev shell: that one has unfree terraform, built from source
+      - run: |
+          nix shell --inputs-from . nixpkgs#sqlc -c sqlc diff || { echo "::error::internal/storage/db is stale: run 'just sqlc' and commit it"; exit 1; }
+      # shortcut: one retry, as the go-modules download inside nix sometimes hits a proxy.golang.org stream
+      # error; a real failure fails twice. Drop it if a binary cache for these outputs is added.
+      - run: |
+          build() { nix build -L .#default .#image-app .#image-runner; }
+          build || { echo "::warning::nix build failed, retrying once"; build; }
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        id: trivy-app
+        with:
+          input: result-1 # result: the package, result-1: image-app, result-2: image-runner
+          trivyignores: .trivyignore.yaml
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          output: trivy-app.txt
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        id: trivy-runner
+        if: ${{ !cancelled() }}
+        with:
+          input: result-2
+          trivyignores: .trivyignore.yaml
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          output: trivy-runner.txt
+      - if: ${{ !cancelled() }}
+        run: |
+          for t in app runner; do
+            { echo "### Trivy: $t image (fixable HIGH/CRITICAL)"; echo '```'; cat "trivy-$t.txt" 2>/dev/null || echo "scan did not run"; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
+          done
 
-  # Build and scan both images on every CI run; publishing lives in release.yml so a
-  # Release Please/API failure can never skip this validation.
-  images:
+  # The NixOS module, booted in a VM: server, runner, secrets from files (nix/test.nix).
+  nixos-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # GitHub's Linux runners have KVM; let the build user (nixbld) open it.
+      - run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
+        with:
+          extra_nix_config: system-features = nixos-test benchmark big-parallel kvm
+      - run: nix build -L .#checks.x86_64-linux.nixos
+
+  # ---- master only: releases (Release Please), after every check above passed ----
+  # Open/update the release PR, or cut the release when that PR was merged.
+  release-please:
+    needs: [lint, test, runner-linux, nix, nixos-test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      created: ${{ steps.rp.outputs.release_created }}
+      tag: ${{ steps.rp.outputs.tag_name }}
+      sha: ${{ steps.rp.outputs.sha }}
+    steps:
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: rp
+        with:
+          # A release PR opened with GITHUB_TOKEN gets no CI run (GitHub shows "action required"), so its
+          # checks never pass on their own. Set RELEASE_PLEASE_TOKEN (a fine-grained PAT, or a GitHub App
+          # token: contents and pull requests read/write on this repo) and they run like on any PR.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+      - if: success()
+        env:
+          CREATED: ${{ steps.rp.outputs.release_created }}
+          TAG: ${{ steps.rp.outputs.tag_name }}
+        run: |
+          if [ "$CREATED" = true ]; then echo "Released **$TAG**; images are published by the next job." >> "$GITHUB_STEP_SUMMARY"
+          else echo "No release this run; the release PR was opened or updated if there were releasable commits." >> "$GITHUB_STEP_SUMMARY"; fi
+      - if: failure()
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ### Release Please failed
+          Every check in this run passed; nothing was released or published.
+          This is usually a transient GitHub API error ("Something went wrong while executing your query").
+          Use **Re-run failed jobs**: Release Please picks up where it left off.
+          "GitHub Actions is not permitted to create or approve pull requests" is not transient: add a PAT or
+          GitHub App token as the RELEASE_PLEASE_TOKEN secret, or allow it under Settings > Actions > General.
+          EOF
+
+  # Push the release images, built with nix from the release commit.
+  publish:
+    needs: release-please
+    if: needs.release-please.outputs.created == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
     strategy:
       fail-fast: false
       matrix:
@@ -67,21 +232,36 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The tag, not the sha: metadata-action's git context can't infer a ref from a bare detached sha.
+          ref: ${{ needs.release-please.outputs.tag }}
           persist-credentials: false
       - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
-      # shortcut: linux/amd64 only; build .#packages.aarch64-linux.image-* on an arm runner for arm nodes.
-      - run: nix build -L .#image-${{ matrix.target }}
-      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        id: trivy
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
-          input: result
-          trivyignores: .trivyignore.yaml
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: "1"
-          output: trivy.txt
-      - if: ${{ !cancelled() }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          # git context: sha tag and revision label come from the release commit, not master's head.
+          context: git
+          images: ghcr.io/${{ github.repository }}-${{ matrix.target }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ needs.release-please.outputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release-please.outputs.tag }}
+            type=raw,value=latest
+            type=sha
+      # shortcut: linux/amd64 only; build .#packages.aarch64-linux.image-* on an arm runner and push a manifest list for arm nodes.
+      - env:
+          TAGS: ${{ steps.meta.outputs.tags }}
         run: |
-          { echo "### Trivy: ${{ matrix.target }} image (fixable HIGH/CRITICAL)"; echo '```'; cat trivy.txt 2>/dev/null || echo "scan did not run"; echo '```'; } | tee -a "$GITHUB_STEP_SUMMARY"
-          # the table lands here and in the job summary, not under the red Trivy step
-          if [ "${{ steps.trivy.outcome }}" = failure ]; then echo "::error::Trivy failed for the ${{ matrix.target }} image: findings are in this step's log and the run summary"; fi
+          nix build -L .#image-${{ matrix.target }}
+          ref=$(docker load < result | sed -n 's/^Loaded image: //p')
+          for t in $TAGS; do docker tag "$ref" "$t" && docker push "$t"; done
+      - env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          { echo "### Published ${{ matrix.target }}"; echo '```'; echo "$TAGS"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - if: failure()
+        run: echo "Publishing failed after the release was created. Use **Re-run failed jobs** (not a new push) so the release outputs are reused." >> "$GITHUB_STEP_SUMMARY"
