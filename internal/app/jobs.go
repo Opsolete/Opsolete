@@ -232,7 +232,7 @@ func (a *App) Artifact(ctx context.Context, runID uuid.UUID, lease, name string)
 
 // ReapLeases queues again claimed jobs their runner never acknowledged (storage.UnclaimJobs), and
 // fails acknowledged jobs whose runner stopped heartbeating (crash, node loss) and cleans up after
-// them. For a background loop: errors are logged.
+// them, but not within LeaseTTL of this replica taking the lead. For a background loop: errors are logged.
 func (a *App) ReapLeases(ctx context.Context) {
 	unclaimed, err := a.Store.UnclaimJobs(ctx)
 	if err != nil {
@@ -241,6 +241,12 @@ func (a *App) ReapLeases(ctx context.Context) {
 	for _, u := range unclaimed {
 		// a runner whose claims keep showing up here never acknowledges: an old or broken runner
 		a.Log.Warn("job not acknowledged by its runner, queued again", "run", u.RunID, "runner", u.Runner)
+	}
+	// Leases that ran out while no replica led (a server or database outage) aren't the runners' fault:
+	// failing those runs now would refuse their applies' state writes and orphan what they created.
+	// A new leader gives runners one LeaseTTL to heartbeat again (Heartbeat renews an expired lease).
+	if since, ok := leadingSince(ctx); ok && time.Since(since) < LeaseTTL {
+		return
 	}
 	ids, err := a.Store.ReapExpiredLeases(ctx)
 	if err != nil {

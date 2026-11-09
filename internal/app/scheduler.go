@@ -18,6 +18,14 @@ import (
 // schedulerLock is the advisory lock id of the leader ("opsolete" in ASCII).
 const schedulerLock int64 = 0x6f70736f6c657465
 
+type leadKey struct{}
+
+// leadingSince is when the replica running a leader's job (ctx) took the lead; ok=false outside one.
+func leadingSince(ctx context.Context) (since time.Time, ok bool) {
+	since, ok = ctx.Value(leadKey{}).(time.Time)
+	return since, ok
+}
+
 // Job is a named piece of background work, run every Every; a run never overlaps the previous one.
 type Job struct {
 	Name  string
@@ -79,7 +87,7 @@ func (s *Scheduler) lead(ctx context.Context, jobs []Job) {
 		switch {
 		case holds && !leading:
 			s.Log.Info("scheduler: this replica leads, running background jobs")
-			jctx, stop := context.WithCancel(ctx)
+			jctx, stop := context.WithCancel(context.WithValue(ctx, leadKey{}, time.Now()))
 			done := make(chan struct{})
 			go func() { defer close(done); runJobs(jctx, s.Log, jobs) }()
 			follow = func() { stop(); <-done; setLeading(false) }
