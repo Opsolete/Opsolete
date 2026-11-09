@@ -4,7 +4,7 @@ layout: hextra-home
 ---
 
 {{< hextra/hero-headline >}}
-From forms to infrastructure.<br>Automatically.
+Pick. Plan. Apply.
 {{< /hextra/hero-headline >}}
 
 <div class="hx:mb-6">

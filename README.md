@@ -1,8 +1,8 @@
 # Opsolete
 
-**Fill in a form. Get real infrastructure.**
+**Pick. Plan. Apply.**
 
-Most teams have a few people who write good Terraform and a lot of people who just need a storage account, a resource group or a VM by Friday. Opsolete sits between them. The people who know Terraform turn their modules into templates. Everyone else picks a template, fills in a short form, looks at the plan and clicks apply.
+Most teams have a few people who write good Terraform and a lot of people who just need a storage account, a resource group or a VM by Friday. Opsolete sits between them. The people who know Terraform turn their modules into templates. Everyone else picks a template, fills in a short form, reviews the plan and applies it.
 
 It's self-hosted, it runs your existing modules as they are, and it doesn't hide what Terraform is doing: every change is a run you can follow line by line in the browser.
 
