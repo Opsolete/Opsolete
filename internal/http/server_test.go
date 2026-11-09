@@ -101,10 +101,17 @@ func (h notShown) Handle(_ context.Context, r slog.Record) error {
 	return nil
 }
 
+// noStore records no users: the dev user of a test without a database. Dev mode needs no sessions.
+type noStore struct{ auth.Store }
+
+func (noStore) UpsertUser(context.Context, string, string, string, []string) (uuid.UUID, error) {
+	return uuid.Nil, nil
+}
+
 func devAuth(t *testing.T, store *storage.Store, email string, admin bool, groups ...string) *auth.Auth {
-	save := func(context.Context, string, string, string, []string) (uuid.UUID, error) { return uuid.Nil, nil }
+	var save auth.Store = noStore{}
 	if store != nil {
-		save = store.UpsertUser
+		save = store
 	}
 	var admins []string
 	if admin {
@@ -215,13 +222,16 @@ func TestLoginRequired(t *testing.T) {
 	}
 }
 
-// TestLogout (A2): signed in through the IdP, a user signs out: the session cookie is cleared and
-// the browser's next request goes to the login again.
+// TestLogout (A2): signed in through the IdP, each login is a session row and the cookie only its
+// token. Logout ends the session, so a copied cookie stops working too; "log out everywhere" ends
+// the user's other sessions, an admin ends a user's sessions from the audit log, an expired session
+// goes to the login.
 func TestLogout(t *testing.T) {
 	store := testStore(t)
+	ctx := t.Context()
 	is := authtest.New(t)
 	a, err := auth.New(context.Background(), auth.Config{Issuer: is.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret,
-		PublicURL: testReg.PublicURL}, []byte("k"), store.UpsertUser)
+		PublicURL: testReg.PublicURL}, []byte("k"), store)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,25 +242,50 @@ func TestLogout(t *testing.T) {
 		}
 		return req
 	}
+	page := func(cookies []*http.Cookie, path string) *httptest.ResponseRecorder {
+		return do(h, with(httptest.NewRequest("GET", path, nil), cookies))
+	}
+	signedIn := func(cookies []*http.Cookie) bool { return page(cookies, "/workspaces").Code == http.StatusOK }
+	sessions := func() (n int) {
+		store.Pool.QueryRow(ctx, `SELECT count(*) FROM sessions`).Scan(&n)
+		return n
+	}
 	// sign in: login → IdP → callback, as a browser follows them
-	rec := get(h, "/auth/login?next=%2Fworkspaces")
-	noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	res, err := noFollow.Get(rec.Header().Get("Location"))
-	if err != nil {
-		t.Fatal(err)
+	signIn := func() []*http.Cookie {
+		t.Helper()
+		rec := get(h, "/auth/login?next=%2Fworkspaces")
+		noFollow := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		res, err := noFollow.Get(rec.Header().Get("Location"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		cb, _ := url.Parse(res.Header.Get("Location"))
+		rec = do(h, with(httptest.NewRequest("GET", cb.RequestURI(), nil), rec.Result().Cookies()))
+		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/workspaces" {
+			t.Fatalf("callback: %d %q", rec.Code, rec.Header().Get("Location"))
+		}
+		return rec.Result().Cookies()
 	}
-	res.Body.Close()
-	cb, _ := url.Parse(res.Header.Get("Location"))
-	rec = do(h, with(httptest.NewRequest("GET", cb.RequestURI(), nil), rec.Result().Cookies()))
-	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/workspaces" {
-		t.Fatalf("callback: %d %q", rec.Code, rec.Header().Get("Location"))
+	session := signIn()
+	if sessions() != 1 || !signedIn(session) {
+		t.Fatalf("login creates a session: %d", sessions())
 	}
-	session := rec.Result().Cookies()
-	if rec := do(h, with(httptest.NewRequest("GET", "/workspaces", nil), session)); rec.Code != http.StatusOK {
-		t.Fatalf("signed in: %d", rec.Code)
+	var tok string
+	for _, c := range session {
+		if c.Name == "ops_session" {
+			tok = c.Value
+		}
+	}
+	if len(tok) != 43 || strings.Contains(tok, ".") || strings.Contains(tok, "dev@example.com") {
+		t.Fatalf("the cookie must be an opaque 256-bit token: %q", tok)
 	}
 
-	rec = do(h, with(httptest.NewRequest("POST", "/auth/logout", nil), session))
+	other := signIn() // a second browser
+	if body := page(session, "/account/sessions").Body.String(); strings.Count(body, "<tr>") != 3 || strings.Count(body, `"tag">this browser<`) != 1 || !strings.Contains(body, "Log out everywhere") {
+		t.Fatal("the sessions page lists both and marks this one")
+	}
+	rec := do(h, with(httptest.NewRequest("POST", "/auth/logout", nil), session))
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/" {
 		t.Fatalf("logout: %d %q", rec.Code, rec.Header().Get("Location"))
 	}
@@ -258,9 +293,38 @@ func TestLogout(t *testing.T) {
 	if len(cleared) != 1 || cleared[0].Name != "ops_session" || cleared[0].Value != "" || cleared[0].MaxAge >= 0 {
 		t.Fatalf("logout must clear the session cookie: %+v", cleared)
 	}
-	// the browser dropped it: the next page view asks for a login
-	if rec := get(h, "/workspaces"); rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), "/auth/login") {
-		t.Fatalf("after logout: %d %q", rec.Code, rec.Header().Get("Location"))
+	// a copy of the cookie (kept elsewhere) no longer works; the other browser still does
+	if rec := page(session, "/workspaces"); rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), "/auth/login") {
+		t.Fatalf("copied cookie after logout: %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	if !signedIn(other) || sessions() != 1 {
+		t.Fatalf("logout ends only its own session: %d", sessions())
+	}
+
+	third := signIn()
+	if rec := do(h, with(httptest.NewRequest("POST", "/account/sessions/revoke", nil), third)); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/" {
+		t.Fatalf("log out everywhere: %d", rec.Code)
+	}
+	if signedIn(other) || signedIn(third) || sessions() != 0 {
+		t.Fatal("log out everywhere ends every session of the user")
+	}
+
+	// an admin ends the user's sessions from the audit log (the entry names the user)
+	fourth := signIn()
+	admin := newServerAs(t, "../../catalog", false, store, devAuth(t, store, "admin-logout@example.com", true))
+	var uid uuid.UUID
+	store.Pool.QueryRow(ctx, `SELECT user_id FROM sessions`).Scan(&uid)
+	if body := get(admin, "/audit?show=access").Body.String(); !strings.Contains(body, "/users/"+uid.String()+"/sessions/revoke") {
+		t.Fatal("the audit log offers to end a signed-in user's sessions")
+	}
+	if rec := post(admin, "/users/"+uid.String()+"/sessions/revoke", nil); rec.Code != http.StatusSeeOther || signedIn(fourth) {
+		t.Fatalf("admin ends a user's sessions: %d", rec.Code)
+	}
+
+	expired := signIn()
+	store.Pool.Exec(ctx, `UPDATE sessions SET expires_at = now() - interval '1 second'`)
+	if rec := page(expired, "/workspaces"); rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), "/auth/login") {
+		t.Fatalf("expired session: %d %q", rec.Code, rec.Header().Get("Location"))
 	}
 }
 

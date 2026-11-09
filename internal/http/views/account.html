@@ -13,6 +13,33 @@
 <p class="hint">As your identity provider sent them at your last login. Workspaces and projects grant access to groups: log out and in again after a change.</p>
 </div>
 
+{{else if eq .Sub "sessions"}}
+<nav class="back" aria-label="breadcrumb">Account settings: Sessions</nav>
+<div class="page-head">
+  <div>
+    <h1>Sessions</h1>
+    <p class="muted">Every browser signed in as you; a session lasts 12 hours. Log out everywhere ends all of them, this one too.
+      Terraform's tokens (<code>terraform login</code>) are not sessions: revoke them under <a href="/account/tokens">Tokens</a>.</p>
+  </div>
+  {{if .Sessions}}<form method="post" action="/account/sessions/revoke" data-confirm="Log out everywhere, this browser too?">
+    <button type="submit" class="danger">Log out everywhere</button></form>{{end}}
+</div>
+<div class="card flush">
+<table>
+<tr><th>Browser</th><th>Address</th><th>Signed in</th><th>Last seen</th></tr>
+{{range .Sessions}}
+<tr>
+  <td>{{.UserAgent}}{{if eq .ID $.Current}} <span class="tag">this browser</span>{{end}}</td>
+  <td>{{.IP}}</td>
+  <td class="nowrap" title="{{.CreatedAt.Format "2006-01-02 15:04"}}">{{ago .CreatedAt}}</td>
+  <td class="nowrap" title="{{.LastSeenAt.Format "2006-01-02 15:04"}}">{{ago .LastSeenAt}}</td>
+</tr>
+{{else}}
+<tr><td colspan="4" class="empty">No sessions.</td></tr>
+{{end}}
+</table>
+</div>
+
 {{else}}
 <nav class="back" aria-label="breadcrumb">Account settings: Tokens</nav>
 <div class="page-head">

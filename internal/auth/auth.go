@@ -1,5 +1,5 @@
 // Package auth handles browser login: OIDC (authorization code + PKCE) or a fixed dev user,
-// HMAC-signed session cookies, and the user/admin role.
+// server-side sessions (the cookie holds only a random token), and the user/admin role.
 package auth
 
 import (
@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -26,8 +27,8 @@ import (
 const (
 	sessionCookie = "ops_session"
 	loginCookie   = "ops_login"
-	// shortcut: identity lives in the cookie, so IdP removals apply at the next login (≤ sessionTTL);
-	// add a server-side session table if you need instant revocation. The role follows ADMIN_EMAILS and ADMIN_GROUPS.
+	// IdP removals apply at the next login (≤ sessionTTL), or at once when the session is ended
+	// (logout, log out everywhere, an admin). The role follows ADMIN_EMAILS and ADMIN_GROUPS.
 	sessionTTL = 12 * time.Hour
 	loginTTL   = 10 * time.Minute
 )
@@ -36,6 +37,8 @@ type User struct {
 	ID    uuid.UUID `json:"id"`
 	Email string    `json:"email"`
 	Role  string    `json:"role"` // user | admin
+	// Session is the browser session's id (sessions table); zero for the dev user and API tokens.
+	Session uuid.UUID `json:"-"`
 }
 
 func (u User) Admin() bool { return u.Role == "admin" }
@@ -50,27 +53,59 @@ type Config struct {
 	PublicURL                      *url.URL // the callback is PublicURL/auth/callback
 }
 
-// SaveUser records a login (with the IdP's groups, for team access) and returns the user's id.
-// subject is the OIDC issuer and sub, the stable identity ("" for the dev user); email is an attribute.
-type SaveUser func(ctx context.Context, subject, email, role string, groups []string) (uuid.UUID, error)
+// Store keeps users and browser sessions.
+type Store interface {
+	// UpsertUser records a login (with the IdP's groups, for team access) and returns the user's id.
+	// subject is the OIDC issuer and sub, the stable identity ("" for the dev user); email is an attribute.
+	UpsertUser(ctx context.Context, subject, email, role string, groups []string) (uuid.UUID, error)
+	// CreateSession stores a session and returns its token, the cookie's only content.
+	CreateSession(ctx context.Context, s NewSession) (token string, err error)
+	// Session is the unexpired session of token with its user, or ErrNoSession.
+	Session(ctx context.Context, token string) (Session, error)
+	// DeleteSession ends the session of token; an unknown one deletes nothing.
+	DeleteSession(ctx context.Context, token string) error
+}
 
-// ErrEmailTaken is SaveUser's answer when the email belongs to a user bound to another subject (a reassigned address).
-var ErrEmailTaken = errors.New("this email belongs to another identity provider account")
+// NewSession is a login's session. AdminEmail and AdminGroups are what can make it admin (the email
+// claim, the login's ADMIN_GROUPS groups), so the role follows the config on every request.
+type NewSession struct {
+	UserID        uuid.UUID
+	AdminEmail    string
+	AdminGroups   []string
+	UserAgent, IP string // for the account page, truncated
+	TTL           time.Duration
+}
+
+// Session is a stored session and its user.
+type Session struct {
+	ID, UserID  uuid.UUID
+	Email       string
+	AdminEmail  string
+	AdminGroups []string
+}
+
+var (
+	// ErrEmailTaken is UpsertUser's answer when the email belongs to a user bound to another subject (a reassigned address).
+	ErrEmailTaken = errors.New("this email belongs to another identity provider account")
+	// ErrNoSession: the request has no session cookie, or its session is unknown, ended or expired.
+	ErrNoSession = errors.New("no session")
+)
 
 type Auth struct {
 	key         []byte
 	secure      bool
 	admins      []string
 	adminGroups []string
-	save        SaveUser
+	store       Store
 	dev         *User
 	oauth       oauth2.Config
 	verify      *oidc.IDTokenVerifier
 }
 
-// New sets up login. key signs cookies; it must be secret and shared by all replicas.
-func New(ctx context.Context, c Config, key []byte, save SaveUser) (*Auth, error) {
-	a := &Auth{key: key, secure: c.PublicURL.Scheme == "https", save: save}
+// New sets up login. key signs the login-state cookie (PKCE verifier and nonce during the IdP redirect);
+// it must be secret and shared by all replicas.
+func New(ctx context.Context, c Config, key []byte, store Store) (*Auth, error) {
+	a := &Auth{key: key, secure: c.PublicURL.Scheme == "https", store: store}
 	for _, e := range c.Admins {
 		if e = strings.ToLower(strings.TrimSpace(e)); e != "" {
 			a.admins = append(a.admins, e)
@@ -82,7 +117,7 @@ func New(ctx context.Context, c Config, key []byte, save SaveUser) (*Auth, error
 		return nil, errors.New("set either OIDC_ISSUER or AUTH_DEV_USER, not both")
 	case c.DevUser != "":
 		u := User{Email: strings.ToLower(c.DevUser), Role: a.Role(c.DevUser, c.DevGroups)}
-		id, err := save(ctx, "", u.Email, u.Role, c.DevGroups)
+		id, err := store.UpsertUser(ctx, "", u.Email, u.Role, c.DevGroups)
 		if err != nil {
 			return nil, err
 		}
@@ -116,38 +151,43 @@ func (a *Auth) Role(email string, groups []string) string {
 
 func (a *Auth) adminGroup(g string) bool { return slices.Contains(a.adminGroups, g) }
 
-// session is the session cookie. AdminEmail and AdminGroups are what can make it admin (the email
-// claim, the login's ADMIN_GROUPS groups), so the role follows the config on every request.
-type session struct {
-	User
-	Exp         int64    `json:"exp"`
-	AdminEmail  string   `json:"admin_email,omitempty"`
-	AdminGroups []string `json:"admin_groups,omitempty"`
-}
-
 // Routes: GET /auth/login, GET /auth/callback, POST /auth/logout, on an *http.ServeMux or a wrapper of one.
 func (a *Auth) Routes(mux interface {
 	HandleFunc(string, func(http.ResponseWriter, *http.Request))
 }) {
 	mux.HandleFunc("GET /auth/login", a.login)
 	mux.HandleFunc("GET /auth/callback", a.callback)
-	mux.HandleFunc("POST /auth/logout", func(w http.ResponseWriter, r *http.Request) {
-		a.setCookie(w, sessionCookie, "", "/", -1)
-		http.Redirect(w, r, "/", http.StatusSeeOther)
-	})
+	mux.HandleFunc("POST /auth/logout", a.logout)
 }
 
-// User returns the signed-in user of a request.
-func (a *Auth) User(r *http.Request) (User, bool) {
+// logout deletes the session, so a copy of the cookie kept elsewhere stops working too.
+func (a *Auth) logout(w http.ResponseWriter, r *http.Request) {
+	if c, err := r.Cookie(sessionCookie); err == nil && c.Value != "" && a.dev == nil {
+		if err := a.store.DeleteSession(r.Context(), c.Value); err != nil {
+			http.Error(w, "logout failed, please try again", http.StatusInternalServerError)
+			return
+		}
+	}
+	a.setCookie(w, sessionCookie, "", "/", -1)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// User returns the signed-in user of a request: ErrNoSession if there is none, another error if
+// the lookup failed.
+func (a *Auth) User(r *http.Request) (User, error) {
 	if a.dev != nil {
-		return *a.dev, true
+		return *a.dev, nil
 	}
-	var s session
-	if !a.readCookie(r, sessionCookie, &s) || time.Now().Unix() > s.Exp {
-		return User{}, false
+	c, err := r.Cookie(sessionCookie)
+	if err != nil || c.Value == "" {
+		return User{}, ErrNoSession
 	}
-	s.Role = a.Role(s.AdminEmail, s.AdminGroups) // not the cookie's: an admin removed from ADMIN_EMAILS/GROUPS loses it at the restart
-	return s.User, true
+	s, err := a.store.Session(r.Context(), c.Value)
+	if err != nil {
+		return User{}, err
+	}
+	// the role from the config now, not from the login: an admin removed from ADMIN_EMAILS/GROUPS loses it at the restart
+	return User{ID: s.UserID, Email: s.Email, Role: a.Role(s.AdminEmail, s.AdminGroups), Session: s.ID}, nil
 }
 
 type ctxKey struct{}
@@ -174,6 +214,14 @@ type principalKey struct{}
 
 func WithPrincipal(ctx context.Context, p *Principal) context.Context {
 	return context.WithValue(ctx, principalKey{}, p)
+}
+
+// CurrentPrincipal is the principal on ctx; anonymous if there is none.
+func CurrentPrincipal(ctx context.Context) Principal {
+	if p, ok := ctx.Value(principalKey{}).(*Principal); ok {
+		return *p
+	}
+	return Principal{Type: "anonymous"}
 }
 
 func SetPrincipal(ctx context.Context, u User, typ string) {
@@ -246,7 +294,7 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 	}
 	claimed := strings.ToLower(strings.TrimSpace(c.Email))
 	u := User{Email: email, Role: a.Role(claimed, c.Groups)}
-	if u.ID, err = a.save(r.Context(), idt.Issuer+" "+idt.Subject, u.Email, u.Role, c.Groups); err != nil {
+	if u.ID, err = a.store.UpsertUser(r.Context(), idt.Issuer+" "+idt.Subject, u.Email, u.Role, c.Groups); err != nil {
 		if errors.Is(err, ErrEmailTaken) {
 			http.Error(w, "login failed: "+err.Error(), http.StatusForbidden)
 			return
@@ -254,9 +302,15 @@ func (a *Auth) callback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "login failed: could not save user", http.StatusInternalServerError)
 		return
 	}
+	token, err := a.store.CreateSession(r.Context(), NewSession{UserID: u.ID, AdminEmail: claimed,
+		AdminGroups: slices.DeleteFunc(slices.Clone(c.Groups), func(g string) bool { return !a.adminGroup(g) }),
+		UserAgent:   truncate(r.UserAgent(), 200), IP: truncate(clientIP(r), 100), TTL: sessionTTL})
+	if err != nil {
+		http.Error(w, "login failed: could not save the session", http.StatusInternalServerError)
+		return
+	}
 	SetPrincipal(r.Context(), u, "user")
-	a.writeCookie(w, sessionCookie, session{u, time.Now().Add(sessionTTL).Unix(), claimed,
-		slices.DeleteFunc(slices.Clone(c.Groups), func(g string) bool { return !a.adminGroup(g) })}, "/", sessionTTL)
+	a.setCookie(w, sessionCookie, token, "/", int(sessionTTL.Seconds()))
 	http.Redirect(w, r, st.Next, http.StatusSeeOther)
 }
 
@@ -267,6 +321,26 @@ func localPath(p string) string {
 		return "/"
 	}
 	return p
+}
+
+// clientIP is the peer address, with X-Forwarded-For in front as sent: only trustworthy behind a proxy that sets it.
+func clientIP(r *http.Request) string {
+	ip, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		ip = r.RemoteAddr
+	}
+	if f := r.Header.Get("X-Forwarded-For"); f != "" {
+		return f + " (via " + ip + ")"
+	}
+	return ip
+}
+
+// truncate cuts s to at most n bytes of valid UTF-8.
+func truncate(s string, n int) string {
+	if len(s) > n {
+		s = s[:n]
+	}
+	return strings.ToValidUTF8(s, "")
 }
 
 // Cookies are base64(json) + "." + HMAC(name + json), so one cookie can't stand in for another.

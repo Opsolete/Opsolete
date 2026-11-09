@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -84,16 +85,29 @@ func (s *Server) audit(next http.Handler) http.Handler {
 				h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { badBody(w, err) })
 			}
 		}
+		machine := strings.HasPrefix(r.URL.Path, runnerapi.Prefix+"/") || strings.HasPrefix(r.URL.Path, runnerapi.StatePrefix+"/")
+		// the request's one session lookup: requireLogin takes the user from this principal. Static
+		// files and the runner and state APIs never use a session: no database query for them.
 		p := &auth.Principal{Type: "anonymous"}
-		if u, ok := s.Auth.User(r); ok {
+		var u auth.User
+		err := auth.ErrNoSession
+		if !machine && !strings.HasPrefix(r.URL.Path, "/static/") {
+			u, err = s.Auth.User(r)
+		}
+		switch {
+		case err == nil:
 			*p = auth.Principal{User: u, Type: "user"}
+		case !errors.Is(err, auth.ErrNoSession):
+			s.App.Log.Error("session lookup failed", "err", err)
+			h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "session lookup failed, please try again", http.StatusServiceUnavailable)
+			})
 		}
 		sw := &statusWriter{ResponseWriter: w}
 		h.ServeHTTP(sw, r.WithContext(auth.WithPrincipal(r.Context(), p)))
 		if sw.status == 0 {
 			sw.status = http.StatusOK
 		}
-		machine := strings.HasPrefix(r.URL.Path, runnerapi.Prefix+"/") || strings.HasPrefix(r.URL.Path, runnerapi.StatePrefix+"/")
 		denied := sw.status == http.StatusUnauthorized || sw.status == http.StatusForbidden
 		if !denied && (machine || !mutating) && r.URL.Path != "/auth/callback" {
 			return
@@ -171,12 +185,16 @@ type auditRow struct {
 	From        string // client address
 	Summary     string // key form fields and the error, if any
 	Pretty      string // the detail, indented
+	UserID      string // the principal's user, whose sessions an admin can end here (there is no users page)
 }
 
 func newAuditRow(e storage.AuditEntry) auditRow {
 	row := auditRow{AuditEntry: e}
 	var d struct {
-		Form    map[string]any `json:"form"`
+		Form      map[string]any `json:"form"`
+		Principal struct {
+			ID string `json:"id"`
+		} `json:"principal"`
 		Request struct {
 			IP           string `json:"ip"`
 			ForwardedFor string `json:"forwarded_for"`
@@ -191,7 +209,7 @@ func newAuditRow(e storage.AuditEntry) auditRow {
 	} else {
 		row.Pretty = string(e.Detail)
 	}
-	row.From = d.Request.IP
+	row.From, row.UserID = d.Request.IP, d.Principal.ID
 	if f := d.Request.ForwardedFor; f != "" { // client-supplied unless a proxy sets it: keep the peer address next to it
 		row.From = f + " (via " + d.Request.IP + ")"
 	}

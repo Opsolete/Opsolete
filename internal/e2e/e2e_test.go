@@ -101,7 +101,7 @@ func TestRealRunner(t *testing.T) {
 	t.Cleanup(func() { stopNotify(); waitNotify() })
 	a := &app.App{Store: store, Blobs: memblob.OpenBucket(nil), Secrets: keys, Templates: tpls, Notify: notify, Log: log,
 		Registry: &registry.Registry{PublicURL: public, Key: []byte("e2e-registry-key")}, VCS: vcs.NewClient(nil)}
-	au, err := auth.New(ctx, auth.Config{DevUser: "admin@example.com", Admins: []string{"admin@example.com"}, PublicURL: public}, []byte("k"), store.UpsertUser)
+	au, err := auth.New(ctx, auth.Config{DevUser: "admin@example.com", Admins: []string{"admin@example.com"}, PublicURL: public}, []byte("k"), store)
 	if err != nil {
 		t.Fatal(err)
 	}

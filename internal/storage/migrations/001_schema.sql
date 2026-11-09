@@ -33,6 +33,24 @@ CREATE TABLE api_tokens (
 );
 CREATE INDEX api_tokens_user_idx ON api_tokens (user_id) WHERE user_id IS NOT NULL;
 
+-- sessions: browser logins; the cookie holds the token, only its SHA-256 is stored. admin_email and
+-- admin_groups are what can make the session admin (re-checked against ADMIN_EMAILS/ADMIN_GROUPS per
+-- request); user_agent and ip (truncated) are shown on the account page.
+CREATE TABLE sessions (
+    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    token_hash   bytea NOT NULL UNIQUE,
+    user_id      uuid NOT NULL REFERENCES users ON DELETE CASCADE,
+    admin_email  text NOT NULL DEFAULT '',
+    admin_groups text[] NOT NULL DEFAULT '{}',
+    user_agent   text NOT NULL DEFAULT '',
+    ip           text NOT NULL DEFAULT '',
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    last_seen_at timestamptz NOT NULL DEFAULT now(),
+    expires_at   timestamptz NOT NULL
+);
+CREATE INDEX sessions_user_idx ON sessions (user_id);
+CREATE INDEX sessions_expires_idx ON sessions (expires_at);
+
 CREATE TABLE projects (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name        text NOT NULL UNIQUE,

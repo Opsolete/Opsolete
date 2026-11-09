@@ -371,6 +371,8 @@ func accessRows() []accessRow {
 		{"GET /account", "/account", "", onUI, []int{302, 302, 302, 302, 302}, false},
 		{"GET /account/{page}", "/account/tokens", "", onUI, []int{302, 200, 200, 200, 200}, false},
 		{"POST /account/tokens/{id}/revoke", "/account/tokens/00000000-0000-0000-0000-000000000000/revoke", "", onUI, []int{401, 303, 303, 303, 303}, false},
+		{"POST /account/sessions/revoke", "/account/sessions/revoke", "", onUI, []int{401, 303, 303, 303, 303}, false},
+		{"POST /users/{id}/sessions/revoke", "/users/00000000-0000-0000-0000-000000000000/sessions/revoke", "", onUI, []int{401, 403, 403, 403, 303}, false},
 		{"GET /organization", "/organization", "", onUI, []int{302, 403, 403, 403, 200}, false},
 		{"POST /organization", "/organization", "currency=", onUI, []int{401, 403, 403, 403, 422}, false},
 		{"GET /audit", "/audit", "", onUI, []int{302, 403, 403, 403, 200}, false},

@@ -22,7 +22,9 @@
   <td>{{.At.UTC.Format "2006-01-02 15:04:05"}}</td>
   <td>{{.Actor}}{{with .From}}<br><span class="muted">{{.}}</span>{{end}}</td>
   <td><code>{{.Action}}</code></td>
-  <td><details class="audit"><summary>{{if .StatusText}}<span class="status {{.StatusClass}}" title="HTTP {{.Status}}">{{.StatusText}} {{.Status}}</span> {{end}}<span class="muted">{{.Summary}}</span></summary><pre class="code">{{.Pretty}}</pre></details></td>
+  <td><details class="audit"><summary>{{if .StatusText}}<span class="status {{.StatusClass}}" title="HTTP {{.Status}}">{{.StatusText}} {{.Status}}</span> {{end}}<span class="muted">{{.Summary}}</span></summary><pre class="code">{{.Pretty}}</pre>{{with .UserID}}
+    <form method="post" action="/users/{{.}}/sessions/revoke" data-confirm="End all browser sessions of this user? Their Terraform tokens stay.">
+    <button type="submit" class="secondary small">End this user's sessions</button></form>{{end}}</details></td>
 </tr>
 {{else}}
 <tr><td colspan="5" class="empty">Nothing recorded yet.</td></tr>

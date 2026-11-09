@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/opsolete/opsolete/internal/auth"
 )
 
 // oldRun inserts a run of ws that ended (or, active, was last updated) daysAgo, created a minute
@@ -127,5 +129,29 @@ func TestRetentionBatches(t *testing.T) {
 	a.Store.Pool.QueryRow(ctx, `SELECT count(*) FROM run_logs`).Scan(&logs)
 	if logs != 0 {
 		t.Fatalf("%d log chunks left", logs)
+	}
+}
+
+// Retention deletes expired sessions and keeps live ones.
+func TestRetentionSessions(t *testing.T) {
+	a, ctx := testApp(t), context.Background()
+	u := user(t, a)
+	live, err := a.Store.CreateSession(ctx, auth.NewSession{UserID: u.UserID, TTL: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Store.CreateSession(ctx, auth.NewSession{UserID: u.UserID, TTL: -time.Second}); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := a.Retention(ctx); err != nil || p.Sessions != 1 {
+		t.Fatalf("retention: %+v %v", p, err)
+	}
+	if _, err := a.Store.Session(ctx, live); err != nil {
+		t.Fatalf("the live session must stay: %v", err)
+	}
+	var n int
+	a.Store.Pool.QueryRow(ctx, `SELECT count(*) FROM sessions`).Scan(&n)
+	if n != 1 {
+		t.Fatalf("%d sessions left", n)
 	}
 }

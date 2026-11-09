@@ -134,8 +134,8 @@ func (s *Server) requireLogin(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		u, ok := s.Auth.User(r)
-		if !ok {
+		p := auth.CurrentPrincipal(r.Context()) // looked up by audit
+		if p.Type != "user" {
 			if r.Method == http.MethodGet || r.Method == http.MethodHead {
 				http.Redirect(w, r, "/auth/login?next="+url.QueryEscape(r.URL.RequestURI()), http.StatusFound)
 				return
@@ -143,7 +143,7 @@ func (s *Server) requireLogin(next http.Handler) http.Handler {
 			http.Error(w, "login required", http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(auth.WithUser(r.Context(), u)))
+		next.ServeHTTP(w, r.WithContext(auth.WithUser(r.Context(), p.User)))
 	})
 }
 

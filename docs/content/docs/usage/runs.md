@@ -44,4 +44,5 @@ Once an hour the server prunes what has expired. Active runs are never touched; 
 
 - **Logs** of every run are deleted `RUN_LOG_RETENTION_DAYS` days (default 90, `0` = forever) after it ended. The run, its status history and plan summary stay; its page and raw log say "The log was removed N days after the run ended (RUN_LOG_RETENTION_DAYS)."
 - **Drift checks and speculative plans** are deleted entirely 30 days after they ended, except a workspace's latest drift check, its latest drift check that found drift or none (the drift flag), and the latest speculative plan of each pull request.
+- **Expired browser sessions** (12 hours after sign-in) are deleted too.
 - **Apply, destroy and refresh runs** are kept forever (only their logs expire), and so are state versions, the audit log and module archives.

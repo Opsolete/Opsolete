@@ -21,6 +21,8 @@ var noInvalidInput = map[string]string{
 	"POST /oauth/authorization":                                 "consent: its input is the OAuth client's query",
 	"POST /account/tokens/{id}/revoke":                          "a button",
 	"POST /account/tokens/revoke":                               "a button",
+	"POST /account/sessions/revoke":                             "a button",
+	"POST /users/{id}/sessions/revoke":                          "a button: the user is in the path",
 	"POST /registry/{ns}/{name}/{system}/sync":                  "a button",
 	"POST /registry/{ns}/{name}/{system}/unlink":                "a button",
 	"POST /registry/{ns}/{name}/{system}/delete":                "a button",

@@ -81,8 +81,9 @@ func openStore(ctx context.Context, cfg config.Config) (*storage.Store, error) {
 }
 
 // rotateKey re-seals everything sealed with SECRET_KEY_PREVIOUS under SECRET_KEY, while the servers
-// run with both. Sessions, state credentials and signed URLs are derived from SECRET_KEY too: users
-// sign in again after the restart with the new key.
+// run with both. State credentials, signed URLs, `terraform login` codes and in-flight logins are
+// derived from SECRET_KEY too and end at the restart; browser sessions are random tokens in the
+// database and stay.
 func rotateKey(log *slog.Logger) error {
 	cfg, err := config.Load()
 	if err != nil {
@@ -184,15 +185,15 @@ func serve(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	// a database dump alone must not forge sessions, state credentials or signed URLs
+	// a database dump alone must not forge state credentials, signed URLs or login codes (sessions are hashed random tokens)
 	m := hmac.New(sha256.New, []byte(cfg.SecretKey))
 	m.Write(key)
 	key = m.Sum(nil)
 	reg := &registry.Registry{PublicURL: cfg.PublicURL, Key: key}
 
-	// Same key as the registry: cookie MACs are domain-separated from signed archive URLs.
+	// Same key as the registry: the login-state cookie's MAC is domain-separated from signed archive URLs.
 	authn, err := auth.New(ctx, auth.Config{Issuer: cfg.OIDCIssuer, ClientID: cfg.OIDCClientID, ClientSecret: cfg.OIDCClientSecret,
-		DevUser: cfg.AuthDevUser, DevGroups: cfg.AuthDevGroups, Admins: cfg.AdminEmails, AdminGroups: cfg.AdminGroups, PublicURL: cfg.PublicURL}, key, store.UpsertUser)
+		DevUser: cfg.AuthDevUser, DevGroups: cfg.AuthDevGroups, Admins: cfg.AdminEmails, AdminGroups: cfg.AdminGroups, PublicURL: cfg.PublicURL}, key, store)
 	if err != nil {
 		return err
 	}

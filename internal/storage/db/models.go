@@ -155,6 +155,19 @@ type RunStatusHistory struct {
 	CreatedAt time.Time
 }
 
+type Session struct {
+	ID          uuid.UUID
+	TokenHash   []byte
+	UserID      uuid.UUID
+	AdminEmail  string
+	AdminGroups []string
+	UserAgent   string
+	Ip          string
+	CreatedAt   time.Time
+	LastSeenAt  time.Time
+	ExpiresAt   time.Time
+}
+
 type StateVersion struct {
 	ID          int64
 	WorkspaceID uuid.UUID

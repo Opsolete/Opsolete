@@ -108,3 +108,22 @@ func (a *App) RedeemLoginCode(ctx context.Context, code, verifier, redirectURI s
 	a.Log.Info("user token created", "via", "terraform login", "user", c.User)
 	return token, nil
 }
+
+// UserSessions lists actor's own unexpired browser sessions.
+func (a *App) UserSessions(ctx context.Context, actor Actor) ([]storage.UserSession, error) {
+	return a.Store.UserSessions(ctx, actor.UserID)
+}
+
+// EndSessions ends every browser session of user, at once (every request looks its session up):
+// actor's own (log out everywhere), or anyone's for an admin. API tokens are not sessions and stay.
+func (a *App) EndSessions(ctx context.Context, actor Actor, user uuid.UUID) error {
+	if user != actor.UserID && !actor.Admin {
+		return ErrForbidden
+	}
+	n, err := a.Store.DeleteUserSessions(ctx, user)
+	if err != nil {
+		return err
+	}
+	a.Log.Info("sessions ended", "user", user, "count", n, "by", actor.Email)
+	return nil
+}

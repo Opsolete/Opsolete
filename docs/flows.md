@@ -30,8 +30,9 @@ Test paths are relative to `internal/`, except `cmd/opsolete/…` (from the repo
 - Coverage: `auth/auth_test.go:TestOIDCLogin`, `TestOIDCLoginRejects`, `TestSessionCookie`, `TestLocalPath`; `storage/storage_test.go:TestUpsertUserSubject`; `http/server_test.go:TestLoginRequired`; `config/config_test.go:TestLoad`; `http/server_test.go:TestFeatureSwitches` (CheckTemplates). Missing: `serve()` startup checks (RUNNER_TOKEN length, STATE_STORE probe, `AUTH_DEV_USER` warning) untested.
 
 **A2. Logout** — `full`
-- Actor: any user. Steps: `POST /auth/logout`. Outcome: Opsolete session ends (IdP session stays).
-- Coverage: `http/server_test.go:TestLogout` (signed in through the IdP, logout clears the session cookie, the next page view goes to the login); `http/access_test.go:TestAccessMatrix/POST_/auth/logout`. The session is a stateless cookie: a copy kept elsewhere stays valid until it expires (12 h, `sessionTTL`).
+- Actor: any user. Steps: `POST /auth/logout`; **Account › Sessions › Log out everywhere** (`POST /account/sessions/revoke`); admin: audit log entry › **End this user's sessions** (`POST /users/{id}/sessions/revoke`).
+- Outcome: the session row is deleted (IdP session stays), so a copied cookie stops working too; log out everywhere / the admin action delete all of the user's sessions (`terraform login` tokens stay). Sessions are server-side (`sessions`, token hash only, 12 h, `sessionTTL`); the cookie is an opaque 256-bit token; role re-checked per request; expired rows deleted by the hourly retention job. Dev user mode has no sessions.
+- Coverage: `http/server_test.go:TestLogout` (login creates a row, cookie holds no identity, sessions page marks this browser, copied cookie dead after logout while another browser stays, log out everywhere, admin ends a user's sessions from the audit log, expired session → login); `auth/auth_test.go:TestSessionCookie`, `TestOIDCLogin` (role follows ADMIN_GROUPS per request), `TestDevUser`; `app/retention_test.go:TestRetentionSessions`; `http/access_test.go:TestAccessMatrix` (`POST /auth/logout`, `POST /account/sessions/revoke`, `POST /users/{id}/sessions/revoke`); `http/forms_test.go` no-input list.
 
 **A3. Login required, CSRF, CSP, security headers** — `full`
 - Anonymous GET → 302 to login with `next`; anonymous POST → 401; cross-site POST → 403; strict CSP on every page.
