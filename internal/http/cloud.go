@@ -274,7 +274,12 @@ func (s *Server) cloudLock(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	switch r.PathValue("action") {
 	case "lock":
-		if err := st.LockCLI(ctx); err != nil {
+		err := st.LockCLI(ctx)
+		if errors.Is(err, app.ErrRemoteExecution) {
+			// go-tfe turns any 409 on actions/lock into "workspace already locked": 422 keeps this message
+			writeAPIError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		} else if err != nil {
 			s.apiError(w, r, err)
 			return
 		}
