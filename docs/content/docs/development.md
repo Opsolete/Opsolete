@@ -28,7 +28,8 @@ This site lives in `docs/` (Hugo with the [Hextra](https://imfing.github.io/hext
 `.github/workflows/ci.yml` runs on every PR and every push to `master`. Its jobs run in parallel:
 
 - **`commits`** (PRs only): every commit in the PR must be a [Conventional Commit](https://www.conventionalcommits.org) (merge commits are skipped). PRs are merged with merge commits, so release-please reads each commit, not the PR title.
-- **`test`:** gofmt, vet, all tests **with the race detector** against a Postgres 17 service, with the Terraform version from `.terraform-version` for the runner tests, and `govulncheck`.
+- **`lint`:** gofmt, vet and `govulncheck`.
+- **`test`:** all tests **with the race detector** against a Postgres 17 service, with the Terraform version from `.terraform-version` for the runner tests; its Go build cache is saved on every run, so the race build stays incremental.
 - **`runner-linux`:** `just test-linux`: the tests in a Linux container, once with the test binary as PID 1 and once under tini (`docker --init`), the two ways the runner image runs. It proves the runner kills what a job leaves behind.
 - **`nix`:** `sqlc diff` (generated code current), then the package and both images in **one** `nix build` (which also catches a stale `vendorHash`), then a Trivy scan of both images. Images are pushed **only when a release is created**.
 - **`nixos-test`:** the NixOS module booted in a VM (`nix/test.nix`), with KVM.
@@ -61,7 +62,7 @@ Repo settings, one-time:
    gh api -X PATCH repos/Opsolete/Opsolete -F allow_merge_commit=true -F allow_squash_merge=false \
      -F allow_rebase_merge=false -F delete_branch_on_merge=true
    ```
-2. **Rules → Rulesets → New branch ruleset** for `master`: require a pull request, require the status checks `commits`, `test`, `runner-linux`, `nix` and `nixos-test`, block force pushes, and restrict deletions. Don't require the docs check: it only runs when `docs/` changes.
+2. **Rules → Rulesets → New branch ruleset** for `master`: require a pull request, require the status checks `commits`, `lint`, `test`, `runner-linux`, `nix` and `nixos-test`, block force pushes, and restrict deletions. Don't require the docs check: it only runs when `docs/` changes.
 3. **Release PR checks:** a release PR opened with the default `GITHUB_TOKEN` gets no CI run (GitHub shows *action required*), so its required checks never pass. Add a fine-grained PAT, or a GitHub App token with *contents* and *pull requests* write access, as the secret `RELEASE_PLEASE_TOKEN`.
 4. **Images:** GHCR packages start out private. Make them public, or give your cluster a pull secret.
 5. **Documentation:** **Settings → Pages → Source: GitHub Actions**, or:

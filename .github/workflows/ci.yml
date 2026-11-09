@@ -40,6 +40,24 @@ jobs:
           done < <(git log --no-merges --format='%H%x09%s' "$BASE..$HEAD")
           [ "$bad" = 0 ] || { echo "Reword them (git rebase -i), e.g. 'feat(runner): …', 'fix: …', 'feat!: …' for breaking changes."; exit 1; }
 
+  # gofmt, vet and govulncheck: no database, in parallel with the tests.
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # Latest patch, so govulncheck judges the stdlib we ship (the images use nixpkgs' go: keep flake.lock fresh).
+          go-version: 1.26.x
+          check-latest: true
+      - run: test -z "$(gofmt -l .)" || { gofmt -l .; echo "::error::run gofmt -w ."; exit 1; }
+      - run: go vet ./...
+      # Reports only vulnerabilities in code paths the binary actually calls.
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -60,9 +78,18 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # Latest patch, so govulncheck judges the stdlib we ship (the images use nixpkgs' go: keep flake.lock fresh).
-          go-version: 1.26.x
-          check-latest: true
+          go-version-file: go.mod
+          cache: false # setup-go saves its cache only when the go.sum key misses: race builds would never be cached
+      # Saved on every run, restored from the newest: the race-instrumented build stays incremental.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-test-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-test-${{ hashFiles('go.sum') }}-
+            go-test-
       - id: tf
         run: echo "version=$(cat .terraform-version)" >> "$GITHUB_OUTPUT"
       # The runner image's version; the wrapper would break the runner's parsing of show/output JSON.
@@ -70,11 +97,7 @@ jobs:
         with:
           terraform_version: ${{ steps.tf.outputs.version }}
           terraform_wrapper: false
-      - run: test -z "$(gofmt -l .)" || { gofmt -l .; echo "::error::run gofmt -w ."; exit 1; }
-      - run: go vet ./...
       - run: go test -race -count=1 ./...
-      # Reports only vulnerabilities in code paths the binary actually calls.
-      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
   # The runner kills every process a job leaves behind (a child subreaper): prove it on Linux as a
   # container's PID 1 and under tini (docker --init), the two ways the runner image runs.
@@ -156,7 +179,7 @@ jobs:
   # ---- master only: releases (Release Please), after every check above passed ----
   # Open/update the release PR, or cut the release when that PR was merged.
   release-please:
-    needs: [test, runner-linux, nix, nixos-test]
+    needs: [lint, test, runner-linux, nix, nixos-test]
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     timeout-minutes: 10
