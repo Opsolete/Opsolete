@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -317,8 +318,15 @@ func TestLogout(t *testing.T) {
 	if body := get(admin, "/audit?show=access").Body.String(); !strings.Contains(body, "/users/"+uid.String()+"/sessions/revoke") {
 		t.Fatal("the audit log offers to end a signed-in user's sessions")
 	}
+	cliToken, err := store.CreateUserToken(ctx, uid, "terraform login", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if rec := post(admin, "/users/"+uid.String()+"/sessions/revoke", nil); rec.Code != http.StatusSeeOther || signedIn(fourth) {
 		t.Fatalf("admin ends a user's sessions: %d", rec.Code)
+	}
+	if _, _, _, _, err := store.TokenUser(ctx, cliToken); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("the user's terraform login token survives the admin ending their sessions: %v", err)
 	}
 
 	expired := signIn()
