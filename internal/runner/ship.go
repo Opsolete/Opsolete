@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -38,7 +39,8 @@ func newShipper(r *Runner, job runnerapi.Job, cancel context.CancelFunc, signed 
 			pairs = append(pairs, u[i:], "?<signed>")
 		}
 	}
-	pairs = append(pairs, mask.New(job.Secrets).Pairs("***")...)
+	// the state token too: it is TF_HTTP_PASSWORD in the job's env, and opens the workspace's state while the run works
+	pairs = append(pairs, mask.New(append(slices.Clone(job.Secrets), job.StateToken)).Pairs("***")...)
 	s := &shipper{r: r, job: job, cancel: cancel, redact: strings.NewReplacer(pairs...), end: end,
 		stop: make(chan struct{}), stopped: make(chan struct{})}
 	go s.loop()

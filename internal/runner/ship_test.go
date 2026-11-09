@@ -24,10 +24,12 @@ func TestShipperRedactsAndDrains(t *testing.T) {
 	r := New(config.Runner{ServerURL: u, Token: "tok"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	signed := "/v1/archives/m.tar.gz?expires=1&sig=secret-signature"
 	pem := "-----BEGIN KEY-----\nAAAAkeyline\n-----END KEY-----"
-	s := newShipper(r, runnerapi.Job{RunID: "run1", LeaseID: "lease", Secrets: []string{"hunter22", "hunter22-long", pem, "eu"}}, func() {}, []string{signed}, time.Now().Add(time.Hour))
+	s := newShipper(r, runnerapi.Job{RunID: "run1", LeaseID: "lease", StateToken: "state-token-value",
+		Secrets: []string{"hunter22", "hunter22-long", pem, "eu"}}, func() {}, []string{signed}, time.Now().Add(time.Hour))
 	s.Write([]byte("init " + signed[:30]))
 	s.Write([]byte(signed[30:] + " failed\n"))
 	s.Write([]byte("local-exec: hunter22-long hunter22 eu AAAAkeyline\n"))
+	s.Write([]byte("TF_HTTP_PASSWORD=state-token-value\n"))
 	big := strings.Repeat("x", 300<<10) + "\nthe error at the end"
 	s.Write([]byte(big))
 	s.Close()
@@ -37,6 +39,9 @@ func TestShipperRedactsAndDrains(t *testing.T) {
 	}
 	if !strings.Contains(got, "local-exec: *** *** eu ***\n") {
 		t.Fatalf("sensitive values not masked (whole, per line, not too short): %.400q", got)
+	}
+	if !strings.Contains(got, "TF_HTTP_PASSWORD=***\n") {
+		t.Fatalf("state token not masked: %.400q", got)
 	}
 	if !strings.HasSuffix(got, big) {
 		t.Fatalf("tail lost: got %d bytes, want suffix of %d", len(got), len(big))
