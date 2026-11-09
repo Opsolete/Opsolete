@@ -16,6 +16,10 @@ import (
 // isolates: on Linux every process a job leaves behind is killed before the next job.
 const isolates = true
 
+// prSetChildSubreaper is PR_SET_CHILD_SUBREAPER from <linux/prctl.h>; the frozen syscall package
+// lacks it.
+const prSetChildSubreaper = 36
+
 // isolateCommand gives terraform what terraform-exec does on Linux: killed if the runner dies, and
 // its own process group.
 func isolateCommand(cmd *exec.Cmd) {
@@ -30,7 +34,7 @@ func hardenProcess() error {
 	if _, _, e := syscall.RawSyscall(syscall.SYS_PRCTL, syscall.PR_SET_DUMPABLE, 0, 0); e != 0 {
 		return fmt.Errorf("PR_SET_DUMPABLE: %w", e)
 	}
-	if _, _, e := syscall.RawSyscall(syscall.SYS_PRCTL, syscall.PR_SET_CHILD_SUBREAPER, 1, 0); e != 0 {
+	if _, _, e := syscall.RawSyscall(syscall.SYS_PRCTL, prSetChildSubreaper, 1, 0); e != 0 {
 		return fmt.Errorf("PR_SET_CHILD_SUBREAPER: %w", e)
 	}
 	return nil
