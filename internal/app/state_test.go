@@ -281,3 +281,32 @@ func TestReleaseOrphanedLocks(t *testing.T) {
 		t.Fatalf("a working run's lock was released: %q", got)
 	}
 }
+
+// A CLI upload (local execution: no runner masks it) of a state whose output echoes a sensitive
+// variable is stored with that output masked; Terraform's sensitive outputs stay masked too.
+func TestCLIStateMasksSecrets(t *testing.T) {
+	a, ctx := testApp(t), context.Background()
+	ws, err := a.CreateEmptyWorkspace(ctx, admin, EmptyWorkspace{Name: uniq("cli-"), ExecutionMode: "local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SetWorkspaceVariable(ctx, admin, ws.Name, VariableInput{Category: "terraform", Key: "pw", Value: "Hunter2cli", Sensitive: true}); err != nil {
+		t.Fatal(err)
+	}
+	st, err := a.State(ctx, admin, ws.Name, LevelOperate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.LockCLI(ctx); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"version":4,"serial":1,"lineage":"l","outputs":{"pw":{"value":"Hunter2cli"},"url":{"value":["x://u:Hunter2cli@h"]},
+		"plain":{"value":"ok"},"marked":{"value":"s","sensitive":true}},"resources":[]}`)
+	if _, err := st.SaveCLIState(ctx, body, nil); err != nil {
+		t.Fatal(err)
+	}
+	out, _, err := a.Store.CurrentOutputs(ctx, ws.ID)
+	if got := fmt.Sprint(out); err != nil || got != "map[marked:(sensitive) plain:ok pw:(sensitive) url:[(sensitive)]]" {
+		t.Fatalf("stored outputs: %s %v", got, err)
+	}
+}

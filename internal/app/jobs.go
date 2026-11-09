@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"gocloud.dev/gcerrors"
 
+	"github.com/opsolete/opsolete/internal/mask"
 	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
@@ -153,6 +154,9 @@ func (a *App) FinishJob(ctx context.Context, runID uuid.UUID, lease string, req 
 	if req.Status != "succeeded" && req.Status != "failed" && req.Status != "canceled" {
 		return "", invalid("status", "status must be succeeded, failed or canceled")
 	}
+	if len(req.Outputs) > 0 { // the runner masks them too; the server is the trust boundary, so again here
+		req.Outputs = a.maskRunOutputs(ctx, runID, req.Outputs)
+	}
 	// not canceled with the request: a job's result must survive a server restart
 	status, err := a.Store.FinishJob(context.WithoutCancel(ctx), runID, lease, req.Status, req.Message, req.Outputs, req.Plan, req.Resources)
 	if err != nil {
@@ -249,4 +253,25 @@ func (a *App) QueueDriftChecks(ctx context.Context) {
 	} else if n > 0 {
 		a.Log.Info("drift checks queued", "count", n)
 	}
+}
+
+// maskRunOutputs hides outputs that contain a sensitive value of the run's workspace, as saveState
+// does for state files; if the secrets can't be opened, every output is hidden (the result is kept).
+func (a *App) maskRunOutputs(ctx context.Context, runID uuid.UUID, outputs map[string]any) map[string]any {
+	run, _, err := a.Store.GetRun(ctx, runID)
+	var secrets mask.Masker
+	if err == nil {
+		secrets, err = a.workspaceMasker(ctx, run.WorkspaceID)
+	}
+	out := make(map[string]any, len(outputs))
+	for k, v := range outputs {
+		out[k] = secrets.Value(v)
+		if err != nil {
+			out[k] = mask.Sensitive
+		}
+	}
+	if err != nil {
+		a.Log.Error("open workspace secrets to mask outputs; all outputs hidden", "run", runID, "err", err)
+	}
+	return out
 }

@@ -24,6 +24,7 @@ import (
 	tfjson "github.com/hashicorp/terraform-json"
 
 	"github.com/opsolete/opsolete/internal/config"
+	"github.com/opsolete/opsolete/internal/mask"
 	"github.com/opsolete/opsolete/internal/runnerapi"
 )
 
@@ -263,6 +264,7 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 		return fail("read outputs", err)
 	}
 	outputs := map[string]any{}
+	secrets := mask.New(job.Secrets) // an output echoing a sensitive variable or input never leaves the runner either
 	for k, o := range outs {
 		if o.Sensitive { // never leaves the runner
 			outputs[k] = "(sensitive)"
@@ -270,7 +272,7 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 		}
 		var v any
 		if err := json.Unmarshal(o.Value, &v); err == nil {
-			outputs[k] = v
+			outputs[k] = secrets.Value(v)
 		}
 	}
 	fmt.Fprintln(w, "\n==> done")

@@ -3,10 +3,12 @@ package app
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
 
+	"github.com/opsolete/opsolete/internal/mask"
 	"github.com/opsolete/opsolete/internal/registry"
 	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage"
@@ -229,5 +231,28 @@ func TestPutArtifactRace(t *testing.T) {
 		if ok, _ := a.Blobs.Exists(ctx, ArtifactKey(run.ID, n)); ok {
 			t.Errorf("%s left behind", n)
 		}
+	}
+}
+
+// Outputs a runner reports are masked by the server too: an output echoing a sensitive variable of
+// the workspace is stored as (sensitive), even if the runner didn't mask it.
+func TestFinishMasksOutputs(t *testing.T) {
+	a, ctx := testApp(t), context.Background()
+	ws, run := configured(t, a)
+	if err := a.SetWorkspaceVariable(ctx, admin, ws.Name, VariableInput{Category: "terraform", Key: "password", Value: "hunter2-secret", Sensitive: true}); err != nil {
+		t.Fatal(err)
+	}
+	leased(t, a, run.ID, "l")
+	if _, err := a.Store.Pool.Exec(ctx, `UPDATE runs SET status = 'applying' WHERE id = $1`, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]any{"conn": "user:hunter2-secret@db", "nested": []any{"ok", "hunter2-secret"}, "plain": "hello", "n": 3.0}
+	if st, err := a.FinishJob(ctx, run.ID, "l", runnerapi.FinishRequest{Status: "succeeded", Outputs: out}); err != nil || st != storage.Applied {
+		t.Fatalf("finish: %s %v", st, err)
+	}
+	got, _, err := a.Store.GetRun(ctx, run.ID)
+	want := map[string]any{"conn": mask.Sensitive, "nested": []any{"ok", mask.Sensitive}, "plain": "hello", "n": 3.0}
+	if err != nil || !reflect.DeepEqual(got.Outputs, want) {
+		t.Fatalf("stored outputs: %v %v", got.Outputs, err)
 	}
 }

@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"slices"
 	"strconv"
+
+	"github.com/opsolete/opsolete/internal/mask"
 )
 
 // StateChange is a resource instance or root output that differs between two state versions.
@@ -29,8 +31,8 @@ type leaf struct {
 var secretPath = regexp.MustCompile(`(?i)password|secret|token|private|credential|connection_string|kube_config|access_key|certificate|(^|[._])key$`)
 
 // stateLeaves flattens a Terraform state file into address -> attribute path -> value, marking
-// sensitive values: they never leave the server.
-func stateLeaves(body []byte) (map[string]map[string]leaf, error) {
+// sensitive values: they never leave the server. Strings containing one of secrets are sensitive too.
+func stateLeaves(secrets mask.Masker, body []byte) (map[string]map[string]leaf, error) {
 	out := map[string]map[string]leaf{}
 	if body == nil {
 		return out, nil
@@ -58,7 +60,9 @@ func stateLeaves(body []byte) (map[string]map[string]leaf, error) {
 	}
 	for name, o := range st.Outputs {
 		m := map[string]leaf{}
-		walkJSON("value", o.Value, func(p, v string) { m[p] = leaf{v, o.Sensitive || secretPath.MatchString(name)} })
+		walkJSON("value", o.Value, func(p string, raw any, v string) {
+			m[p] = leaf{v, o.Sensitive || secretPath.MatchString(name) || hides(secrets, raw)}
+		})
 		out["output."+name] = m
 	}
 	for _, r := range st.Resources {
@@ -109,7 +113,9 @@ func stateLeaves(body []byte) (map[string]map[string]leaf, error) {
 			m := map[string]leaf{}
 			for name, v := range attrs {
 				hide := all || secret[name]
-				walkJSON(name, v, func(p, v string) { m[p] = leaf{v, hide || secretPath.MatchString(p)} })
+				walkJSON(name, v, func(p string, raw any, v string) {
+					m[p] = leaf{v, hide || secretPath.MatchString(p) || hides(secrets, raw)}
+				})
 			}
 			out[addr] = m
 		}
@@ -117,36 +123,42 @@ func stateLeaves(body []byte) (map[string]map[string]leaf, error) {
 	return out, nil
 }
 
-// walkJSON calls emit with the path and JSON encoding of each leaf of v; empty objects and lists are leaves.
-func walkJSON(path string, v any, emit func(path, val string)) {
+// hides: a string leaf containing a secret.
+func hides(secrets mask.Masker, raw any) bool {
+	s, ok := raw.(string)
+	return ok && secrets.Hides(s)
+}
+
+// walkJSON calls emit with the path, value and JSON encoding of each leaf of v; empty objects and lists are leaves.
+func walkJSON(path string, v any, emit func(path string, raw any, val string)) {
 	switch t := v.(type) {
 	case map[string]any:
 		if len(t) == 0 {
-			emit(path, "{}")
+			emit(path, t, "{}")
 		}
 		for k, c := range t {
 			walkJSON(path+"."+k, c, emit)
 		}
 	case []any:
 		if len(t) == 0 {
-			emit(path, "[]")
+			emit(path, t, "[]")
 		}
 		for i, c := range t {
 			walkJSON(path+"."+strconv.Itoa(i), c, emit)
 		}
 	default:
 		b, _ := json.Marshal(t)
-		emit(path, string(b))
+		emit(path, t, string(b))
 	}
 }
 
 // diffStates lists what changes from state file a to b (nil: no state), sorted by address and path.
-func diffStates(a, b []byte) ([]StateChange, error) {
-	from, err := stateLeaves(a)
+func diffStates(secrets mask.Masker, a, b []byte) ([]StateChange, error) {
+	from, err := stateLeaves(secrets, a)
 	if err != nil {
 		return nil, err
 	}
-	to, err := stateLeaves(b)
+	to, err := stateLeaves(secrets, b)
 	if err != nil {
 		return nil, err
 	}

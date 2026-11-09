@@ -50,7 +50,7 @@ type Job struct {
 	// Env is set for Terraform on top of the runner's own environment: the workspace's
 	// environment variables, typically cloud credentials (ARM_CLIENT_SECRET, ...).
 	Env map[string]string `json:"env,omitempty"`
-	// Secrets are the values of sensitive variables and inputs: the runner masks them in the log, as
+	// Secrets are the values of sensitive variables and inputs: the runner masks them (internal/mask) in the log and outputs, as
 	// a module may print them (local-exec, or a variable its module doesn't mark sensitive).
 	Secrets []string `json:"secrets,omitempty"`
 	// Currency of the cost estimate (ISO 4217, e.g. EUR); "" is Infracost's default, USD.

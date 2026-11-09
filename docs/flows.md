@@ -224,7 +224,7 @@ Test paths are relative to `internal/`, except `cmd/opsolete/…` (from the repo
 - Coverage: `http/cloud_gotfe_test.go:TestCloudGoTFE` (go-tfe as Terraform 1.14 ships it); `http/cloud_test.go:TestCloudLoginAndState`; `http/access_test.go:TestAccessMatrix` (cloud rows).
 
 **F3. Local plan/apply with remote state: lock, upload, download, outputs, unlock** — `full`
-- Failures: save without lock 409; second lock 409 (`ErrWorkspaceLocked`); unlock of another user's lock → `ErrWorkspaceLockedByUser`; of a run's lock → `ErrWorkspaceLockedByRun`; upload-URL flow → 422 fallback to inline; outputs list names only; reader → 403; stranger → 404.
+- Failures: save without lock 409; second lock 409 (`ErrWorkspaceLocked`); unlock of another user's lock → `ErrWorkspaceLockedByUser`; of a run's lock → `ErrWorkspaceLockedByRun`; upload-URL flow → 422 fallback to inline; outputs list names only; outputs containing a sensitive variable's value stored `(sensitive)` (`app/state_test.go:TestCLIStateMasksSecrets`); reader → 403; stranger → 404.
 - Coverage: `http/cloud_gotfe_test.go:TestCloudGoTFE`; `http/cloud_test.go:TestCloudLoginAndState`; `storage/jobs_test.go:TestCloudStateWriteFenced`.
 
 **F4. `terraform force-unlock`** — `full`
@@ -490,7 +490,8 @@ Test paths are relative to `internal/`, except `cmd/opsolete/…` (from the repo
 
 **Q8. Log shipping, masking, caps** — `full`
 - ~1 s batches cut at line ends; sensitive values and signed URLs masked; 10 MB per run; 256 KB per post.
-- Coverage: `e2e/e2e_test.go:TestRealRunner/a_sensitive_input_reaches_Terraform…` (the real runner masks a sensitive template input Terraform prints); `runner/ship_test.go:TestShipperRedactsAndDrains` (signed URLs; `Job.Secrets` whole, per line, short ones kept); `runner/terraform_test.go:TestHeadBuffer`; `storage/jobs_test.go:TestRunLifecycle` (cap via `AppendLog` max); `runner/runner_test.go:TestPlanThenApply` (no leaks); `http/flows_test.go:TestJobVariables` (sensitive variables in `Job.Secrets`); `http/workspacetemplates_test.go:TestSensitiveInputs` (sensitive template inputs in `Job.Secrets`); `http/logs_test.go:TestLogPostLimit` (a post over 256 KB 413, nothing stored; one at the limit accepted).
+- Masking rule in one place, `internal/mask` (secrets ≥ 4 non-space chars, multi-line ones also line by line, longest first): the log shows `***`; an output string containing a secret (also nested in lists/maps) is stored whole as `(sensitive)`: by the runner for `runs.outputs` (`Job.Secrets`), by `saveState` for `state_versions.outputs` (runs, CLI uploads, rollbacks; the workspace's sensitive variables and inputs via `workspaceMasker`; if they can't be opened every output is stored `(sensitive)`), and in state diffs for every leaf (outputs and attributes). The cloud outputs endpoint lists names only.
+- Coverage: `e2e/e2e_test.go:TestRealRunner/a_sensitive_input_reaches_Terraform…` (the real runner masks a sensitive template input Terraform prints); `mask/mask_test.go:TestMasker`; `app/state_test.go:TestCLIStateMasksSecrets`; e2e also checks run page, Outputs tab, state diff, cloud outputs and the stored rows show `(sensitive)`, never the value; `runner/ship_test.go:TestShipperRedactsAndDrains` (signed URLs; `Job.Secrets` whole, per line, short ones kept); `runner/terraform_test.go:TestHeadBuffer`; `storage/jobs_test.go:TestRunLifecycle` (cap via `AppendLog` max); `runner/runner_test.go:TestPlanThenApply` (no leaks); `http/flows_test.go:TestJobVariables` (sensitive variables in `Job.Secrets`); `http/workspacetemplates_test.go:TestSensitiveInputs` (sensitive template inputs in `Job.Secrets`); `http/logs_test.go:TestLogPostLimit` (a post over 256 KB 413, nothing stored; one at the limit accepted).
 
 ---
 

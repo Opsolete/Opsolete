@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	tfjson "github.com/hashicorp/terraform-json"
 
+	"github.com/opsolete/opsolete/internal/mask"
 	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage"
 )
@@ -42,7 +43,9 @@ var (
 
 // saveState stores body as the workspace's new current state version, unless it's the same as the
 // current one: it writes the file, then record records the version (with its writer's checks); if
-// that fails the file is deleted again. The caller holds the state lock. ValidationError: not a
+// that fails the file is deleted again. The version's outputs are stored masked: Terraform's
+// sensitive ones and those containing a sensitive variable or input value of the workspace (mask).
+// The caller holds the state lock. ValidationError: not a
 // state file; ErrStateConflict: another lineage, an older serial, or the same serial with other content.
 func (a *App) saveState(ctx context.Context, workspaceID uuid.UUID, body []byte, record func(storage.StateVersion) error) error {
 	sum := md5.Sum(body)
@@ -60,10 +63,14 @@ func (a *App) saveState(ctx context.Context, workspaceID uuid.UUID, body []byte,
 	}
 	v := storage.StateVersion{Serial: *head.Serial, Lineage: head.Lineage, MD5: hex.EncodeToString(sum[:]), Size: int64(len(body)),
 		Outputs: map[string]any{}}
+	secrets, err := a.workspaceMasker(ctx, workspaceID)
+	if err != nil { // the state must still be saved (a lost write orphans resources): hide every output instead
+		a.Log.Error("open workspace secrets to mask outputs; all outputs hidden", "workspace", workspaceID, "err", err)
+	}
 	for k, o := range head.Outputs {
-		v.Outputs[k] = o.Value
-		if o.Sensitive { // sensitive values never leave the state file
-			v.Outputs[k] = "(sensitive)"
+		v.Outputs[k] = secrets.Value(o.Value) // an output echoing a sensitive variable or input
+		if o.Sensitive || err != nil {        // sensitive values never leave the state file
+			v.Outputs[k] = mask.Sensitive
 		}
 	}
 	cur, err := a.Store.StateVersions(ctx, workspaceID, 1)
@@ -343,7 +350,11 @@ func (s State) Diff(ctx context.Context, version int64) (VersionDiff, error) {
 	if len(pair) > 1 {
 		d.Prev = &pair[1]
 	}
-	if d.Changes, err = s.a.diffVersions(ctx, d.Prev, &d.Version); err != nil {
+	secrets, err := s.a.workspaceMasker(ctx, s.Workspace.ID)
+	if err != nil {
+		return d, err
+	}
+	if d.Changes, err = s.a.diffVersions(ctx, secrets, d.Prev, &d.Version); err != nil {
 		return d, err
 	}
 	cur, err := s.Versions(ctx, 1)
@@ -351,13 +362,13 @@ func (s State) Diff(ctx context.Context, version int64) (VersionDiff, error) {
 		return d, err
 	}
 	if d.IsCurrent = cur[0].ID == version; !d.IsCurrent {
-		d.Rollback, err = s.a.diffVersions(ctx, &cur[0], &d.Version)
+		d.Rollback, err = s.a.diffVersions(ctx, secrets, &cur[0], &d.Version)
 	}
 	return d, err
 }
 
-// diffVersions diffs two state versions; a nil version is no state.
-func (a *App) diffVersions(ctx context.Context, from, to *storage.StateVersion) ([]StateChange, error) {
+// diffVersions diffs two state versions; a nil version is no state. Values containing a secret are hidden.
+func (a *App) diffVersions(ctx context.Context, secrets mask.Masker, from, to *storage.StateVersion) ([]StateChange, error) {
 	var files [2][]byte
 	for i, v := range []*storage.StateVersion{from, to} {
 		if v == nil {
@@ -368,7 +379,7 @@ func (a *App) diffVersions(ctx context.Context, from, to *storage.StateVersion) 
 			return nil, err
 		}
 	}
-	return diffStates(files[0], files[1])
+	return diffStates(secrets, files[0], files[1])
 }
 
 // Lock locks the workspace from the UI, with an optional reason (at most 300 characters). It's a

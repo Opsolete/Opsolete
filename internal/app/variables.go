@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/opsolete/opsolete/internal/mask"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
 )
@@ -43,6 +44,27 @@ func (a *App) runVariables(ctx context.Context, workspaceID uuid.UUID) (env map[
 		}
 	}
 	return env, vars, secrets, nil
+}
+
+// workspaceMasker hides the workspace's sensitive variable and template input values (what its jobs
+// get as runnerapi.Job.Secrets) in outputs the server reads from state files.
+func (a *App) workspaceMasker(ctx context.Context, workspaceID uuid.UUID) (mask.Masker, error) {
+	_, _, secrets, err := a.runVariables(ctx, workspaceID)
+	if err != nil {
+		return mask.Masker{}, err
+	}
+	mods, err := a.Store.WorkspaceTemplates(ctx, workspaceID)
+	if err != nil {
+		return mask.Masker{}, err
+	}
+	for _, m := range mods {
+		_, sec, err := a.OpenInputs(m.Inputs, workspaceID, m.Name)
+		if err != nil {
+			return mask.Masker{}, err
+		}
+		secrets = append(secrets, sec...)
+	}
+	return mask.New(secrets), nil
 }
 
 // withWorkspaceVars adds to an added template's inputs the workspace's Terraform variables (vars, from

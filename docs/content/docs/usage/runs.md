@@ -36,7 +36,7 @@ Per workspace, off by default: once a day the server queues a drift check, a ref
 
 ## Logs
 
-The run page follows the runner's output live. See [Runners]({{< relref "/docs/operations/runners#how-it-works" >}}) for how logs are shipped and capped.
+The run page follows the runner's output live. See [Runners]({{< relref "/docs/operations/runners#how-it-works" >}}) for how logs are shipped and capped. Values of sensitive variables and inputs are masked in the log (`***`) and in outputs (`(sensitive)`): see [masking]({{< relref "variables" >}}).
 
 ## Retention
 

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"strings"
@@ -140,24 +141,43 @@ func TestRotateKeyRace(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// read in insertion order (a fresh table's sequential scan): LOST's warning comes before GOOD is re-sealed
-	put("LOST", "x", keys("rotate-lost-"+uniq(""), ""))
-	put("GOOD", "v1", keys(oldSecret, ""))
+	// The race is on one row, so it doesn't depend on the order rows are read in: an added template's
+	// inputs are stored after all of them were re-sealed, and the warning about "lost" comes in between.
+	wsID := uuid.New()
+	sealed := func(k *secrets.Keyring, input, plain string) map[string]any {
+		t.Helper()
+		b, err := k.Seal(plain, InputAD(wsID, "main", input))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return map[string]any{"sealed": base64.StdEncoding.EncodeToString(b)}
+	}
+	_, run, err := store.CreateWorkspace(ctx, wsID, uniq("race-"), "", storage.WorkspaceTemplate{Name: "main", TemplateID: "t",
+		ModuleSource: "git::https://x//m", ModuleRef: "v1", Inputs: map[string]any{
+			"lost": sealed(keys("rotate-lost-"+uniq(""), ""), "lost", `"x"`), "good": sealed(keys(oldSecret, ""), "good", `"v1"`)}}, false, uuid.Nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Pool.Exec(ctx, `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE id = $1::uuid`, run.ID)
 	var hook func()
 	log := slog.New(onWarn{slog.DiscardHandler, func() { hook() }})
 
-	hook = func() { put("GOOD", "v2", both) } // a server saves GOOD meanwhile, under the new key
+	hook = func() { // a server saves the inputs meanwhile, under the new key
+		b, _ := json.Marshal(map[string]any{"good": sealed(both, "good", `"v2"`)})
+		if _, err := store.Pool.Exec(ctx, `UPDATE workspace_templates SET inputs = $1::jsonb WHERE workspace_id = $2::uuid`, b, wsID); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err := RotateKey(ctx, store, nil, both, log); err == nil || !strings.Contains(err.Error(), "1 values changed while being re-sealed: run rotate-key again") {
 		t.Fatalf("a value changed meanwhile: %v", err)
 	}
-	vars, _ := store.Variables(ctx, o)
-	for _, v := range vars {
-		if got, err := newKey.Open(v.Value, VariableAD(v)); v.Key == "GOOD" && (err != nil || got != "v2") {
-			t.Fatalf("the server's write must stay: %q %v", got, err)
-		}
+	uses, _ := store.WorkspaceTemplates(ctx, wsID)
+	if in, _, err := (&App{Secrets: newKey}).OpenInputs(uses[0].Inputs, wsID, "main"); err != nil || in["good"] != "v2" {
+		t.Fatalf("the server's write must stay: %v %v", in, err)
 	}
 
-	hook = func() { // a run starts meanwhile
+	put("LOST", "x", keys("rotate-lost-"+uniq(""), "")) // the next hook's trigger
+	hook = func() {                                     // a run starts meanwhile
 		if _, _, err := store.CreateWorkspace(ctx, uuid.New(), uniq("race-"), "", storage.WorkspaceTemplate{Name: "main", TemplateID: "t",
 			ModuleSource: "git::https://x//m", ModuleRef: "v1"}, false, uuid.Nil); err != nil {
 			t.Error(err)

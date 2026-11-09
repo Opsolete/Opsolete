@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -42,7 +43,7 @@ const runnerToken = "e2e-runner-token-0123456789abcdef"
 
 // TestRealRunner: an admin uploads the greeting module to the registry and creates a workspace from
 // the catalog's greeting template; the runner plans it with Terraform, the admin confirms, the runner
-// applies. A second template with a sensitive input is added (masked in the log) and removed again
+// applies. A second template with a sensitive input is added (masked in the log and its outputs) and removed again
 // (a targeted destroy, then its outputs dropped); then the workspace is destroyed. Terraform fetches the module from the server's own
 // registry and keeps state in its http backend: no network beyond the test server.
 func TestRealRunner(t *testing.T) {
@@ -72,7 +73,7 @@ func TestRealRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 	// the catalog's greeting template, and a copy whose "name" is a sensitive input: the module's
-	// message output (not sensitive) prints it, so only the runner's masking keeps it out of the log
+	// message output (not sensitive) prints it, so only masking keeps it out of the log and the stored outputs
 	dir := t.TempDir()
 	greeting, err := os.ReadFile("../../catalog/greeting.json")
 	if err != nil {
@@ -241,14 +242,50 @@ func TestRealRunner(t *testing.T) {
 				secretModule = a.Name
 			}
 		}
-		// Outputs (the run page's, the Outputs tab) are left out: they show what the module outputs, and
-		// it declares message not sensitive (docs: outputs follow the module's flag, masking is best-effort).
+		// The module's message output echoes the value and isn't marked sensitive: the runner (the
+		// run's outputs) and the server (the state version's) store it masked, so no page shows it.
+		vs, _ := store.StateVersions(ctx, w.ID, 1)
 		for _, p := range []string{"/workspaces/" + ws + "?show=templates", "/workspaces/" + ws + "/templates/" + secretModule,
-			"/workspaces/" + ws + "/runs", "/workspaces/" + ws + "/runs/" + runID.String() + "/logs/stream"} {
-			if body := page(t, p); strings.Contains(body, password) {
+			"/workspaces/" + ws + "/runs", "/workspaces/" + ws + "/runs/" + runID.String() + "/logs/stream",
+			"/workspaces/" + ws + "/runs/" + runID.String(), "/workspaces/" + ws + "?show=outputs",
+			"/workspaces/" + ws + "/states/" + strconv.FormatInt(vs[0].ID, 10)} {
+			body := page(t, p)
+			if strings.Contains(body, password) {
 				i := strings.Index(body, password)
 				t.Errorf("%s shows the sensitive value: …%s…", p, body[max(0, i-400):i+100])
 			}
+			if strings.Contains(p, "/states/") || strings.HasSuffix(p, "outputs") || strings.HasSuffix(p, runID.String()) {
+				if !strings.Contains(body, "(sensitive)") {
+					t.Errorf("%s doesn't show the masked output: %s", p, body)
+				}
+			}
+		}
+		var admin uuid.UUID
+		if err := store.Pool.QueryRow(ctx, `SELECT id FROM users WHERE email = 'admin@example.com'`).Scan(&admin); err != nil {
+			t.Fatal(err)
+		}
+		tok, err := store.CreateUserToken(ctx, admin, "e2e", time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req, _ := http.NewRequest("GET", ts.URL+"/api/v2/workspaces/"+w.ID.String()+"/current-state-version-outputs", nil)
+		req.Header.Set("Authorization", "Bearer "+tok)
+		res, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		if res.StatusCode != http.StatusOK || !strings.Contains(string(b), secretModule+"__message") || strings.Contains(string(b), password) {
+			t.Errorf("cloud API outputs: %d %s", res.StatusCode, b)
+		}
+		var stored string
+		if err := store.Pool.QueryRow(ctx, `SELECT coalesce((SELECT string_agg(outputs::text, ' ') FROM runs WHERE workspace_id = $1), '') ||
+			coalesce((SELECT string_agg(outputs::text, ' ') FROM state_versions WHERE workspace_id = $1), '')`, w.ID).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(stored, password) || !strings.Contains(stored, `"(sensitive)"`) {
+			t.Errorf("stored outputs: %s", stored)
 		}
 	})
 	t.Run("removing a deployed template destroys its resources, then drops its outputs", func(t *testing.T) {
