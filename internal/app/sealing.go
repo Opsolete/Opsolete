@@ -3,11 +3,15 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 	"gocloud.dev/blob"
 
+	"github.com/opsolete/opsolete/internal/secrets"
 	"github.com/opsolete/opsolete/internal/storage"
 )
 
@@ -81,4 +85,39 @@ func (a *App) ReadBlob(ctx context.Context, key string) ([]byte, error) {
 		return nil, fmt.Errorf("decrypt %s: %w", key, err)
 	}
 	return []byte(plain), nil
+}
+
+// signingKeyAD binds the sealed signing key to its row.
+const signingKeyAD = "signing key"
+
+// SigningKey returns the HMAC key behind run state credentials, signed URLs, terraform login codes
+// and the login-state cookie. It is stored sealed, so a database dump alone can't forge them, and it
+// never changes: a SECRET_KEY rotation re-seals it (RotateKey) instead of replacing it, so credentials
+// issued before the restart stay valid. A key stored unsealed (by 0.6.0, or a first start) is
+// converted once into the key 0.6.0 used: HMAC(legacySecret, stored), with legacySecret the
+// SECRET_KEY 0.6.0 ran with (SECRET_KEY_PREVIOUS while rotating, else SECRET_KEY).
+func SigningKey(ctx context.Context, st *storage.Store, keys *secrets.Keyring, legacySecret string) ([]byte, error) {
+	for range 3 { // another replica may convert it at the same time: then read its result
+		stored, err := st.SigningKey(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if secrets.IsSealed(stored) {
+			key, err := keys.Open(stored, signingKeyAD)
+			return []byte(key), err
+		}
+		m := hmac.New(sha256.New, []byte(legacySecret))
+		m.Write(stored)
+		key := m.Sum(nil)
+		sealed, err := keys.Seal(string(key), signingKeyAD)
+		if err != nil {
+			return nil, err
+		}
+		if err := st.ReplaceSigningKey(ctx, stored, sealed); err == nil {
+			return key, nil
+		} else if !errors.Is(err, storage.ErrNotFound) {
+			return nil, err
+		}
+	}
+	return nil, errors.New("signing key: changed while converting it, three times")
 }
