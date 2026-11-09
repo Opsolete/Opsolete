@@ -431,9 +431,26 @@ type General struct {
 }
 
 // SaveGeneral saves the General settings, and only those. ErrNameTaken: the new name is in use;
-// ErrNotFound: no such workspace.
+// ErrRunActive: the execution mode changes while a run is active (a CLI lock and upload in the gap
+// between Terraform releasing the run's lock and the run finishing would get the run's resource
+// index); ErrNotFound: no such workspace.
 func (s *Store) SaveGeneral(ctx context.Context, id uuid.UUID, g General) error {
-	err := affected(s.q.UpdateGeneralSettings(ctx, db.UpdateGeneralSettingsParams{ID: id, Name: g.Name, ExecutionMode: g.ExecutionMode, AutoApply: g.AutoApply}))
+	err := s.tx(ctx, func(q *db.Queries) error {
+		w, err := q.LockIdleWorkspace(ctx, id) // the row lock keeps a new run out until this commits
+		if err != nil {
+			return notFound(err)
+		}
+		if w.Active {
+			remote, err := q.WorkspaceIsRemote(ctx, id)
+			if err != nil {
+				return err
+			}
+			if remote != (g.ExecutionMode == "remote") {
+				return ErrRunActive
+			}
+		}
+		return affected(q.UpdateGeneralSettings(ctx, db.UpdateGeneralSettingsParams{ID: id, Name: g.Name, ExecutionMode: g.ExecutionMode, AutoApply: g.AutoApply}))
+	})
 	if isUnique(err) {
 		return ErrNameTaken
 	}

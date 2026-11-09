@@ -174,6 +174,9 @@ func (a *App) SaveGeneralSettings(ctx context.Context, actor Actor, workspace st
 	if errors.Is(err, storage.ErrNameTaken) {
 		return ws, invalid("name", err.Error())
 	}
+	if errors.Is(err, storage.ErrRunActive) {
+		return ws, invalid("execution_mode", "the execution mode can't change while a run is active: wait for it to end or cancel it")
+	}
 	if err != nil {
 		return ws, err
 	}

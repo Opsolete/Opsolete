@@ -67,7 +67,7 @@ A rollout of its own that errors, is discarded or is canceled **pauses** the rol
 
 A workspace's *Settings* need `operate`:
 
-- **General:** its project (admins move it), **name** (state, runs and grants are keyed by its id and stay put), **execution mode** and **auto-apply**, and [remote state sharing]({{< relref "state#remote-state-sharing" >}}). *Remote* (the default) runs plans and applies on Opsolete's runners. *Local* is for the [Terraform CLI]({{< relref "terraform-cli" >}}): Terraform runs on your machine and Opsolete only keeps the state, so runs, drift checks, VCS triggers and rollouts don't start here. Changing the mode doesn't stop a run or a CLI lock already under way.
+- **General:** its project (admins move it), **name** (state, runs and grants are keyed by its id and stay put), **execution mode** and **auto-apply**, and [remote state sharing]({{< relref "state#remote-state-sharing" >}}). *Remote* (the default) runs plans and applies on Opsolete's runners. *Local* is for the [Terraform CLI]({{< relref "terraform-cli" >}}): Terraform runs on your machine and Opsolete only keeps the state, so runs, drift checks, VCS triggers and rollouts don't start here. The mode can't change while a run is active (wait for it to end or cancel it); a CLI lock already under way isn't stopped by a change.
 - **Health:** [drift detection]({{< relref "runs#drift-detection" >}}).
 - **Locking:** lock the workspace's state by hand, with an optional reason; see [Locking]({{< relref "state#locking" >}}).
 - **Team access:** the grants below (admins change them).

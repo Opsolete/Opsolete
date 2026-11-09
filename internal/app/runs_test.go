@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -93,6 +94,55 @@ func TestUnacknowledgedClaim(t *testing.T) {
 	}
 	if _, err := a.StateRun(ctx, ws.ID, ws.ID.String(), a.StateToken(ws.ID, run.ID)); err != nil {
 		t.Errorf("state credential after the ack: %v", err)
+	}
+}
+
+// A lease that ran out while no replica led (an outage) isn't reaped by a new leader until its
+// runner had ReapGrace to heartbeat again; the heartbeat renews it. Past that, it is reaped.
+func TestReapAfterOutage(t *testing.T) {
+	a, ctx := testApp(t), context.Background()
+	_, run := configured(t, a)
+	leased(t, a, run.ID, "l")
+	expire := func() {
+		t.Helper()
+		if _, err := a.Store.Pool.Exec(ctx, `UPDATE runs SET lease_until = now() - interval '1 minute' WHERE id = $1`, run.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status := func() string { r, _ := a.Store.RunStatus(ctx, run.ID); return r.Status }
+
+	expire()
+	a.ReapLeases(context.WithValue(ctx, leadKey{}, time.Now())) // just took the lead
+	if s := status(); s != storage.Planning {
+		t.Fatalf("reaped by a new leader: %s", s)
+	}
+	if _, err := a.Heartbeat(ctx, run.ID, "l"); err != nil {
+		t.Fatalf("heartbeat after the outage: %v", err)
+	}
+	a.ReapLeases(ctx)
+	if s := status(); s != storage.Planning {
+		t.Fatalf("reaped after its heartbeat: %s", s)
+	}
+
+	expire() // the runner is really gone
+	a.ReapLeases(context.WithValue(ctx, leadKey{}, time.Now().Add(-ReapGrace)))
+	if s := status(); s != storage.Errored {
+		t.Fatalf("leading for ReapGrace: %s, want errored", s)
+	}
+}
+
+// While a run is active the execution mode stays (the rest of the General settings still save).
+func TestExecutionModeDuringRun(t *testing.T) {
+	a, ctx := testApp(t), context.Background()
+	ws, _ := configured(t, a) // its first plan is queued
+	if _, err := a.SaveGeneralSettings(ctx, admin, ws.Name, GeneralSettings{Name: ws.Name, ExecutionMode: "local"}); !isValidation(err) {
+		t.Fatalf("to local during a run: %v", err)
+	}
+	if got, _, _ := a.Workspace(ctx, admin, ws.Name, LevelRead); got.ExecutionMode != "remote" {
+		t.Fatalf("the mode changed anyway: %q", got.ExecutionMode)
+	}
+	if _, err := a.SaveGeneralSettings(ctx, admin, ws.Name, GeneralSettings{Name: ws.Name + "-x", ExecutionMode: "remote"}); err != nil {
+		t.Fatalf("a rename during a run: %v", err)
 	}
 }
 

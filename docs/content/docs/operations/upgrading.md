@@ -22,4 +22,6 @@ New settings ([Configuration]({{< relref "configuration" >}})):
 | `RUN_LOG_RETENTION_DAYS` | `90` | Run logs are deleted this long after the run ended; `0` keeps them |
 | `OPS_JOB_GRACE` | `10m` | Runner: how long Terraform may take to save state after an interrupt. Set `terminationGracePeriodSeconds` to at least `OPS_JOB_TIMEOUT` + `OPS_JOB_GRACE` + 5 minutes |
 
+From 0.6 on, a new version migrates the database in place when it starts. There is no downgrade: an older version refuses a database a newer one migrated ("this database was migrated by a newer Opsolete …"), so back up the database before upgrading, and to go back, restore that backup.
+
 Drift checks and speculative plans older than 30 days are deleted too ([Retention]({{< relref "/docs/usage/runs#retention" >}})). Runners on Linux refuse to start if they can't become a child subreaper ([Runners]({{< relref "runners#how-it-works" >}})).

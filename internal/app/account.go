@@ -115,7 +115,9 @@ func (a *App) UserSessions(ctx context.Context, actor Actor) ([]storage.UserSess
 }
 
 // EndSessions ends every browser session of user, at once (every request looks its session up):
-// actor's own (log out everywhere), or anyone's for an admin. API tokens are not sessions and stay.
+// actor's own (log out everywhere: their `terraform login` tokens stay, under Account settings ›
+// Tokens), or anyone's for an admin, which revokes the user's tokens too: an admin cutting someone
+// off (they left, or their laptop was stolen) means the CLI as well.
 func (a *App) EndSessions(ctx context.Context, actor Actor, user uuid.UUID) error {
 	if user != actor.UserID && !actor.Admin {
 		return ErrForbidden
@@ -125,5 +127,12 @@ func (a *App) EndSessions(ctx context.Context, actor Actor, user uuid.UUID) erro
 		return err
 	}
 	a.Log.Info("sessions ended", "user", user, "count", n, "by", actor.Email)
+	if user == actor.UserID {
+		return nil
+	}
+	if err := a.Store.RevokeUserTokens(ctx, user); err != nil {
+		return err
+	}
+	a.Log.Info("all tokens revoked", "user", user, "by", actor.Email)
 	return nil
 }

@@ -753,7 +753,7 @@ func TestAccess(t *testing.T) {
 	}
 
 	other, _ := newWorkspace(t, s, false)
-	if err := s.SaveGeneral(ctx, w.ID, General{Name: other.Name, AutoApply: true, ExecutionMode: "local"}); !errors.Is(err, ErrNameTaken) {
+	if err := s.SaveGeneral(ctx, w.ID, General{Name: other.Name, AutoApply: true, ExecutionMode: "remote"}); !errors.Is(err, ErrNameTaken) {
 		t.Fatalf("rename onto a taken name: %v", err)
 	}
 	if got, _ := s.GetWorkspaceByID(ctx, w.ID); got.AutoApply || got.ExecutionMode != "remote" {

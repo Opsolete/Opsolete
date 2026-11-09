@@ -159,7 +159,7 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 | `POST /account/sessions/revoke` | user | Log out everywhere |
 | `POST /account/tokens/{id}/revoke` | user | Revokes one of your `terraform login` tokens |
 | `POST /account/tokens/revoke` | user | Revokes all of them |
-| `POST /users/{id}/sessions/revoke` | admin | Ends a user's sessions (from the audit log) |
+| `POST /users/{id}/sessions/revoke` | admin | Ends a user's sessions and revokes their `terraform login` tokens (from the audit log) |
 | `GET /organization` | admin | Settings → Organization |
 | `POST /organization` | admin | `currency` (Infracost), `module_uploads` |
 | `GET /audit` | admin | Audit log; `?show=access` for sign-ins and refused requests |
