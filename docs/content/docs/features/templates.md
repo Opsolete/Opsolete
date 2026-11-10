@@ -1,6 +1,8 @@
 ---
 title: Templates
-weight: 1
+weight: 8
+aliases:
+  - /docs/catalog/templates/
 ---
 
 Each template is a JSON file that describes one existing Terraform module pinned to an approved `ref`, plus the inputs its form asks. This is the template file format 1.0:
@@ -36,7 +38,7 @@ See also [`catalog/storage-account.json`](https://github.com/Opsolete/Opsolete/b
 | `id` | string | required | Lowercase letters, digits and dashes, at most 63 characters, not `new`. Unique in the catalog. The builder gives new templates a UUID. |
 | `name` | string | required | The title in the catalog. |
 | `description` | string | optional | One sentence, shown on the catalog card. |
-| `module` | object | required | `source`: a `git::` URL or a [registry]({{< relref "module-registry" >}}) module address; `ref`: the approved Git ref or registry version. Both required. |
+| `module` | object | required | `source`: a `git::` URL or a [registry]({{< relref "/docs/features/module-registry" >}}) module address; `ref`: the approved Git ref or registry version. Both required. |
 | `inputs` | array | optional | The form's fields, in order. |
 | `adopt` | array | optional | Resources of the module that can take over existing ones; see [adopting existing resources](#adopting-existing-resources). |
 
@@ -72,9 +74,9 @@ Mark a `string` or `number` input `"sensitive": true` for passwords and keys. It
 
 Mark one input `"key": true` (not `bool` or sensitive) to name the template after its value when it's added to a workspace: a key `vm_name` of `Web-Prod 01` adds it as `module.web_prod_01_c8ad`: a random hex suffix, so the same key can be added twice. Without a key, the template's name is used. The name can't be typed in, and is fixed once added: changing the key's value later doesn't rename it, since that would destroy and recreate its resources.
 
-Mark an input `"per_environment": true` for a value that differs per environment (a region, a size): each project may then set it for all its workspaces under *Environment values*, and that value applies at every run, over the workspace's own. See [Environments and promotion]({{< relref "/docs/usage/environments#per-environment-inputs" >}}).
+Mark an input `"per_environment": true` for a value that differs per environment (a region, a size): each project may then set it for all its workspaces under *Environment values*, and that value applies at every run, over the workspace's own. See [Environments and promotion]({{< relref "/docs/features/environments#per-environment-inputs" >}}).
 
-Fields generated from a [registry]({{< relref "module-registry" >}}) module's variables take their label and help from the variable's `description`, split once at its first `: ` when the builder imports them: `VM name: 1-64 letters, digits or -.` becomes the label *VM name* and the help *1-64 letters, digits or -.*. So write descriptions in that form. A template's own `help` takes precedence over the module's.
+Fields generated from a [registry]({{< relref "/docs/features/module-registry" >}}) module's variables take their label and help from the variable's `description`, split once at its first `: ` when the builder imports them: `VM name: 1-64 letters, digits or -.` becomes the label *VM name* and the help *1-64 letters, digits or -.*. So write descriptions in that form. A template's own `help` takes precedence over the module's.
 
 ## Converting 0.x templates
 
@@ -138,7 +140,7 @@ template <id>: module: unknown field "version"
 template <id>: unknown field "tags"
 ```
 
-A label with `: ` in it loads without an error, so search the files for `"label": "` values containing `: ` as well. Opening and saving a template in the [template builder]({{< relref "template-builder" >}}) also writes the 1.0 format, but only once the file loads.
+A label with `: ` in it loads without an error, so search the files for `"label": "` values containing `: ` as well. Opening and saving a template in the [template builder]({{< relref "/docs/features/template-builder" >}}) also writes the 1.0 format, but only once the file loads.
 
 ## Writing modules for templates
 
@@ -147,16 +149,16 @@ A template's module is deployed by people who never write Terraform, so it has t
 - **Configure the providers in the module.** Declare `required_providers` and write the `provider` blocks in the module itself, e.g. `provider "azurerm" { features {} }`. The workspace writes no provider configuration, and a template always runs as `module.<name>`, next to other templates. With its own providers, each template works on its own, whatever else the workspace holds.
 
   Reusable modules called from your own Terraform normally *leave out* provider blocks. A module that has them can't be called with `count`, `for_each` or `depends_on`. Opsolete never writes those arguments, so that limit doesn't apply. Terraform also needs a module's provider configuration to destroy its resources, so removing an added template first runs a destroy targeted at `module.<name>` while its block is still there, and only then drops the block.
-- **No credentials in the module.** Pass them as environment variables (`ARM_CLIENT_ID`, `AWS_ACCESS_KEY_ID`, …) through a [variable set]({{< relref "/docs/usage/variables" >}}). Environment variables reach every template in the workspace.
-- **Resources in the module's root directory**, in the standard module structure (`main.tf`, `variables.tf`, `outputs.tf`), so the [registry]({{< relref "module-registry" >}}) can generate the docs and the form from it.
+- **No credentials in the module.** Pass them as environment variables (`ARM_CLIENT_ID`, `AWS_ACCESS_KEY_ID`, …) through a [variable set]({{< relref "/docs/features/variables" >}}). Environment variables reach every template in the workspace.
+- **Resources in the module's root directory**, in the standard module structure (`main.tf`, `variables.tf`, `outputs.tf`), so the [registry]({{< relref "/docs/features/module-registry" >}}) can generate the docs and the form from it.
 - **One specific use case, few decisions.** Hard-code what your standards fix (SKU, region list, logging, network rules) and expose only what users must choose.
-- **Settings outside the form:** a variable the form doesn't ask can still be set per project with a variable set. Give it a safe default, and take maps and lists as a JSON string (see [Settings outside the template's form]({{< relref "/docs/usage/variables#settings-outside-the-templates-form" >}})).
+- **Settings outside the form:** a variable the form doesn't ask can still be set per project with a variable set. Give it a safe default, and take maps and lists as a JSON string (see [Settings outside the template's form]({{< relref "/docs/features/variables#settings-outside-the-templates-form" >}})).
 - **Defaults wherever possible**, and a `select` input for variables that have no default, so users pick from approved values instead of typing them.
-- **Pin an approved version** in the template's `ref`. Moving the template to a newer one offers existing workspaces a module update, which admins can [roll out]({{< relref "/docs/usage/workspaces#update-to-a-new-module-version" >}}) to all of them, in batches and per project. Give inputs that are new and required a `default`, or each workspace needs its update form.
+- **Pin an approved version** in the template's `ref`. Moving the template to a newer one offers existing workspaces a module update, which admins can [roll out]({{< relref "/docs/features/workspaces#update-to-a-new-module-version" >}}) to all of them, in batches and per project. Give inputs that are new and required a `default`, or each workspace needs its update form.
 
 ## Conditional inputs
 
-Add `"show_if": {"input": "<name>", "equals": ["<value>", ...]}` to an input to show it only while an earlier `select` input has one of the values, or an earlier `bool` input is `true` or `false`. The values are typed like the input they refer to: strings for a `select` (its option values), JSON booleans for a `bool` (e.g. `{"input": "backups", "equals": [true]}`). At least one value is required. In the [template builder]({{< relref "template-builder" >}}) this is a field's **Show when … is …** row. Conditions can be chained (a hidden dropdown hides the inputs that depend on it). A hidden input isn't validated or sent to Terraform, so the module's own default applies. Switching a workspace away from a condition drops that input's stored value, sensitive ones included.
+Add `"show_if": {"input": "<name>", "equals": ["<value>", ...]}` to an input to show it only while an earlier `select` input has one of the values, or an earlier `bool` input is `true` or `false`. The values are typed like the input they refer to: strings for a `select` (its option values), JSON booleans for a `bool` (e.g. `{"input": "backups", "equals": [true]}`). At least one value is required. In the [template builder]({{< relref "/docs/features/template-builder" >}}) this is a field's **Show when … is …** row. Conditions can be chained (a hidden dropdown hides the inputs that depend on it). A hidden input isn't validated or sent to Terraform, so the module's own default applies. Switching a workspace away from a condition drops that input's stored value, sensitive ones included.
 
 A `select` option is either a string or an object `{"value": "...", "label": "..."}`: the form shows the label and Terraform gets the value.
 
@@ -169,7 +171,7 @@ A `select` option is either a string or an object `{"value": "...", "label": "..
 Things to know:
 
 - **Module variables need a default.** Every variable behind a conditional input needs one (e.g. `default = null`). Without it, Terraform fails with a missing variable whenever that input is hidden.
-- **Registry modules drop unknown inputs.** For a template on a [registry]({{< relref "module-registry" >}}) module, the form follows the module's variables, and JSON inputs the module doesn't declare are dropped. If the dropdown or yes / no input a `show_if` refers to (such as `os`) isn't a module variable, every input that depends on it stays hidden. Add it to the module as a variable.
+- **Registry modules drop unknown inputs.** For a template on a [registry]({{< relref "/docs/features/module-registry" >}}) module, the form follows the module's variables, and JSON inputs the module doesn't declare are dropped. If the dropdown or yes / no input a `show_if` refers to (such as `os`) isn't a module variable, every input that depends on it stays hidden. Add it to the module as a variable.
 - **A dropdown without a value counts as its first option**, the one the browser shows selected.
 
 ## Adopting existing resources
@@ -259,9 +261,9 @@ The [template builder]({{< relref "template-builder" >}}) edits `adopt` under **
 
 In production, in a Git repository, so the app keeps no data on its disk:
 
-1. Add a [VCS provider]({{< relref "vcs-providers" >}}) whose token can read the repository.
+1. Add a [VCS provider]({{< relref "/docs/features/vcs-providers" >}}) whose token can read the repository.
 2. In **Settings → Templates** (admins), choose the connection, repository, branch and folder. The `*.json` files directly in that folder are the catalog.
-3. Choose what the [template builder]({{< relref "template-builder" >}}) does on save:
+3. Choose what the [template builder]({{< relref "/docs/features/template-builder" >}}) does on save:
    - **Open a pull request:** a new branch `opsolete/template-<id>-…` with the file and a pull request into the branch. The template changes once it's merged. Saving the template again while its pull request is open adds a commit to that pull request instead of opening another, replacing any change made to the file on its branch (it stays in the pull request's history). Removing a template always opens its own pull request. Works with branch protection.
    - **Commit to the branch:** live right away. The branch must allow direct pushes.
    - **Off:** templates are only edited in Git; a read-only token is enough.

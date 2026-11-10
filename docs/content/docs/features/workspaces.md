@@ -1,24 +1,26 @@
 ---
 title: Workspaces
 weight: 1
+aliases:
+  - /docs/usage/workspaces/
 ---
 
-A workspace holds exactly one Terraform [state]({{< relref "state" >}}). Every change to it is a [run]({{< relref "runs" >}}).
+A workspace holds exactly one Terraform [state]({{< relref "/docs/features/state" >}}). Every change to it is a [run]({{< relref "/docs/features/runs" >}}).
 
 ## Create a workspace
 
-Every workspace is in a [project]({{< relref "projects" >}}): pick it when creating the workspace. Creating one needs `operate` on the project, the default project too; admins create workspaces in any project.
+Every workspace is in a [project]({{< relref "/docs/features/projects" >}}): pick it when creating the workspace. Creating one needs `operate` on the project, the default project too; admins create workspaces in any project.
 
 - **From a template:** pick a template, name the workspace and fill in the form. The template is added to the new workspace like any other (`module.<name>`, see below).
-- **Workspaces don't need a template** (**Workspaces → New workspace**). A blank workspace can stay empty or hold only [variables]({{< relref "variables" >}}).
+- **Workspaces don't need a template** (**Workspaces → New workspace**). A blank workspace can stay empty or hold only [variables]({{< relref "/docs/features/variables" >}}).
 
 Runs need configuration: added templates, a linked branch, or both.
 
 ## Link a VCS repository branch
 
-A workspace can be linked to a **VCS repository branch** (GitHub or Azure DevOps, through a [VCS connection]({{< relref "/docs/catalog/vcs-providers" >}}), if the connection allows the workspace). Runs then plan the repository root at the branch's latest commit. That commit is pinned for the run, so the apply uses the configuration that was planned.
+A workspace can be linked to a **VCS repository branch** (GitHub or Azure DevOps, through a [VCS connection]({{< relref "/docs/features/vcs-providers" >}}), if the connection allows the workspace). Runs then plan the repository root at the branch's latest commit. That commit is pinned for the run, so the apply uses the configuration that was planned.
 
-The server checks the branch every minute (no webhooks, so Opsolete can stay internal; see [API usage of VCS polling]({{< relref "/docs/catalog/vcs-providers#api-usage-of-vcs-polling" >}})):
+The server checks the branch every minute (no webhooks, so Opsolete can stay internal; see [API usage of VCS polling]({{< relref "/docs/features/vcs-providers#api-usage-of-vcs-polling" >}})):
 
 - **Start a run on every new commit** (on by default for new links) queues an apply run of each new commit that has no run yet, applied with auto-apply or after confirmation.
 - **Speculative plans for pull requests** (opt-in) queue a plan-only run, never applied, for each new commit of an open pull request into the branch; pull requests from forks are skipped.
@@ -36,11 +38,11 @@ Add any number of templates (**Deploy…** in a workspace's menu, operate access
 - Their outputs show as `<name>__<output>`. Terraform keeps all outputs after a destroy limited to one template, so once that destroy is applied, the same run plans the configuration without the template (`-refresh=false`) and applies that plan if it changes only outputs. Otherwise the log says so, and the next apply removes them.
 - Workspace variables and variable sets reach every template: env variables (credentials) as the environment, Terraform variables as the variables of a linked branch's configuration and as inputs of each template whose module declares them and whose form doesn't ask for them (inputs the form asks keep their value, and a hidden or empty one the module's default). Templates on external sources (e.g. `git::`) get no Terraform variables, only environment variables: publish their module to the registry (it can sync from VCS). HCP Terraform's no-code provisioning has the same rule: only private registry modules.
   - *Possible improvement:* the runner has every template's module on disk after `terraform init`, `git::` ones too. It could add the workspace Terraform variables each module declares itself, if the job also lists the inputs each template's form asks for, so those keep winning.
-- Each template's module configures its own providers (see [Writing modules for templates]({{< relref "/docs/catalog/templates#writing-modules-for-templates" >}})).
+- Each template's module configures its own providers (see [Writing modules for templates]({{< relref "/docs/features/templates#writing-modules-for-templates" >}})).
 
 ## Promote to another workspace
 
-**Promote to…** in a workspace's menu (read access) makes another workspace, existing (operate) or new, an exact copy of its templates, e.g. dev's in test. A preview shows every change first, and the target's run always waits for confirmation. See [Environments and promotion]({{< relref "environments#promote-a-workspace" >}}).
+**Promote to…** in a workspace's menu (read access) makes another workspace, existing (operate) or new, an exact copy of its templates, e.g. dev's in test. A preview shows every change first, and the target's run always waits for confirmation. See [Environments and promotion]({{< relref "/docs/features/environments#promote-a-workspace" >}}).
 
 ## Update to a new module version
 
@@ -67,12 +69,12 @@ A rollout of its own that errors, is discarded or is canceled **pauses** the rol
 
 A workspace's *Settings* need `operate`:
 
-- **General:** its project (admins move it), **name** (state, runs and grants are keyed by its id and stay put), **execution mode** and **auto-apply**, and [remote state sharing]({{< relref "state#remote-state-sharing" >}}). *Remote* (the default) runs plans and applies on Opsolete's runners. *Local* is for the [Terraform CLI]({{< relref "terraform-cli" >}}): Terraform runs on your machine and Opsolete only keeps the state, so runs, drift checks, VCS triggers and rollouts don't start here. The mode can't change while a run is active (wait for it to end or cancel it); a CLI lock already under way isn't stopped by a change.
-- **Health:** [drift detection]({{< relref "runs#drift-detection" >}}).
-- **Locking:** lock the workspace's state by hand, with an optional reason; see [Locking]({{< relref "state#locking" >}}).
+- **General:** its project (admins move it), **name** (state, runs and grants are keyed by its id and stay put), **execution mode** and **auto-apply**, and [remote state sharing]({{< relref "/docs/features/state#remote-state-sharing" >}}). *Remote* (the default) runs plans and applies on Opsolete's runners. *Local* is for the [Terraform CLI]({{< relref "/docs/features/terraform-cli" >}}): Terraform runs on your machine and Opsolete only keeps the state, so runs, drift checks, VCS triggers and rollouts don't start here. The mode can't change while a run is active (wait for it to end or cancel it); a CLI lock already under way isn't stopped by a change.
+- **Health:** [drift detection]({{< relref "/docs/features/runs#drift-detection" >}}).
+- **Locking:** lock the workspace's state by hand, with an optional reason; see [Locking]({{< relref "/docs/features/state#locking" >}}).
 - **Team access:** the grants below (admins change them).
 - **Destruction and deletion:** **Queue destroy plan** destroys the infrastructure (confirmed as usual). **Delete workspace** removes its runs, variables, grants and state files; it's refused while a run is active or the state is locked. Destroy the resources first: if its state still lists resources (or isn't indexed), the button says **Delete workspace anyway**, and any resources that still exist are no longer managed by Terraform and must be cleaned up by hand.
 
 ## Access
 
-The creator and admins operate a workspace; IdP groups get `read` or `operate` per workspace or per [project]({{< relref "projects#access" >}}), and the higher of the two wins. Without access, a workspace returns 404, as if it didn't exist. A workspace's *Settings* need `operate`; with `read`, its Overview shows the project, repository link and trigger, execution mode, auto-apply and drift detection. See [Teams: access per workspace]({{< relref "/docs/operations/authentication#teams-access-per-workspace" >}}).
+The creator and admins operate a workspace; IdP groups get `read` or `operate` per workspace or per [project]({{< relref "/docs/features/projects#access" >}}), and the higher of the two wins. Without access, a workspace returns 404, as if it didn't exist. A workspace's *Settings* need `operate`; with `read`, its Overview shows the project, repository link and trigger, execution mode, auto-apply and drift detection. See [Teams: access per workspace]({{< relref "/docs/config/authentication#teams-access-per-workspace" >}}).

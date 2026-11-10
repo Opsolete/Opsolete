@@ -1,6 +1,8 @@
 ---
 title: Terraform CLI
-weight: 6
+weight: 7
+aliases:
+  - /docs/usage/terraform-cli/
 ---
 
 Run Terraform on your own machine with Opsolete as the state backend, using Terraform's [`cloud` block](https://developer.hashicorp.com/terraform/cli/cloud/settings):
@@ -26,7 +28,7 @@ terraform {
 - **Workspaces:** `terraform init` creates the named workspace if it doesn't exist, as a blank workspace owned by you, with **local execution**. An existing one must use local execution too (*Settings › General*): for a remote one, locking and saving state are refused, since only its runs write its state. Using it needs **operate** access: with read access the state calls are `403` (the state holds secrets), without access the workspace is `404`. Only `workspaces { name = … }` works, optionally with `project`: tags aren't supported.
 - **Projects:** `project` (or `TF_CLOUD_PROJECT`) is where `terraform init` creates a missing workspace: the default project if unset. Creating a workspace needs **operate** access to its project, the default one too (admins: any project); without it, `terraform init` fails with a 422 error. A missing project is created only for admins; others get an error. An existing workspace stays in its project, whatever the block says.
 - **State** works like a run's: every save is a state version with outputs (sensitive ones, and those containing a sensitive variable's value, masked) and a resource list, rollback works, and the CLI takes the same state lock as runs, so a run and a CLI never write at the same time. `terraform force-unlock` releases a lock held by a CLI or set in the UI, not one held by a run or a rollback.
-- **Tokens** from `terraform login` act as you (your role and groups from your last browser login) and expire after 30 days: run `terraform login` again. They also work for the [module registry]({{< relref "/docs/catalog/module-registry" >}}) on the same host. Revoke them under *Account settings › Tokens* (click your email at the top): one, e.g. from a lost laptop, or all of them.
+- **Tokens** from `terraform login` act as you (your role and groups from your last browser login) and expire after 30 days: run `terraform login` again. They also work for the [module registry]({{< relref "/docs/features/module-registry" >}}) on the same host. Revoke them under *Account settings › Tokens* (click your email at the top): one, e.g. from a lost laptop, or all of them.
 
 ## Local development over HTTP
 
