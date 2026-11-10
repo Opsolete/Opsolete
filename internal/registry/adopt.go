@@ -11,19 +11,20 @@ import (
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/zclconf/go-cty/cty"
 
+	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/templates"
 )
 
-// Generating a template's adopt entries from its module's code (the builder's "Generate from module"): every
-// managed resource of the module's root becomes an entry, found with its own type as list resource, and the
-// module's code says the rest:
-//   - count = var.x == "v" ? 1 : 0 (or var.x ? 1 : 0): show_if x is v, address [0]; x becomes a dropdown
+// What a scan can find for a template, read from its module's code (a workspace's Import): every managed
+// resource of the module's root is an entry, found with its own type as list resource, and the module's code
+// says the rest, whatever the variables are called:
+//   - count = var.x == "v" ? 1 : 0 (or var.x ? 1 : 0): it exists for x = v, address [0]
 //   - attribute = var.x, or coalesce(var.x, ...): inputs x = the attribute's path (nested blocks: block[0].attr)
 //   - dynamic "b" { for_each = var.x ? [...] : [] }: the yes / no input x = whether b is set
 //   - attribute = [other.res.id] or other.res.id: other is a related entry, id_from that path
 //   - a sensitive input in an attribute in lifecycle ignore_changes: a placeholder
 // shortcut: other expressions, for_each, nested modules and .tf.json files are skipped (listed in the notes);
-// the admin fills those in by hand. Read more forms when modules need it.
+// the form asks them when importing. Read more forms when modules need it.
 
 // requireByType is for list resources that also return resources of another kind: the attribute only theirs has.
 var requireByType = map[string]string{
@@ -37,16 +38,16 @@ type resourceBlock struct {
 	body      *hclsyntax.Body
 }
 
-// Adoptable proposes adopt entries for a module (a registry archive) and a template's inputs; it returns the
-// inputs too, with the ones a count condition tests turned into dropdowns, and notes on what it skipped.
-func Adoptable(archive []byte, inputs []templates.Input) ([]templates.Adopt, []templates.Input, []string, error) {
+// Adoptable reads what a scan can find for a module (a registry archive) used with a template's inputs, and
+// notes on what it skipped.
+func Adoptable(archive []byte, inputs []templates.Input) ([]runnerapi.ScanEntry, []string, error) {
 	dir, err := os.MkdirTemp("", "ops-adopt-*")
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	defer os.RemoveAll(dir)
 	if err := extract(archive, dir); err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	files, _ := filepath.Glob(filepath.Join(dir, "*.tf"))
 	slices.Sort(files)
@@ -55,11 +56,11 @@ func Adoptable(archive []byte, inputs []templates.Input) ([]templates.Adopt, []t
 	for _, name := range files {
 		src, err := os.ReadFile(name)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, err
 		}
 		f, diags := hclsyntax.ParseConfig(src, filepath.Base(name), hcl.InitialPos)
 		if diags.HasErrors() {
-			return nil, nil, nil, fmt.Errorf("%s: %w", filepath.Base(name), diags)
+			return nil, nil, fmt.Errorf("%s: %w", filepath.Base(name), diags)
 		}
 		for _, b := range f.Body.(*hclsyntax.Body).Blocks {
 			if b.Type == "resource" && len(b.Labels) == 2 {
@@ -67,15 +68,12 @@ func Adoptable(archive []byte, inputs []templates.Input) ([]templates.Adopt, []t
 			}
 		}
 	}
-	g := generator{inputs: slices.Clone(inputs), refs: map[string]ref{}}
-	for i := range g.inputs {
-		g.inputs[i].Options = slices.Clone(g.inputs[i].Options)
-	}
+	g := generator{inputs: inputs, refs: map[string]ref{}}
 	addrs := map[string]bool{}
 	for _, r := range res {
 		addrs[r.typ+"."+r.name] = true
 	}
-	var out []templates.Adopt
+	var out []runnerapi.ScanEntry
 	for _, r := range res {
 		a, note := g.entry(r, addrs)
 		if note != "" {
@@ -89,16 +87,15 @@ func Adoptable(archive []byte, inputs []templates.Input) ([]templates.Adopt, []t
 			out[i].IDFrom = rf.path
 		}
 	}
-	if !slices.ContainsFunc(out, templates.Adopt.Primary) && len(out) > 0 {
+	if !slices.ContainsFunc(out, runnerapi.ScanEntry.Primary) && len(out) > 0 {
 		notes = append(notes, "every resource refers to another one: none to find first")
 	}
-	return out, g.inputs, append(notes, g.notes...), nil
+	return out, notes, nil
 }
 
 type generator struct {
 	inputs []templates.Input
 	refs   map[string]ref // resource address → the first resource referring to its id
-	notes  []string
 }
 
 type ref struct{ from, path string }
@@ -108,23 +105,20 @@ func (g *generator) input(name string) *templates.Input {
 	if i < 0 {
 		return nil
 	}
-	return &g.inputs[i]
+	return &g.inputs[i] // read only
 }
 
 // entry is r's adopt entry; a note instead if r can't be adopted as a single resource.
-func (g *generator) entry(r resourceBlock, addrs map[string]bool) (templates.Adopt, string) {
+func (g *generator) entry(r resourceBlock, addrs map[string]bool) (runnerapi.ScanEntry, string) {
 	addr := r.typ + "." + r.name
 	if _, ok := r.body.Attributes["for_each"]; ok {
-		return templates.Adopt{}, addr + ": for_each isn't supported, skipped"
+		return runnerapi.ScanEntry{}, addr + ": for_each isn't supported, skipped"
 	}
-	a := templates.Adopt{To: addr, List: r.typ, Require: requireByType[r.typ], Label: label(r.typ), Inputs: map[string]string{}}
-	if strings.HasPrefix(r.typ, "azurerm_") {
-		a.Help = "Azure portal: the resource → Properties → Resource ID."
-	}
+	a := runnerapi.ScanEntry{To: addr, List: r.typ, Require: requireByType[r.typ], Inputs: map[string]string{}}
 	if c, ok := r.body.Attributes["count"]; ok {
 		cond, ok := g.countCondition(c.Expr)
 		if !ok {
-			return templates.Adopt{}, addr + ": its count isn't var.x == \"value\" ? 1 : 0, skipped"
+			return runnerapi.ScanEntry{}, addr + ": its count isn't var.x == \"value\" ? 1 : 0, skipped"
 		}
 		a.To, a.ShowIf = addr+"[0]", cond
 	}
@@ -149,7 +143,7 @@ func (g *generator) entry(r resourceBlock, addrs map[string]bool) (templates.Ado
 }
 
 // body maps the attributes and blocks of b (at path prefix) into a.
-func (g *generator) body(b *hclsyntax.Body, prefix, addr string, addrs, ignored map[string]bool, a *templates.Adopt) {
+func (g *generator) body(b *hclsyntax.Body, prefix, addr string, addrs, ignored map[string]bool, a *runnerapi.ScanEntry) {
 	for _, name := range slices.Sorted(func(yield func(string) bool) {
 		for k := range b.Attributes {
 			if !yield(k) {
@@ -199,8 +193,7 @@ func (g *generator) body(b *hclsyntax.Body, prefix, addr string, addrs, ignored 
 	}
 }
 
-// countCondition reads count = var.x == "v" ? 1 : 0 (either side of ==) or var.x ? 1 : 0 as show_if; a string
-// input it tests becomes a dropdown with the values tested so far.
+// countCondition reads count = var.x == "v" ? 1 : 0 (either side of ==) or var.x ? 1 : 0 as show_if.
 func (g *generator) countCondition(e hclsyntax.Expression) (*templates.ShowIf, bool) {
 	c, ok := e.(*hclsyntax.ConditionalExpr)
 	if !ok || !isNumber(c.TrueResult, 1) || !isNumber(c.FalseResult, 0) {
@@ -217,21 +210,10 @@ func (g *generator) countCondition(e hclsyntax.Expression) (*templates.ShowIf, b
 	if name == "" {
 		name, lit = varOf(eq.RHS), literal(eq.LHS)
 	}
-	in := g.input(name)
-	if in == nil || lit == "" || in.Type != "select" && in.Type != "string" {
+	if in := g.input(name); in == nil || lit == "" || in.Type != "select" && in.Type != "string" {
 		return nil, false
 	}
-	if in.Type == "string" {
-		in.Type, in.Options, in.Pattern = "select", nil, ""
-		if in.Default != "" {
-			in.Options = append(in.Options, templates.Option{Value: in.Default})
-		}
-		g.notes = append(g.notes, in.Name+" became a dropdown: resources exist depending on its value")
-	}
-	if !slices.ContainsFunc(in.Options, func(o templates.Option) bool { return o.Value == lit }) {
-		in.Options = append(in.Options, templates.Option{Value: lit})
-	}
-	return &templates.ShowIf{Input: in.Name, Equals: []string{lit}}, true
+	return &templates.ShowIf{Input: name, Equals: []string{lit}}, true
 }
 
 // resourceID matches [other.res.id] (path[0]) or other.res.id (path) for a resource of the module.
@@ -278,13 +260,4 @@ func literal(e hclsyntax.Expression) string {
 func isNumber(e hclsyntax.Expression, n int64) bool {
 	v, diags := e.Value(nil)
 	return !diags.HasErrors() && v.IsKnown() && !v.IsNull() && v.Type().Equals(cty.Number) && v.Equals(cty.NumberIntVal(n)).True()
-}
-
-// label is the field's title for a resource type: azurerm_windows_virtual_machine → Windows virtual machine resource ID.
-func label(typ string) string {
-	if _, rest, ok := strings.Cut(typ, "_"); ok && rest != "" {
-		typ = rest
-	}
-	s := strings.ReplaceAll(typ, "_", " ")
-	return strings.ToUpper(s[:1]) + s[1:] + " resource ID"
 }

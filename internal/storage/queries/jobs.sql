@@ -14,7 +14,7 @@ UPDATE runs SET runner = sqlc.arg(runner)::text, lease_id = sqlc.arg(lease_id)::
     lease_until = now() + make_interval(secs => sqlc.arg(lease_secs)::float8)
 WHERE id = sqlc.arg(id)::uuid
 RETURNING workspace_id, action, replace, COALESCE(vcs_commit, '')::text AS vcs_commit, remove_templates, imports,
-    COALESCE(scan_template, '')::text AS scan_template;
+    COALESCE(scan_resource_group, '')::text AS scan_resource_group;
 
 -- name: WorkspaceHasVCS :one
 SELECT EXISTS (SELECT 1 FROM workspace_vcs WHERE workspace_id = sqlc.arg(workspace_id)::uuid);

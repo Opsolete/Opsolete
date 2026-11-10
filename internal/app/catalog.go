@@ -261,29 +261,3 @@ func (a *App) DeleteCatalogTemplate(ctx context.Context, actor Actor, id string)
 	a.Log.Info("template deleted", "id", t.ID, "pull_request", pr, "user", actor.Email)
 	return t, pr, nil
 }
-
-// GenerateAdopt fills t's adopt entries from its registry module's code (registry.Adoptable), replacing any
-// it had, and returns t, with the inputs a count condition tests turned into dropdowns, and notes on what it
-// skipped. Nothing is saved. Needs the builder. ValidationError: t isn't on a registry module version.
-func (a *App) GenerateAdopt(ctx context.Context, actor Actor, t templates.Template) (templates.Template, []string, error) {
-	if err := a.editor(actor); err != nil {
-		return t, nil, err
-	}
-	ns, name, sys, ok := a.Registry.ParseSource(t.Module.Source)
-	if !ok {
-		return t, nil, &ValidationError{Message: "Generate from module reads the module's code, which only registry modules have here: start from a registry module, or fill in the rows by hand"}
-	}
-	archive, err := a.Store.ModuleArchive(ctx, ns, name, sys, t.Module.Ref)
-	if errors.Is(err, storage.ErrNotFound) {
-		return t, nil, &ValidationError{Message: fmt.Sprintf("registry module %s has no version %q", t.Module.Source, t.Module.Ref)}
-	}
-	if err != nil {
-		return t, nil, err
-	}
-	adopt, inputs, notes, err := registry.Adoptable(archive, t.Inputs)
-	if err != nil {
-		return t, nil, &ValidationError{Message: "reading the module: " + err.Error()}
-	}
-	t.Adopt, t.Inputs = adopt, inputs
-	return t, notes, nil
-}

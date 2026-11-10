@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/opsolete/opsolete/internal/registry/registrytest"
 	"github.com/opsolete/opsolete/internal/templates"
 )
 
@@ -53,12 +52,6 @@ func TestTemplateBuilder(t *testing.T) {
 		"in_show_input":   {"", "", "region", ""},
 		"in_show_equals":  {"", "", "northeurope", ""},
 		"key":             {"zone"},
-		"ad_to":           {"azurerm_virtual_network.this", ""}, // an adopt row and the blank one
-		"ad_label":        {"VNet resource ID", ""},
-		"ad_show_input":   {"region", ""},
-		"ad_show_equals":  {"northeurope", ""},
-		"ad_list":         {"azurerm_virtual_network", ""},
-		"ad_inputs":       {"cidr = address_space[0]", ""},
 	}
 	// a preview renders the deploy form from the unsaved template, and saves nothing
 	preview := url.Values{}
@@ -84,8 +77,7 @@ func TestTemplateBuilder(t *testing.T) {
 	saved, _ := os.ReadFile(filepath.Join(dir, id+".json"))
 	if s := string(saved); !strings.Contains(s, `"show_if": {`) || strings.Contains(s, "stale") || !strings.Contains(s, `"required": true`) ||
 		!strings.Contains(s, `"label": "North, Europe"`) || strings.Count(s, `"key": true`) != 1 ||
-		!strings.Contains(s, `"help": "A private range: 10.0.0.0/16"`) || !strings.Contains(s, `"default": 7`) || !strings.Contains(s, `"default": true`) ||
-		!strings.Contains(s, `"to": "azurerm_virtual_network.this"`) {
+		!strings.Contains(s, `"help": "A private range: 10.0.0.0/16"`) || !strings.Contains(s, `"default": 7`) || !strings.Contains(s, `"default": true`) {
 		t.Fatalf("saved template wrong:\n%s", s)
 	}
 	// the deploy form shows the help, described by it
@@ -97,10 +89,7 @@ func TestTemplateBuilder(t *testing.T) {
 	if body := get(h, loc+"/edit").Body.String(); !strings.Contains(body, `<option value="region" selected>when region is</option>`) ||
 		!strings.Contains(body, `name="in_help" value="A private range: 10.0.0.0/16"`) ||
 		!strings.Contains(body, `value="7" type="number"`) || !strings.Contains(body, `<option value="true" selected>yes (true)</option>`) ||
-		!strings.Contains(body, `name="in_opt_label_1" value="North, Europe"`) || !strings.Contains(body, `<option value="zone" selected>zone</option>`) ||
-		!strings.Contains(body, `name="ad_to" value="azurerm_virtual_network.this"`) || !strings.Contains(body, `name="ad_show_equals" class="mono" value="northeurope"`) ||
-		strings.Count(body, `name="ad_to"`) != 2 || // the row and a blank one
-		!strings.Contains(body, `name="ad_list" value="azurerm_virtual_network"`) || !strings.Contains(body, ">cidr = address_space[0]\n</textarea>") {
+		!strings.Contains(body, `name="in_opt_label_1" value="North, Europe"`) || !strings.Contains(body, `<option value="zone" selected>zone</option>`) {
 		t.Fatalf("builder lost the condition or options: %s", body)
 	}
 	// a condition on a dropdown below the field is refused with a readable error
@@ -153,32 +142,13 @@ func TestBuilderRoundTrip(t *testing.T) {
 		"in_opt_label_3":     {"Small", "l"},
 		"in_show_input":      {"", "", "", "", "backup"},
 		"in_show_equals":     {"", "", "", "", "false"},
-		// adopt rows, the blank one last, like the page submits
-		"ad_to":          {"azurerm_windows_virtual_machine.self[0]", " azurerm_network_interface.self ", ""},
-		"ad_label":       {"VM resource ID", "", ""},
-		"ad_help":        {"From the portal", "", ""},
-		"ad_pattern":     {`(?i)/subscriptions/.+/virtualMachines/[^/]+`, "", ""},
-		"ad_show_input":  {"backup", "", ""},
-		"ad_show_equals": {"true", "", ""},
-		"ad_list":        {"azurerm_windows_virtual_machine", "azurerm_network_interface", ""},
-		"ad_require":     {"provision_vm_agent", "", ""},
-		"ad_id_from":     {"", "network_interface_ids[0]", ""},
-		"ad_inputs":      {"vm_name = name\n\n size = size \n", "", ""},
-		"ad_placeholder": {"", "", ""},
 	})
-	want := []templates.Adopt{{To: "azurerm_windows_virtual_machine.self[0]", Label: "VM resource ID", Help: "From the portal",
-		Pattern: `(?i)/subscriptions/.+/virtualMachines/[^/]+`, ShowIf: &templates.ShowIf{Input: "backup", Equals: []string{"true"}},
-		List: "azurerm_windows_virtual_machine", Require: "provision_vm_agent", Inputs: map[string]string{"vm_name": "name", "size": "size"}},
-		{To: "azurerm_network_interface.self", List: "azurerm_network_interface", IDFrom: "network_interface_ids[0]"}}
-	if !reflect.DeepEqual(tpl.Adopt, want) {
-		t.Errorf("adopt rows: %+v", tpl.Adopt)
-	}
 	tpl.ID = "vm"
 	b, err := templates.Encode(tpl)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"default": 2`, `"default": true`, `"help": "Free text"`, `"per_environment": true`, `"to": "azurerm_network_interface.self"`} {
+	for _, want := range []string{`"default": 2`, `"default": true`, `"help": "Free text"`, `"per_environment": true`} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("encoded lacks %s:\n%s", want, b)
 		}
@@ -186,44 +156,5 @@ func TestBuilderRoundTrip(t *testing.T) {
 	ts, _, err := templates.Parse(map[string][]byte{"vm.json": b})
 	if err != nil || !reflect.DeepEqual(ts["vm"], tpl) {
 		t.Errorf("round trip: %v\n%+v\n%+v", err, ts["vm"], tpl)
-	}
-}
-
-// TestGenerateAdopt: on a registry module, Generate from module fills the adopt rows from its code and turns the
-// input its count tests into a dropdown, saving nothing; for other sources it says why it can't.
-func TestGenerateAdopt(t *testing.T) {
-	store := testStore(t)
-	dir := t.TempDir()
-	h := newServer(t, dir, true, store)
-	ns := "g" + strings.ToLower(newID()[:8])
-	files := map[string]string{}
-	for _, f := range []string{"main.tf", "variables.tf"} {
-		b, err := os.ReadFile("../registry/testdata/vm/" + f)
-		if err != nil {
-			t.Fatal(err)
-		}
-		files[f] = string(b)
-	}
-	if rec := upload(h, map[string]string{"namespace": ns, "name": "vm", "system": "azurerm", "version": "3.1.0"}, registrytest.TarGz(t, files)); rec.Code != http.StatusSeeOther {
-		t.Fatalf("upload: %d %s", rec.Code, rec.Body.String())
-	}
-	form := url.Values{"name": {"VM"}, "module_source": {"ops.example.com/" + ns + "/vm/azurerm"}, "module_ref": {"3.1.0"}, "generate": {"1"},
-		"in_name": {"name", "os_type", "admin_password", "size", ""}, "in_type": {"string", "string", "string", "string", "string"},
-		"in_default": {"", "windows", "", "", ""}, "in_sensitive": {"2"}}
-	page := post(h, "/templates/new", form).Body.String()
-	for _, want := range []string{"Generated 3 rows under Adopt existing resources", "os_type became a dropdown",
-		`name="ad_to" value="azurerm_windows_virtual_machine.self[0]"`, `name="ad_list" value="azurerm_network_interface"`,
-		`name="ad_id_from" value="network_interface_ids[0]"`, `name="ad_placeholder" value="admin_password"`, ">name = name\nsize = size\n</textarea>",
-		`name="in_opt_value_1" value="linux"`} {
-		if !strings.Contains(page, want) {
-			t.Fatalf("generated builder lacks %q:\n%s", want, page)
-		}
-	}
-	if files, _ := filepath.Glob(filepath.Join(dir, "*.json")); len(files) != 0 {
-		t.Fatalf("generating must not save: %v", files)
-	}
-	form.Set("module_source", "git::https://example.com/vm")
-	if rec := post(h, "/templates/new", form); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "only registry modules have") {
-		t.Fatalf("git source: %d %s", rec.Code, rec.Body.String())
 	}
 }

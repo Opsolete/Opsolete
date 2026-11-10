@@ -3,8 +3,6 @@ package httpserver
 import (
 	"cmp"
 	"errors"
-	"fmt"
-	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -23,40 +21,13 @@ type builderPage struct {
 	Page
 	T           templates.Template
 	Rows        []templates.Input // existing inputs plus blank rows to fill in
-	AdoptRows   []templates.Adopt // existing adopt entries plus a blank row to fill in
-	Resources   []string          // the registry module's resources (type.name), suggested as adopt addresses
 	Editing     bool
 	F           *formState // a refused save
 	Warning     string
-	Notice      string           // what Generate from module did
 	Modules     []storage.Module // registry modules to start from
 	Selected    string           // ns/name/system/version picked from the registry
 	Registry    bool             // registry enabled: offer "start from a registry module"
 	PullRequest string           // the pull request the save opened (Git catalog in pr mode)
-}
-
-// AdoptShowOptions lists the fields an adopt row's "show when" can pick: every select and bool field, plus
-// its current choice c (nil: always), like ShowOptions.
-func (p builderPage) AdoptShowOptions(c *templates.ShowIf) []string {
-	var names []string
-	for _, in := range p.Rows {
-		if (in.Type == "select" || in.Type == "bool") && in.Name != "" {
-			names = append(names, in.Name)
-		}
-	}
-	if c != nil && !slices.Contains(names, c.Input) {
-		names = append(names, c.Input)
-	}
-	return names
-}
-
-// InputLines is an adopt row's inputs mapping as the builder's text area shows it: input = path per line.
-func (builderPage) InputLines(m map[string]string) string {
-	var b strings.Builder
-	for _, k := range slices.Sorted(maps.Keys(m)) {
-		b.WriteString(k + " = " + m[k] + "\n")
-	}
-	return b.String()
 }
 
 // ShowOptions lists the fields row i's "show when" can pick: the select and bool rows above it, plus its
@@ -85,8 +56,6 @@ func (s *Server) renderBuilder(w http.ResponseWriter, r *http.Request, status in
 		p.Modules = mods
 	}
 	p.Rows = append(slices.Clone(p.T.Inputs), templates.Input{}) // a blank card to fill in (and for "+ Add field" to clone)
-	p.AdoptRows = append(slices.Clone(p.T.Adopt), templates.Adopt{})
-	p.Resources = s.App.ModuleResources(r.Context(), p.T.Module)
 	// and a blank option row per card; Clip so the template's own slice is never written
 	for i := range p.Rows {
 		p.Rows[i].Options = append(slices.Clip(p.Rows[i].Options), templates.Option{})
@@ -145,20 +114,6 @@ func (s *Server) saveTemplate(w http.ResponseWriter, r *http.Request) {
 		t.ID = r.PathValue("id")
 	}
 	page := builderPage{Editing: editing, Selected: f.Get("selected")}
-	if f.Has("generate") { // adopt rows from the module's code, shown to review; nothing saved
-		gt, notes, err := s.App.GenerateAdopt(r.Context(), actor(r), t)
-		page.T = gt
-		if err != nil {
-			s.builderError(w, r, page, err)
-			return
-		}
-		page.Notice = fmt.Sprintf("Generated %d rows under Adopt existing resources from the module's code: review them, then save.", len(gt.Adopt))
-		if len(notes) > 0 {
-			page.Notice += " " + strings.Join(notes, "; ") + "."
-		}
-		s.renderBuilder(w, r, http.StatusOK, page)
-		return
-	}
 	if f.Has("preview") { // the deploy form as end users get it, without saving
 		rt, err := s.App.PreviewTemplate(r.Context(), actor(r), t, editing)
 		if err != nil {
@@ -268,36 +223,6 @@ func templateFromForm(f url.Values) templates.Template {
 			}
 		}
 		t.Inputs = append(t.Inputs, in)
-	}
-	// adopt rows: parallel ad_* lists, rows without an address dropped
-	for i, to := range f["ad_to"] {
-		if to = strings.TrimSpace(to); to == "" {
-			continue
-		}
-		a := templates.Adopt{To: to, Label: at("ad_label", i), Help: at("ad_help", i), Pattern: at("ad_pattern", i),
-			List: at("ad_list", i), Require: at("ad_require", i), IDFrom: at("ad_id_from", i)}
-		for _, line := range strings.Split(at("ad_inputs", i), "\n") { // input = attribute path, one per line
-			if in, path, ok := strings.Cut(line, "="); ok && strings.TrimSpace(in) != "" {
-				if a.Inputs == nil {
-					a.Inputs = map[string]string{}
-				}
-				a.Inputs[strings.TrimSpace(in)] = strings.TrimSpace(path)
-			}
-		}
-		for _, v := range strings.Split(at("ad_placeholder", i), ",") {
-			if v = strings.TrimSpace(v); v != "" {
-				a.Placeholder = append(a.Placeholder, v)
-			}
-		}
-		if src := at("ad_show_input", i); src != "" {
-			a.ShowIf = &templates.ShowIf{Input: src}
-			for _, v := range strings.Split(at("ad_show_equals", i), ",") {
-				if v = strings.TrimSpace(v); v != "" {
-					a.ShowIf.Equals = append(a.ShowIf.Equals, v)
-				}
-			}
-		}
-		t.Adopt = append(t.Adopt, a)
 	}
 	return t
 }

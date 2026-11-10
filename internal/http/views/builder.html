@@ -30,7 +30,6 @@
 
 {{template "formerror" .F}}
 {{with .Warning}}<div class="alert warn" role="status">{{.}}</div>{{end}}
-{{with .Notice}}<div class="alert" role="status">{{.}}</div>{{end}}
 <form method="post" id="builder">
   <input type="hidden" name="selected" value="{{.Selected}}">
   {{if and (not .Editing) .T.ID}}<!-- saving again (e.g. after its pull request opened) keeps the id instead of adding a second template -->
@@ -132,67 +131,6 @@
       </div>
     {{end}}
     </div>
-  </section>
-
-  <section class="card bstep">
-    <h2><span class="num" aria-hidden="true">4</span>Adopt existing resources <span class="muted">(optional)</span></h2>
-    <p class="muted">List the module's resources that can take over ones that already exist, for example VMs built in the Azure portal. End users then
-      paste each resource's ID when they add the template, and type its current settings into the fields; the run imports the resources
-      instead of creating them. One row per resource; clear an address to remove its row.</p>
-    {{if .Registry}}<div class="inline mb-1">
-      <button type="submit" name="generate" value="1" class="secondary" formnovalidate>Generate from module</button>
-      <span class="hint">Reads the registry module's code and fills in these rows, including how a scan finds the resources and fills the form; replaces the rows below. Review them, then save.</span>
-    </div>{{end}}
-    <div id="adopt-rows">
-    {{range $i, $a := .AdoptRows}}{{$cur := ""}}{{with .ShowIf}}{{$cur = .Input}}{{end}}
-    <div class="bgrid adopt-row" role="group" aria-label="Adoptable resource">
-      <label class="f"><span class="f-head">Resource address{{template "tip" "The resource in the module, as type.name, e.g. azurerm_network_interface.self. Add [0] for a resource with count, e.g. azurerm_windows_virtual_machine.self[0]."}}</span>
-        <input name="ad_to" value="{{.To}}" class="mono" list="module-resources" placeholder="azurerm_linux_virtual_machine.this" autocomplete="off" spellcheck="false"></label>
-      <label class="f"><span class="f-head">Label{{template "tip" "The field end users see, e.g. VM resource ID."}}</span>
-        <input name="ad_label" value="{{.Label}}" placeholder="VM resource ID"></label>
-      <label class="f"><span class="f-head">Help{{template "tip" "Optional. Shown under the field, and as the error when the ID doesn't match the pattern: say where to find the ID."}}</span>
-        <input name="ad_help" value="{{.Help}}" placeholder="Azure portal: the VM → Properties → Resource ID"></label>
-      <label class="f span2"><span class="f-head">ID pattern{{template "tip" "Optional. A regular expression the whole ID must match, so a NIC ID can't be pasted as a VM's. Pick a suggestion or write one; start it with (?i): Azure isn't consistent about casing."}}</span>
-        <input name="ad_pattern" value="{{.Pattern}}" class="mono" list="adopt-patterns" placeholder="(?i)/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\.Compute/virtualMachines/[^/]+" autocomplete="off" spellcheck="false"></label>
-      <div class="f"><span class="f-head">Show{{template "tip" "Ask for this ID only when a dropdown or Yes / no field has one of the values (comma-separated), e.g. when os_type is windows."}}</span>
-        <div class="inline">
-          <select name="ad_show_input" aria-label="Ask for this ID">
-            <option value="">always</option>
-            {{range $.AdoptShowOptions .ShowIf}}<option value="{{.}}"{{if eq . $cur}} selected{{end}}>when {{.}} is</option>{{end}}
-          </select>
-          <input name="ad_show_equals" class="mono" value="{{with .ShowIf}}{{join .Equals ", "}}{{end}}" placeholder="windows" aria-label="Values that ask for this ID (comma-separated)">
-        </div></div>
-      <label class="f"><span class="f-head">Scan: find with{{template "tip" "Optional, for Import existing resources: the provider's list resource type that finds these resources, e.g. azurerm_windows_virtual_machine. Each one found becomes a candidate to adopt, unless ID from is set."}}</span>
-        <input name="ad_list" value="{{.List}}" class="mono" list="list-types" placeholder="azurerm_windows_virtual_machine" autocomplete="off" spellcheck="false"></label>
-      <label class="f"><span class="f-head">Scan: only if set{{template "tip" "Optional: skip resources whose attribute is empty, e.g. provision_vm_agent for Windows VMs (azurerm's Linux VM list also returns Windows VMs)."}}</span>
-        <input name="ad_require" value="{{.Require}}" class="mono" placeholder="provision_vm_agent" autocomplete="off" spellcheck="false"></label>
-      <label class="f"><span class="f-head">Scan: ID from{{template "tip" "For a related resource: the found resource's attribute that holds this one's ID, e.g. network_interface_ids[0]. Set Find with too, to fill inputs from it."}}</span>
-        <input name="ad_id_from" value="{{.IDFrom}}" class="mono" placeholder="network_interface_ids[0]" autocomplete="off" spellcheck="false"></label>
-      <label class="f span2"><span class="f-head">Scan: fill inputs{{template "tip" "One per line: input = attribute path of this resource, e.g. size = size, os_disk_type = os_disk[0].storage_account_type. Inputs left out stay empty in the form."}}</span>
-        <textarea name="ad_inputs" class="mono" rows="3" placeholder="size = size&#10;os_disk_type = os_disk[0].storage_account_type" spellcheck="false">{{$.InputLines .Inputs}}</textarea></label>
-      <label class="f"><span class="f-head">Scan: placeholders{{template "tip" "Sensitive inputs filled with a random value when adopting, for values the cloud never returns (e.g. admin_password; the module must ignore_changes it). Comma-separated."}}</span>
-        <input name="ad_placeholder" value="{{join .Placeholder ", "}}" class="mono" placeholder="admin_password" autocomplete="off" spellcheck="false"></label>
-    </div>
-    {{end}}
-    </div>
-    <button type="button" id="add-adopt" class="secondary mt-1" hidden>+ Add resource</button>
-    <datalist id="module-resources">{{range .Resources}}<option value="{{.}}">{{end}}</datalist>
-    <datalist id="list-types">
-      <option value="azurerm_windows_virtual_machine"><option value="azurerm_linux_virtual_machine"><option value="azurerm_network_interface">
-      <option value="azurerm_public_ip"><option value="azurerm_storage_account"><option value="azurerm_key_vault"><option value="azurerm_mssql_server">
-      <option value="azurerm_mssql_database"><option value="azurerm_resource_group">
-    </datalist>
-    <datalist id="adopt-patterns">
-      <option value="(?i)/subscriptions/[^/]+/resourceGroups/[^/]+" label="Resource group">
-      <option value="(?i)/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\.Compute/virtualMachines/[^/]+" label="Virtual machine">
-      <option value="(?i)/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\.Network/networkInterfaces/[^/]+" label="Network interface">
-      <option value="(?i)/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\.Network/publicIPAddresses/[^/]+" label="Public IP">
-      <option value="(?i)/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\.Compute/disks/[^/]+" label="Managed disk">
-      <option value="(?i)/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\.Storage/storageAccounts/[^/]+" label="Storage account">
-      <option value="(?i)/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\.KeyVault/vaults/[^/]+" label="Key Vault">
-      <option value="(?i)/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\.Sql/servers/[^/]+" label="SQL server">
-      <option value="(?i)/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\.DBforPostgreSQL/flexibleServers/[^/]+" label="PostgreSQL flexible server">
-    </datalist>
   </section>
   <div class="actions sticky">
     <button type="button" id="add-field" class="secondary" hidden>+ Add field</button>

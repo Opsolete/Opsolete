@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/opsolete/opsolete/internal/app"
+	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
 )
@@ -36,25 +37,25 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 // formPage is the deploy form (form.html): a template's inputs, to create a workspace or configure an added template.
 type formPage struct {
 	Page
-	T         templates.Template
-	Editor    bool
-	Preview   bool // the builder's unsaved template: shown, never submitted
-	Values    map[string]string
-	Adopt     []string   // the IDs pasted to adopt existing resources, by templates.AdoptField index
-	Found     string     // adding what a scan found: its name
-	F         *formState // a refused submit
-	Workspace string
-	AutoApply bool
-	Project   string             // the project picked for the new workspace; "" is the default
-	Projects  []storage.Project  // to pick from, when creating a workspace
-	Configure *storage.Workspace // set: change this workspace's inputs and module version instead of creating one
-	Module    string             // with Configure: the added template to change (or add, with Adding)
-	Adding    bool
-	Cur       templates.Module  // with Configure: the module version it runs now
-	Set       map[string]bool   // sensitive inputs with a stored value: left empty, it's kept
-	Locked    map[string]string // per-environment inputs the project sets (canonical values by name): read-only, not posted
-	LockedBy  string            // that project
-	EnvReload bool              // creating: picking another project posts the form with refresh, shown again with that project's values
+	T           templates.Template
+	Editor      bool
+	Preview     bool // the builder's unsaved template: shown, never submitted
+	Values      map[string]string
+	Found       *runnerapi.Candidate // adding: importing what a scan found
+	Placeholder map[string]bool      // importing: sensitive inputs a random value fills when left empty
+	F           *formState           // a refused submit
+	Workspace   string
+	AutoApply   bool
+	Project     string             // the project picked for the new workspace; "" is the default
+	Projects    []storage.Project  // to pick from, when creating a workspace
+	Configure   *storage.Workspace // set: change this workspace's inputs and module version instead of creating one
+	Module      string             // with Configure: the added template to change (or add, with Adding)
+	Adding      bool
+	Cur         templates.Module  // with Configure: the module version it runs now
+	Set         map[string]bool   // sensitive inputs with a stored value: left empty, it's kept
+	Locked      map[string]string // per-environment inputs the project sets (canonical values by name): read-only, not posted
+	LockedBy    string            // that project
+	EnvReload   bool              // creating: picking another project posts the form with refresh, shown again with that project's values
 }
 
 // LockedText is how the form says the project's value of the locked input in.

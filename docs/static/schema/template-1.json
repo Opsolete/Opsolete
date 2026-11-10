@@ -17,12 +17,7 @@
     "name": { "type": "string", "minLength": 1 },
     "description": { "type": "string" },
     "module": { "$ref": "#/$defs/module" },
-    "inputs": { "type": "array", "items": { "$ref": "#/$defs/input" } },
-    "adopt": {
-      "description": "Resources of the module that can adopt existing cloud resources when the template is added: the user pastes their IDs, the run imports them instead of creating them.",
-      "type": "array",
-      "items": { "$ref": "#/$defs/adopt" }
-    }
+    "inputs": { "type": "array", "items": { "$ref": "#/$defs/input" } }
   },
   "$defs": {
     "module": {
@@ -98,23 +93,6 @@
           }
         }
       ]
-    },
-    "adopt": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["to"],
-      "properties": {
-        "to": { "description": "The resource's address in the module, e.g. azurerm_linux_virtual_machine.this or azurerm_windows_virtual_machine.self[0]; unique.", "type": "string", "minLength": 1 },
-        "label": { "description": "The field end users see; empty: the address.", "type": "string" },
-        "help": { "description": "Shown under the field, and as the error when the pattern doesn't match.", "type": "string" },
-        "pattern": { "description": "A Go regular expression the whole ID must match, e.g. (?i)/subscriptions/[^/]+/resourceGroups/[^/]+.", "type": "string" },
-        "show_if": { "$ref": "#/$defs/show_if" },
-        "list": { "description": "Scanning: the provider's list resource type that finds this entry's resources (terraform query), e.g. azurerm_windows_virtual_machine. With list and without id_from, each resource found is a candidate to adopt.", "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
-        "require": { "description": "Scanning: only resources whose attribute at this path is set count, e.g. provision_vm_agent (azurerm's Linux VM list also returns Windows VMs). Needs list.", "type": "string" },
-        "id_from": { "description": "Scanning: this resource's ID is the candidate's attribute at this path, e.g. network_interface_ids[0].", "type": "string" },
-        "inputs": { "description": "Scanning: input name to the attribute path whose value fills it, e.g. {\"size\": \"size\", \"os_disk_type\": \"os_disk[0].storage_account_type\"}.", "type": "object", "additionalProperties": { "type": "string" } },
-        "placeholder": { "description": "Sensitive inputs filled with a random value when adopting (values the cloud never returns, which the module must ignore_changes).", "type": "array", "items": { "type": "string" } }
-      }
     },
     "show_if": {
       "description": "Show the input only while an earlier select or bool input has one of these values (typed like that input: strings for a select, booleans for a bool).",

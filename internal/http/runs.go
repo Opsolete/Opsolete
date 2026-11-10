@@ -40,14 +40,15 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, http.StatusOK, "run.html", page)
 }
 
-// newScan queues a scan for existing resources the posted template can adopt (app.StartScan).
+// newScan queues a scan for existing resources the catalog's templates can take over, in the posted
+// resource_group ("" the whole subscription) (app.StartScan).
 func (s *Server) newScan(w http.ResponseWriter, r *http.Request) {
 	f, ok := readForm(w, r)
 	if !ok {
 		return
 	}
-	ws, run, err := s.App.StartScan(r.Context(), actor(r), r.PathValue("name"), f.Get("template"))
-	if s.failed(w, r, err, "scan", f, s.onWorkspacePage(w, r, "deploy", "")) {
+	ws, run, err := s.App.StartScan(r.Context(), actor(r), r.PathValue("name"), f.Get(app.FieldResourceGroup))
+	if s.failed(w, r, err, "scan", f, s.onWorkspacePage(w, r, "import", "")) {
 		return
 	}
 	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID.String(), http.StatusSeeOther)

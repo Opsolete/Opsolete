@@ -16,25 +16,28 @@ import (
 	"github.com/opsolete/opsolete/internal/templates"
 )
 
-// vmTemplate is the example VM module's template, scan mapping included (docs/resource-import.md).
+// vmTemplate and vmEntries: the example VM module's template, and what the server reads from its code
+// (registry.Adoptable).
 const vmTemplate = `{"id": "vm", "name": "VM", "module": {"source": "s", "ref": "r"}, "inputs": [
 	{"name": "name", "type": "string", "required": true},
 	{"name": "os_type", "type": "select", "options": ["windows", "linux"]},
-	{"name": "resource_group_name", "type": "string", "required": true},
-	{"name": "subnet_id", "type": "string", "required": true},
+	{"name": "resource_group_name", "label": "Resource group", "type": "string", "required": true},
+	{"name": "subnet_id", "label": "Subnet ID", "type": "string", "required": true},
 	{"name": "size", "type": "string"},
 	{"name": "secure_boot_enabled", "type": "bool"},
 	{"name": "boot_diagnostics_enabled", "type": "bool"},
 	{"name": "admin_password", "type": "string", "sensitive": true, "required": true, "show_if": {"input": "os_type", "equals": ["windows"]}},
-	{"name": "nic_name", "type": "string"}],
-	"adopt": [
-	{"to": "azurerm_windows_virtual_machine.self[0]", "list": "azurerm_windows_virtual_machine", "require": "provision_vm_agent",
-		"show_if": {"input": "os_type", "equals": ["windows"]}, "placeholder": ["admin_password"],
-		"inputs": {"name": "name", "resource_group_name": "resource_group_name", "size": "size", "secure_boot_enabled": "secure_boot_enabled", "boot_diagnostics_enabled": "boot_diagnostics"}},
-	{"to": "azurerm_linux_virtual_machine.self[0]", "list": "azurerm_linux_virtual_machine", "require": "disable_password_authentication",
-		"show_if": {"input": "os_type", "equals": ["linux"]}, "inputs": {"name": "name", "resource_group_name": "resource_group_name"}},
-	{"to": "azurerm_network_interface.self", "list": "azurerm_network_interface", "id_from": "network_interface_ids[0]",
-		"inputs": {"nic_name": "name", "subnet_id": "ip_configuration[0].subnet_id", "resource_group_name": "resource_group_name"}}]}`
+	{"name": "nic_name", "type": "string"}]}`
+
+var vmEntries = []runnerapi.ScanEntry{
+	{To: "azurerm_network_interface.self", List: "azurerm_network_interface", IDFrom: "network_interface_ids[0]",
+		Inputs: map[string]string{"nic_name": "name", "subnet_id": "ip_configuration[0].subnet_id", "resource_group_name": "resource_group_name"}},
+	{To: "azurerm_windows_virtual_machine.self[0]", List: "azurerm_windows_virtual_machine", Require: "provision_vm_agent",
+		ShowIf: &templates.ShowIf{Input: "os_type", Equals: []string{"windows"}}, Placeholder: []string{"admin_password"},
+		Inputs: map[string]string{"name": "name", "resource_group_name": "resource_group_name", "size": "size", "secure_boot_enabled": "secure_boot_enabled", "boot_diagnostics_enabled": "boot_diagnostics"}},
+	{To: "azurerm_linux_virtual_machine.self[0]", List: "azurerm_linux_virtual_machine", Require: "disable_password_authentication",
+		ShowIf: &templates.ShowIf{Input: "os_type", Equals: []string{"linux"}}, Inputs: map[string]string{"name": "name", "resource_group_name": "resource_group_name"}},
+}
 
 // TestCandidates: what terraform query found becomes form values and IDs; the OS comes from the entry that
 // found it (Require drops the Linux list's copy of a Windows VM), the NIC from the VM's attribute, IDs take the
@@ -58,21 +61,23 @@ func TestCandidates(t *testing.T) {
 		"azurerm_linux_virtual_machine":   {{"testvm", asLinux}},
 		"azurerm_network_interface":       {{"testvm807", nic}},
 	}
-	cands, vals := candidates(tpl, byType, func() string { return "Placeholder-1a!" })
+	cands, vals := candidates(tpl, vmEntries, byType, func() string { return "Placeholder-1a!" })
 	if len(cands) != 2 {
 		t.Fatalf("candidates: %+v", cands)
 	}
 	c := cands[0]
-	wantIDs := []string{sub + "test1/providers/Microsoft.Compute/virtualMachines/testvm", "", nic["id"].(string)}
+	vmID := sub + "test1/providers/Microsoft.Compute/virtualMachines/testvm"
+	wantImports := []runnerapi.Import{{To: "azurerm_network_interface.self", ID: nic["id"].(string)}, {To: "azurerm_windows_virtual_machine.self[0]", ID: vmID}}
 	wantIn := map[string]string{"name": "testvm", "os_type": "windows", "resource_group_name": "test1", "size": "Standard_D2s_v3",
 		"secure_boot_enabled": "true", "boot_diagnostics_enabled": "true", "nic_name": "testvm807", "subnet_id": "/subscriptions/s/resourceGroups/f2s/providers/Microsoft.Network/virtualNetworks/v/subnets/a"}
-	if c.Fit != "" || c.ID != wantIDs[0] || !reflect.DeepEqual(c.Adopt, wantIDs) || !reflect.DeepEqual(c.Inputs, wantIn) {
-		t.Fatalf("testvm:\n%+v\nwant IDs %v\ninputs %v", c, wantIDs, wantIn)
+	if c.Template != "vm" || c.Fit != "" || c.ID != vmID || !reflect.DeepEqual(c.Imports, wantImports) || !reflect.DeepEqual(c.Inputs, wantIn) ||
+		!reflect.DeepEqual(c.Placeholder, []string{"admin_password"}) {
+		t.Fatalf("testvm:\n%+v\nwant imports %v\ninputs %v", c, wantImports, wantIn)
 	}
 	if vals[0]["admin_password"] != "Placeholder-1a!" || vals[0]["secure_boot_enabled"] != true {
 		t.Fatalf("values for the fit check: %v", vals[0])
 	}
-	if l := cands[1]; l.Fit != "invalid" || !strings.Contains(l.Message, "subnet_id: This field is required.") || !strings.Contains(l.Message, "ops-adopt-2") {
+	if l := cands[1]; l.Fit != "invalid" || l.Message != "Subnet ID: This field is required." || len(l.Imports) != 1 {
 		t.Fatalf("a VM without NIC: %+v", l)
 	}
 }
@@ -89,13 +94,13 @@ variable "greeting" {
   default = null
 }
 resource "terraform_data" "this" { input = var.greeting }`), "?", 2)[0]
-	tpl := templates.Template{Adopt: []templates.Adopt{{To: "terraform_data.this"}}}
-	cands := []runnerapi.Candidate{{Name: "same", Adopt: []string{"a"}}, {Name: "other", Adopt: []string{"b"}}, {Name: "bad", Fit: "invalid"}}
+	im := func(id string) []runnerapi.Import { return []runnerapi.Import{{To: "terraform_data.this", ID: id}} }
+	cands := []runnerapi.Candidate{{Template: "t", Name: "same", Imports: im("a")}, {Template: "t", Name: "other", Imports: im("b")}, {Template: "t", Name: "bad", Fit: "invalid"}}
 	vals := []map[string]any{{}, {"greeting": "hi"}, nil}
 	home := t.TempDir()
 	tf := &tfProc{bin: r.Terraform, grace: time.Minute, end: time.Now().Add(time.Minute), env: append(os.Environ(), "HOME="+home)}
 	var log strings.Builder
-	r.fit(context.Background(), tf, t.TempDir(), src, tpl, nil, cands, vals, &log)
+	r.fit(context.Background(), tf, t.TempDir(), map[string]string{"t": src}, nil, cands, vals, &log)
 	// terraform_data always plans an update after an import; the change is in "other" only
 	other := runnerapi.FitChange{Address: "terraform_data.this", Action: "update", Attributes: []string{"input"}}
 	if cands[0].Fit == "" || cands[1].Fit != "differs" || !reflect.DeepEqual(cands[1].Changes, []runnerapi.FitChange{other}) || cands[2].Fit != "invalid" {
@@ -144,5 +149,43 @@ func TestParseQuery(t *testing.T) {
 	}
 	if _, _, err := parseQuery(strings.NewReader(`{"type":"diagnostic","@level":"error","@message":"Error: building account"}`), &log); err == nil {
 		t.Fatal("an error diagnostic must fail the query")
+	}
+}
+
+func TestPath(t *testing.T) {
+	var v any
+	json.Unmarshal([]byte(`{"size": "S", "os_disk": [{"storage_account_type": "Premium_LRS"}], "nics": ["a", "b"], "n": 2, "on": true, "x": null}`), &v)
+	for p, want := range map[string]any{"size": "S", "os_disk[0].storage_account_type": "Premium_LRS", "nics[1]": "b", "n": 2.0, "on": true,
+		"x": nil, "nope": nil, "nics[2]": nil, "size[0]": nil, "os_disk.storage_account_type": nil} {
+		if got := path(v, p); got != want {
+			t.Errorf("path(%s) = %v, want %v", p, got, want)
+		}
+	}
+}
+
+// TestQueryFile: a resource group narrows azurerm lists, except the resource group list itself.
+func TestQueryFile(t *testing.T) {
+	got := queryFile([]string{"azurerm_windows_virtual_machine", "azurerm_resource_group"}, "test1")
+	want := `list "azurerm_windows_virtual_machine" "l0" {
+  provider         = azurerm
+  include_resource = true
+  limit            = 1000
+  config {
+    resource_group_name = "test1"
+  }
+}
+list "azurerm_resource_group" "l1" {
+  provider         = azurerm
+  include_resource = true
+  limit            = 1000
+}
+`
+	if got != want {
+		t.Fatalf("got\n%s", got)
+	}
+	for rg, ok := range map[string]bool{"test1": true, "rg-prod_01(a).x": true, `a"b`: false, "${x}": false, "": false} {
+		if rgRe.MatchString(rg) != ok {
+			t.Errorf("rgRe(%q) = %v", rg, !ok)
+		}
 	}
 }

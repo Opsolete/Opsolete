@@ -110,13 +110,9 @@ func (a *App) assembleJob(ctx context.Context, j storage.Job) ([]byte, error) {
 		mods = append(mods, runnerapi.Module{Name: m.Name, Inputs: in,
 			Source: a.Registry.RunnerSource(templates.Module{Source: m.ModuleSource, Ref: m.ModuleRef}, runnerSrcTTL)})
 	}
-	var scan []byte
-	if err == nil && j.Action == "scan" { // the template's module only, no root configuration
-		var t templates.Template
-		if t, err = a.Template(ctx, j.Scan); err == nil {
-			scan, err = json.Marshal(t)
-		}
-		mods = []runnerapi.Module{{Name: "template", Source: a.Registry.RunnerSource(t.Module, runnerSrcTTL)}}
+	var scan *runnerapi.Scan
+	if err == nil && j.Action == "scan" { // the templates' modules only, no root configuration
+		scan, mods, err = a.scanJob(ctx, j.ScanResourceGroup)
 	}
 	if err != nil {
 		return nil, err

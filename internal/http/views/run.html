@@ -20,7 +20,7 @@
     {{end}}
   </div>
   {{else if and $.CanOperate (not $r.Active) $.Scan}}
-  <form method="post" action="/workspaces/{{$w.Name}}/scans"><input type="hidden" name="template" value="{{$.Scan.Template.ID}}">
+  <form method="post" action="/workspaces/{{$w.Name}}/scans"><input type="hidden" name="resource_group" value="{{$.Scan.ResourceGroup}}">
     <button type="submit" class="secondary">Scan again</button></form>
   {{else if and $.CanOperate (not $r.Active) $w.HasConfig (ne $r.Action "plan") (ne $r.Action "scan")}}
   <form method="post" action="/workspaces/{{$w.Name}}/runs"{{if eq $r.Action "destroy"}}
@@ -45,21 +45,22 @@
 
 {{with .Scan}}
 <section class="card scan" aria-labelledby="scan-head">
-  <h2 id="scan-head">{{.Template.Name}}: {{len .Candidates}} found</h2>
-  {{if not .Candidates}}<p class="muted">{{if $r.Active}}Scanning with this workspace's credentials…{{else if eq $r.Status "planned"}}Nothing found that this template can adopt.{{else}}The scan didn't finish: see its log below.{{end}}</p>
+  <h2 id="scan-head">{{len .Candidates}} found{{with .ResourceGroup}} in resource group <code>{{.}}</code>{{end}}</h2>
+  {{if not .Candidates}}<p class="muted">{{if $r.Active}}Scanning with this workspace's credentials…{{else if eq $r.Status "planned"}}Nothing found that a template can manage.{{else}}The scan didn't finish: see its log below.{{end}}</p>
   {{else}}
-  <p class="muted">Each resource was planned as if adopted, into a throwaway state (nothing changed): <strong>fits</strong> imports it unchanged,
-    <strong>differs</strong> would also change what's listed, <strong>doesn't fit</strong> would replace it, <strong>incomplete</strong> lacks values the form needs.</p>
+  <p class="muted">Each was planned as if imported, into a throwaway state (nothing changed): <strong>fits</strong> imports it as it is,
+    <strong>differs</strong> would also change what's listed, <strong>doesn't fit</strong> would replace it, <strong>incomplete</strong> lacks values its template's form needs (fill them in when importing).</p>
   <table class="candidates">
-  <tr><th>Resource</th><th>Fit</th><th>Details</th><th>Adopt</th></tr>
+  <tr><th>Resource</th><th>Template</th><th>Status</th><th>Details</th><th>Import</th></tr>
   {{range $i, $c := .Candidates}}
   <tr>
-    <td><strong>{{.Name}}</strong><br><code class="muted">{{.ID}}</code></td>
+    <td><strong>{{.Name}}</strong>{{range .Related}}<br><span class="muted">+ {{.}}</span>{{end}}<br><code class="muted">{{.ID}}</code></td>
+    <td>{{.TemplateName}}</td>
     <td class="nowrap">{{if .ManagedBy}}<span class="status no_changes">managed</span>{{else if eq .Fit "fits"}}<span class="status applied">fits</span>{{else if eq .Fit "differs"}}<span class="status needs_confirmation">differs</span>{{else if eq .Fit "replaces"}}<span class="status errored">doesn't fit</span>{{else if eq .Fit "invalid"}}<span class="status errored">incomplete</span>{{else}}<span class="status">unchecked</span>{{end}}</td>
     <td>{{if .ManagedBy}}Already managed in workspace <a href="/workspaces/{{.ManagedBy}}">{{.ManagedBy}}</a>.{{else if eq .Fit "fits"}}Imports only: nothing changes.{{end}}
       {{with .Message}}<p class="muted">{{.}}</p>{{end}}
       {{range .Changes}}<div><span class="change {{.Action}}">{{.Action}}</span> <code>{{.Address}}</code>{{with .Attributes}}: {{join . ", "}}{{end}}</div>{{end}}</td>
-    <td>{{if and $.CanOperate (not .ManagedBy) (ne .Fit "replaces") (not $r.Active)}}<a class="btn secondary" href="/workspaces/{{$w.Name}}/templates/new?template={{$.Scan.Template.ID}}&amp;scan={{$r.ID}}&amp;n={{$i}}">Adopt</a>{{end}}</td>
+    <td>{{if and $.CanOperate (not .ManagedBy) (ne .Fit "replaces") (not $r.Active)}}<a class="btn secondary" href="/workspaces/{{$w.Name}}/templates/new?template={{.Template}}&amp;scan={{$r.ID}}&amp;n={{$i}}">Import</a>{{end}}</td>
   </tr>
   {{end}}
   </table>

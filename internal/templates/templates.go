@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"unicode"
 )
 
 type Template struct {
@@ -23,118 +22,6 @@ type Template struct {
 	Description string  `json:"description"`
 	Module      Module  `json:"module"`
 	Inputs      []Input `json:"inputs"`
-	// Adopt lists the module's resources that can take over existing ones when the template is added (AdoptIDs).
-	Adopt []Adopt `json:"adopt,omitempty"`
-}
-
-// Adopt is a resource of the module that can adopt an existing cloud resource: the user pastes its ID when
-// adding the template, and the run imports it into module.<name>.<To> instead of creating it.
-type Adopt struct {
-	To      string  `json:"to"` // its address in the module, e.g. azurerm_windows_virtual_machine.self[0]
-	Label   string  `json:"label,omitempty"`
-	Help    string  `json:"help,omitempty"`    // shown under the field, and as the error when Pattern doesn't match
-	Pattern string  `json:"pattern,omitempty"` // the ID's format: a Go regexp the whole ID must match
-	ShowIf  *ShowIf `json:"show_if,omitempty"` // as for inputs, e.g. a VM resource that depends on an os_type input
-
-	// Scanning (a workspace's "Import existing resources"): how existing resources are found and fill the form.
-	// List: the provider's list resource type that finds this entry's resources (terraform query), e.g.
-	// azurerm_windows_virtual_machine. An entry with List and without IDFrom is a primary one: each resource it
-	// finds is a candidate (and sets the input of a one-value ShowIf, e.g. os_type windows).
-	List string `json:"list,omitempty"`
-	// Require: only resources whose attribute (a path) is set count, e.g. provision_vm_agent: azurerm's Linux VM
-	// list also returns Windows VMs, read without their Windows settings.
-	Require string `json:"require,omitempty"`
-	// IDFrom: a related entry's ID is the primary resource's attribute at this path, e.g. network_interface_ids[0].
-	IDFrom string `json:"id_from,omitempty"`
-	// Inputs: input name → the attribute path in this entry's resource whose value fills it.
-	Inputs map[string]string `json:"inputs,omitempty"`
-	// Placeholder: sensitive inputs filled with a random value when adopting, for values the cloud never
-	// returns (an admin password the module must ignore_changes).
-	Placeholder []string `json:"placeholder,omitempty"`
-}
-
-// Primary reports whether the entry's resources are scan candidates (List without IDFrom).
-func (a Adopt) Primary() bool { return a.List != "" && a.IDFrom == "" }
-
-// IsPlaceholder reports whether input name gets a random value when adopting and left empty (Adopt.Placeholder).
-func (t Template) IsPlaceholder(name string) bool {
-	return slices.ContainsFunc(t.Adopt, func(a Adopt) bool { return slices.Contains(a.Placeholder, name) })
-}
-
-// Scannable reports whether a scan can find candidates for t.
-func (t Template) Scannable() bool { return slices.ContainsFunc(t.Adopt, Adopt.Primary) }
-
-// pathRe is an attribute path: name, then .name or [index] steps.
-var pathRe = regexp.MustCompile(`^[A-Za-z_][\w-]*(\.[A-Za-z_][\w-]*|\[\d+\])*$`)
-
-// Path reads the attribute at path (pathRe) from v, a resource's JSON attributes; nil when absent.
-func Path(v any, path string) any {
-	for _, step := range pathSteps.FindAllString(path, -1) {
-		switch x := v.(type) {
-		case map[string]any:
-			v = x[strings.TrimPrefix(step, ".")]
-		case []any:
-			i, err := strconv.Atoi(strings.Trim(step, "[]"))
-			if err != nil || i >= len(x) || !strings.HasPrefix(step, "[") {
-				return nil
-			}
-			v = x[i]
-		default:
-			return nil
-		}
-	}
-	return v
-}
-
-var pathSteps = regexp.MustCompile(`^[^.\[]+|\.[^.\[]+|\[\d+\]`)
-
-// Title is what the form calls the field: its label, else its address.
-func (a Adopt) Title() string { return cmp.Or(a.Label, a.To) }
-
-// AdoptField is the form field of the ID for Adopt[i].
-func AdoptField(i int) string { return "ops-adopt-" + strconv.Itoa(i) }
-
-// maxIDLen bounds a pasted resource ID (Azure's are at most a few hundred characters).
-const maxIDLen = 1024
-
-// AdoptIDs checks the IDs pasted to adopt existing resources (ids[i] for Adopt[i]; the form values raw decide
-// show_if) and returns them by the address they're imported to. All empty: nil, the template creates its
-// resources. Otherwise every shown entry needs one; hidden ones are ignored. errs is keyed by AdoptField.
-func (t Template) AdoptIDs(raw map[string]string, ids []string) (map[string]string, map[string]string) {
-	errs := map[string]string{}
-	shown, cur := t.eval(raw)
-	id := func(i int) string {
-		if i < len(ids) {
-			return strings.TrimSpace(ids[i])
-		}
-		return ""
-	}
-	given := false
-	for i, a := range t.Adopt {
-		given = given || a.ShowIf.holds(shown, cur) && id(i) != ""
-	}
-	if !given {
-		return nil, errs
-	}
-	out := map[string]string{}
-	for i, a := range t.Adopt {
-		if !a.ShowIf.holds(shown, cur) {
-			continue
-		}
-		switch v := id(i); {
-		case v == "":
-			errs[AdoptField(i)] = "Paste this resource's ID too, or leave all IDs empty to create new resources."
-		case len(v) > maxIDLen || strings.ContainsFunc(v, unicode.IsControl):
-			errs[AdoptField(i)] = "This is not a resource ID."
-		case a.Pattern != "" && !regexp.MustCompile(anchored(a.Pattern)).MatchString(v):
-			errs[AdoptField(i)] = cmp.Or(a.Help, "Doesn't have the expected format: "+a.Pattern)
-		case a.Pattern == "" && strings.HasPrefix(resourceType(a.To), "azurerm_") && !azureID.MatchString(v):
-			errs[AdoptField(i)] = "Not an Azure resource ID: /subscriptions/…/resourceGroups/…/providers/…"
-		default:
-			out[a.To] = v
-		}
-	}
-	return out, errs
 }
 
 // Module points at an existing Terraform module at an approved revision.
@@ -502,72 +389,8 @@ func (t Template) check() error {
 		}
 		before[in.Name] = in
 	}
-	adopted := map[string]bool{}
-	for _, a := range t.Adopt {
-		if !addrRe.MatchString(a.To) {
-			return fmt.Errorf("adopt %q: not a resource address in the module, e.g. azurerm_linux_virtual_machine.this or x.this[0]", a.To)
-		}
-		if adopted[a.To] {
-			return fmt.Errorf("adopt %q: listed twice", a.To)
-		}
-		adopted[a.To] = true
-		if a.Pattern != "" {
-			if _, err := regexp.Compile(anchored(a.Pattern)); err != nil {
-				return fmt.Errorf("adopt %q: %w", a.To, err)
-			}
-		}
-		if err := a.ShowIf.check(before); err != nil {
-			return fmt.Errorf("adopt %q: %w", a.To, err)
-		}
-		if a.List != "" && !listRe.MatchString(a.List) {
-			return fmt.Errorf("adopt %q: list %q is not a resource type", a.To, a.List)
-		}
-		if a.Require != "" && a.List == "" {
-			return fmt.Errorf("adopt %q: require needs list", a.To)
-		}
-		if a.IDFrom != "" && !t.Scannable() {
-			return fmt.Errorf("adopt %q: id_from needs an entry with list and without id_from, whose resource it reads", a.To)
-		}
-		for _, p := range []string{a.Require, a.IDFrom} {
-			if p != "" && !pathRe.MatchString(p) {
-				return fmt.Errorf("adopt %q: %q is not an attribute path, e.g. network_interface_ids[0] or os_disk[0].storage_account_type", a.To, p)
-			}
-		}
-		for _, name := range slices.Sorted(maps.Keys(a.Inputs)) {
-			if _, ok := before[name]; !ok {
-				return fmt.Errorf("adopt %q: inputs: %q is not an input of the template", a.To, name)
-			}
-			if !pathRe.MatchString(a.Inputs[name]) {
-				return fmt.Errorf("adopt %q: inputs: %q is not an attribute path, e.g. size or os_disk[0].storage_account_type", a.To, a.Inputs[name])
-			}
-		}
-		for _, name := range a.Placeholder {
-			if in, ok := before[name]; !ok || !in.Sensitive {
-				return fmt.Errorf("adopt %q: placeholder %q is not a sensitive input of the template", a.To, name)
-			}
-		}
-	}
 	return nil
 }
-
-var listRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
-
-// azureID is the shape of every Azure resource ID: a resource group, or a resource (and child resources) in one.
-var azureID = regexp.MustCompile(`(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+(/providers/[^/]+(/[^/]+/[^/]+)+)?$`)
-
-// resourceType is the type of resource address addr (addrRe): azurerm_x for module.m.azurerm_x.this[0].
-func resourceType(addr string) string {
-	addr, _, _ = strings.Cut(addr, "[")
-	parts := strings.Split(addr, ".")
-	if len(parts) < 2 {
-		return ""
-	}
-	return parts[len(parts)-2]
-}
-
-// addrRe is a managed resource address, optionally in nested modules and with an index; it goes into an
-// import block's "to" as is.
-var addrRe = regexp.MustCompile(`^(module\.[A-Za-z_][\w-]*(\[(\d+|"[\w.-]+")\])?\.)*[A-Za-z_][\w-]*\.[A-Za-z_][\w-]*(\[(\d+|"[\w.-]+")\])?$`)
 
 func (c *ShowIf) check(before map[string]Input) error {
 	if c == nil {

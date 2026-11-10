@@ -27,7 +27,7 @@
 {{if .Preview}}<div class="alert" role="status">Preview: the form end users get with this template, as it is in the builder. It can't be submitted; close this tab to go back to the builder.</div>{{end}}
 {{end}}
 {{template "formerror" .F}}
-{{with .Found}}<div class="alert" role="status">Adopting <strong>{{.}}</strong>: the settings and resource IDs below come from the scan. Check them, then start the plan: it imports the resources and waits for your confirmation.</div>{{end}}
+{{with .Found}}<div class="alert" role="status">Importing <strong>{{.Name}}</strong>{{if gt (len .Imports) 1}} ({{len .Imports}} resources){{end}}: the settings below come from the scan. Check them, then start the plan: it imports the resources instead of creating them, and waits for your confirmation.</div>{{end}}
 <form method="post" class="card form-rows" id="template-form">
 {{$v := .Values}}
 {{if not .Configure}}
@@ -69,33 +69,17 @@
       {{$cur := index $v .Name}}
       {{range .Options}}<option value="{{.Value}}"{{if eq .Value $cur}} selected{{end}}>{{.Text}}</option>{{end}}
     </select>
-  {{else if .Sensitive}}{{$set := index $.Set .Name}}{{$ph := $.T.IsPlaceholder .Name}}
+  {{else if .Sensitive}}{{$set := index $.Set .Name}}{{$ph := index $.Placeholder .Name}}
     <!-- never filled in: the stored value is sealed; left empty, it's kept -->
     <input id="{{.Name}}" name="secret.{{.Name}}" type="password" autocomplete="new-password"
       {{if .Pattern}} pattern="{{.Pattern}}"{{with .Help}} title="{{.}}"{{end}}{{end}}{{if and .Required (not $set) (not $ph)}} required{{end}}{{aria $.F .Name (print .Name "-hint") $help}}>
-    <p class="hint" id="{{.Name}}-hint">Sensitive: stored encrypted and never shown.{{if $set}} A value is set; leave empty to keep it.{{end}}{{if and $ph (not $set)}} Adopting existing resources: leave empty, a random placeholder is used (the existing value is kept).{{end}}</p>
+    <p class="hint" id="{{.Name}}-hint">Sensitive: stored encrypted and never shown.{{if $set}} A value is set; leave empty to keep it.{{end}}{{if and $ph (not $set)}} Importing: leave empty, a random placeholder is used (the resource keeps its own).{{end}}</p>
   {{else}}
     <input id="{{.Name}}" name="{{.Name}}" value="{{index $v .Name}}" autocomplete="off" spellcheck="false"
       {{if eq .Type "number"}}type="number" step="any" inputmode="decimal"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{with .Help}} title="{{.}}"{{end}}{{end}}{{if .Required}} required{{end}}{{aria $.F .Name $help}}>
   {{end}}
     {{if .Help}}<p class="hint" id="{{.Name}}-help">{{.Help}}</p>{{end}}
     {{template "fielderror" (dict "F" $.F "N" .Name)}}
-  </fieldset>
-{{end}}
-  </div>
-{{end}}
-{{if and .T.Adopt (or (not .Configure) .Adding)}}
-  <div class="rows-head"><h2>Adopt existing resources</h2></div>
-  <p class="hint" id="ops-adopt-hint">Optional. To take over resources that already exist instead of creating new ones, paste their IDs
-    (Azure portal: the resource's <em>Properties → Resource ID</em>) and enter their current settings above. The plan then imports them
-    and always waits for your confirmation; if it would replace or delete anything, it stops and nothing is applied. Leave all IDs empty to create new resources.</p>
-  <div class="rows">
-{{range $i, $a := .T.Adopt}}{{$n := adoptField $i}}{{$help := and .Help (print $n "-help")}}
-  <fieldset class="row{{if .ShowIf}} show-if{{end}}{{if fieldError $.F $n}} invalid{{end}}"{{with .ShowIf}} data-show-if="{{json .}}"{{if not ($.T.Match . $v)}} hidden disabled{{end}}{{end}}>
-    <label for="{{$n}}">{{.Title}}</label>
-    <input id="{{$n}}" name="{{$n}}" value="{{with $.Adopt}}{{index . $i}}{{end}}" autocomplete="off" spellcheck="false"{{aria $.F $n "ops-adopt-hint" $help}}>
-    {{if .Help}}<p class="hint" id="{{$n}}-help">{{.Help}}</p>{{end}}
-    {{template "fielderror" (dict "F" $.F "N" $n)}}
   </fieldset>
 {{end}}
   </div>

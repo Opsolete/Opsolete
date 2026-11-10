@@ -46,7 +46,6 @@ func TestSchema(t *testing.T) {
 		"input":    {schema.Defs["input"].Properties, fileInput{}},
 		"option":   {schema.Defs["option"].OneOf[1].Properties, plainOption{}},
 		"show_if":  {schema.Defs["show_if"].Properties, fileShowIf{}},
-		"adopt":    {schema.Defs["adopt"].Properties, fileAdopt{}},
 	} {
 		var goFields []string
 		rt := reflect.TypeOf(c.goT)
@@ -112,19 +111,6 @@ func TestSchema(t *testing.T) {
 			"input allOf[5] then sensitive const false", `template "t", input "p": a per-environment input can't be sensitive`},
 		{"per_environment key", `{"name": "k", "type": "string", "key": true, "per_environment": true}`,
 			"input allOf[5] then key const false", `template "t", input "k": a per-environment input can't be the key`},
-		{"adopt: bad address", `{"name": "s", "type": "string"}], "adopt": [{"to": "data.x.y"}`, "loader only: to is a resource address", `adopt "data.x.y": not a resource address`},
-		{"adopt: input not in the template", `{"name": "s", "type": "string"}], "adopt": [{"to": "a.b", "list": "a", "inputs": {"size": "size"}}`,
-			"loader only: inputs name inputs", `adopt "a.b": inputs: "size" is not an input`},
-		{"adopt: placeholder not sensitive", `{"name": "s", "type": "string"}], "adopt": [{"to": "a.b", "placeholder": ["s"]}`,
-			"loader only: placeholder names sensitive inputs", `placeholder "s" is not a sensitive input`},
-		{"adopt: id_from without a primary", `{"name": "s", "type": "string"}], "adopt": [{"to": "a.b", "id_from": "x"}`,
-			"loader only: id_from needs a primary entry", `id_from needs an entry with list`},
-		{"adopt: bad path", `{"name": "s", "type": "string"}], "adopt": [{"to": "a.b", "list": "a", "inputs": {"s": "a..b"}}`,
-			"loader only: paths", `"a..b" is not an attribute path`},
-		{"adopt: twice", `{"name": "s", "type": "string"}], "adopt": [{"to": "a.b"}, {"to": "a.b"}`, "loader only: to is unique", `adopt "a.b": listed twice`},
-		{"adopt: unknown field", `{"name": "s", "type": "string"}], "adopt": [{"to": "a.b", "type": "x"}`, "adopt additionalProperties", `adopt #1: unknown field "type"`},
-		{"adopt: show_if on a later input", `{"name": "s", "type": "string"}], "adopt": [{"to": "a.b", "show_if": {"input": "s", "equals": ["x"]}}`,
-			"loader only: show_if refers to a select or bool input", `adopt "a.b": show when: "s" is not a dropdown`},
 		{"sensitive with a default", `{"name": "p", "type": "string", "sensitive": true, "default": "x"}`, "input allOf[4] then not required default", "can't have a default"},
 	} {
 		file := head + c.inputs + `]}`
@@ -152,9 +138,7 @@ func TestJSONRoundTrip(t *testing.T) {
 		{"name": "n", "label": "N", "help": "h", "type": "number", "required": false, "default": 1e21, "per_environment": true},
 		{"name": "f", "label": "", "type": "number", "required": false, "default": 0.5},
 		{"name": "b", "label": "", "type": "bool", "required": false, "default": true},
-		{"name": "s", "label": "", "type": "string", "required": false, "default": "7", "show_if": {"input": "b", "equals": [false]}}],
-		"adopt": [{"to": "x.y[0]", "label": "L", "pattern": "p", "show_if": {"input": "b", "equals": [true]},
-			"list": "x", "require": "r", "inputs": {"s": "a[0].b"}}, {"to": "z.w", "id_from": "ids[0]"}]}`)
+		{"name": "s", "label": "", "type": "string", "required": false, "default": "7", "show_if": {"input": "b", "equals": [false]}}]}`)
 	ts, _, err := Parse(map[string][]byte{"t.json": file})
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +156,7 @@ func TestJSONRoundTrip(t *testing.T) {
 	}
 	var compact bytes.Buffer
 	json.Compact(&compact, b)
-	for _, want := range []string{`"default":1e+21`, `"default":0.5`, `"default":true`, `"default":"7"`, `"equals":[false]`, `"per_environment":true`, `"adopt":[{"to":"x.y[0]","label":"L","pattern":"p","list":"x","require":"r","inputs":{"s":"a[0].b"},"show_if":{"input":"b","equals":[true]}},{"to":"z.w","id_from":"ids[0]"}]`, `"$schema":"` + SchemaURL + `"`} {
+	for _, want := range []string{`"default":1e+21`, `"default":0.5`, `"default":true`, `"default":"7"`, `"equals":[false]`, `"per_environment":true`, `"$schema":"` + SchemaURL + `"`} {
 		if !strings.Contains(compact.String(), want) {
 			t.Errorf("encoded lacks %s:\n%s", want, b)
 		}

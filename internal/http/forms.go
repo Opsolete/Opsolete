@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/opsolete/opsolete/internal/app"
-	"github.com/opsolete/opsolete/internal/templates"
 )
 
 // Forms: every UI POST handler reads its form with readForm (readMultipart for uploads), and shows a
@@ -184,5 +183,4 @@ func (f *formState) List() []fieldErr {
 
 type fieldErr struct{ Name, Label, Msg string }
 
-var formFuncs = template.FuncMap{"formOf": formOf, "value": value, "checked": checked, "fieldError": fieldError, "aria": aria,
-	"adoptField": templates.AdoptField}
+var formFuncs = template.FuncMap{"formOf": formOf, "value": value, "checked": checked, "fieldError": fieldError, "aria": aria}

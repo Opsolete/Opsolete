@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
-	"slices"
 	"time"
 
 	"github.com/opsolete/opsolete/internal/registry"
@@ -97,20 +95,6 @@ func (a *App) ModuleDocs(ctx context.Context, ns, name, sys, version string) (Mo
 		}
 	}
 	return d, nil
-}
-
-// ModuleResources lists the managed resources (type.name, sorted) of the registry module version m points
-// at, as the builder's suggestions for adopt addresses. nil for other sources or on any error: only hints.
-func (a *App) ModuleResources(ctx context.Context, m templates.Module) []string {
-	ns, name, sys, ok := a.Registry.ParseSource(m.Source)
-	if !ok {
-		return nil
-	}
-	d, err := a.Store.GetModuleDocs(ctx, ns, name, sys, m.Ref)
-	if err != nil || d.Module == nil {
-		return nil
-	}
-	return slices.Sorted(maps.Keys(d.Module.ManagedResources))
 }
 
 // CanUpload: actor is an admin and module uploads are on (the organization setting, or TemplateEditor).

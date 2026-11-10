@@ -1,7 +1,6 @@
 package templates
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -196,78 +195,6 @@ func TestParseLimits(t *testing.T) {
 	for name, files := range map[string]map[string][]byte{"file": big, "count": many, "total": total} {
 		if _, _, err := Parse(files); err == nil || !strings.Contains(err.Error(), "at most") && !strings.Contains(err.Error(), "total over") {
 			t.Errorf("%s limit: %v", name, err)
-		}
-	}
-}
-
-func TestAdoptIDs(t *testing.T) {
-	ts, _, err := Parse(map[string][]byte{"vm.json": []byte(`{"id": "vm", "name": "VM", "module": {"source": "s", "ref": "r"}, "inputs": [
-		{"name": "os_type", "type": "select", "options": ["windows", "linux"]}],
-		"adopt": [
-		{"to": "azurerm_windows_virtual_machine.self[0]", "pattern": "(?i)/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Compute/virtualMachines/[^/]+",
-			"show_if": {"input": "os_type", "equals": ["windows"]}},
-		{"to": "azurerm_linux_virtual_machine.self[0]", "show_if": {"input": "os_type", "equals": ["linux"]}},
-		{"to": "azurerm_network_interface.self", "help": "A NIC ID", "pattern": "/subscriptions/.+/networkInterfaces/[^/]+"}]}`)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	vm := ts["vm"]
-	const vmID, nicID = "/subscriptions/s/resourcegroups/rg/providers/Microsoft.Compute/virtualMachines/vm", "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkInterfaces/nic"
-	win := map[string]string{"os_type": "windows"}
-
-	if got, errs := vm.AdoptIDs(win, []string{" ", "", ""}); got != nil || len(errs) != 0 {
-		t.Errorf("no IDs: create, got %v %v", got, errs)
-	}
-	// the linux VM's field is hidden on windows: what it holds is ignored, also for "any given"
-	if got, errs := vm.AdoptIDs(win, []string{"", "stale", ""}); got != nil || len(errs) != 0 {
-		t.Errorf("only a hidden ID: %v %v", got, errs)
-	}
-	got, errs := vm.AdoptIDs(win, []string{" " + vmID + " ", "stale", nicID})
-	if len(errs) != 0 || len(got) != 2 || got["azurerm_windows_virtual_machine.self[0]"] != vmID || got["azurerm_network_interface.self"] != nicID {
-		t.Errorf("windows: %v %v", got, errs)
-	}
-	if _, errs = vm.AdoptIDs(win, []string{vmID}); errs[AdoptField(2)] == "" || len(errs) != 1 {
-		t.Errorf("one given, one missing: %v", errs)
-	}
-	if _, errs = vm.AdoptIDs(win, []string{nicID, "", vmID}); !strings.Contains(errs[AdoptField(0)], "expected format") || errs[AdoptField(2)] != "A NIC ID" {
-		t.Errorf("wrong type pasted: %v", errs)
-	}
-	if _, errs = vm.AdoptIDs(win, []string{vmID + "\nx", "", nicID}); errs[AdoptField(0)] != "This is not a resource ID." {
-		t.Errorf("line break: %v", errs)
-	}
-	// without a pattern an azurerm resource's ID must have Azure's shape
-	if _, errs = vm.AdoptIDs(map[string]string{"os_type": "linux"}, []string{"", "anything", nicID}); !strings.HasPrefix(errs[AdoptField(1)], "Not an Azure resource ID") {
-		t.Errorf("linux, no pattern, not an ID: %v", errs)
-	}
-	linuxID := "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/l1"
-	if got, errs = vm.AdoptIDs(map[string]string{"os_type": "linux"}, []string{"", linuxID, nicID}); len(errs) != 0 || got["azurerm_linux_virtual_machine.self[0]"] != linuxID {
-		t.Errorf("linux, no pattern: %v %v", got, errs)
-	}
-	for id, ok := range map[string]bool{"/subscriptions/s/resourceGroups/rg": true, "/subscriptions/s/resourcegroups/rg/providers/Microsoft.Sql/servers/a/databases/b": true,
-		"/subscriptions/s/resourceGroups/rg/providers/Microsoft.Sql/servers": false, "/subscriptions/s": false, "rg": false} {
-		if azureID.MatchString(id) != ok {
-			t.Errorf("azureID(%s) = %v", id, !ok)
-		}
-	}
-}
-
-func TestPath(t *testing.T) {
-	var v any
-	json.Unmarshal([]byte(`{"size": "S", "os_disk": [{"storage_account_type": "Premium_LRS"}], "nics": ["a", "b"], "n": 2, "on": true, "x": null}`), &v)
-	for path, want := range map[string]any{"size": "S", "os_disk[0].storage_account_type": "Premium_LRS", "nics[1]": "b", "n": 2.0, "on": true,
-		"x": nil, "nope": nil, "nics[2]": nil, "size[0]": nil, "os_disk.storage_account_type": nil} {
-		if got := Path(v, path); got != want {
-			t.Errorf("Path(%s) = %v, want %v", path, got, want)
-		}
-	}
-	for _, p := range []string{"a", "a.b", "a[0].b_c", "network_interface_ids[0]"} {
-		if !pathRe.MatchString(p) {
-			t.Errorf("valid path %q rejected", p)
-		}
-	}
-	for _, p := range []string{"", "a..b", "[0]", "a[x]", "a.", "${x}"} {
-		if pathRe.MatchString(p) {
-			t.Errorf("invalid path %q accepted", p)
 		}
 	}
 }

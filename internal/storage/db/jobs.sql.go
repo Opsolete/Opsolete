@@ -187,7 +187,7 @@ UPDATE runs SET runner = $1::text, lease_id = $2::text,
     lease_until = now() + make_interval(secs => $3::float8)
 WHERE id = $4::uuid
 RETURNING workspace_id, action, replace, COALESCE(vcs_commit, '')::text AS vcs_commit, remove_templates, imports,
-    COALESCE(scan_template, '')::text AS scan_template
+    COALESCE(scan_resource_group, '')::text AS scan_resource_group
 `
 
 type LeaseRunParams struct {
@@ -198,13 +198,13 @@ type LeaseRunParams struct {
 }
 
 type LeaseRunRow struct {
-	WorkspaceID     uuid.UUID
-	Action          string
-	Replace         []byte
-	VcsCommit       string
-	RemoveTemplates []string
-	Imports         []byte
-	ScanTemplate    string
+	WorkspaceID       uuid.UUID
+	Action            string
+	Replace           []byte
+	VcsCommit         string
+	RemoveTemplates   []string
+	Imports           []byte
+	ScanResourceGroup string
 }
 
 func (q *Queries) LeaseRun(ctx context.Context, arg LeaseRunParams) (LeaseRunRow, error) {
@@ -222,7 +222,7 @@ func (q *Queries) LeaseRun(ctx context.Context, arg LeaseRunParams) (LeaseRunRow
 		&i.VcsCommit,
 		&i.RemoveTemplates,
 		&i.Imports,
-		&i.ScanTemplate,
+		&i.ScanResourceGroup,
 	)
 	return i, err
 }

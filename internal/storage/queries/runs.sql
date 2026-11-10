@@ -81,14 +81,14 @@ UPDATE runs SET rollout_id = sqlc.arg(rollout_id)::uuid WHERE id = sqlc.arg(id):
 -- name: SetRunAlwaysConfirm :exec
 UPDATE runs SET always_confirm = true WHERE id = sqlc.arg(id)::uuid;
 
--- name: SetRunScanTemplate :exec
-UPDATE runs SET scan_template = sqlc.arg(template)::text WHERE id = sqlc.arg(id)::uuid;
+-- name: SetRunScanResourceGroup :exec
+UPDATE runs SET scan_resource_group = sqlc.arg(resource_group)::text WHERE id = sqlc.arg(id)::uuid;
 
 -- name: SetRunCandidates :exec
 UPDATE runs SET candidates = sqlc.arg(candidates)::jsonb WHERE id = sqlc.arg(id)::uuid;
 
 -- name: RunScan :one
-SELECT COALESCE(scan_template, '')::text AS template, candidates FROM runs WHERE id = sqlc.arg(id)::uuid;
+SELECT COALESCE(scan_resource_group, '')::text AS resource_group, candidates FROM runs WHERE id = sqlc.arg(id)::uuid AND action = 'scan';
 
 -- name: RunImports :one
 SELECT imports FROM runs WHERE id = sqlc.arg(id)::uuid;

@@ -5,84 +5,113 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/opsolete/opsolete/internal/registry/registrytest"
 	"github.com/opsolete/opsolete/internal/runnerapi"
 )
 
-// TestScanFlow: a workspace scans for what a template can adopt; the runner gets the template and its module
-// only; the run page lists what it found with its fit, marks what a workspace manages already, and Adopt opens the
-// add form filled in, whose save imports the resources with a placeholder for the password Azure never returns.
-func TestScanFlow(t *testing.T) {
+// TestImportFlow: a workspace's Import scans, with the resource group given, for what the catalog's registry
+// templates can take over (read from their modules' code, the templates need nothing for it); the run page lists
+// what was found with its template, related resources and fit, and marks what a workspace manages already;
+// Import opens the template's form filled in, whose plan imports the resources (IDs from the scan, never the
+// browser) with a placeholder for the password Azure never returns; a managed resource can't be imported again.
+func TestImportFlow(t *testing.T) {
 	store := testStore(t)
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "vm.json"), []byte(`{"id": "vm", "name": "VM", "module": {"source": "git::https://example.com/vm", "ref": "v1"},
-		"inputs": [{"name": "name", "type": "string", "required": true, "key": true}, {"name": "os_type", "type": "select", "options": ["windows", "linux"]},
-			{"name": "resource_group_name", "type": "string", "required": true}, {"name": "nic_name", "type": "string"},
-			{"name": "admin_password", "type": "string", "sensitive": true, "required": true, "show_if": {"input": "os_type", "equals": ["windows"]}}],
-		"adopt": [
-		{"to": "azurerm_windows_virtual_machine.self[0]", "list": "azurerm_windows_virtual_machine", "require": "provision_vm_agent",
-			"show_if": {"input": "os_type", "equals": ["windows"]}, "placeholder": ["admin_password"], "inputs": {"name": "name"}},
-		{"to": "azurerm_linux_virtual_machine.self[0]", "list": "azurerm_linux_virtual_machine", "show_if": {"input": "os_type", "equals": ["linux"]}},
-		{"to": "azurerm_network_interface.self", "list": "azurerm_network_interface", "id_from": "network_interface_ids[0]", "inputs": {"nic_name": "name"}}]}`), 0o600)
-	h := newServer(t, dir, false, store)
+	h := newServer(t, t.TempDir(), true, store)
 	r := &fakeRunner{h: h}
-	ws := "sc-" + strings.ToLower(newID()[:8])
+	ns := "i" + strings.ToLower(newID()[:8])
+	files := map[string]string{}
+	for _, f := range []string{"main.tf", "variables.tf"} {
+		b, err := os.ReadFile("../registry/testdata/vm/" + f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[f] = string(b)
+	}
+	if rec := upload(h, map[string]string{"namespace": ns, "name": "vm", "system": "azurerm", "version": "3.1.0"}, registrytest.TarGz(t, files)); rec.Code != http.StatusSeeOther {
+		t.Fatalf("upload: %d %s", rec.Code, rec.Body.String())
+	}
+	tplForm := url.Values{"name": {"VM"}, "module_source": {"ops.example.com/" + ns + "/vm/azurerm"}, "module_ref": {"3.1.0"}, "key": {"name"},
+		"in_name": {"name", "os_type", "resource_group_name", "nic_name", "admin_password"}, "in_type": {"string", "select", "string", "string", "string"},
+		"in_opt_value_1": {"windows", "linux"}, "in_required": {"0", "2"}, "in_sensitive": {"4"}, "in_show_input": {"", "", "", "", "os_type"},
+		"in_show_equals": {"", "", "", "", "windows"}}
+	rec := post(h, "/templates/new", tplForm)
+	tpl := strings.TrimPrefix(rec.Header().Get("Location"), "/templates/")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("template: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := post(h, "/templates/new", url.Values{"name": {"Git one"}, "module_source": {"git::https://example.com/x"}, "module_ref": {"v1"}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("git template: %d", rec.Code)
+	}
+	ws := "im-" + strings.ToLower(newID()[:8])
 	if rec := post(h, "/workspaces/new", url.Values{fieldWorkspace: {ws}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("create: %d", rec.Code)
 	}
-	if page := get(h, "/workspaces/"+ws+"/deploy").Body.String(); !strings.Contains(page, "Import existing resources") || !strings.Contains(page, `<option value="vm">VM</option>`) {
-		t.Fatalf("deploy tab without the scan:\n%s", page)
+	page := get(h, "/workspaces/"+ws+"/import").Body.String()
+	for _, want := range []string{`action="/workspaces/` + ws + `/scans"`, "Finds resources for <strong>VM</strong>", "Git one: its module isn", `href="/workspaces/` + ws + `/import" aria-current="page">Import…`} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("import page lacks %q:\n%s", want, page)
+		}
 	}
 
-	scan := runID(t, post(h, "/workspaces/"+ws+"/scans", url.Values{"template": {"vm"}}))
-	if j := r.claim(t, scan, "plan"); j.Action != "scan" || j.ModuleSource != "" || len(j.Modules) != 1 || j.Modules[0].Source != "git::https://example.com/vm?ref=v1" ||
-		!strings.Contains(string(j.Scan), `"list":"azurerm_windows_virtual_machine"`) {
-		t.Fatalf("scan job: %+v %s", j, j.Scan)
+	scan := runID(t, post(h, "/workspaces/"+ws+"/scans", url.Values{"resource_group": {"test1"}}))
+	j := r.claim(t, scan, "plan")
+	if j.Action != "scan" || j.ModuleSource != "" || j.Scan == nil || j.Scan.ResourceGroup != "test1" || len(j.Scan.Templates) != 1 ||
+		len(j.Scan.Templates[0].Entries) != 3 || len(j.Modules) != 1 || j.Modules[0].Name != j.Scan.Templates[0].Module {
+		t.Fatalf("scan job: %+v %+v", j, j.Scan)
 	}
 	const sub = "/subscriptions/s/resourceGroups/test1/providers/"
 	vmID, nicID := sub+"Microsoft.Compute/virtualMachines/testvm", sub+"Microsoft.Network/networkInterfaces/testvm807"
+	imports := []runnerapi.Import{{To: "azurerm_network_interface.self", ID: nicID}, {To: "azurerm_windows_virtual_machine.self[0]", ID: vmID}}
 	cands := []runnerapi.Candidate{
-		{Name: "testvm", ID: vmID, Fit: "fits", Adopt: []string{vmID, "", nicID},
+		{Template: tpl, Name: "testvm", ID: vmID, Fit: "fits", Imports: imports, Placeholder: []string{"admin_password"},
 			Inputs: map[string]string{"name": "testvm", "os_type": "windows", "resource_group_name": "test1", "nic_name": "testvm807"}},
-		{Name: "odd", ID: sub + "Microsoft.Compute/virtualMachines/odd", Fit: "replaces", Adopt: []string{sub + "Microsoft.Compute/virtualMachines/odd", "", ""},
+		{Template: tpl, Name: "odd", ID: sub + "Microsoft.Compute/virtualMachines/odd", Fit: "replaces",
 			Changes: []runnerapi.FitChange{{Address: "azurerm_windows_virtual_machine.self[0]", Action: "replace", Attributes: []string{"zone"}}}},
 	}
 	body, _ := json.Marshal(runnerapi.FinishRequest{Status: "succeeded", Candidates: cands})
 	r.finish(t, string(body))
-	page := get(h, "/workspaces/"+ws+"/runs/"+scan).Body.String()
-	adopt := "/workspaces/" + ws + "/templates/new?template=vm&scan=" + scan + "&n=0"
-	for _, want := range []string{"Scan for existing resources", "VM: 2 found", `<span class="status applied">fits</span>`, `href="` + strings.ReplaceAll(adopt, "&", "&amp;") + `"`,
+	page = get(h, "/workspaces/"+ws+"/runs/"+scan).Body.String()
+	link := "/workspaces/" + ws + "/templates/new?template=" + tpl + "&scan=" + scan + "&n=0"
+	for _, want := range []string{"Scan for existing resources", "2 found in resource group <code>test1</code>", "+ network interface testvm807",
+		"<td>VM</td>", `<span class="status applied">fits</span>`, `href="` + strings.ReplaceAll(link, "&", "&amp;") + `">Import</a>`,
 		`<span class="status errored">doesn't fit</span>`, `<code>azurerm_windows_virtual_machine.self[0]</code>: zone`, "Scan again"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("scan page lacks %q:\n%s", want, page)
 		}
 	}
 	if strings.Contains(page, "&amp;n=1\"") {
-		t.Fatal("a resource that doesn't fit offers Adopt")
+		t.Fatal("a resource that doesn't fit offers Import")
 	}
 
-	// Adopt: the add form, filled in; the password is left to the placeholder
-	form := get(h, adopt).Body.String()
-	for _, want := range []string{"Adopting <strong>testvm</strong>", `value="testvm807"`, `name="ops-adopt-0" value="` + vmID + `"`, "a random placeholder is used"} {
+	// Import: the form filled in, no ID fields, the password left to the placeholder
+	form := get(h, link).Body.String()
+	for _, want := range []string{"Importing <strong>testvm</strong> (2 resources)", `value="testvm807"`, "a random placeholder is used"} {
 		if !strings.Contains(form, want) {
-			t.Fatalf("adopt form lacks %q:\n%s", want, form)
+			t.Fatalf("import form lacks %q:\n%s", want, form)
 		}
 	}
-	if strings.Contains(form, `name="secret.admin_password" type="password" autocomplete="new-password"
-       required`) || strings.Contains(form, `autocomplete="new-password" required`) {
-		t.Fatal("the placeholder password is required")
+	if strings.Contains(form, nicID) || strings.Contains(form, `autocomplete="new-password" required`) {
+		t.Fatal("the form shows IDs or requires the placeholder password")
 	}
-	added := runID(t, post(h, adopt, url.Values{"name": {"testvm"}, "os_type": {"windows"}, "resource_group_name": {"test1"}, "nic_name": {"testvm807"},
-		"ops-adopt-0": {vmID}, "ops-adopt-2": {nicID}}))
-	j := r.claim(t, added, "plan")
-	if len(j.Imports) != 2 || !strings.HasPrefix(j.Modules[0].Inputs["admin_password"].(string), "Ops-") {
-		t.Fatalf("adoption job: %+v", j)
+	values := url.Values{"name": {"testvm"}, "os_type": {"windows"}, "resource_group_name": {"test1"}, "nic_name": {"testvm807"}, "subnet_id": {"/s"}}
+	if rec := post(h, "/workspaces/"+ws+"/templates/new?template=x&scan="+scan+"&n=0", values); rec.Code != http.StatusNotFound {
+		t.Fatalf("another template than the one found for: %d", rec.Code)
+	}
+	rec = post(h, link, values)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("import: %d %s", rec.Code, rec.Body.String())
+	}
+	added := runID(t, rec)
+	j = r.claim(t, added, "plan")
+	if len(j.Imports) != 2 || !strings.HasPrefix(j.Imports[0].To, "module.testvm_") || j.Imports[1].ID != vmID ||
+		!strings.HasPrefix(j.Modules[0].Inputs["admin_password"].(string), "Ops-") {
+		t.Fatalf("import job: %+v", j)
 	}
 
-	// once applied, the scan shows it as managed (IDs compare in any case)
+	// once applied, the scan shows it managed, and importing it again is refused
 	r.finish(t, `{"status":"succeeded","plan":{"add":0,"change":0,"destroy":0,"import":2,"changes":[]}}`)
 	if rec := post(h, "/workspaces/"+ws+"/runs/"+added+"/confirm", nil); rec.Code != http.StatusSeeOther {
 		t.Fatalf("confirm: %d", rec.Code)
@@ -93,12 +122,9 @@ func TestScanFlow(t *testing.T) {
 		"name":"self","provider":"p","module":"module.testvm_x","id":"`+strings.ToUpper(vmID)+`"}]}`)
 	if page := get(h, "/workspaces/"+ws+"/runs/"+scan).Body.String(); !strings.Contains(page, `Already managed in workspace <a href="/workspaces/`+ws+`">`) ||
 		strings.Contains(page, "&amp;n=0\"") {
-		t.Fatalf("an adopted resource isn't shown as managed:\n%s", page)
+		t.Fatalf("an imported resource isn't shown as managed:\n%s", page)
 	}
-	// and adopting it again, by hand, is refused
-	again := url.Values{"name": {"testvm2"}, "os_type": {"windows"}, "resource_group_name": {"test1"}, "ops-adopt-0": {strings.ToLower(vmID)}, "ops-adopt-2": {nicID}}
-	if rec := post(h, "/workspaces/"+ws+"/templates/new?template=vm", again); rec.Code != http.StatusUnprocessableEntity ||
-		!strings.Contains(rec.Body.String(), "Already managed in workspace "+ws) {
-		t.Fatalf("adopting a managed resource again: %d %s", rec.Code, rec.Body.String())
+	if rec := post(h, link, values); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "managed already, in workspace "+ws) {
+		t.Fatalf("importing a managed resource again: %d %s", rec.Code, rec.Body.String())
 	}
 }

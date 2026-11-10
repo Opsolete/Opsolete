@@ -62,7 +62,6 @@ type NewWorkspace struct {
 	AutoApply  bool
 	TemplateID string
 	Inputs     map[string]string // the template's inputs as typed, by input name
-	Adopt      []string          // IDs of existing resources to import, for the template's adopt entries (SaveTemplate)
 }
 
 // CreateWorkspace creates a workspace with the template added to it and queues its first plan.
@@ -81,7 +80,7 @@ func (a *App) CreateWorkspace(ctx context.Context, actor Actor, in NewWorkspace)
 		}
 		locked = env.Locked(t)
 	}
-	raw := withPlaceholders(t, lockInputs(in.Inputs, locked), in.Adopt)
+	raw := lockInputs(in.Inputs, locked)
 	vals, errs := t.Validate(raw) // errs is never nil
 	if !ValidName(in.Name) {
 		errs[FieldName] = NameRule
@@ -92,10 +91,6 @@ func (a *App) CreateWorkspace(ctx context.Context, actor Actor, in NewWorkspace)
 		return storage.Workspace{}, storage.Run{}, err
 	}
 	keepOwn(vals, errs, locked, nil)
-	imports := adoptions(t, raw, in.Adopt, module, errs)
-	if err := a.refuseManaged(ctx, t, module, imports, errs); err != nil {
-		return storage.Workspace{}, storage.Run{}, err
-	}
 	if len(errs) > 0 {
 		return storage.Workspace{}, storage.Run{}, &ValidationError{Fields: errs}
 	}
@@ -103,7 +98,7 @@ func (a *App) CreateWorkspace(ctx context.Context, actor Actor, in NewWorkspace)
 		return storage.Workspace{}, storage.Run{}, perr
 	}
 	ws, run, err := a.Store.CreateWorkspace(ctx, id, in.Name, p.Name, storage.WorkspaceTemplate{Name: module, TemplateID: t.ID,
-		ModuleSource: t.Module.Source, ModuleRef: t.Module.Ref, Inputs: vals, Imports: imports}, in.AutoApply, actor.UserID)
+		ModuleSource: t.Module.Source, ModuleRef: t.Module.Ref, Inputs: vals}, in.AutoApply, actor.UserID)
 	if errors.Is(err, storage.ErrNameTaken) {
 		return ws, run, invalid(FieldName, err.Error())
 	}

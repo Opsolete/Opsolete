@@ -21,18 +21,18 @@ var ErrLeaseLost = errors.New("job lease lost")
 
 // Job is one phase of a run, as handed to a runner.
 type Job struct {
-	RunID       uuid.UUID
-	WorkspaceID uuid.UUID
-	Phase       string // plan | apply
-	Action      string // apply | destroy | refresh | assess | plan
-	Replace     []string
-	Target      []string // -target: module.<name> of each template a destroy run removes
-	Imports     []runnerapi.Import
-	Scan        string // action scan: the template it scans for
-	LeaseID     string
-	VCS         bool                // the root configuration comes from the workspace's VCS branch
-	VCSCommit   string              // commit pinned when the run was queued (VCS-triggered runs), or by an earlier phase
-	Modules     []WorkspaceTemplate // templates added to the workspace
+	RunID             uuid.UUID
+	WorkspaceID       uuid.UUID
+	Phase             string // plan | apply
+	Action            string // apply | destroy | refresh | assess | plan
+	Replace           []string
+	Target            []string // -target: module.<name> of each template a destroy run removes
+	Imports           []runnerapi.Import
+	ScanResourceGroup string // action scan: the resource group it searches; "" the whole subscription
+	LeaseID           string
+	VCS               bool                // the root configuration comes from the workspace's VCS branch
+	VCSCommit         string              // commit pinned when the run was queued (VCS-triggered runs), or by an earlier phase
+	Modules           []WorkspaceTemplate // templates added to the workspace
 }
 
 // ClaimJob hands the longest-waiting queued phase (plan or confirmed apply) to runner, or returns
@@ -63,7 +63,7 @@ func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration
 		if err != nil {
 			return err
 		}
-		j.WorkspaceID, j.Action, j.VCSCommit, j.Scan = r.WorkspaceID, r.Action, r.VcsCommit, r.ScanTemplate
+		j.WorkspaceID, j.Action, j.VCSCommit, j.ScanResourceGroup = r.WorkspaceID, r.Action, r.VcsCommit, r.ScanResourceGroup
 		if r.Replace != nil {
 			if err := json.Unmarshal(r.Replace, &j.Replace); err != nil {
 				return err

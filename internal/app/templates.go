@@ -2,9 +2,7 @@ package app
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
-	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -83,10 +81,10 @@ func (a *App) TemplateForm(ctx context.Context, actor Actor, workspace, module, 
 
 // SaveTemplate adds templateID to the workspace (module "") or saves the added template module's
 // inputs (raw: as typed, by input name) and the template's current module version, and queues the
-// plan that applies it. Adding, adopt are the IDs of existing resources to import (see adoptions;
-// ignored when configuring). It returns the module name. ValidationError: the inputs (Fields by input
-// name) and IDs (by templates.AdoptField).
-func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, templateID string, raw map[string]string, adopt []string) (string, storage.Run, error) {
+// plan that applies it. Adding, from (nil: none) is a scan's result to import (Import): the plan imports
+// its resources instead of creating them. It returns the module name. ValidationError: the inputs
+// (Fields by input name), or the import.
+func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, templateID string, raw map[string]string, from *Found) (string, storage.Run, error) {
 	f, err := a.TemplateForm(ctx, actor, workspace, module, templateID)
 	if err != nil {
 		return module, storage.Run{}, err
@@ -103,8 +101,12 @@ func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, 
 	}
 	locked := env.Locked(t)
 	raw = lockInputs(raw, locked)
-	if adding {
-		raw = withPlaceholders(t, raw, adopt)
+	var c *runnerapi.Candidate
+	if adding && from != nil {
+		if c, err = a.importing(ctx, actor, f.Workspace, t, *from); err != nil {
+			return module, storage.Run{}, err
+		}
+		raw = withPlaceholders(raw, c.Placeholder)
 	}
 	vals, errs := t.Validate(raw)
 	if err := a.SealInputs(t, raw, vals, old, errs, f.Workspace.ID, module); err != nil {
@@ -112,11 +114,10 @@ func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, 
 	}
 	keepOwn(vals, errs, locked, old)
 	var imports []runnerapi.Import
-	if adding {
-		imports = adoptions(t, raw, adopt, module, errs)
-	}
-	if err := a.refuseManaged(ctx, t, module, imports, errs); err != nil {
-		return module, storage.Run{}, err
+	if c != nil {
+		for _, im := range c.Imports {
+			imports = append(imports, runnerapi.Import{To: "module." + module + "." + im.To, ID: im.ID})
+		}
 	}
 	if len(errs) > 0 {
 		return module, storage.Run{}, &ValidationError{Fields: errs}
@@ -130,21 +131,8 @@ func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, 
 		return module, run, err
 	}
 	a.Log.Info("workspace template saved", "workspace", f.Workspace.Name, "module", module, "template", t.ID, "added", adding,
-		"ref", t.Module.Ref, "run", run.ID, "adopts", len(imports), "user", actor.Email)
+		"ref", t.Module.Ref, "run", run.ID, "imports", len(imports), "user", actor.Email)
 	return module, run, nil
-}
-
-// adoptions checks the IDs pasted to adopt existing resources into template t added as module (raw: the
-// form values, for show_if), adds their errors to errs, and returns the run's imports, sorted by address
-// (nil: adopt nothing).
-func adoptions(t templates.Template, raw map[string]string, ids []string, module string, errs map[string]string) []runnerapi.Import {
-	byAddr, idErrs := t.AdoptIDs(raw, ids)
-	maps.Copy(errs, idErrs)
-	var out []runnerapi.Import
-	for _, to := range slices.Sorted(maps.Keys(byAddr)) {
-		out = append(out, runnerapi.Import{To: "module." + module + "." + to, ID: byAddr[to]})
-	}
-	return out
 }
 
 // RemoveTemplate removes an added template and queues the plan that destroys its resources; with
@@ -193,117 +181,4 @@ func defaultModule(t templates.Template, raw map[string]string, taken []storage.
 			return name
 		}
 	}
-}
-
-// refuseManaged adds an error for each of imports whose ID a workspace's state manages already: two states
-// must not manage one resource. IDs compare in any case.
-func (a *App) refuseManaged(ctx context.Context, t templates.Template, module string, imports []runnerapi.Import, errs map[string]string) error {
-	if len(imports) == 0 {
-		return nil
-	}
-	ids := make([]string, len(imports))
-	for i, im := range imports {
-		ids[i] = im.ID
-	}
-	managed, err := a.Store.ManagedBy(ctx, ids)
-	for _, im := range imports {
-		if ws := managed[strings.ToLower(im.ID)]; ws != "" {
-			i := slices.IndexFunc(t.Adopt, func(e templates.Adopt) bool { return "module."+module+"."+e.To == im.To })
-			errs[templates.AdoptField(i)] = "Already managed in workspace " + ws + ": a resource can be in one state only."
-		}
-	}
-	return err
-}
-
-// withPlaceholders fills the placeholder inputs of t's adopt entries that get an ID (adopting: ids, as for
-// SaveTemplate) with a random value when left empty: values the cloud never returns, such as an admin password,
-// which the module must ignore.
-func withPlaceholders(t templates.Template, raw map[string]string, ids []string) map[string]string {
-	byAddr, _ := t.AdoptIDs(raw, ids)
-	if byAddr == nil {
-		return raw
-	}
-	raw = maps.Clone(raw)
-	for _, a := range t.Adopt {
-		if byAddr[a.To] == "" {
-			continue
-		}
-		for _, in := range a.Placeholder {
-			if strings.TrimSpace(raw[in]) == "" {
-				raw[in] = "Ops-" + rand.Text() + "-a1!" // letters, digits and a symbol: passes common complexity rules
-			}
-		}
-	}
-	return raw
-}
-
-// StartScan queues a scan of the workspace, with its credentials, for existing resources templateID can adopt
-// (runner.scan). Needs operate. ErrNotFound: no such template; ValidationError: it has no adopt entry with list.
-func (a *App) StartScan(ctx context.Context, actor Actor, workspace, templateID string) (storage.Workspace, storage.Run, error) {
-	ws, _, err := a.Workspace(ctx, actor, workspace, LevelOperate)
-	if err != nil {
-		return ws, storage.Run{}, err
-	}
-	t, err := a.Template(ctx, templateID)
-	if err != nil {
-		return ws, storage.Run{}, err
-	}
-	if !t.Scannable() {
-		return ws, storage.Run{}, invalid("template", t.Name+" can't scan: none of its adopt entries says how to find resources (list)")
-	}
-	run, err := a.Store.CreateScan(ctx, ws.ID, t.ID, actor.UserID)
-	if err != nil {
-		return ws, run, err
-	}
-	a.Log.Info("scan queued", "workspace", ws.Name, "template", t.ID, "run", run.ID, "user", actor.Email)
-	return ws, run, nil
-}
-
-// ScanResult is what a scan found: its template (by id only if it left the catalog) and the candidates, each
-// with the workspace already managing it.
-type ScanResult struct {
-	Template   templates.Template
-	Candidates []ScanCandidate
-}
-
-type ScanCandidate struct {
-	runnerapi.Candidate
-	ManagedBy string // a workspace whose current state has its ID; "" none
-}
-
-// ScanResult loads scan run runID's result (RunDetail checked the actor's access).
-func (a *App) ScanResult(ctx context.Context, runID uuid.UUID) (ScanResult, error) {
-	sc, err := a.Store.RunScan(ctx, runID)
-	if err != nil {
-		return ScanResult{}, err
-	}
-	res := ScanResult{Template: templates.Template{ID: sc.Template, Name: sc.Template}}
-	if t, ok := a.Templates.Get(sc.Template); ok {
-		res.Template = t
-	}
-	ids := make([]string, len(sc.Candidates))
-	for i, c := range sc.Candidates {
-		ids[i] = c.ID
-	}
-	managed, err := a.Store.ManagedBy(ctx, ids)
-	for _, c := range sc.Candidates {
-		res.Candidates = append(res.Candidates, ScanCandidate{c, managed[strings.ToLower(c.ID)]})
-	}
-	return res, err
-}
-
-// ScanCandidate returns candidate n of the workspace's scan run runID, to fill the add form. Needs operate.
-func (a *App) ScanCandidate(ctx context.Context, actor Actor, workspace string, runID uuid.UUID, n int) (runnerapi.Candidate, error) {
-	d, err := a.Run(ctx, actor, workspace, runID, LevelOperate)
-	if err != nil {
-		return runnerapi.Candidate{}, err
-	}
-	sc, err := a.Store.RunScan(ctx, d.Run.ID)
-	if err != nil {
-		return runnerapi.Candidate{}, err
-	}
-	if n < 0 || n >= len(sc.Candidates) {
-		return runnerapi.Candidate{}, ErrNotFound
-	}
-	return sc.Candidates[n], nil
 }

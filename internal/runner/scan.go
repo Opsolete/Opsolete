@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -25,9 +26,10 @@ import (
 	"github.com/opsolete/opsolete/internal/templates"
 )
 
-// A scan finds existing resources a template can adopt (its adopt entries with list), maps their attributes to
-// the template's inputs, and checks the fit with one speculative plan that adopts them all, each as its own
-// module, into a throwaway local state. It writes nothing: no backend, no lock, no apply.
+// A scan finds existing resources the catalog's templates can take over (the entries the server read from their
+// modules' code), maps their attributes to each template's inputs, and checks the fit with one speculative plan
+// that imports them all, each as its own module, into a throwaway local state. It writes nothing: no backend, no
+// lock, no apply.
 
 // maxCandidates bounds a scan's fit check, one module per candidate in a single plan.
 // shortcut: candidates past it are listed as unchecked; batch the fit check when scans get that large.
@@ -41,15 +43,31 @@ type found struct {
 
 func (r *Runner) scan(ctx context.Context, tf *tfProc, dir string, job runnerapi.Job, w io.Writer,
 	fail func(string, error) runnerapi.FinishRequest) runnerapi.FinishRequest {
-	var t templates.Template
-	if err := json.Unmarshal(job.Scan, &t); err != nil || len(job.Modules) != 1 {
-		return fail("read scan", fmt.Errorf("invalid scan job: %v", err))
+	if job.Scan == nil {
+		return fail("read scan", errors.New("a scan job without what to scan"))
 	}
+	sources := map[string]string{} // module name → source
+	for _, m := range job.Modules {
+		sources[m.Name] = m.Source
+	}
+	tpls := make([]templates.Template, len(job.Scan.Templates))
 	var lists []string
-	for _, a := range t.Adopt {
-		if a.List != "" && !slices.Contains(lists, a.List) {
-			lists = append(lists, a.List)
+	for i, st := range job.Scan.Templates {
+		if err := json.Unmarshal(st.Template, &tpls[i]); err != nil || sources[st.Module] == "" {
+			return fail("read scan", fmt.Errorf("invalid template in the scan job: %v", err))
 		}
+		for _, n := range st.Notes {
+			fmt.Fprintf(w, "==> %s: %s\n", tpls[i].Name, n)
+		}
+		for _, e := range st.Entries {
+			if !slices.Contains(lists, e.List) && listRe.MatchString(e.List) {
+				lists = append(lists, e.List)
+			}
+		}
+	}
+	rg := job.Scan.ResourceGroup
+	if rg != "" && !rgRe.MatchString(rg) {
+		return fail("read scan", fmt.Errorf("invalid resource group name %q", rg))
 	}
 	qdir := filepath.Join(dir, "query")
 	if err := os.Mkdir(qdir, 0o700); err != nil {
@@ -65,12 +83,7 @@ func (r *Runner) scan(ctx context.Context, tf *tfProc, dir string, job runnerapi
 	}
 	var byType map[string][]found
 	for queried := slices.Clone(lists); ; {
-		var q strings.Builder
-		for i, l := range queried { // listRe-checked types: safe in HCL
-			prov, _, _ := strings.Cut(l, "_")
-			fmt.Fprintf(&q, "list %q \"l%d\" {\n  provider         = %s\n  include_resource = true\n  limit            = 1000\n}\n", l, i, prov)
-		}
-		if err := os.WriteFile(filepath.Join(qdir, "scan.tfquery.hcl"), []byte(q.String()), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(qdir, "scan.tfquery.hcl"), []byte(queryFile(queried, rg)), 0o600); err != nil {
 			return fail("prepare scan", err)
 		}
 		fmt.Fprintf(w, "\n==> terraform query (find %s)\n", strings.Join(queried, ", "))
@@ -86,17 +99,24 @@ func (r *Runner) scan(ctx context.Context, tf *tfProc, dir string, job runnerapi
 			continue
 		}
 		if len(unsupported) > 0 && err == nil {
-			err = fmt.Errorf("the provider can list none of %s: the template's adopt entries need other list types", strings.Join(unsupported, ", "))
+			err = fmt.Errorf("the provider can list none of %s", strings.Join(unsupported, ", "))
 		}
 		if err = cmp.Or(err, qerr); err != nil {
 			return fail("query", err)
 		}
 		break
 	}
-	cands, vals := candidates(t, byType, func() string { return "Ops-" + rand.Text() + "-1a" })
-	fmt.Fprintf(w, "\n==> %d candidates\n", len(cands))
+	var cands []runnerapi.Candidate
+	var vals []map[string]any
+	srcs := map[string]string{} // template id → its module's source
+	for i, st := range job.Scan.Templates {
+		c, v := candidates(tpls[i], st.Entries, byType, func() string { return "Ops-" + rand.Text() + "-1a" })
+		cands, vals = append(cands, c...), append(vals, v...)
+		srcs[tpls[i].ID] = sources[st.Module]
+	}
+	fmt.Fprintf(w, "\n==> %d found\n", len(cands))
 	if checkable(cands) > 0 {
-		r.fit(ctx, tf, dir, job.Modules[0].Source, t, lists, cands, vals, w)
+		r.fit(ctx, tf, dir, srcs, lists, cands, vals, w)
 	}
 	secrets := mask.New(job.Secrets)
 	for i := range cands {
@@ -107,6 +127,23 @@ func (r *Runner) scan(ctx context.Context, tf *tfProc, dir string, job runnerapi
 		}
 	}
 	return runnerapi.FinishRequest{Status: "succeeded", Candidates: cands}
+}
+
+// queryFile is the .tfquery.hcl that lists the types (listRe-checked), in resource group rg (rgRe-checked; ""
+// all): both safe in HCL as they are.
+func queryFile(lists []string, rg string) string {
+	var q strings.Builder
+	for i, l := range lists {
+		prov, _, _ := strings.Cut(l, "_")
+		fmt.Fprintf(&q, "list %q \"l%d\" {\n  provider         = %s\n  include_resource = true\n  limit            = 1000\n", l, i, prov)
+		// shortcut: azurerm's list resources take resource_group_name, except the resource group list; add a
+		// per-provider filter setting for other providers.
+		if rg != "" && prov == "azurerm" && l != "azurerm_resource_group" {
+			fmt.Fprintf(&q, "  config {\n    resource_group_name = %q\n  }\n", rg)
+		}
+		q.WriteString("}\n")
+	}
+	return q.String()
 }
 
 // writeProviders writes the provider requirements and configurations for the list types' providers (each
@@ -176,10 +213,10 @@ func parseQuery(out io.Reader, w io.Writer) (map[string][]found, []string, error
 // unsupportedList matches Terraform's "The provider hashicorp/azurerm does not support list resource "x"."
 var unsupportedList = regexp.MustCompile(`does not support list resource "([a-z0-9_]+)"`)
 
-// candidates maps what the query found to template t: one candidate per resource of a primary entry (that
-// has Require set), its inputs and related resources (IDFrom) filled in, checked like the form checks them.
-// vals are the valid candidates' Terraform values (placeholders included), by index, for the fit check.
-func candidates(t templates.Template, byType map[string][]found, placeholder func() string) ([]runnerapi.Candidate, []map[string]any) {
+// candidates maps what the query found to template t's entries: one candidate per resource of a primary entry
+// (that has Require set), its inputs and related resources (IDFrom) filled in, checked like the form checks them.
+// vals are the candidates' Terraform values (placeholders included), by index, for the fit check.
+func candidates(t templates.Template, entries []runnerapi.ScanEntry, byType map[string][]found, placeholder func() string) ([]runnerapi.Candidate, []map[string]any) {
 	var out []runnerapi.Candidate
 	var vals []map[string]any
 	seen := map[string]bool{}
@@ -187,23 +224,23 @@ func candidates(t templates.Template, byType map[string][]found, placeholder fun
 	for _, in := range t.Inputs {
 		types[in.Name] = in.Type
 	}
-	for pi, p := range t.Adopt {
+	for pi, p := range entries {
 		if !p.Primary() {
 			continue
 		}
 		for _, f := range byType[p.List] {
 			id, _ := f.obj["id"].(string)
-			if id == "" || seen[strings.ToLower(id)] || p.Require != "" && templates.Path(f.obj, p.Require) == nil {
+			if id == "" || seen[strings.ToLower(id)] || p.Require != "" && path(f.obj, p.Require) == nil {
 				continue
 			}
 			seen[strings.ToLower(id)] = true
-			raw, ids, secret := map[string]string{}, make([]string, len(t.Adopt)), map[string]bool{}
+			raw, ids, secret := map[string]string{}, make([]string, len(entries)), map[string]bool{}
 			if c := p.ShowIf; c != nil && len(c.Equals) == 1 {
 				raw[c.Input] = c.Equals[0]
 			}
-			fill := func(a templates.Adopt, obj map[string]any) {
+			fill := func(a runnerapi.ScanEntry, obj map[string]any) {
 				for _, in := range slices.Sorted(maps.Keys(a.Inputs)) {
-					v := templates.Path(obj, a.Inputs[in])
+					v := path(obj, a.Inputs[in])
 					if types[in] == "bool" { // whether it's set, e.g. a block such as boot_diagnostics
 						raw[in] = strconv.FormatBool(isSet(v))
 					} else if s, ok := rawValue(v); ok {
@@ -213,11 +250,11 @@ func candidates(t templates.Template, byType map[string][]found, placeholder fun
 			}
 			ids[pi] = id
 			fill(p, f.obj)
-			for j, a := range t.Adopt {
+			for j, a := range entries {
 				if a.IDFrom == "" || !t.Match(a.ShowIf, raw) {
 					continue
 				}
-				rid, _ := templates.Path(f.obj, a.IDFrom).(string)
+				rid, _ := path(f.obj, a.IDFrom).(string)
 				ids[j] = rid
 				for _, rf := range byType[a.List] {
 					if fid, _ := rf.obj["id"].(string); rid != "" && strings.EqualFold(fid, rid) {
@@ -225,28 +262,28 @@ func candidates(t templates.Template, byType map[string][]found, placeholder fun
 					}
 				}
 			}
-			for j, a := range t.Adopt {
+			c := runnerapi.Candidate{Template: t.ID, Name: f.name, Inputs: map[string]string{}}
+			for j, a := range entries {
 				if ids[j] == "" {
 					continue
 				}
 				for _, in := range a.Placeholder {
 					if raw[in] == "" {
 						raw[in], secret[in] = placeholder(), true
+						c.Placeholder = append(c.Placeholder, in)
 					}
 				}
+				c.Imports = append(c.Imports, runnerapi.Import{To: a.To, ID: sameCase(ids[j], raw)})
 			}
-			for k := range ids {
-				ids[k] = sameCase(ids[k], raw)
-			}
-			c := runnerapi.Candidate{Name: f.name, ID: ids[pi], Adopt: ids, Inputs: map[string]string{}}
+			c.ID = sameCase(id, raw)
 			v, errs := t.Validate(raw)
-			_, idErrs := t.AdoptIDs(raw, ids)
-			maps.Copy(errs, idErrs)
 			if len(errs) > 0 {
 				c.Fit = "invalid"
 				var msgs []string
-				for _, k := range slices.Sorted(maps.Keys(errs)) {
-					msgs = append(msgs, k+": "+errs[k])
+				for _, in := range t.Inputs { // in the form's order and words
+					if e, ok := errs[in.Name]; ok {
+						msgs = append(msgs, in.Title()+": "+e)
+					}
 				}
 				c.Message = strings.Join(msgs, "; ")
 			}
@@ -261,6 +298,32 @@ func candidates(t templates.Template, byType map[string][]found, placeholder fun
 	}
 	return out, vals
 }
+
+// path reads the attribute at p (an attribute path such as os_disk[0].storage_account_type) from v, a
+// resource's JSON attributes; nil when absent.
+func path(v any, p string) any {
+	for _, step := range pathSteps.FindAllString(p, -1) {
+		switch x := v.(type) {
+		case map[string]any:
+			v = x[strings.TrimPrefix(step, ".")]
+		case []any:
+			i, err := strconv.Atoi(strings.Trim(step, "[]"))
+			if err != nil || i >= len(x) || !strings.HasPrefix(step, "[") {
+				return nil
+			}
+			v = x[i]
+		default:
+			return nil
+		}
+	}
+	return v
+}
+
+var (
+	pathSteps = regexp.MustCompile(`^[^.\[]+|\.[^.\[]+|\[\d+\]`)
+	listRe    = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+	rgRe      = regexp.MustCompile(`^[-\w.()]{1,90}$`) // Azure's resource group names; also what's safe in HCL
+)
 
 // rawValue is an attribute value as the form types it; false for values a form field can't hold.
 func rawValue(v any) (string, bool) {
@@ -317,9 +380,9 @@ func checkable(cands []runnerapi.Candidate) int {
 	return n
 }
 
-// fit plans adopting every valid candidate (the first maxCandidates), each as module c<i> of the template's
-// module src with its imports, against an empty local state, and sets each one's Fit from its part of the plan.
-func (r *Runner) fit(ctx context.Context, tf *tfProc, dir, src string, t templates.Template, lists []string,
+// fit plans adopting every valid candidate (the first maxCandidates), each as module c<i> of its template's
+// module (srcs by template id) with its imports, against an empty local state, and sets each one's Fit from its part of the plan.
+func (r *Runner) fit(ctx context.Context, tf *tfProc, dir string, srcs map[string]string, lists []string,
 	cands []runnerapi.Candidate, vals []map[string]any, w io.Writer) {
 	unchecked := func(i int, msg string) { cands[i].Fit, cands[i].Message = "unchecked", msg }
 	var mods []runnerapi.Module
@@ -333,11 +396,9 @@ func (r *Runner) fit(ctx context.Context, tf *tfProc, dir, src string, t templat
 			continue
 		}
 		name := "c" + strconv.Itoa(i)
-		mods = append(mods, runnerapi.Module{Name: name, Source: src, Inputs: vals[i]})
-		for j, id := range c.Adopt {
-			if id != "" {
-				imports = append(imports, runnerapi.Import{To: "module." + name + "." + t.Adopt[j].To, ID: id})
-			}
+		mods = append(mods, runnerapi.Module{Name: name, Source: srcs[c.Template], Inputs: vals[i]})
+		for _, im := range c.Imports {
+			imports = append(imports, runnerapi.Import{To: "module." + name + "." + im.To, ID: im.ID})
 		}
 	}
 	failAll := func(err error) {

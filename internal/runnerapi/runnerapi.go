@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 
 	tfjson "github.com/hashicorp/terraform-json"
+
+	"github.com/opsolete/opsolete/internal/templates"
 )
 
 const (
@@ -60,10 +62,40 @@ type Job struct {
 	Secrets []string `json:"secrets,omitempty"`
 	// Currency of the cost estimate (ISO 4217, e.g. EUR); "" is Infracost's default, USD.
 	Currency string `json:"currency,omitempty"`
-	// Scan (action scan, plan phase only): the template (JSON) whose adopt entries say what to find; Modules[0]
-	// is its module, for the fit check. No state: nothing is written, nothing locked.
-	Scan json.RawMessage `json:"scan,omitempty"`
+	// Scan (action scan, plan phase only): what to look for. No state: nothing is written, nothing locked.
+	Scan *Scan `json:"scan,omitempty"`
 }
+
+// Scan finds existing resources the catalog's templates can take over (runner.scan).
+type Scan struct {
+	ResourceGroup string         `json:"resource_group,omitempty"` // narrows the search; "" the whole subscription
+	Templates     []ScanTemplate `json:"templates"`
+}
+
+// ScanTemplate is a template a scan matches resources to. Entries, derived from its module's code
+// (registry.Adoptable), say what to find and how it fills the form; Module names its module in Job.Modules,
+// for the fit check.
+type ScanTemplate struct {
+	Template json.RawMessage `json:"template"` // templates.Template: its inputs, for show_if and the form's checks
+	Module   string          `json:"module"`
+	Entries  []ScanEntry     `json:"entries"`
+	Notes    []string        `json:"notes,omitempty"` // what reading the module skipped, for the log
+}
+
+// ScanEntry is a resource of a template's module that can take over an existing one.
+type ScanEntry struct {
+	To      string            `json:"to"`                // its address in the module, e.g. azurerm_windows_virtual_machine.self[0]
+	List    string            `json:"list"`              // the list resource type that finds it (terraform query)
+	Require string            `json:"require,omitempty"` // only resources with this attribute set count
+	IDFrom  string            `json:"id_from,omitempty"` // a related resource: its ID is the primary's attribute at this path
+	ShowIf  *templates.ShowIf `json:"show_if,omitempty"` // it exists only for these values of an input, e.g. os_type windows
+	Inputs  map[string]string `json:"inputs,omitempty"`  // input name → the attribute path that fills it
+	// Placeholder: sensitive inputs it ignores (lifecycle ignore_changes), filled with a random value on import.
+	Placeholder []string `json:"placeholder,omitempty"`
+}
+
+// Primary reports whether resources found for the entry are candidates (not related to another's).
+func (e ScanEntry) Primary() bool { return e.IDFrom == "" }
 
 // Module is a template added to the workspace: the runner adds it as module.<Name> next to the
 // root configuration, and exposes each of its outputs as the root output <Name>__<output>.
@@ -93,16 +125,19 @@ type FinishRequest struct {
 	Candidates []Candidate `json:"candidates,omitempty"`
 }
 
-// Candidate is an existing resource a scan found for a template: the form values that adopt it, and how a plan
-// with them went (the fit check).
+// Candidate is an existing resource a scan found for a template, with its related ones: the form values and
+// imports that take them over, and how a plan with them went (the fit check).
 type Candidate struct {
-	Name    string            `json:"name"`
-	ID      string            `json:"id"`     // the resource's ID
-	Inputs  map[string]string `json:"inputs"` // form values by input name, as typed; sensitive ones left out
-	Adopt   []string          `json:"adopt"`  // the IDs to paste, by adopt entry
-	Fit     string            `json:"fit"`    // fits | differs | replaces | invalid (the form refuses it) | unchecked
-	Message string            `json:"message,omitempty"`
-	Changes []FitChange       `json:"changes,omitempty"` // differs / replaces: what the plan would do besides importing
+	Template string            `json:"template"` // its id
+	Name     string            `json:"name"`
+	ID       string            `json:"id"`      // the resource's ID
+	Inputs   map[string]string `json:"inputs"`  // form values by input name, as typed; sensitive ones left out
+	Imports  []Import          `json:"imports"` // To: the address in the template's module
+	// Placeholder: sensitive inputs to fill with a random value on import (ScanEntry.Placeholder).
+	Placeholder []string    `json:"placeholder,omitempty"`
+	Fit         string      `json:"fit"` // fits | differs | replaces | invalid (the form refuses its values) | unchecked
+	Message     string      `json:"message,omitempty"`
+	Changes     []FitChange `json:"changes,omitempty"` // differs / replaces: what the plan would do besides importing
 }
 
 // FitChange is one resource a fit check's plan changes: the action and the attributes, never their values.

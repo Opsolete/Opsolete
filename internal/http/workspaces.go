@@ -29,7 +29,7 @@ func (s *Server) workspaceRoutes(mux routes) {
 	mux.HandleFunc("GET /v1/vcs-archives/{file}", s.vcsArchive)
 	// the workspace's side-menu pages: workspace.html shows the part of the tab
 	mux.HandleFunc("GET /workspaces/{name}", s.workspaceTab("overview"))
-	for _, tab := range []string{"runs", "states", "variables", "settings", "deploy"} {
+	for _, tab := range []string{"runs", "states", "variables", "settings", "deploy", "import"} {
 		mux.HandleFunc("GET /workspaces/{name}/"+tab, s.workspaceTab(tab))
 	}
 	mux.HandleFunc("GET /workspaces/{name}/settings/{page}", s.workspaceTab("settings"))
@@ -70,12 +70,12 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in := app.NewWorkspace{Name: strings.TrimSpace(f.Get(fieldWorkspace)), Project: f.Get(fieldProject),
-		AutoApply: f.Get(fieldAutoApply) != "", TemplateID: t.ID, Inputs: formValues(f, t), Adopt: adoptIDs(f, t)}
+		AutoApply: f.Get(fieldAutoApply) != "", TemplateID: t.ID, Inputs: formValues(f, t)}
 	form := func(status int, fs *formState) { // the form again, as posted
 		if fs != nil {
 			fs.Labels = inputLabels(t)
 		}
-		page := formPage{Page: Page{Section: "templates"}, T: t, Editor: s.canEditTemplates(r), Values: in.Inputs, Adopt: in.Adopt, F: fs, Workspace: in.Name, AutoApply: in.AutoApply, Project: in.Project}
+		page := formPage{Page: Page{Section: "templates"}, T: t, Editor: s.canEditTemplates(r), Values: in.Inputs, F: fs, Workspace: in.Name, AutoApply: in.AutoApply, Project: in.Project}
 		var err error
 		if page.Projects, err = s.creatableProjects(r); err != nil {
 			s.internalError(w, "list projects", err)

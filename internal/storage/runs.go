@@ -309,32 +309,33 @@ func prune(batch func(lim int32) (int64, error), lim int32) (int64, error) {
 	}
 }
 
-// CreateScan queues a scan of the workspace for existing resources template can adopt (runner.scan).
-// ErrRunActive, ErrLocalExecution: as for CreateRun.
-func (s *Store) CreateScan(ctx context.Context, workspaceID uuid.UUID, template string, createdBy uuid.UUID) (Run, error) {
+// CreateScan queues a scan of the workspace for existing resources (runner.scan), in resourceGroup ("" the
+// whole subscription). ErrRunActive, ErrLocalExecution: as for CreateRun.
+func (s *Store) CreateScan(ctx context.Context, workspaceID uuid.UUID, resourceGroup string, createdBy uuid.UUID) (Run, error) {
 	var r Run
 	err := s.tx(ctx, func(q *db.Queries) error {
 		var err error
 		if r, err = createRun(ctx, q, workspaceID, "scan", createdBy); err != nil {
 			return err
 		}
-		return q.SetRunScanTemplate(ctx, db.SetRunScanTemplateParams{ID: r.ID, Template: template})
+		return q.SetRunScanResourceGroup(ctx, db.SetRunScanResourceGroupParams{ID: r.ID, ResourceGroup: resourceGroup})
 	})
 	return r, err
 }
 
-// Scan is a scan run's template and what it found (nil until it finished).
+// Scan is a scan run's resource group ("" the whole subscription) and what it found (nil until it finished).
 type Scan struct {
-	Template   string
-	Candidates []runnerapi.Candidate
+	ResourceGroup string
+	Candidates    []runnerapi.Candidate
 }
 
+// RunScan loads scan run runID; ErrNotFound if it isn't a scan.
 func (s *Store) RunScan(ctx context.Context, runID uuid.UUID) (Scan, error) {
 	row, err := s.q.RunScan(ctx, runID)
 	if err != nil {
 		return Scan{}, notFound(err)
 	}
-	sc := Scan{Template: row.Template}
+	sc := Scan{ResourceGroup: row.ResourceGroup}
 	if row.Candidates != nil {
 		err = json.Unmarshal(row.Candidates, &sc.Candidates)
 	}

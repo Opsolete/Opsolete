@@ -57,6 +57,7 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 | `POST /workspaces/{name}/variables` | operate | Sets a variable: `category` (`env` or `terraform`), `key`, `value`, `sensitive` |
 | `POST /workspaces/{name}/variables/{id}/delete` | operate | Deletes a variable |
 | `GET /workspaces/{name}/deploy` | read | Templates to add |
+| `GET /workspaces/{name}/import` | read | Import existing resources: the scan form, the templates a scan can use, the latest scans |
 | `GET /workspaces/{name}/templates/new` | operate | Form to add `?template={id}` |
 | `POST /workspaces/{name}/templates/new` | operate | Adds it and queues a plan |
 | `GET /workspaces/{name}/templates/{module}` | operate | Configure an added template (or update it to the template's version) |
@@ -82,7 +83,7 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 | Endpoint | Access | Purpose |
 |---|---|---|
 | `POST /workspaces/{name}/runs` | operate | Starts a run: `action=apply\|plan\|destroy\|refresh\|assess`, `replace=<address>` (apply only, repeatable); `409` while another run is active |
-| `POST /workspaces/{name}/scans` | operate | Starts a scan for existing resources `template=<id>` can adopt (a run, action `scan`); `422` if the template can't scan, `409` while another run is active |
+| `POST /workspaces/{name}/scans` | operate | Starts a scan (a run, action `scan`) for existing resources the catalog's registry templates can take over, in `resource_group=<name>` (empty: the whole subscription); `422` for an invalid name or when no template can import, `409` while another run is active |
 | `GET /workspaces/{name}/runs/{run}` | read | Plan, confirm / discard / cancel, live log, history; a scan's results |
 | `POST /workspaces/{name}/runs/{run}/confirm` | operate | Queues the apply of a plan waiting for confirmation |
 | `POST /workspaces/{name}/runs/{run}/discard` | operate | Ends it without applying |

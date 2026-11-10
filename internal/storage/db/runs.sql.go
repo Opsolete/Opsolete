@@ -583,18 +583,18 @@ func (q *Queries) RunImports(ctx context.Context, id uuid.UUID) ([]byte, error) 
 }
 
 const runScan = `-- name: RunScan :one
-SELECT COALESCE(scan_template, '')::text AS template, candidates FROM runs WHERE id = $1::uuid
+SELECT COALESCE(scan_resource_group, '')::text AS resource_group, candidates FROM runs WHERE id = $1::uuid AND action = 'scan'
 `
 
 type RunScanRow struct {
-	Template   string
-	Candidates []byte
+	ResourceGroup string
+	Candidates    []byte
 }
 
 func (q *Queries) RunScan(ctx context.Context, id uuid.UUID) (RunScanRow, error) {
 	row := q.db.QueryRow(ctx, runScan, id)
 	var i RunScanRow
-	err := row.Scan(&i.Template, &i.Candidates)
+	err := row.Scan(&i.ResourceGroup, &i.Candidates)
 	return i, err
 }
 
@@ -706,17 +706,17 @@ func (q *Queries) SetRunRollout(ctx context.Context, arg SetRunRolloutParams) er
 	return err
 }
 
-const setRunScanTemplate = `-- name: SetRunScanTemplate :exec
-UPDATE runs SET scan_template = $1::text WHERE id = $2::uuid
+const setRunScanResourceGroup = `-- name: SetRunScanResourceGroup :exec
+UPDATE runs SET scan_resource_group = $1::text WHERE id = $2::uuid
 `
 
-type SetRunScanTemplateParams struct {
-	Template string
-	ID       uuid.UUID
+type SetRunScanResourceGroupParams struct {
+	ResourceGroup string
+	ID            uuid.UUID
 }
 
-func (q *Queries) SetRunScanTemplate(ctx context.Context, arg SetRunScanTemplateParams) error {
-	_, err := q.db.Exec(ctx, setRunScanTemplate, arg.Template, arg.ID)
+func (q *Queries) SetRunScanResourceGroup(ctx context.Context, arg SetRunScanResourceGroupParams) error {
+	_, err := q.db.Exec(ctx, setRunScanResourceGroup, arg.ResourceGroup, arg.ID)
 	return err
 }
 
