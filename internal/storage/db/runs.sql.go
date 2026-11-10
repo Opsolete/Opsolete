@@ -571,6 +571,17 @@ func (q *Queries) RestoreTemplate(ctx context.Context, arg RestoreTemplateParams
 	return err
 }
 
+const runImports = `-- name: RunImports :one
+SELECT imports FROM runs WHERE id = $1::uuid
+`
+
+func (q *Queries) RunImports(ctx context.Context, id uuid.UUID) ([]byte, error) {
+	row := q.db.QueryRow(ctx, runImports, id)
+	var imports []byte
+	err := row.Scan(&imports)
+	return imports, err
+}
+
 const runScan = `-- name: RunScan :one
 SELECT COALESCE(scan_template, '')::text AS template, candidates FROM runs WHERE id = $1::uuid
 `

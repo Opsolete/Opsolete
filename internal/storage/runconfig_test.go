@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -174,6 +175,22 @@ func TestAdoption(t *testing.T) {
 
 	if _, status := adopt(runnerapi.Plan{Import: 2, Add: 1, Destroy: 1}); status != Errored || added() {
 		t.Fatalf("a replacing adoption: %s, template kept %v", status, added())
+	}
+	// an import of a resource the state has already (as its plan phase read it): refused, whatever the plan
+	r0, err := s.SetWorkspaceTemplate(ctx, w.ID, WorkspaceTemplate{Name: "vm", TemplateID: "job-test", ModuleSource: "git::x", ModuleRef: "v1",
+		Inputs: map[string]any{}, Imports: imports}, true, uuid.Nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j0 := claim(t, s, "plan")
+	have := []runnerapi.Resource{{Address: "module.old.a.b", Type: "a", Name: "b", ID: "/X/1"}} // imports[0] in other case
+	if status, err := s.FinishJob(ctx, r0.ID, j0.LeaseID, "succeeded", "", nil, &runnerapi.Plan{Import: 2}, have); err != nil || status != Errored || added() {
+		t.Fatalf("adopting a managed resource: %s %v, template kept %v", status, err, added())
+	}
+	var msg string
+	s.Pool.QueryRow(ctx, `SELECT message FROM run_status_history WHERE run_id = $1 ORDER BY created_at DESC LIMIT 1`, r0.ID).Scan(&msg)
+	if !strings.Contains(msg, "managed already, by module.old.a.b") {
+		t.Fatalf("message: %q", msg)
 	}
 	r, status := adopt(runnerapi.Plan{Import: 2, Change: 1})
 	if status != NeedsConfirmation { // not apply_queued: the workspace auto-applies

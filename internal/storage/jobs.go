@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -194,6 +196,8 @@ func (s *Store) CancelRun(ctx context.Context, id uuid.UUID, email string, force
 //     (destroys, refresh-only runs and template rollouts always wait for a human), or drifted for assess runs and
 //     planned for speculative plans, which are never applied; without changes: no_changes
 //   - scan: planned, its candidates stored
+//   - plan of an adoption that imports a resource a state manages already (resources: this workspace's state as
+//     the plan read it; the index for the others): errored
 //   - plan of an adoption (runs.imports) that would replace or delete anything: errored, and the template
 //     change is undone like any run that ends before its apply (adoptions always wait for a human)
 //   - apply: applied
@@ -224,10 +228,18 @@ func (s *Store) finishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 			return err
 		}
 		final = map[string]string{"failed": Errored, "canceled": Canceled}[result]
+		var conflict string
+		if r.Adopting && r.Status == Planning && final == "" {
+			if conflict, err = adoptionConflict(ctx, q, runID, resources); err != nil {
+				return err
+			}
+		}
 		switch {
 		case final != "":
 		case r.Status == Applying:
 			final = Applied
+		case conflict != "":
+			final, message = Errored, conflict
 		case r.Action == "scan": // never applied
 			final = Planned
 			b, err := json.Marshal(candidates)
@@ -297,6 +309,34 @@ func (s *Store) finishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 		entry.stream()
 	}
 	return final, nil
+}
+
+// adoptionConflict says which of run runID's imports a state manages already ("" none): this workspace's as
+// its plan phase read it (resources; nil: its index), the others' by their index. A resource in two states, or
+// twice in one, would be destroyed by removing either.
+func adoptionConflict(ctx context.Context, q *db.Queries, runID uuid.UUID, resources []runnerapi.Resource) (string, error) {
+	raw, err := q.RunImports(ctx, runID)
+	if err != nil {
+		return "", err
+	}
+	var imports []runnerapi.Import
+	if err := json.Unmarshal(raw, &imports); err != nil {
+		return "", err
+	}
+	ids := make([]string, len(imports))
+	for i, im := range imports {
+		ids[i] = strings.ToLower(im.ID)
+	}
+	for _, res := range resources {
+		if slices.Contains(ids, strings.ToLower(res.ID)) && res.ID != "" {
+			return "adoption refused: " + res.ID + " is managed already, by " + res.Address + " in this workspace; nothing was applied", nil
+		}
+	}
+	rows, err := q.ManagedResourceIDs(ctx, ids)
+	if err != nil || len(rows) == 0 {
+		return "", err
+	}
+	return "adoption refused: " + rows[0].ID + " is managed already, in workspace " + rows[0].Workspace + "; nothing was applied", nil
 }
 
 // Unclaimed is a job UnclaimJobs put back in the queue.

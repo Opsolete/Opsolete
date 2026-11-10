@@ -90,6 +90,9 @@ UPDATE runs SET candidates = sqlc.arg(candidates)::jsonb WHERE id = sqlc.arg(id)
 -- name: RunScan :one
 SELECT COALESCE(scan_template, '')::text AS template, candidates FROM runs WHERE id = sqlc.arg(id)::uuid;
 
+-- name: RunImports :one
+SELECT imports FROM runs WHERE id = sqlc.arg(id)::uuid;
+
 -- name: SetRunImports :exec
 -- An adoption: it always waits for a human, also with auto-apply.
 UPDATE runs SET imports = sqlc.arg(imports)::jsonb, always_confirm = true WHERE id = sqlc.arg(id)::uuid;

@@ -227,7 +227,8 @@ in the form values, and plans adopting all of them, each as its own module, into
 written or locked. The run page shows each one as **fits** (imports only), **differs** (and which attributes would
 change), **doesn't fit** (would replace it: no Adopt), **incomplete** (the form lacks values; Adopt and fill them
 in) or **managed** (a workspace's state has its ID already). Adopting an ID a workspace manages is refused, also when
-pasted by hand: a resource can be in one state only. States record resource IDs since this feature; an older one
+pasted by hand: a resource can be in one state only. The adoption's plan checks it again against the state as it
+reads it, and ends the run as errored if the resource is there already. States record resource IDs since this feature; an older one
 gets them at its workspace's next run (any run but a speculative plan or drift check, even one without changes). Resource IDs take the case of the input values
 (Azure reports `TEST1` in a VM's ID and `test1` in its NIC's). Found values never include sensitive attributes'
 values: map only plain settings. At most 50 resources per scan are checked; the rest are listed as unchecked.
