@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/opsolete/opsolete/internal/registry/registrytest"
+	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/templates"
 )
 
@@ -39,7 +40,7 @@ func TestAdoptableTree(t *testing.T) {
 	inputs, _ := Inputs(ins.Variables)
 	i := slices.IndexFunc(inputs, func(in templates.Input) bool { return in.Name == "admin_password" })
 	inputs[i].Sensitive = true // as the template marks it
-	entries, notes, err := Adoptable(archive, inputs, func(source, version string) ([]byte, error) {
+	entries, probes, notes, err := Adoptable(archive, inputs, func(source, version string) ([]byte, error) {
 		if !strings.HasPrefix(version, "~> 1.") {
 			t.Errorf("%s: version %q", source, version)
 		}
@@ -57,10 +58,32 @@ func TestAdoptableTree(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("entries:\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
-	wantNotes := []string{"module.data_disk: repeated (for_each), filled in on the form", "module.shutdown_schedule: optional, filled in on the form",
-		"module.nsg: optional, filled in on the form"}
-	if !reflect.DeepEqual(notes, wantNotes) {
+	if len(notes) != 0 {
 		t.Errorf("notes %q", notes)
+	}
+	// the optional and repeated parts import what exists themselves (existing): probes, whose tries fill the form
+	if len(probes) != 3 {
+		t.Fatalf("probes: %+v", probes)
+	}
+	disk, sched, nsg := probes[0], probes[1], probes[2]
+	vm := []string{"module.windows[0].azurerm_windows_virtual_machine.main", "module.linux[0].azurerm_linux_virtual_machine.main"}
+	if disk.Call != "module.data_disk" || disk.List != "data_disks" || disk.Key != "lun" || disk.Type != "Microsoft.Compute/disks" || disk.Imports != 2 ||
+		!strings.HasSuffix(disk.Source, "/data-disk/azurerm") || disk.Version != "~> 1.1" ||
+		!reflect.DeepEqual(disk.Args["existing"], runnerapi.ProbeArg{Field: "existing", Switch: true}) ||
+		!reflect.DeepEqual(disk.Args["name"], runnerapi.ProbeArg{Field: "name", Name: true}) ||
+		!reflect.DeepEqual(disk.Args["virtual_machine_id"], runnerapi.ProbeArg{Refs: vm}) || disk.Args["location"].Input != "location" ||
+		disk.Fills[0].Values["size_gb"] != "disk_size_gb" || disk.Fills[1].Values["lun"] != "lun" || disk.Fills[1].Values["caching"] != "caching" {
+		t.Errorf("data disk: %+v", disk)
+	}
+	if sched.Type != "" || sched.List != "" || !reflect.DeepEqual(sched.Args["existing"], runnerapi.ProbeArg{Input: "auto_shutdown_existing", Switch: true}) ||
+		sched.Fills[0].Values["auto_shutdown_time"] != "daily_recurrence_time" || sched.Fills[0].Values["auto_shutdown_notification_email"] != "notification_settings[0].email" {
+		t.Errorf("schedule: %+v", sched)
+	}
+	if nsg.Type != "Microsoft.Network/networkSecurityGroups" || !reflect.DeepEqual(nsg.Args["name"], runnerapi.ProbeArg{Input: "nsg_name", Name: true}) ||
+		!reflect.DeepEqual(nsg.Args["network_interface_id"], runnerapi.ProbeArg{Refs: []string{"module.nic.azurerm_network_interface.main"}}) ||
+		nsg.Fills[0].Values["nsg_name"] != "name" || nsg.Fills[0].Lists["nsg_rules"].Block != "security_rule" ||
+		nsg.Fills[0].Lists["nsg_rules"].Fields["destination_port_range"] != "destination_port_range" {
+		t.Errorf("nsg: %+v", nsg)
 	}
 	w := entries[1]
 	if w.ShowIf == nil || w.ShowIf.Equals[0] != "windows" || !reflect.DeepEqual(w.Placeholder, []string{"admin_password"}) ||

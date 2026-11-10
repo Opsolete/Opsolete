@@ -29,9 +29,19 @@ type; `count = var.x == "v" ? 1 : 0` → exists for x = v; `attr = var.x` / `coa
 input x; `dynamic "b" { for_each = var.x ? … : [] }` → yes/no input x; `[other.res.id]` → other is related
 (`id_from`); sensitive input in `ignore_changes` → random placeholder. Module calls are followed (local, and this
 registry's newest version within the constraint), values through arguments, locals and outputs. Optional and
-repeated parts (`count = var.x != null ? 1 : 0` or `for_each` on a module call) are skipped, with a note: they're
-filled in on the form, and their module imports existing ones itself (an `import` block in the module on an input
-`existing`, Terraform ≥ 1.16; IDs built from its inputs). No naming convention: the code says which
+repeated parts (`count = var.x != null ? 1 : 0`, or `for_each` over a list input's rows, on a module call) whose
+module imports existing ones itself (import blocks switched by an input, e.g. `existing`, Terraform ≥ 1.16) are
+probes (`runnerapi.Probe`): where each call argument comes from (an input, a row field, a found resource's ID),
+which one switches the import and which takes the name, the type the import ID names (`/providers/<ns>/<type>/`
+before the name), and which attribute fills which input, row field or list (dynamic blocks). The runner
+(`runner/probe.go`) tries them in one throwaway plan per scan, a module per try calling the part's module directly:
+per inventory resource of that type in the candidate's resource group, or once. A failing import fails only its
+try (the errored plan file still has the others); a try whose every import succeeds belongs, its "before" fills
+the form with the switch on, and the candidate is validated again before the fit check. What the module imports
+itself is the candidate's `found`: checked against the states like its imports, never written as import blocks.
+Required text fields get a placeholder matching their pattern (the provider checks formats before importing). Live:
+`vm-test` fills its data disk, schedule and NSG with its rules, fit `7 to import, 0 to add, 0 to change, 0 to
+destroy`. No naming convention: the code says which
 input sets which attribute. A small table covers azurerm's Linux VM list also returning Windows VMs (`require`).
 
 Rejected:
@@ -81,9 +91,7 @@ Rejected:
 ## Open
 
 - Linux VMs, extensions: not tried on real resources.
-- Optional parts are filled in by hand: a probe plan could fill them (import every candidate link, e.g. each disk
-  in the group as an attachment of the VM: what imports is linked, its "before" values fill the form; one failing
-  import doesn't hide the others, the errored plan file still has them). Checked live, not built.
+- Probes: more than 100 tries per scan are skipped (logged); a part from a local module (`./x`) isn't tried.
 - More than 50 found per scan: fit-checked in batches; paging past `limit = 1000` per list type.
 - Resources no template can manage: listing them would show which templates to write next.
 - Import by resource ID (without a scan), bulk import of everything that fits.

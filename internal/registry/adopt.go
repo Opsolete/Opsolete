@@ -1,9 +1,12 @@
 package registry
 
 import (
+	"cmp"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -25,10 +28,12 @@ import (
 //   - attribute = [other.id] or other.id (also through outputs): other is related, found from this attribute
 //   - a sensitive input in an attribute in lifecycle ignore_changes: a placeholder
 //
-// Optional and repeated parts (count = var.x != null ? 1 : 0, or for_each, on a module call) are skipped: Terraform
-// can't list most of them (data disks, schedules), so the form asks them, and their module imports existing ones
-// (an import block in the module, e.g. on an input existing = true). shortcut: other expressions, for_each on
-// resources and other sources are skipped too (listed in the notes); the form asks them when importing.
+// Optional and repeated parts (count = var.x != null ? 1 : 0, or for_each over a list input's rows, on a module
+// call) aren't searched: Terraform can't list most of them (data disks, schedules). When their module imports what
+// exists itself (import blocks switched by an input, e.g. existing = true) they're probes (probe): the runner tries
+// the inventory's resources with that module, and fills the form from what imports. Otherwise the form asks them.
+// shortcut: other expressions, for_each on resources and other sources are skipped too (listed in the notes); the
+// form asks them when importing.
 
 // requireByType is for list resources that also return resources of another kind: the attribute only theirs has.
 var requireByType = map[string]string{
@@ -47,6 +52,8 @@ const maxDepth = 8
 type module struct {
 	resources []*hclsyntax.Block
 	calls     []*hclsyntax.Block
+	imports   []*hclsyntax.Block
+	vars      map[string]bool // variable → whether it has a default
 	locals    map[string]hclsyntax.Expression
 	outputs   map[string]hclsyntax.Expression
 	dir       string // where its local calls start, in its archive
@@ -64,16 +71,16 @@ type inst struct {
 
 // Adoptable reads what a scan can find for a module (a registry archive) used with a template's inputs, and notes
 // on what it skipped.
-func Adoptable(archive []byte, inputs []templates.Input, fetch Fetch) ([]runnerapi.ScanEntry, []string, error) {
+func Adoptable(archive []byte, inputs []templates.Input, fetch Fetch) ([]runnerapi.ScanEntry, []runnerapi.Probe, []string, error) {
 	r := reader{inputs: inputs, fetch: fetch}
 	defer r.cleanup()
 	root, err := r.load(archive)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	r.walk(&inst{mod: root}, 0)
 	r.classify()
-	return r.entries, r.notes, nil
+	return r.entries, r.probes, r.notes, nil
 }
 
 type reader struct {
@@ -82,6 +89,7 @@ type reader struct {
 	dirs    []string // extracted archives, removed by cleanup
 	entries []runnerapi.ScanEntry
 	refs    [][]reference // by entry: the resources its attributes refer to
+	probes  []runnerapi.Probe
 	notes   []string
 }
 
@@ -107,7 +115,7 @@ func (r *reader) load(archive []byte) (*module, error) {
 }
 
 func readModule(archive, dir string) (*module, error) {
-	m := &module{locals: map[string]hclsyntax.Expression{}, outputs: map[string]hclsyntax.Expression{}, dir: dir, archive: archive}
+	m := &module{locals: map[string]hclsyntax.Expression{}, outputs: map[string]hclsyntax.Expression{}, vars: map[string]bool{}, dir: dir, archive: archive}
 	files, _ := filepath.Glob(filepath.Join(dir, "*.tf"))
 	slices.Sort(files)
 	for _, name := range files {
@@ -125,6 +133,10 @@ func readModule(archive, dir string) (*module, error) {
 				m.resources = append(m.resources, b)
 			case b.Type == "module" && len(b.Labels) == 1:
 				m.calls = append(m.calls, b)
+			case b.Type == "import":
+				m.imports = append(m.imports, b)
+			case b.Type == "variable" && len(b.Labels) == 1:
+				m.vars[b.Labels[0]] = b.Body.Attributes["default"] != nil
 			case b.Type == "locals":
 				for k, a := range b.Body.Attributes {
 					m.locals[k] = a.Expr
@@ -188,12 +200,13 @@ func (r *reader) walk(in *inst, depth int) {
 		}
 		switch {
 		case c.args["for_each"] != nil:
-			r.notes = append(r.notes, name+": repeated (for_each), filled in on the form")
+			list, key := r.repeatOf(in, c.args["for_each"])
+			r.probe(in, call, c, name, list, key)
 			continue
 		case c.args["count"] != nil:
 			ok, optional := r.count(in, c.args["count"], &c.showIf)
 			if optional {
-				r.notes = append(r.notes, name+": optional, filled in on the form")
+				r.probe(in, call, c, name, "", "")
 				continue
 			}
 			if !ok {
@@ -242,11 +255,12 @@ func (r *reader) count(in *inst, e hclsyntax.Expression, showIf **templates.Show
 	return false, false
 }
 
-// val is what an expression comes from: a root input, or the IDs of resources (as a one-element list: tuple).
+// val is what an expression comes from: a root input, a field of a repeated module call's row (each.value.x), or
+// the IDs of resources (as a one-element list: tuple).
 type val struct {
-	input string
-	refs  []string
-	tuple bool
+	input, field string
+	refs         []string
+	tuple        bool
 }
 
 // resolve follows an expression in in's scope to what it comes from.
@@ -311,6 +325,10 @@ func (r *reader) resolve(in *inst, e hclsyntax.Expression) val {
 			out = attr(3)
 		}
 		return r.output(in, attr(1), out)
+	case "each":
+		if attr(1) == "value" && attr(2) != "" {
+			return val{field: attr(2)}
+		}
 	case "data", "path", "count", "terraform", "self":
 	default: // type.name.id, type.name[0].id
 		name, id := attr(1), attr(len(t)-1)
@@ -342,7 +360,7 @@ func (r *reader) output(in *inst, name, out string) val {
 		c.prefix = in.prefix + "module." + name + "[0]."
 	}
 	v := r.resolve(c, mod.outputs[out])
-	v.input = "" // an output's value is only followed for resource IDs
+	v.input, v.field = "", "" // an output's value is only followed for resource IDs
 	return v
 }
 
@@ -440,6 +458,166 @@ func (r *reader) body(in *inst, b *hclsyntax.Body, prefix string, n int, ignored
 			r.dynamic(in, blk, prefix, n)
 		default:
 			r.body(in, blk.Body, prefix+blk.Type+"[0].", n, ignored)
+		}
+	}
+}
+
+// repeatOf reads a module call's for_each = { for d in var.x : tostring(d.k) => d } (through locals) as rows of the
+// list input x keyed by its field k; "" if it isn't one.
+func (r *reader) repeatOf(in *inst, e hclsyntax.Expression) (list, key string) {
+	if t, diags := hcl.AbsTraversalForExpr(e); !diags.HasErrors() && t.RootName() == "local" && len(t) == 2 {
+		if a, ok := t[1].(hcl.TraverseAttr); ok && in.mod.locals[a.Name] != nil {
+			return r.repeatOf(in, in.mod.locals[a.Name])
+		}
+	}
+	f, ok := e.(*hclsyntax.ForExpr)
+	if !ok || f.KeyExpr == nil || f.CondExpr != nil {
+		return "", ""
+	}
+	k := f.KeyExpr
+	if fc, ok := k.(*hclsyntax.FunctionCallExpr); ok && fc.Name == "tostring" && len(fc.Args) == 1 {
+		k = fc.Args[0]
+	}
+	t, diags := hcl.AbsTraversalForExpr(k)
+	if diags.HasErrors() || len(t) != 2 || t.RootName() != f.ValVar {
+		return "", ""
+	}
+	field, _ := t[1].(hcl.TraverseAttr)
+	list = r.resolve(in, f.CollExpr).input
+	if ti := r.input(list); ti == nil || ti.Type != "list" {
+		return "", ""
+	}
+	return list, field.Name
+}
+
+// probeIDRe finds the type an import ID names: /providers/<namespace>/<type>/ right before the resource's name.
+var probeIDRe = regexp.MustCompile(`/providers/([^/]+/[^/]+)/$`)
+
+// probe makes a Probe of an optional or repeated module call (c, its instance; list and key: the rows it's
+// repeated over), or notes why the form asks it instead.
+func (r *reader) probe(in *inst, call *hclsyntax.Block, c *inst, name, list, key string) {
+	note := func(why string) { r.notes = append(r.notes, name+": "+why+", filled in on the form") }
+	repeated := c.args["for_each"] != nil
+	src := literal(attrExpr(call.Body, "source"))
+	switch {
+	case repeated && list == "":
+		note("repeated, but not over a list input's rows ({ for d in var.x : tostring(d.k) => d })")
+		return
+	case strings.HasPrefix(src, "."):
+		note("a local module, not tried")
+		return
+	case len(c.mod.imports) == 0:
+		note("optional; its module imports nothing")
+		return
+	}
+	p := runnerapi.Probe{Call: name, Source: src, Version: literal(attrExpr(call.Body, "version")), List: list, Key: key,
+		Imports: len(c.mod.imports), Args: map[string]runnerapi.ProbeArg{}}
+	var switchVar, nameVar string
+	for _, im := range c.mod.imports {
+		if cond, ok := attrExpr(im.Body, "for_each").(*hclsyntax.ConditionalExpr); ok { // var.existing ? toset([…]) : toset([])
+			if t, diags := hcl.AbsTraversalForExpr(cond.Condition); !diags.HasErrors() && t.RootName() == "var" && len(t) == 2 {
+				a, _ := t[1].(hcl.TraverseAttr)
+				switchVar = a.Name
+			}
+		}
+		if typ, v := idType(c.mod, attrExpr(im.Body, "id")); typ != "" && p.Type == "" {
+			p.Type, nameVar = typ, v
+		}
+	}
+	if switchVar == "" {
+		note("its module's import blocks aren't switched by an input (for_each = var.x ? … : [])")
+		return
+	}
+	for arg, e := range c.args {
+		if slices.Contains([]string{"source", "version", "count", "for_each", "providers", "depends_on"}, arg) {
+			continue
+		}
+		v := r.resolve(in, e)
+		a := runnerapi.ProbeArg{Input: v.input, Field: v.field, Refs: v.refs, Switch: arg == switchVar, Name: arg == nameVar}
+		if a.Input == "" && a.Field == "" && len(a.Refs) == 0 && !a.Switch && !a.Name {
+			if !c.mod.vars[arg] {
+				note("its argument " + arg + " comes from neither an input nor a found resource")
+				return
+			}
+			continue // the module's default
+		}
+		p.Args[arg] = a
+	}
+	if _, ok := p.Args[switchVar]; !ok {
+		note("it doesn't pass its module's import switch " + switchVar)
+		return
+	}
+	for _, b := range c.mod.resources {
+		f := runnerapi.ProbeFill{To: b.Labels[0] + "." + b.Labels[1], Values: map[string]string{}}
+		r.fill(c, b.Body, "", &f)
+		p.Fills = append(p.Fills, f)
+	}
+	r.probes = append(r.probes, p)
+}
+
+// idType reads an import ID ("${…}/providers/Microsoft.Compute/disks/${var.name}", also through a local) for the
+// type it names and the variable of the name after it; "" if it names none.
+func idType(m *module, e hclsyntax.Expression) (typ, nameVar string) {
+	if t, diags := hcl.AbsTraversalForExpr(e); !diags.HasErrors() && t.RootName() == "local" && len(t) == 2 {
+		if a, ok := t[1].(hcl.TraverseAttr); ok {
+			e = m.locals[a.Name]
+		}
+	}
+	tmpl, ok := e.(*hclsyntax.TemplateExpr)
+	if !ok {
+		return "", ""
+	}
+	var lit string
+	for _, part := range tmpl.Parts {
+		if s := literal(part); s != "" {
+			lit += s
+			continue
+		}
+		t, diags := hcl.AbsTraversalForExpr(part)
+		if m := probeIDRe.FindStringSubmatch(lit); m != nil && !diags.HasErrors() && t.RootName() == "var" && len(t) == 2 {
+			a, _ := t[1].(hcl.TraverseAttr)
+			return m[1], a.Name
+		}
+		lit = ""
+	}
+	return "", ""
+}
+
+// fill maps the attributes of a probed module's resource (body, at path prefix) back to the form: an input or
+// row field each, and a dynamic block over a list input to that list's rows.
+func (r *reader) fill(c *inst, b *hclsyntax.Body, prefix string, f *runnerapi.ProbeFill) {
+	for _, name := range slices.Sorted(maps.Keys(b.Attributes)) {
+		v := r.resolve(c, b.Attributes[name].Expr)
+		if k := cmp.Or(v.input, v.field); k != "" && f.Values[k] == "" {
+			if ti := r.input(v.input); v.field != "" || ti != nil && !ti.Sensitive {
+				f.Values[k] = prefix + name
+			}
+		}
+	}
+	for _, blk := range b.Blocks {
+		switch {
+		case blk.Type == "lifecycle" || blk.Type == "timeouts":
+		case blk.Type == "dynamic" && len(blk.Labels) == 1:
+			list := r.resolve(c, attrExpr(blk.Body, "for_each")).input
+			if ti := r.input(list); ti == nil || ti.Type != "list" {
+				continue
+			}
+			bl := runnerapi.BlockList{Block: prefix + blk.Labels[0], Fields: map[string]string{}}
+			for _, content := range blk.Body.Blocks {
+				for attr, a := range content.Body.Attributes {
+					if t, diags := hcl.AbsTraversalForExpr(a.Expr); !diags.HasErrors() && len(t) == 3 && t.RootName() == blk.Labels[0] {
+						if field, ok := t[2].(hcl.TraverseAttr); ok {
+							bl.Fields[field.Name] = attr
+						}
+					}
+				}
+			}
+			if f.Lists == nil {
+				f.Lists = map[string]runnerapi.BlockList{}
+			}
+			f.Lists[list] = bl
+		default:
+			r.fill(c, blk.Body, prefix+blk.Type+"[0].", f)
 		}
 	}
 }

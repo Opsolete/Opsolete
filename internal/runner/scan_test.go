@@ -228,3 +228,13 @@ func TestCLIConfig(t *testing.T) {
 		t.Fatal("a missing runner config must fail the job, not be dropped")
 	}
 }
+
+// TestSample: a probe's placeholder for a field with a pattern matches it, so the provider's own format checks
+// (run before an import) let the try through.
+func TestSample(t *testing.T) {
+	for pattern, want := range map[string]string{`^([01][0-9]|2[0-3])[0-5][0-9]$`: "0000", `[a-z]{3,24}`: "aaa", `vm-[0-9]+`: "vm-0", `x|y`: "x", ``: "", `(`: "", `a*`: ""} {
+		if got := sample(pattern); got != want {
+			t.Errorf("%q: %q, want %q", pattern, got, want)
+		}
+	}
+}

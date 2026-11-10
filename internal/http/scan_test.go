@@ -69,18 +69,25 @@ func TestImportFlow(t *testing.T) {
 	vmID, nicID := sub+"Microsoft.Compute/virtualMachines/testvm", sub+"Microsoft.Network/networkInterfaces/testvm807"
 	imports := []runnerapi.Import{{To: "azurerm_network_interface.self", ID: nicID}, {To: "azurerm_windows_virtual_machine.self[0]", ID: vmID}}
 	diskID, vnetID := sub+"Microsoft.Compute/disks/testvm_OsDisk_1", sub+"Microsoft.Network/virtualNetworks/VNET"
+	dataID, sharedID := sub+"Microsoft.Compute/disks/testvm_data", sub+"Microsoft.Compute/virtualMachines/shared"
 	cands := []runnerapi.Candidate{
 		{Template: tpl, Name: "testvm", ID: vmID, Fit: "fits", Imports: imports, Placeholder: []string{"admin_password"}, Uses: []string{diskID},
+			Found:  []runnerapi.Import{{To: `module.data_disk["0"].azurerm_managed_disk.main`, ID: dataID}}, // its module imports it itself
 			Inputs: map[string]string{"name": "testvm", "os_type": "windows", "resource_group_name": "test1", "nic_name": "testvm807"}},
 		{Template: tpl, Name: "odd", ID: sub + "Microsoft.Compute/virtualMachines/odd", Fit: "replaces",
 			Imports: []runnerapi.Import{{To: "azurerm_windows_virtual_machine.self[0]", ID: sub + "Microsoft.Compute/virtualMachines/odd"}},
 			Changes: []runnerapi.FitChange{{Address: "azurerm_windows_virtual_machine.self[0]", Action: "replace", Attributes: []string{"zone"}}}},
+		// what its module would import itself is managed already (once testvm is): refused like an import
+		{Template: tpl, Name: "shared", ID: sharedID, Fit: "fits", Imports: []runnerapi.Import{{To: "azurerm_windows_virtual_machine.self[0]", ID: sharedID}},
+			Found: []runnerapi.Import{{To: `module.data_disk["0"].azurerm_managed_disk.main`, ID: vmID}}},
 	}
 	inventory := []runnerapi.Found{{ID: vmID, Name: "testvm", Type: "Microsoft.Compute/virtualMachines", ResourceGroup: "test1"},
 		{ID: nicID, Name: "testvm807", Type: "Microsoft.Network/networkInterfaces", ResourceGroup: "test1"},
 		{ID: diskID, Name: "testvm_OsDisk_1", Type: "Microsoft.Compute/disks", ResourceGroup: "test1"},
 		{ID: sub + "Microsoft.Compute/virtualMachines/odd", Name: "odd", Type: "Microsoft.Compute/virtualMachines", ResourceGroup: "test1"},
-		{ID: vnetID, Name: "VNET", Type: "Microsoft.Network/virtualNetworks", ResourceGroup: "test1"}}
+		{ID: vnetID, Name: "VNET", Type: "Microsoft.Network/virtualNetworks", ResourceGroup: "test1"},
+		{ID: dataID, Name: "testvm_data", Type: "Microsoft.Compute/disks", ResourceGroup: "test1"},
+		{ID: sharedID, Name: "shared", Type: "Microsoft.Compute/virtualMachines", ResourceGroup: "test1"}}
 	body, _ := json.Marshal(runnerapi.FinishRequest{Status: "succeeded", Candidates: cands, Inventory: inventory})
 	r.finish(t, string(body))
 	if rec := get(h, "/workspaces/"+ws+"/import"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `href="/workspaces/`+ws+`/runs/`+scan+`"`) {
@@ -88,9 +95,9 @@ func TestImportFlow(t *testing.T) {
 	}
 	page = get(h, "/workspaces/"+ws+"/runs/"+scan).Body.String()
 	link := "/workspaces/" + ws + "/templates/new?template=" + tpl + "&scan=" + scan + "&n=0"
-	for _, want := range []string{"Scan for existing resources", "5 resources in resource group <code>test1</code>", "Can be imported <strong>1</strong>",
+	for _, want := range []string{"Scan for existing resources", "7 resources in resource group <code>test1</code>", "Can be imported <strong>2</strong>",
 		`<strong title="` + vmID + `">testvm</strong> <span class="tag" title="template">VM</span>`, "Windows virtual machine · test1 · with network interface",
-		`<span title="disks: testvm_OsDisk_1">testvm_OsDisk_1</span> (not imported)`, `<span class="status applied" title="Imports only: nothing changes">fits</span>`,
+		`<span title="disks: testvm_OsDisk_1">testvm_OsDisk_1</span> (not imported)`, `with managed disk <span title="testvm_data">testvm_data</span>`, `<span class="status applied" title="Imports only: nothing changes">fits</span>`,
 		`href="` + strings.ReplaceAll(link, "&", "&amp;") + `">Import</a>`, "Template needs work <strong>1</strong>", "Would replace zone",
 		"No template <strong>1</strong>", `<strong title="Microsoft.Network/virtualNetworks">Virtual networks</strong>`, "Scan again"} {
 		if !strings.Contains(page, want) {
@@ -135,12 +142,17 @@ func TestImportFlow(t *testing.T) {
 	r.saveState(t, stateV(1))
 	r.finish(t, `{"status":"succeeded","resources":[{"address":"module.testvm_x.azurerm_windows_virtual_machine.self[0]","type":"azurerm_windows_virtual_machine",
 		"name":"self","provider":"p","module":"module.testvm_x","id":"`+strings.ToUpper(vmID)+`"}]}`)
-	if page := get(h, "/workspaces/"+ws+"/runs/"+scan).Body.String(); !strings.Contains(page, "Already managed <strong>1</strong>") ||
+	if page := get(h, "/workspaces/"+ws+"/runs/"+scan).Body.String(); !strings.Contains(page, "Already managed <strong>2</strong>") ||
 		!strings.Contains(page, `<a href="/workspaces/`+ws+`">`+ws+`</a>`) || strings.Contains(page, "&amp;n=0\"") || !strings.Contains(page, "Can be imported <strong>0</strong>") {
 		t.Fatalf("an imported resource isn't shown as managed:\n%s", page)
 	}
 	if rec := post(h, link, values); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "managed already, in workspace "+ws) {
 		t.Fatalf("importing a managed resource again: %d %s", rec.Code, rec.Body.String())
+	}
+	shared := "/workspaces/" + ws + "/templates/new?template=" + tpl + "&scan=" + scan + "&n=2"
+	if rec := post(h, shared, url.Values{"name": {"shared"}, "os_type": {"windows"}, "resource_group_name": {"test1"}, "subnet_id": {"/s"}}); rec.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(rec.Body.String(), "managed already, in workspace "+ws) {
+		t.Fatalf("what the module would import itself is managed: %d %s", rec.Code, rec.Body.String())
 	}
 }
 

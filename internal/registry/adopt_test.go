@@ -33,7 +33,7 @@ func TestAdoptable(t *testing.T) {
 		in("size", "string"), in("admin_username", "string"), osType, pw, in("ssh_public_key", "string"), in("nic_name", "string"),
 		in("ip_configuration_name", "string"), in("public_ip_address_id", "string"), in("secure_boot_enabled", "bool"), in("vtpm_enabled", "bool"),
 		in("os_disk_type", "string"), in("image_publisher", "string"), in("image_offer", "string"), in("image_sku", "string"), in("boot_diagnostics_enabled", "bool")}
-	entries, notes, err := Adoptable(registrytest.TarGz(t, files), inputs, nil)
+	entries, _, notes, err := Adoptable(registrytest.TarGz(t, files), inputs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestAdoptable(t *testing.T) {
 
 // TestAdoptableSkips: what the reader can't follow is named, not guessed.
 func TestAdoptableSkips(t *testing.T) {
-	_, notes, err := Adoptable(registrytest.TarGz(t, map[string]string{"main.tf": `
+	_, _, notes, err := Adoptable(registrytest.TarGz(t, map[string]string{"main.tf": `
 variable "n" {}
 resource "a_x" "each" {
   for_each = toset(["a"])
