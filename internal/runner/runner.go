@@ -181,7 +181,8 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	env["HOME"] = home
 	delete(env, "XDG_DATA_HOME") // Terraform's other implied provider mirror; defaults to under HOME
 	if job.Registry != nil {     // modules from the server's registry, e.g. ones a template's module calls
-		if env["TF_CLI_CONFIG_FILE"], err = writeCLIConfig(home, *job.Registry, env["TF_CLI_CONFIG_FILE"]); err != nil {
+		modules := strings.TrimSuffix(r.ServerURL.String(), "/") + "/v1/modules/"
+		if env["TF_CLI_CONFIG_FILE"], err = writeCLIConfig(home, *job.Registry, modules, env["TF_CLI_CONFIG_FILE"]); err != nil {
 			return fail("prepare workdir", err)
 		}
 	}

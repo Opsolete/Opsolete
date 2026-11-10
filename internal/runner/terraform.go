@@ -162,7 +162,10 @@ func inventory(ctx context.Context, tf *tfProc) []runnerapi.Resource {
 
 // writeCLIConfig writes a Terraform CLI config into the job's home with a credentials block for the registry, on
 // top of the runner's own config file (existing: its path, "" none), and returns its path for TF_CLI_CONFIG_FILE.
-func writeCLIConfig(home string, reg runnerapi.RegistryAccess, existing string) (string, error) {
+// A host block points the registry's module service at modules, the runner's own way to the server: Terraform
+// then skips service discovery, which needs HTTPS on the public URL (local development is plain HTTP, and
+// runners may not reach the public URL at all).
+func writeCLIConfig(home string, reg runnerapi.RegistryAccess, modules, existing string) (string, error) {
 	var conf []byte
 	if existing != "" {
 		var err error
@@ -172,6 +175,7 @@ func writeCLIConfig(home string, reg runnerapi.RegistryAccess, existing string) 
 		conf = append(conf, '\n')
 	}
 	conf = fmt.Appendf(conf, "credentials %q {\n  token = %q\n}\n", reg.Host, reg.Token)
+	conf = fmt.Appendf(conf, "host %q {\n  services = {\n    \"modules.v1\" = %q\n  }\n}\n", reg.Host, modules)
 	path := filepath.Join(home, "opsolete.tfrc")
 	return path, os.WriteFile(path, conf, 0o600)
 }

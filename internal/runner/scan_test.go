@@ -211,19 +211,20 @@ func TestUses(t *testing.T) {
 func TestCLIConfig(t *testing.T) {
 	home := t.TempDir()
 	reg := runnerapi.RegistryAccess{Host: "ops.example.com:8443", Token: "opsrun.x.y"}
-	p, err := writeCLIConfig(home, reg, "")
+	p, err := writeCLIConfig(home, reg, "http://opsolete:8080/v1/modules/", "")
 	b, _ := os.ReadFile(p)
-	if err != nil || string(b) != "credentials \"ops.example.com:8443\" {\n  token = \"opsrun.x.y\"\n}\n" {
+	if err != nil || string(b) != "credentials \"ops.example.com:8443\" {\n  token = \"opsrun.x.y\"\n}\n"+
+		"host \"ops.example.com:8443\" {\n  services = {\n    \"modules.v1\" = \"http://opsolete:8080/v1/modules/\"\n  }\n}\n" {
 		t.Fatalf("%v %q", err, b)
 	}
 	own := filepath.Join(t.TempDir(), "runner.tfrc")
 	os.WriteFile(own, []byte(`plugin_cache_dir = "/cache"`), 0o600)
-	p, err = writeCLIConfig(home, reg, own)
+	p, err = writeCLIConfig(home, reg, "http://opsolete:8080/v1/modules/", own)
 	b, _ = os.ReadFile(p)
 	if err != nil || !strings.HasPrefix(string(b), "plugin_cache_dir = \"/cache\"\ncredentials ") {
 		t.Fatalf("with the runner's own config: %v %q", err, b)
 	}
-	if _, err := writeCLIConfig(home, reg, "/nope"); err == nil {
+	if _, err := writeCLIConfig(home, reg, "http://opsolete:8080/v1/modules/", "/nope"); err == nil {
 		t.Fatal("a missing runner config must fail the job, not be dropped")
 	}
 }

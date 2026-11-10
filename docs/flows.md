@@ -348,7 +348,7 @@ Test paths are relative to `internal/`, except `cmd/opsolete/…` (from the repo
 **J5. `terraform init` against the registry** — `full`
 - Registry token (`opsolete token`) or `terraform login` token; versions → download (`X-Terraform-Get` signed 10-min URL) → archive; tampered signature 403.
 - Runs: a job's registry token (its run's, read-only, only while a runner works on it) lets a template's module call other registry modules; the runner writes it as a CLI `credentials` block.
-- Coverage: `http/registry_test.go:TestRegistry`; `http/access_test.go:TestAccessMatrix` (registry rows: user and registry tokens allowed, the runner token refused); `registry/registry_test.go:TestAddressAndSigning`; `http/scan_test.go:TestRunRegistryToken` (valid while working, not after, not tampered); `runner/scan_test.go:TestCLIConfig`. Missing: a real `terraform init` of a nested registry module (Terraform requires HTTPS for registries).
+- Coverage: `http/registry_test.go:TestRegistry`; `http/access_test.go:TestAccessMatrix` (registry rows: user and registry tokens allowed, the runner token refused); `registry/registry_test.go:TestAddressAndSigning`; `http/scan_test.go:TestRunRegistryToken` (valid while working, not after, not tampered); `runner/scan_test.go:TestCLIConfig`; `e2e/e2e_test.go:TestRealRunner/a_template's_module_calls_another_registry_module…` (real runner and Terraform, over plain HTTP: the nested module downloads with the run's token).
 
 **J6. Registry module in a template (no-code)** — `full`
 - Builder "Start from a registry module" prefills fields; module page shows *No-code ready* + Provision workspace; runner gets a signed source.
