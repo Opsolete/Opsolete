@@ -190,8 +190,8 @@ func (a *App) FinishJob(ctx context.Context, runID uuid.UUID, lease string, req 
 	}
 	// not canceled with the request: a job's result must survive a server restart
 	finish := func(ctx context.Context) (string, error) {
-		if req.Candidates != nil {
-			return a.Store.FinishScan(ctx, runID, lease, req.Status, req.Message, req.Candidates)
+		if req.Candidates != nil || req.Inventory != nil {
+			return a.Store.FinishScan(ctx, runID, lease, req.Status, req.Message, req.Candidates, req.Inventory)
 		}
 		return a.Store.FinishJob(ctx, runID, lease, req.Status, req.Message, req.Outputs, req.Plan, req.Resources)
 	}

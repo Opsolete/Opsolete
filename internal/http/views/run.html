@@ -45,28 +45,62 @@
 
 {{with .Scan}}
 <section class="card scan" aria-labelledby="scan-head">
-  <h2 id="scan-head">{{len .Candidates}} found{{with .ResourceGroup}} in resource group <code>{{.}}</code>{{end}}</h2>
-  {{if not .Candidates}}<p class="muted">{{if $r.Active}}Scanning with this workspace's credentials…{{else if eq $r.Status "planned"}}Nothing found that a template can manage.{{else}}The scan didn't finish: see its log below.{{end}}</p>
+  <h2 id="scan-head">{{if .Stocked}}{{.Total}} resources{{else}}Resources{{end}}{{with .ResourceGroup}} in resource group <code>{{.}}</code>{{end}}</h2>
+  {{if $r.Active}}<p class="muted">Scanning with this workspace's credentials…</p>
+  {{else if ne $r.Status "planned"}}<p class="muted">The scan didn't finish: see its log below.</p>
   {{else}}
-  <p class="muted">Each was planned as if imported, into a throwaway state (nothing changed): <strong>fits</strong> imports it as it is,
-    <strong>differs</strong> would also change what's listed, <strong>doesn't fit</strong> would replace it, <strong>incomplete</strong> lacks values its template's form needs (fill them in when importing).</p>
+  {{if not .Stocked}}<p class="alert warn" role="status">It couldn't list every resource (see the log): only what templates can import is shown.</p>{{end}}
+
+  <h3>Can be imported <span class="muted">({{len .Importable}})</span></h3>
+  {{with .Importable}}
+  <p class="muted">Each was planned as if imported, into a throwaway state: <strong>fits</strong> imports it as it is, <strong>differs</strong> would also change what's listed, <strong>incomplete</strong> lacks values its template's form needs (fill them in when importing).</p>
   <table class="candidates">
   <tr><th>Resource</th><th>Template</th><th>Status</th><th>Details</th><th>Import</th></tr>
-  {{range $i, $c := .Candidates}}
+  {{range .}}
   <tr>
-    <td><strong>{{.Name}}</strong>{{range .Related}}<br><span class="muted">+ {{.}}</span>{{end}}<br><code class="muted">{{.ID}}</code></td>
+    <td>{{template "scanres" .}}</td>
     <td>{{.TemplateName}}</td>
-    <td class="nowrap">{{if .ManagedBy}}<span class="status no_changes">managed</span>{{else if eq .Fit "fits"}}<span class="status applied">fits</span>{{else if eq .Fit "differs"}}<span class="status needs_confirmation">differs</span>{{else if eq .Fit "replaces"}}<span class="status errored">doesn't fit</span>{{else if eq .Fit "invalid"}}<span class="status errored">incomplete</span>{{else}}<span class="status">unchecked</span>{{end}}</td>
-    <td>{{if .ManagedBy}}Already managed in workspace <a href="/workspaces/{{.ManagedBy}}">{{.ManagedBy}}</a>.{{else if eq .Fit "fits"}}Imports only: nothing changes.{{end}}
-      {{with .Message}}<p class="muted">{{.}}</p>{{end}}
+    <td class="nowrap">{{if eq .Fit "fits"}}<span class="status applied">fits</span>{{else if eq .Fit "differs"}}<span class="status needs_confirmation">differs</span>{{else if eq .Fit "invalid"}}<span class="status errored">incomplete</span>{{else}}<span class="status">unchecked</span>{{end}}</td>
+    <td>{{if eq .Fit "fits"}}Imports only: nothing changes.{{end}}{{with .Message}}<p class="muted">{{.}}</p>{{end}}
       {{range .Changes}}<div><span class="change {{.Action}}">{{.Action}}</span> <code>{{.Address}}</code>{{with .Attributes}}: {{join . ", "}}{{end}}</div>{{end}}</td>
-    <td>{{if and $.CanOperate (not .ManagedBy) (ne .Fit "replaces") (not $r.Active)}}<a class="btn secondary" href="/workspaces/{{$w.Name}}/templates/new?template={{.Template}}&amp;scan={{$r.ID}}&amp;n={{$i}}">Import</a>{{end}}</td>
+    <td>{{if $.CanOperate}}<a class="btn secondary" href="/workspaces/{{$w.Name}}/templates/new?template={{.Template}}&amp;scan={{$r.ID}}&amp;n={{.N}}">Import</a>{{end}}</td>
   </tr>
   {{end}}
   </table>
+  {{else}}<p class="muted">Nothing a template can import as it is.</p>{{end}}
+
+  {{with .Rework}}
+  <h3>Template needs work <span class="muted">({{len .}})</span></h3>
+  <p class="muted">A template matches, but importing with it would replace these resources: its module has to describe them as they are first (make these settings inputs, see <em>Writing modules that can import</em> in the docs).</p>
+  <table class="candidates">
+  <tr><th>Resource</th><th>Template</th><th>Would replace because of</th></tr>
+  {{range .}}
+  <tr><td>{{template "scanres" .}}</td><td>{{.TemplateName}}</td>
+    <td>{{range .Changes}}<div><span class="change {{.Action}}">{{.Action}}</span> <code>{{.Address}}</code>{{with .Attributes}}: {{join . ", "}}{{end}}</div>{{end}}</td></tr>
+  {{end}}
+  </table>
+  {{end}}
+
+  {{with .NoTemplate}}
+  <h3>No template <span class="muted">({{len .}})</span></h3>
+  <p class="muted">No catalog template can import these yet: a template on a registry module that creates their type would.</p>
+  <table class="candidates">
+  <tr><th>Resource</th><th>Type</th><th>Resource group</th></tr>
+  {{range .}}<tr><td><strong>{{.Name}}</strong><br><code class="muted">{{.ID}}</code></td><td><code>{{.Type}}</code></td><td>{{.ResourceGroup}}</td></tr>{{end}}
+  </table>
+  {{end}}
+
+  {{with .Managed}}
+  <h3>Already managed <span class="muted">({{len .}})</span></h3>
+  <table class="candidates">
+  <tr><th>Resource</th><th>Type</th><th>Workspace</th></tr>
+  {{range .}}<tr><td><strong>{{.Name}}</strong><br><code class="muted">{{.ID}}</code></td><td><code>{{.Type}}</code></td><td><a href="/workspaces/{{.ManagedBy}}">{{.ManagedBy}}</a></td></tr>{{end}}
+  </table>
+  {{end}}
   {{end}}
 </section>
 {{end}}
+{{define "scanres"}}<strong>{{.Name}}</strong>{{range .Related}}<br><span class="muted">+ {{.}}</span>{{end}}{{range .Uses}}<br><span class="muted">uses {{.}}</span>{{end}}<br><code class="muted">{{.ID}}</code>{{end}}
 
 <details class="section">
   <summary><strong>Run details</strong> <span class="muted">{{$r.CreatedAt.Format "2006-01-02 15:04:05"}}</span>

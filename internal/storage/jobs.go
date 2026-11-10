@@ -210,12 +210,18 @@ func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 }
 
 // FinishScan is FinishJob for a scan, with what it found.
-func (s *Store) FinishScan(ctx context.Context, runID uuid.UUID, lease, result, message string, candidates []runnerapi.Candidate) (string, error) {
-	return s.finishJob(ctx, runID, lease, result, message, nil, nil, nil, candidates)
+func (s *Store) FinishScan(ctx context.Context, runID uuid.UUID, lease, result, message string, candidates []runnerapi.Candidate,
+	inventory []runnerapi.Found) (string, error) {
+	return s.finishJob(ctx, runID, lease, result, message, nil, nil, nil, &scanResult{candidates, inventory})
+}
+
+type scanResult struct {
+	candidates []runnerapi.Candidate
+	inventory  []runnerapi.Found
 }
 
 func (s *Store) finishJob(ctx context.Context, runID uuid.UUID, lease, result, message string, outputs map[string]any,
-	plan *runnerapi.Plan, resources []runnerapi.Resource, candidates []runnerapi.Candidate) (string, error) {
+	plan *runnerapi.Plan, resources []runnerapi.Resource, scan *scanResult) (string, error) {
 	var final string
 	var entry *AuditEntry
 	err := s.tx(ctx, func(q *db.Queries) error {
@@ -242,11 +248,18 @@ func (s *Store) finishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 			final, message = Errored, conflict
 		case r.Action == "scan": // never applied
 			final = Planned
-			b, err := json.Marshal(candidates)
+			if scan == nil {
+				scan = &scanResult{}
+			}
+			c, err := json.Marshal(scan.candidates)
 			if err != nil {
 				return err
 			}
-			if err := q.SetRunCandidates(ctx, db.SetRunCandidatesParams{ID: runID, Candidates: b}); err != nil {
+			inv, err := json.Marshal(scan.inventory)
+			if err != nil {
+				return err
+			}
+			if err := q.SetRunScanResult(ctx, db.SetRunScanResultParams{ID: runID, Candidates: c, Inventory: inv}); err != nil {
 				return err
 			}
 		case r.Adopting && plan != nil && plan.Destroy > 0: // the template doesn't fit what exists

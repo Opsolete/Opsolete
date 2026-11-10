@@ -50,7 +50,7 @@ func TestImportFlow(t *testing.T) {
 		t.Fatalf("create: %d", rec.Code)
 	}
 	page := get(h, "/workspaces/"+ws+"/import").Body.String()
-	for _, want := range []string{`action="/workspaces/` + ws + `/scans"`, "Finds resources for <strong>VM</strong>", "Git one: its module isn", `href="/workspaces/` + ws + `/import" aria-current="page">Import…`} {
+	for _, want := range []string{`action="/workspaces/` + ws + `/scans"`, "which of them <strong>VM</strong> can import", "Git one: its module isn", `href="/workspaces/` + ws + `/import" aria-current="page">Import…`} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("import page lacks %q:\n%s", want, page)
 		}
@@ -59,28 +59,37 @@ func TestImportFlow(t *testing.T) {
 	scan := runID(t, post(h, "/workspaces/"+ws+"/scans", url.Values{"resource_group": {"test1"}}))
 	j := r.claim(t, scan, "plan")
 	if j.Action != "scan" || j.ModuleSource != "" || j.Scan == nil || j.Scan.ResourceGroup != "test1" || len(j.Scan.Templates) != 1 ||
-		len(j.Scan.Templates[0].Entries) != 3 || len(j.Modules) != 1 || j.Modules[0].Name != j.Scan.Templates[0].Module {
+		len(j.Scan.Templates[0].Entries) != 3 || len(j.Modules) != 1 || j.Modules[0].Name != j.Scan.Templates[0].Module ||
+		len(j.Scan.Notes) != 1 || !strings.HasPrefix(j.Scan.Notes[0], "Git one:") {
 		t.Fatalf("scan job: %+v %+v", j, j.Scan)
 	}
 	const sub = "/subscriptions/s/resourceGroups/test1/providers/"
 	vmID, nicID := sub+"Microsoft.Compute/virtualMachines/testvm", sub+"Microsoft.Network/networkInterfaces/testvm807"
 	imports := []runnerapi.Import{{To: "azurerm_network_interface.self", ID: nicID}, {To: "azurerm_windows_virtual_machine.self[0]", ID: vmID}}
+	diskID, vnetID := sub+"Microsoft.Compute/disks/testvm_OsDisk_1", sub+"Microsoft.Network/virtualNetworks/VNET"
 	cands := []runnerapi.Candidate{
-		{Template: tpl, Name: "testvm", ID: vmID, Fit: "fits", Imports: imports, Placeholder: []string{"admin_password"},
+		{Template: tpl, Name: "testvm", ID: vmID, Fit: "fits", Imports: imports, Placeholder: []string{"admin_password"}, Uses: []string{diskID},
 			Inputs: map[string]string{"name": "testvm", "os_type": "windows", "resource_group_name": "test1", "nic_name": "testvm807"}},
 		{Template: tpl, Name: "odd", ID: sub + "Microsoft.Compute/virtualMachines/odd", Fit: "replaces",
+			Imports: []runnerapi.Import{{To: "azurerm_windows_virtual_machine.self[0]", ID: sub + "Microsoft.Compute/virtualMachines/odd"}},
 			Changes: []runnerapi.FitChange{{Address: "azurerm_windows_virtual_machine.self[0]", Action: "replace", Attributes: []string{"zone"}}}},
 	}
-	body, _ := json.Marshal(runnerapi.FinishRequest{Status: "succeeded", Candidates: cands})
+	inventory := []runnerapi.Found{{ID: vmID, Name: "testvm", Type: "Microsoft.Compute/virtualMachines", ResourceGroup: "test1"},
+		{ID: nicID, Name: "testvm807", Type: "Microsoft.Network/networkInterfaces", ResourceGroup: "test1"},
+		{ID: diskID, Name: "testvm_OsDisk_1", Type: "Microsoft.Compute/disks", ResourceGroup: "test1"},
+		{ID: sub + "Microsoft.Compute/virtualMachines/odd", Name: "odd", Type: "Microsoft.Compute/virtualMachines", ResourceGroup: "test1"},
+		{ID: vnetID, Name: "VNET", Type: "Microsoft.Network/virtualNetworks", ResourceGroup: "test1"}}
+	body, _ := json.Marshal(runnerapi.FinishRequest{Status: "succeeded", Candidates: cands, Inventory: inventory})
 	r.finish(t, string(body))
 	if rec := get(h, "/workspaces/"+ws+"/import"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `href="/workspaces/`+ws+`/runs/`+scan+`"`) {
 		t.Fatalf("import page with the scan listed: %d %s", rec.Code, rec.Body.String())
 	}
 	page = get(h, "/workspaces/"+ws+"/runs/"+scan).Body.String()
 	link := "/workspaces/" + ws + "/templates/new?template=" + tpl + "&scan=" + scan + "&n=0"
-	for _, want := range []string{"Scan for existing resources", "2 found in resource group <code>test1</code>", "+ network interface testvm807",
-		"<td>VM</td>", `<span class="status applied">fits</span>`, `href="` + strings.ReplaceAll(link, "&", "&amp;") + `">Import</a>`,
-		`<span class="status errored">doesn't fit</span>`, `<code>azurerm_windows_virtual_machine.self[0]</code>: zone`, "Scan again"} {
+	for _, want := range []string{"Scan for existing resources", "5 resources in resource group <code>test1</code>", "Can be imported <span class=\"muted\">(1)",
+		"+ network interface testvm807", "uses disks testvm_OsDisk_1", "<td>VM</td>", `<span class="status applied">fits</span>`,
+		`href="` + strings.ReplaceAll(link, "&", "&amp;") + `">Import</a>`, "Template needs work <span class=\"muted\">(1)",
+		`<code>azurerm_windows_virtual_machine.self[0]</code>: zone`, "No template <span class=\"muted\">(1)", "<td><code>Microsoft.Network/virtualNetworks</code></td>", "Scan again"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("scan page lacks %q:\n%s", want, page)
 		}
@@ -123,8 +132,8 @@ func TestImportFlow(t *testing.T) {
 	r.saveState(t, stateV(1))
 	r.finish(t, `{"status":"succeeded","resources":[{"address":"module.testvm_x.azurerm_windows_virtual_machine.self[0]","type":"azurerm_windows_virtual_machine",
 		"name":"self","provider":"p","module":"module.testvm_x","id":"`+strings.ToUpper(vmID)+`"}]}`)
-	if page := get(h, "/workspaces/"+ws+"/runs/"+scan).Body.String(); !strings.Contains(page, `Already managed in workspace <a href="/workspaces/`+ws+`">`) ||
-		strings.Contains(page, "&amp;n=0\"") {
+	if page := get(h, "/workspaces/"+ws+"/runs/"+scan).Body.String(); !strings.Contains(page, "Already managed <span class=\"muted\">(1)") ||
+		!strings.Contains(page, `<a href="/workspaces/`+ws+`">`+ws+`</a>`) || strings.Contains(page, "&amp;n=0\"") || !strings.Contains(page, "Can be imported <span class=\"muted\">(0)") {
 		t.Fatalf("an imported resource isn't shown as managed:\n%s", page)
 	}
 	if rec := post(h, link, values); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "managed already, in workspace "+ws) {

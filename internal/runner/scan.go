@@ -26,10 +26,10 @@ import (
 	"github.com/opsolete/opsolete/internal/templates"
 )
 
-// A scan finds existing resources the catalog's templates can take over (the entries the server read from their
-// modules' code), maps their attributes to each template's inputs, and checks the fit with one speculative plan
-// that imports them all, each as its own module, into a throwaway local state. It writes nothing: no backend, no
-// lock, no apply.
+// A scan takes stock of the resources in the subscription (or one resource group), finds those the catalog's
+// templates can take over (the entries the server read from their modules' code), maps their attributes to each
+// template's inputs, and checks the fit with one speculative plan that imports them all, each as its own module,
+// into a throwaway local state. It writes nothing: no backend, no lock, no apply.
 
 // maxCandidates bounds a scan's fit check, one module per candidate in a single plan.
 // shortcut: candidates past it are listed as unchecked; batch the fit check when scans get that large.
@@ -49,6 +49,9 @@ func (r *Runner) scan(ctx context.Context, tf *tfProc, dir string, job runnerapi
 	sources := map[string]string{} // module name → source
 	for _, m := range job.Modules {
 		sources[m.Name] = m.Source
+	}
+	for _, n := range job.Scan.Notes {
+		fmt.Fprintf(w, "==> %s\n", n)
 	}
 	tpls := make([]templates.Template, len(job.Scan.Templates))
 	var lists []string
@@ -73,16 +76,21 @@ func (r *Runner) scan(ctx context.Context, tf *tfProc, dir string, job runnerapi
 	if err := os.Mkdir(qdir, 0o700); err != nil {
 		return fail("prepare scan", err)
 	}
-	if err := writeProviders(qdir, lists); err != nil {
+	// shortcut: the inventory is Azure's (azurerm_resources, per resource group); other clouds need their own.
+	queried := slices.Clone(lists)
+	if rg == "" && !slices.Contains(queried, rgList) { // the resource groups to take stock of
+		queried = append(queried, rgList)
+	}
+	if err := writeProviders(qdir, append(slices.Clone(lists), rgList)); err != nil {
 		return fail("prepare scan", err)
 	}
 	tf.dir = qdir
-	fmt.Fprintf(w, "==> terraform init (providers for %s)\n", strings.Join(lists, ", "))
+	fmt.Fprintf(w, "==> terraform init (providers for %s)\n", strings.Join(append(slices.Clone(lists), rgList), ", "))
 	if _, err := tf.run(ctx, w, w, "init", "-input=false"); err != nil {
 		return fail("init", err)
 	}
-	var byType map[string][]found
-	for queried := slices.Clone(lists); ; {
+	byType := map[string][]found{}
+	for len(queried) > 0 {
 		if err := os.WriteFile(filepath.Join(qdir, "scan.tfquery.hcl"), []byte(queryFile(queried, rg)), 0o600); err != nil {
 			return fail("prepare scan", err)
 		}
@@ -106,6 +114,16 @@ func (r *Runner) scan(ctx context.Context, tf *tfProc, dir string, job runnerapi
 		}
 		break
 	}
+	rgs := []string{rg}
+	if rg == "" {
+		rgs = nil
+		for _, g := range byType[rgList] {
+			if name, _ := g.obj["name"].(string); name != "" {
+				rgs = append(rgs, name)
+			}
+		}
+	}
+	inventory := r.inventory(ctx, tf, dir, rgs, w)
 	var cands []runnerapi.Candidate
 	var vals []map[string]any
 	srcs := map[string]string{} // template id → its module's source
@@ -114,7 +132,8 @@ func (r *Runner) scan(ctx context.Context, tf *tfProc, dir string, job runnerapi
 		cands, vals = append(cands, c...), append(vals, v...)
 		srcs[tpls[i].ID] = sources[st.Module]
 	}
-	fmt.Fprintf(w, "\n==> %d found\n", len(cands))
+	uses(cands, inventory)
+	fmt.Fprintf(w, "\n==> %d resources, %d a template can import\n", len(inventory), len(cands))
 	if checkable(cands) > 0 {
 		r.fit(ctx, tf, dir, srcs, lists, cands, vals, w)
 	}
@@ -126,7 +145,111 @@ func (r *Runner) scan(ctx context.Context, tf *tfProc, dir string, job runnerapi
 			}
 		}
 	}
-	return runnerapi.FinishRequest{Status: "succeeded", Candidates: cands}
+	return runnerapi.FinishRequest{Status: "succeeded", Candidates: cands, Inventory: inventory}
+}
+
+// rgList is the list resource the resource groups to take stock of come from.
+const rgList = "azurerm_resource_group"
+
+// inventory lists every resource in the resource groups rgs (azurerm_resources, read in a plan against a throwaway
+// state): IDs, names and types only. nil if it can't: the candidates are still worth listing, so the log says why.
+func (r *Runner) inventory(ctx context.Context, tf *tfProc, dir string, rgs []string, w io.Writer) []runnerapi.Found {
+	if len(rgs) == 0 {
+		return []runnerapi.Found{}
+	}
+	fail := func(err error) []runnerapi.Found {
+		msg, _, _ := strings.Cut(strings.TrimSpace(err.Error()), "\n")
+		fmt.Fprintf(w, "\n==> taking stock failed, listing only what templates can import: %s\n", msg)
+		return nil
+	}
+	idir := filepath.Join(dir, "inventory")
+	if err := os.Mkdir(idir, 0o700); err != nil {
+		return fail(err)
+	}
+	// the names as a variable: data, never HCL
+	conf := map[string]any{
+		"variable": map[string]any{"rgs": map[string]any{"type": "list(string)"}},
+		"data": map[string]any{"azurerm_resources": map[string]any{"rg": map[string]any{
+			"for_each": "${toset(var.rgs)}", "resource_group_name": "${each.key}"}}},
+		"output": map[string]any{"inventory": map[string]any{"value": "${flatten([for g, d in data.azurerm_resources.rg : " +
+			"[for r in d.resources : {id = r.id, name = r.name, type = r.type, location = r.location, resource_group = g}]])}"}},
+	}
+	for name, v := range map[string]any{"opsolete_inventory.tf.json": conf, "terraform.tfvars.json": map[string]any{"rgs": rgs}} {
+		b, err := json.Marshal(v)
+		if err == nil {
+			err = os.WriteFile(filepath.Join(idir, name), b, 0o600)
+		}
+		if err != nil {
+			return fail(err)
+		}
+	}
+	if err := writeProviders(idir, []string{rgList}); err != nil {
+		return fail(err)
+	}
+	tf.dir = idir
+	fmt.Fprintf(w, "\n==> take stock of %d resource groups (terraform plan, data sources only)\n", len(rgs))
+	if _, err := tf.run(ctx, w, w, "init", "-input=false"); err != nil {
+		return fail(err)
+	}
+	if _, err := tf.run(ctx, io.Discard, w, "plan", "-input=false", "-lock=false", "-out=inventory.tfplan"); err != nil {
+		return fail(err)
+	}
+	var p struct {
+		PlannedValues struct {
+			Outputs map[string]struct {
+				Value []runnerapi.Found `json:"value"`
+			} `json:"outputs"`
+		} `json:"planned_values"`
+	}
+	if err := tf.json(ctx, &p, "show", "-json", "-no-color", "inventory.tfplan"); err != nil {
+		return fail(err)
+	}
+	inv := p.PlannedValues.Outputs["inventory"].Value
+	if inv == nil {
+		inv = []runnerapi.Found{}
+	}
+	return inv
+}
+
+// uses sets each candidate's Uses: the inventory's resources its resources refer to (collected in Uses by
+// candidates) that it doesn't import, such as its OS disk or a public IP.
+func uses(cands []runnerapi.Candidate, inventory []runnerapi.Found) {
+	known := map[string]string{}
+	for _, f := range inventory {
+		known[strings.ToLower(f.ID)] = f.ID
+	}
+	for i := range cands {
+		imported := map[string]bool{}
+		for _, im := range cands[i].Imports {
+			imported[strings.ToLower(im.ID)] = true
+		}
+		var out []string
+		for _, id := range cands[i].Uses {
+			if k := strings.ToLower(id); known[k] != "" && !imported[k] && !slices.Contains(out, known[k]) {
+				out = append(out, known[k])
+			}
+		}
+		slices.Sort(out)
+		cands[i].Uses = out
+	}
+}
+
+// refs collects the IDs (strings that start with /subscriptions/) anywhere in a resource's attributes v.
+func refs(v any, out *[]string) {
+	switch x := v.(type) {
+	case string:
+		if strings.HasPrefix(strings.ToLower(x), "/subscriptions/") {
+			*out = append(*out, x)
+		}
+	case []any:
+		for _, e := range x {
+			refs(e, out)
+		}
+	case map[string]any:
+		for _, k := range slices.Sorted(maps.Keys(x)) {
+			refs(x[k], out)
+		}
+	}
 }
 
 // queryFile is the .tfquery.hcl that lists the types (listRe-checked), in resource group rg (rgRe-checked; ""
@@ -238,7 +361,9 @@ func candidates(t templates.Template, entries []runnerapi.ScanEntry, byType map[
 			if c := p.ShowIf; c != nil && len(c.Equals) == 1 {
 				raw[c.Input] = c.Equals[0]
 			}
+			var used []string
 			fill := func(a runnerapi.ScanEntry, obj map[string]any) {
+				refs(obj, &used)
 				for _, in := range slices.Sorted(maps.Keys(a.Inputs)) {
 					v := path(obj, a.Inputs[in])
 					if types[in] == "bool" { // whether it's set, e.g. a block such as boot_diagnostics
@@ -262,7 +387,7 @@ func candidates(t templates.Template, entries []runnerapi.ScanEntry, byType map[
 					}
 				}
 			}
-			c := runnerapi.Candidate{Template: t.ID, Name: f.name, Inputs: map[string]string{}}
+			c := runnerapi.Candidate{Template: t.ID, Name: f.name, Inputs: map[string]string{}, Uses: used}
 			for j, a := range entries {
 				if ids[j] == "" {
 					continue

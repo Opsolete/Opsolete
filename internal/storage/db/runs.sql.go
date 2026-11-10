@@ -583,18 +583,19 @@ func (q *Queries) RunImports(ctx context.Context, id uuid.UUID) ([]byte, error) 
 }
 
 const runScan = `-- name: RunScan :one
-SELECT COALESCE(scan_resource_group, '')::text AS resource_group, candidates FROM runs WHERE id = $1::uuid AND action = 'scan'
+SELECT COALESCE(scan_resource_group, '')::text AS resource_group, candidates, inventory FROM runs WHERE id = $1::uuid AND action = 'scan'
 `
 
 type RunScanRow struct {
 	ResourceGroup string
 	Candidates    []byte
+	Inventory     []byte
 }
 
 func (q *Queries) RunScan(ctx context.Context, id uuid.UUID) (RunScanRow, error) {
 	row := q.db.QueryRow(ctx, runScan, id)
 	var i RunScanRow
-	err := row.Scan(&i.ResourceGroup, &i.Candidates)
+	err := row.Scan(&i.ResourceGroup, &i.Candidates, &i.Inventory)
 	return i, err
 }
 
@@ -618,20 +619,6 @@ UPDATE runs SET always_confirm = true WHERE id = $1::uuid
 
 func (q *Queries) SetRunAlwaysConfirm(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, setRunAlwaysConfirm, id)
-	return err
-}
-
-const setRunCandidates = `-- name: SetRunCandidates :exec
-UPDATE runs SET candidates = $1::jsonb WHERE id = $2::uuid
-`
-
-type SetRunCandidatesParams struct {
-	Candidates []byte
-	ID         uuid.UUID
-}
-
-func (q *Queries) SetRunCandidates(ctx context.Context, arg SetRunCandidatesParams) error {
-	_, err := q.db.Exec(ctx, setRunCandidates, arg.Candidates, arg.ID)
 	return err
 }
 
@@ -717,6 +704,21 @@ type SetRunScanResourceGroupParams struct {
 
 func (q *Queries) SetRunScanResourceGroup(ctx context.Context, arg SetRunScanResourceGroupParams) error {
 	_, err := q.db.Exec(ctx, setRunScanResourceGroup, arg.ResourceGroup, arg.ID)
+	return err
+}
+
+const setRunScanResult = `-- name: SetRunScanResult :exec
+UPDATE runs SET candidates = $1::jsonb, inventory = $2::jsonb WHERE id = $3::uuid
+`
+
+type SetRunScanResultParams struct {
+	Candidates []byte
+	Inventory  []byte
+	ID         uuid.UUID
+}
+
+func (q *Queries) SetRunScanResult(ctx context.Context, arg SetRunScanResultParams) error {
+	_, err := q.db.Exec(ctx, setRunScanResult, arg.Candidates, arg.Inventory, arg.ID)
 	return err
 }
 

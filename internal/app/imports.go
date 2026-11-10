@@ -104,9 +104,9 @@ var rgRe = regexp.MustCompile(`^[-\w.()]{1,90}$`)
 // FieldResourceGroup is the Import form's resource group field.
 const FieldResourceGroup = "resource_group"
 
-// StartScan queues a scan of the workspace, with its credentials, for existing resources the catalog's templates
-// can take over, in resourceGroup ("" the whole subscription). Needs operate. ValidationError: the resource
-// group's name, or no template can import.
+// StartScan queues a scan of the workspace, with its credentials, of the resources in resourceGroup ("" the whole
+// subscription): what the catalog's templates can take over, and what not. Needs operate. ValidationError: the
+// resource group's name.
 func (a *App) StartScan(ctx context.Context, actor Actor, workspace, resourceGroup string) (storage.Workspace, storage.Run, error) {
 	ws, _, err := a.Workspace(ctx, actor, workspace, LevelOperate)
 	if err != nil {
@@ -114,13 +114,6 @@ func (a *App) StartScan(ctx context.Context, actor Actor, workspace, resourceGro
 	}
 	if resourceGroup = strings.TrimSpace(resourceGroup); resourceGroup != "" && !rgRe.MatchString(resourceGroup) {
 		return ws, storage.Run{}, invalid(FieldResourceGroup, "A resource group name has 1-90 letters, digits and _ - . ( ).")
-	}
-	imps, _, err := a.importables(ctx)
-	if err != nil {
-		return ws, storage.Run{}, err
-	}
-	if len(imps) == 0 {
-		return ws, storage.Run{}, &ValidationError{Message: "no template can import: they need a module from the registry with resources to find"}
 	}
 	run, err := a.Store.CreateScan(ctx, ws.ID, resourceGroup, actor.UserID)
 	if err != nil {
@@ -136,36 +129,45 @@ func (a *App) scanJob(ctx context.Context, resourceGroup string) (*runnerapi.Sca
 	if err != nil {
 		return nil, nil, err
 	}
-	sc := &runnerapi.Scan{ResourceGroup: resourceGroup}
+	sc := &runnerapi.Scan{ResourceGroup: resourceGroup, Templates: []runnerapi.ScanTemplate{}, Notes: skipped}
 	var mods []runnerapi.Module
-	for i, imp := range imps {
+	for _, imp := range imps {
 		b, err := json.Marshal(imp.t)
 		if err != nil {
 			return nil, nil, err
 		}
 		name := "t" + uuid.NewString()[:8]
-		notes := imp.notes
-		if i == 0 {
-			notes = append(slices.Clone(notes), skipped...) // in the log once
-		}
-		sc.Templates = append(sc.Templates, runnerapi.ScanTemplate{Template: b, Module: name, Entries: imp.entries, Notes: notes})
+		sc.Templates = append(sc.Templates, runnerapi.ScanTemplate{Template: b, Module: name, Entries: imp.entries, Notes: imp.notes})
 		mods = append(mods, runnerapi.Module{Name: name, Source: a.Registry.RunnerSource(imp.t.Module, runnerSrcTTL)})
 	}
 	return sc, mods, nil
 }
 
-// ScanResult is what a scan found, each with its template's name, its related resources and the workspace
-// managing it already.
+// ScanResult is what a scan found, in four groups: what a template can import, what its template would replace
+// (the template or module needs work), what no template can import, and what a workspace manages already.
+// Resources a candidate imports or uses (its NIC, its OS disk) are listed with it only.
 type ScanResult struct {
 	ResourceGroup string
-	Candidates    []ScanCandidate
+	Stocked       bool // it took stock of every resource, not only what templates find
+	Total         int  // resources it saw
+	Importable    []ScanCandidate
+	Rework        []ScanCandidate
+	NoTemplate    []ScanRow
+	Managed       []ScanRow
 }
 
 type ScanCandidate struct {
 	runnerapi.Candidate
+	N            int      // its index in the scan, for Import
 	TemplateName string   // its template's name; its id if it left the catalog
-	Related      []string // its other resources, e.g. "network interface testvm807"
-	ManagedBy    string   // a workspace whose current state has its ID; "" none
+	Related      []string // the other resources it imports, e.g. "network interface testvm807"
+	Uses         []string // resources it refers to without importing them, e.g. "disks testvm_OsDisk_1"
+}
+
+// ScanRow is a resource listed on its own: no template can import it, or a workspace manages it.
+type ScanRow struct {
+	Name, Type, ResourceGroup, ID string
+	ManagedBy                     string // the workspace; "" none
 }
 
 // ScanResult loads scan run runID's result (RunDetail checked the actor's access).
@@ -174,29 +176,73 @@ func (a *App) ScanResult(ctx context.Context, runID uuid.UUID) (ScanResult, erro
 	if err != nil {
 		return ScanResult{}, err
 	}
-	res := ScanResult{ResourceGroup: sc.ResourceGroup}
-	var ids []string
+	res := ScanResult{ResourceGroup: sc.ResourceGroup, Stocked: sc.Inventory != nil, Total: len(sc.Inventory)}
+	byID := map[string]runnerapi.Found{}
+	ids := make([]string, 0, len(sc.Inventory))
+	for _, f := range sc.Inventory {
+		byID[strings.ToLower(f.ID)] = f
+		ids = append(ids, f.ID)
+	}
+	covered := map[string]bool{} // listed with a candidate
 	for _, c := range sc.Candidates {
 		for _, im := range c.Imports {
-			ids = append(ids, im.ID)
+			ids, covered[strings.ToLower(im.ID)] = append(ids, im.ID), true
+		}
+		for _, u := range c.Uses {
+			covered[strings.ToLower(u)] = true
 		}
 	}
 	managed, err := a.Store.ManagedBy(ctx, ids)
-	for _, c := range sc.Candidates {
-		sc := ScanCandidate{Candidate: c, TemplateName: c.Template}
+	if err != nil {
+		return res, err
+	}
+	for n, c := range sc.Candidates {
+		cand := ScanCandidate{Candidate: c, N: n, TemplateName: c.Template}
 		if t, ok := a.Templates.Get(c.Template); ok {
-			sc.TemplateName = t.Name
+			cand.TemplateName = t.Name
 		}
+		var by string
 		for _, im := range c.Imports {
-			sc.ManagedBy = cmp.Or(sc.ManagedBy, managed[strings.ToLower(im.ID)])
+			by = cmp.Or(by, managed[strings.ToLower(im.ID)])
 			if !strings.EqualFold(im.ID, c.ID) {
-				sc.Related = append(sc.Related, kind(im.To)+" "+im.ID[strings.LastIndex(im.ID, "/")+1:])
+				cand.Related = append(cand.Related, kind(im.To)+" "+lastSegment(im.ID))
 			}
 		}
-		res.Candidates = append(res.Candidates, sc)
+		for _, u := range c.Uses {
+			f := byID[strings.ToLower(u)]
+			cand.Uses = append(cand.Uses, lastSegment(f.Type)+" "+cmp.Or(f.Name, lastSegment(u)))
+		}
+		switch {
+		case by != "":
+			f := byID[strings.ToLower(c.ID)]
+			res.Managed = append(res.Managed, ScanRow{Name: c.Name, Type: cmp.Or(f.Type, kind(c.Imports[len(c.Imports)-1].To)),
+				ResourceGroup: f.ResourceGroup, ID: c.ID, ManagedBy: by})
+		case c.Fit == "replaces":
+			res.Rework = append(res.Rework, cand)
+		default:
+			res.Importable = append(res.Importable, cand)
+		}
 	}
-	return res, err
+	for _, f := range sc.Inventory {
+		if covered[strings.ToLower(f.ID)] {
+			continue
+		}
+		row := ScanRow{Name: f.Name, Type: f.Type, ResourceGroup: f.ResourceGroup, ID: f.ID, ManagedBy: managed[strings.ToLower(f.ID)]}
+		if row.ManagedBy != "" {
+			res.Managed = append(res.Managed, row)
+		} else {
+			res.NoTemplate = append(res.NoTemplate, row)
+		}
+	}
+	for _, rows := range [][]ScanRow{res.NoTemplate, res.Managed} {
+		slices.SortFunc(rows, func(a, b ScanRow) int {
+			return cmp.Or(strings.Compare(a.Type, b.Type), strings.Compare(a.ResourceGroup, b.ResourceGroup), strings.Compare(a.Name, b.Name))
+		})
+	}
+	return res, nil
 }
+
+func lastSegment(s string) string { return s[strings.LastIndex(s, "/")+1:] }
 
 // kind names the resource type of an address in words: azurerm_network_interface.self → network interface.
 func kind(addr string) string {

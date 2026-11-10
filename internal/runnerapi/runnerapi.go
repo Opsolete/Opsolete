@@ -70,6 +70,7 @@ type Job struct {
 type Scan struct {
 	ResourceGroup string         `json:"resource_group,omitempty"` // narrows the search; "" the whole subscription
 	Templates     []ScanTemplate `json:"templates"`
+	Notes         []string       `json:"notes,omitempty"` // templates a scan can't use, and why, for the log
 }
 
 // ScanTemplate is a template a scan matches resources to. Entries, derived from its module's code
@@ -123,6 +124,17 @@ type FinishRequest struct {
 	Resources []Resource `json:"resources"`
 	// Candidates a scan found, by name. Inputs never hold sensitive values.
 	Candidates []Candidate `json:"candidates,omitempty"`
+	// Inventory: every resource the scan saw, templates or not (nil: it couldn't take stock).
+	Inventory []Found `json:"inventory,omitempty"`
+}
+
+// Found is a resource a scan saw in the cloud: names only, no settings.
+type Found struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Type          string `json:"type"` // the cloud's, e.g. Microsoft.Network/virtualNetworks
+	ResourceGroup string `json:"resource_group"`
+	Location      string `json:"location,omitempty"`
 }
 
 // Candidate is an existing resource a scan found for a template, with its related ones: the form values and
@@ -134,10 +146,12 @@ type Candidate struct {
 	Inputs   map[string]string `json:"inputs"`  // form values by input name, as typed; sensitive ones left out
 	Imports  []Import          `json:"imports"` // To: the address in the template's module
 	// Placeholder: sensitive inputs to fill with a random value on import (ScanEntry.Placeholder).
-	Placeholder []string    `json:"placeholder,omitempty"`
-	Fit         string      `json:"fit"` // fits | differs | replaces | invalid (the form refuses its values) | unchecked
-	Message     string      `json:"message,omitempty"`
-	Changes     []FitChange `json:"changes,omitempty"` // differs / replaces: what the plan would do besides importing
+	Placeholder []string `json:"placeholder,omitempty"`
+	// Uses: other resources of the inventory its resources refer to (an OS disk, a public IP), not imported with it.
+	Uses    []string    `json:"uses,omitempty"`
+	Fit     string      `json:"fit"` // fits | differs | replaces | invalid (the form refuses its values) | unchecked
+	Message string      `json:"message,omitempty"`
+	Changes []FitChange `json:"changes,omitempty"` // differs / replaces: what the plan would do besides importing
 }
 
 // FitChange is one resource a fit check's plan changes: the action and the attributes, never their values.

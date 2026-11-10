@@ -14,10 +14,12 @@ everything Opsolete creates, **without redeploying it**, and without Terraform, 
 **A workspace's Import page**, separate from templates:
 
 1. **Scan** (optionally one resource group): a run with action `scan` and the workspace's credentials. Plan phase
-   only, no backend, no lock, never applied.
-2. **Results**: what was found, related resources together (VM + NIC), each with the template that manages it and
-   its fit: a plan importing all of them, each as its own module, into a throwaway state (fits / differs + the
-   attributes / doesn't fit / incomplete / managed).
+   only, no backend, no lock, never applied. It lists every resource (Azure: resource groups by `terraform query`,
+   then `azurerm_resources` per group) and what the templates can import.
+2. **Results** in four groups: *can be imported* (fits / differs + the attributes / incomplete, from a plan importing
+   all of them, each as its own module, into a throwaway state), *template needs work* (the plan would replace it),
+   *no template* (its type), *already managed* (the workspace). Resources a candidate imports or refers to (NIC, OS
+   disk, public IP) are listed with it.
 3. **Import**, one at a time: the template's add form, filled in from the scan; the plan imports the resources
    (IDs from the stored scan result, never the browser), always waits for confirmation.
 

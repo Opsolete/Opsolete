@@ -190,8 +190,9 @@
 
 {{if eq $tab "import"}}
 <p class="muted">Take over resources that already exist in the cloud, built in the portal or by scripts, without creating them again.
-  A scan searches with this workspace's credentials for resources the catalog's templates can manage; each one it finds can be imported
-  here as its template, with the template's form filled in from what was found. The plan imports it and changes nothing else.</p>
+  A scan lists, with this workspace's credentials, every resource: what a catalog template can import (each one into this workspace,
+  its template's form filled in from what was found), what its template would replace, what no template covers yet, and what a
+  workspace manages already. Importing plans the import and changes nothing else.</p>
 {{template "formerror" (formOf .F "scan")}}
 {{if not .CanOperate}}<div class="alert" role="note">You need operate access to import resources into this workspace.</div>
 {{else if eq $w.ExecutionMode "local"}}<div class="alert" role="note">This workspace uses local execution: switch to remote in <a href="/workspaces/{{$w.Name}}/settings">Settings</a> to import resources.</div>
@@ -207,8 +208,8 @@
     </div>
   </div>
   <div class="form-foot">
-    <p class="hint">{{with .Templates}}Finds resources for {{range $i, $t := .}}{{if $i}}, {{end}}<strong>{{$t.Name}}</strong>{{end}}. Nothing in the cloud changes.{{else}}No template can import yet: importing reads a template's module code, so it needs a module from the <a href="/registry">registry</a>.{{end}}</p>
-    <div class="actions"><button type="submit"{{if not .Templates}} disabled{{end}}>Scan</button></div>
+    <p class="hint">Lists every resource, and which of them {{with .Templates}}{{range $i, $t := .}}{{if $i}}, {{end}}<strong>{{$t.Name}}</strong>{{end}} can import{{else}}a template could import: none can yet, importing reads a template's module code, so it needs a module from the <a href="/registry">registry</a>{{end}}. Nothing in the cloud changes.</p>
+    <div class="actions"><button type="submit">Scan</button></div>
   </div>
 </form>
 {{end}}

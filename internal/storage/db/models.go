@@ -132,6 +132,7 @@ type Run struct {
 	Imports           []byte
 	ScanResourceGroup *string
 	Candidates        []byte
+	Inventory         []byte
 }
 
 type RunList struct {

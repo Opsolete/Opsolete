@@ -46,14 +46,17 @@ Resources built outside Opsolete (in the Azure portal, by scripts) can be taken 
 **Import…** in a workspace's menu (operate access).
 
 1. **Scan**, optionally in one resource group. A scan is a run (action `scan`) with the workspace's credentials that
-   searches for resources the catalog's templates can manage, and changes nothing: no state, no lock, no apply.
-2. The scan's page lists what it found, related resources together (a VM with its network interface), each with the
-   template that manages it and a status from a plan that imports it into a throwaway state:
-   - **fits**: imported as it is, nothing changes;
-   - **differs**: the plan would also change the attributes listed (the template's defaults differ from the resource);
-   - **doesn't fit**: the plan would replace it, so it can't be imported with this template;
-   - **incomplete**: values the template's form requires weren't found (fill them in when importing);
-   - **managed**: a workspace's state has it already.
+   lists every resource in the subscription (or the resource group), and changes nothing: no state, no lock, no apply.
+2. The scan's page sorts them into four groups. Resources one imports or uses (a VM's network interface, its OS
+   disk) are listed with it.
+   - **Can be imported**: a catalog template can manage it. Each was planned as if imported, into a throwaway state:
+     **fits** (imported as it is, nothing changes), **differs** (the plan would also change the attributes listed:
+     the template's defaults differ from the resource), **incomplete** (values the form requires weren't found; fill
+     them in when importing).
+   - **Template needs work**: a template matches, but importing with it would replace the resource; the attributes
+     that force it say what its module must make an input.
+   - **No template**: no catalog template can import its type yet.
+   - **Already managed**: a workspace's state has it, with a link to that workspace.
 3. **Import** opens the template's form filled in from what was found. Check it and start the plan: it imports the
    resources (`N to import, 0 to add, 0 to change, 0 to destroy` when it fits) and always waits for confirmation,
    also with auto-apply. From then on it's an ordinary template in the workspace.
@@ -71,8 +74,9 @@ Safety: a resource can be in one state only. Importing one a workspace manages a
 checks again against the state it reads; an import whose plan would replace or delete anything ends as errored,
 nothing applied. The IDs to import come from the scan, never from the form.
 
-Limits: at most 50 resources per scan get a fit check (the rest are listed unchecked); types the provider can't
-list (e.g. managed disks) are imported by ID only, their inputs not filled.
+Limits: listing every resource is Azure's (`azurerm_resources`, per resource group); without it the page shows only
+what templates can import. At most 50 resources per scan get a fit check (the rest are listed unchecked); types the
+provider can't list (e.g. managed disks) are imported by ID only, their inputs not filled.
 
 ## Promote to another workspace
 

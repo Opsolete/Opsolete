@@ -323,10 +323,12 @@ func (s *Store) CreateScan(ctx context.Context, workspaceID uuid.UUID, resourceG
 	return r, err
 }
 
-// Scan is a scan run's resource group ("" the whole subscription) and what it found (nil until it finished).
+// Scan is a scan run's resource group ("" the whole subscription) and what it found (nil until it finished):
+// what templates can import, and every resource it saw (nil: it couldn't take stock).
 type Scan struct {
 	ResourceGroup string
 	Candidates    []runnerapi.Candidate
+	Inventory     []runnerapi.Found
 }
 
 // RunScan loads scan run runID; ErrNotFound if it isn't a scan.
@@ -338,6 +340,9 @@ func (s *Store) RunScan(ctx context.Context, runID uuid.UUID) (Scan, error) {
 	sc := Scan{ResourceGroup: row.ResourceGroup}
 	if row.Candidates != nil {
 		err = json.Unmarshal(row.Candidates, &sc.Candidates)
+	}
+	if row.Inventory != nil && err == nil {
+		err = json.Unmarshal(row.Inventory, &sc.Inventory)
 	}
 	return sc, err
 }

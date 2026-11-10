@@ -189,3 +189,19 @@ list "azurerm_resource_group" "l1" {
 		}
 	}
 }
+
+// TestUses: a candidate uses the inventory's resources its attributes refer to and it doesn't import, any case.
+func TestUses(t *testing.T) {
+	var vm any
+	json.Unmarshal([]byte(`{"id": "/subscriptions/s/resourceGroups/RG/providers/x/vm", "os_managed_disk_id": "/subscriptions/s/resourceGroups/RG/providers/x/disk",
+		"nics": ["/subscriptions/s/resourceGroups/rg/providers/x/nic"], "subnet_id": "/subscriptions/s/resourceGroups/rg/providers/x/vnet/subnets/a", "size": "S"}`), &vm)
+	var used []string
+	refs(vm, &used)
+	c := []runnerapi.Candidate{{Uses: used, Imports: []runnerapi.Import{{ID: "/subscriptions/s/resourceGroups/rg/providers/x/vm"}, {ID: "/subscriptions/s/resourceGroups/rg/providers/x/nic"}}}}
+	inv := []runnerapi.Found{{ID: "/subscriptions/s/resourceGroups/rg/providers/x/vm"}, {ID: "/subscriptions/s/resourceGroups/rg/providers/x/disk"},
+		{ID: "/subscriptions/s/resourceGroups/rg/providers/x/vnet"}}
+	uses(c, inv)
+	if want := []string{"/subscriptions/s/resourceGroups/rg/providers/x/disk"}; !reflect.DeepEqual(c[0].Uses, want) {
+		t.Fatalf("uses %v, want %v (the subnet isn't the network; the VM and NIC are imported)", c[0].Uses, want)
+	}
+}
