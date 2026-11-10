@@ -193,7 +193,7 @@ List the module's resources that can do that in `adopt`:
 | `to` | string | required | The resource's address in the module, e.g. `azurerm_linux_virtual_machine.this` or `azurerm_windows_virtual_machine.self[0]` (with `count`). Unique. |
 | `label` | string | optional | The field's title. Empty: the address. |
 | `help` | string | optional | Shown under the field, and the error when the ID doesn't match `pattern`. |
-| `pattern` | string | optional | A Go (RE2) regular expression the whole ID must match, e.g. to tell a VM ID from a NIC ID. Start it with `(?i)`: Azure isn't consistent about casing. |
+| `pattern` | string | optional | A Go (RE2) regular expression the whole ID must match, e.g. to tell a VM ID from a NIC ID. Start it with `(?i)`: Azure isn't consistent about casing. Without one, an `azurerm_` resource's ID must have Azure's shape (`/subscriptions/…/resourceGroups/…[/providers/…]`). |
 | `show_if` | object | optional | As for inputs, e.g. for a resource that exists only for one `os_type`. |
 
 When the template is added (to a new workspace or an existing one), the form has an **Adopt existing resources**
@@ -207,6 +207,18 @@ above. The run then imports the resources into `module.<name>`:
 - If it would replace or delete anything, the run ends as errored and nothing is applied: the template doesn't fit
   the resource. Added to an existing workspace, the template is removed again.
 - After the apply the resources are ordinary template resources. Configuring the template later asks for no IDs.
+
+### Generate from module
+
+For a template on a [registry]({{< relref "module-registry" >}}) module, **Generate from module** in the
+[builder]({{< relref "template-builder" >}}) writes the `adopt` entries below from the module's code, ready to
+review: each managed resource becomes an entry found with its own type; `count = var.x == "v" ? 1 : 0` gives its
+`show_if` (and makes `x` a dropdown); `attr = var.x` and `coalesce(var.x, …)` fill `inputs`, also in nested blocks;
+`dynamic "b"` with `for_each = var.x ? … : []` maps the yes / no input `x`; `[other.res.id]` makes `other` a
+related entry (`id_from`); a sensitive input in `lifecycle { ignore_changes }` becomes a `placeholder`. Other
+expressions, `for_each` resources and nested modules are skipped and named in the result. For the
+[example VM module](https://github.com/Opsolete/terraform-modules-examples/tree/main/virtualmachine) it writes the
+three entries a scan needs (Windows VM, Linux VM, network interface).
 
 ### Scanning: found and filled in
 
@@ -222,7 +234,8 @@ existing resources** scans the cloud with the workspace's credentials, lists wha
 | `inputs` | `{"<input>": "<attribute path>"}`, e.g. `{"size": "size", "os_disk_type": "os_disk[0].storage_account_type"}`. A yes / no input takes whether the attribute is set (e.g. `"boot_diagnostics_enabled": "boot_diagnostics"`). |
 | `placeholder` | Sensitive inputs filled with a random value when adopting, for values the cloud never returns (an admin password the module ignores with `ignore_changes`). The form doesn't require them then. |
 
-A scan is a run (action `scan`) on the workspace: the runner lists the resources (azurerm ≥ 5.7 for VMs), fills
+A scan is a run (action `scan`) on the workspace: the runner lists the resources (azurerm ≥ 5.7 for VMs; types the
+provider can't list, such as managed disks, are left out of the search and their entries only imported by ID), fills
 in the form values, and plans adopting all of them, each as its own module, into a throwaway state. Nothing is
 written or locked. The run page shows each one as **fits** (imports only), **differs** (and which attributes would
 change), **doesn't fit** (would replace it: no Adopt), **incomplete** (the form lacks values; Adopt and fill them

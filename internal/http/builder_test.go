@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/opsolete/opsolete/internal/registry/registrytest"
 	"github.com/opsolete/opsolete/internal/templates"
 )
 
@@ -185,5 +186,44 @@ func TestBuilderRoundTrip(t *testing.T) {
 	ts, _, err := templates.Parse(map[string][]byte{"vm.json": b})
 	if err != nil || !reflect.DeepEqual(ts["vm"], tpl) {
 		t.Errorf("round trip: %v\n%+v\n%+v", err, ts["vm"], tpl)
+	}
+}
+
+// TestGenerateAdopt: on a registry module, Generate from module fills the adopt rows from its code and turns the
+// input its count tests into a dropdown, saving nothing; for other sources it says why it can't.
+func TestGenerateAdopt(t *testing.T) {
+	store := testStore(t)
+	dir := t.TempDir()
+	h := newServer(t, dir, true, store)
+	ns := "g" + strings.ToLower(newID()[:8])
+	files := map[string]string{}
+	for _, f := range []string{"main.tf", "variables.tf"} {
+		b, err := os.ReadFile("../registry/testdata/vm/" + f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[f] = string(b)
+	}
+	if rec := upload(h, map[string]string{"namespace": ns, "name": "vm", "system": "azurerm", "version": "3.1.0"}, registrytest.TarGz(t, files)); rec.Code != http.StatusSeeOther {
+		t.Fatalf("upload: %d %s", rec.Code, rec.Body.String())
+	}
+	form := url.Values{"name": {"VM"}, "module_source": {"ops.example.com/" + ns + "/vm/azurerm"}, "module_ref": {"3.1.0"}, "generate": {"1"},
+		"in_name": {"name", "os_type", "admin_password", "size", ""}, "in_type": {"string", "string", "string", "string", "string"},
+		"in_default": {"", "windows", "", "", ""}, "in_sensitive": {"2"}}
+	page := post(h, "/templates/new", form).Body.String()
+	for _, want := range []string{"Generated 3 rows under Adopt existing resources", "os_type became a dropdown",
+		`name="ad_to" value="azurerm_windows_virtual_machine.self[0]"`, `name="ad_list" value="azurerm_network_interface"`,
+		`name="ad_id_from" value="network_interface_ids[0]"`, `name="ad_placeholder" value="admin_password"`, ">name = name\nsize = size\n</textarea>",
+		`name="in_opt_value_1" value="linux"`} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("generated builder lacks %q:\n%s", want, page)
+		}
+	}
+	if files, _ := filepath.Glob(filepath.Join(dir, "*.json")); len(files) != 0 {
+		t.Fatalf("generating must not save: %v", files)
+	}
+	form.Set("module_source", "git::https://example.com/vm")
+	if rec := post(h, "/templates/new", form); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "only registry modules have") {
+		t.Fatalf("git source: %d %s", rec.Code, rec.Body.String())
 	}
 }

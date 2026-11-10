@@ -30,6 +30,7 @@
 
 {{template "formerror" .F}}
 {{with .Warning}}<div class="alert warn" role="status">{{.}}</div>{{end}}
+{{with .Notice}}<div class="alert" role="status">{{.}}</div>{{end}}
 <form method="post" id="builder">
   <input type="hidden" name="selected" value="{{.Selected}}">
   {{if and (not .Editing) .T.ID}}<!-- saving again (e.g. after its pull request opened) keeps the id instead of adding a second template -->
@@ -138,6 +139,10 @@
     <p class="muted">List the module's resources that can take over ones that already exist, for example VMs built in the Azure portal. End users then
       paste each resource's ID when they add the template, and type its current settings into the fields; the run imports the resources
       instead of creating them. One row per resource; clear an address to remove its row.</p>
+    {{if .Registry}}<div class="inline mb-1">
+      <button type="submit" name="generate" value="1" class="secondary" formnovalidate>Generate from module</button>
+      <span class="hint">Reads the registry module's code and fills in these rows, including how a scan finds the resources and fills the form; replaces the rows below. Review them, then save.</span>
+    </div>{{end}}
     <div id="adopt-rows">
     {{range $i, $a := .AdoptRows}}{{$cur := ""}}{{with .ShowIf}}{{$cur = .Input}}{{end}}
     <div class="bgrid adopt-row" role="group" aria-label="Adoptable resource">

@@ -3,6 +3,7 @@ package httpserver
 import (
 	"cmp"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/url"
@@ -27,6 +28,7 @@ type builderPage struct {
 	Editing     bool
 	F           *formState // a refused save
 	Warning     string
+	Notice      string           // what Generate from module did
 	Modules     []storage.Module // registry modules to start from
 	Selected    string           // ns/name/system/version picked from the registry
 	Registry    bool             // registry enabled: offer "start from a registry module"
@@ -143,6 +145,20 @@ func (s *Server) saveTemplate(w http.ResponseWriter, r *http.Request) {
 		t.ID = r.PathValue("id")
 	}
 	page := builderPage{Editing: editing, Selected: f.Get("selected")}
+	if f.Has("generate") { // adopt rows from the module's code, shown to review; nothing saved
+		gt, notes, err := s.App.GenerateAdopt(r.Context(), actor(r), t)
+		page.T = gt
+		if err != nil {
+			s.builderError(w, r, page, err)
+			return
+		}
+		page.Notice = fmt.Sprintf("Generated %d rows under Adopt existing resources from the module's code: review them, then save.", len(gt.Adopt))
+		if len(notes) > 0 {
+			page.Notice += " " + strings.Join(notes, "; ") + "."
+		}
+		s.renderBuilder(w, r, http.StatusOK, page)
+		return
+	}
 	if f.Has("preview") { // the deploy form as end users get it, without saving
 		rt, err := s.App.PreviewTemplate(r.Context(), actor(r), t, editing)
 		if err != nil {

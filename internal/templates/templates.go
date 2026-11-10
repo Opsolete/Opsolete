@@ -128,6 +128,8 @@ func (t Template) AdoptIDs(raw map[string]string, ids []string) (map[string]stri
 			errs[AdoptField(i)] = "This is not a resource ID."
 		case a.Pattern != "" && !regexp.MustCompile(anchored(a.Pattern)).MatchString(v):
 			errs[AdoptField(i)] = cmp.Or(a.Help, "Doesn't have the expected format: "+a.Pattern)
+		case a.Pattern == "" && strings.HasPrefix(resourceType(a.To), "azurerm_") && !azureID.MatchString(v):
+			errs[AdoptField(i)] = "Not an Azure resource ID: /subscriptions/…/resourceGroups/…/providers/…"
 		default:
 			out[a.To] = v
 		}
@@ -549,6 +551,19 @@ func (t Template) check() error {
 }
 
 var listRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// azureID is the shape of every Azure resource ID: a resource group, or a resource (and child resources) in one.
+var azureID = regexp.MustCompile(`(?i)^/subscriptions/[^/]+/resourceGroups/[^/]+(/providers/[^/]+(/[^/]+/[^/]+)+)?$`)
+
+// resourceType is the type of resource address addr (addrRe): azurerm_x for module.m.azurerm_x.this[0].
+func resourceType(addr string) string {
+	addr, _, _ = strings.Cut(addr, "[")
+	parts := strings.Split(addr, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	return parts[len(parts)-2]
+}
 
 // addrRe is a managed resource address, optionally in nested modules and with an index; it goes into an
 // import block's "to" as is.

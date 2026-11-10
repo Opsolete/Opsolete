@@ -187,6 +187,10 @@
 </div>
 {{else}}<p class="muted">No templates in the catalog yet.</p>{{end}}
 {{$scannable := false}}{{range .Catalog}}{{if .Scannable}}{{$scannable = true}}{{end}}{{end}}
+{{if and $deploy .Catalog (not $scannable)}}
+<h2 class="mt-125">Import existing resources</h2>
+<p class="muted">No template can scan for existing resources yet. An admin sets that up in the template builder: <strong>Generate from module</strong> under <em>Adopt existing resources</em>.</p>
+{{end}}
 {{if and $deploy $scannable}}
 <h2 class="mt-125">Import existing resources</h2>
 <p class="muted">Find resources that already exist in the cloud (with this workspace's credentials) that a template can take over without

@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -57,25 +58,40 @@ func (r *Runner) scan(ctx context.Context, tf *tfProc, dir string, job runnerapi
 	if err := writeProviders(qdir, lists); err != nil {
 		return fail("prepare scan", err)
 	}
-	var q strings.Builder
-	for i, l := range lists { // listRe-checked types: safe in HCL
-		prov, _, _ := strings.Cut(l, "_")
-		fmt.Fprintf(&q, "list %q \"l%d\" {\n  provider         = %s\n  include_resource = true\n  limit            = 1000\n}\n", l, i, prov)
-	}
-	if err := os.WriteFile(filepath.Join(qdir, "scan.tfquery.hcl"), []byte(q.String()), 0o600); err != nil {
-		return fail("prepare scan", err)
-	}
 	tf.dir = qdir
 	fmt.Fprintf(w, "==> terraform init (providers for %s)\n", strings.Join(lists, ", "))
 	if _, err := tf.run(ctx, w, w, "init", "-input=false"); err != nil {
 		return fail("init", err)
 	}
-	fmt.Fprintln(w, "\n==> terraform query (find existing resources)")
-	var out bytes.Buffer // resource attributes: never in the log
-	_, qerr := tf.run(ctx, &out, w, "query", "-json", "-no-color")
-	byType, err := parseQuery(&out, w) // with -json, Terraform's errors are on stdout too
-	if err = cmp.Or(err, qerr); err != nil {
-		return fail("query", err)
+	var byType map[string][]found
+	for queried := slices.Clone(lists); ; {
+		var q strings.Builder
+		for i, l := range queried { // listRe-checked types: safe in HCL
+			prov, _, _ := strings.Cut(l, "_")
+			fmt.Fprintf(&q, "list %q \"l%d\" {\n  provider         = %s\n  include_resource = true\n  limit            = 1000\n}\n", l, i, prov)
+		}
+		if err := os.WriteFile(filepath.Join(qdir, "scan.tfquery.hcl"), []byte(q.String()), 0o600); err != nil {
+			return fail("prepare scan", err)
+		}
+		fmt.Fprintf(w, "\n==> terraform query (find %s)\n", strings.Join(queried, ", "))
+		var out bytes.Buffer // resource attributes: never in the log
+		_, qerr := tf.run(ctx, &out, w, "query", "-json", "-no-color")
+		var unsupported []string
+		var err error
+		byType, unsupported, err = parseQuery(&out, w) // with -json, Terraform's errors are on stdout too
+		if left := slices.DeleteFunc(slices.Clone(queried), func(l string) bool { return slices.Contains(unsupported, l) }); len(unsupported) > 0 && len(left) > 0 {
+			// e.g. managed disks: such an entry is still imported by ID (id_from), its inputs just aren't filled
+			fmt.Fprintf(w, "==> no list support for %s: found without it\n", strings.Join(unsupported, ", "))
+			queried = left
+			continue
+		}
+		if len(unsupported) > 0 && err == nil {
+			err = fmt.Errorf("the provider can list none of %s: the template's adopt entries need other list types", strings.Join(unsupported, ", "))
+		}
+		if err = cmp.Or(err, qerr); err != nil {
+			return fail("query", err)
+		}
+		break
 	}
 	cands, vals := candidates(t, byType, func() string { return "Ops-" + rand.Text() + "-1a" })
 	fmt.Fprintf(w, "\n==> %d candidates\n", len(cands))
@@ -117,10 +133,11 @@ func writeProviders(dir string, lists []string) error {
 	return os.WriteFile(filepath.Join(dir, "opsolete_providers.tf.json"), j, 0o600)
 }
 
-// parseQuery reads terraform query -json: the resources found by type. Error diagnostics fail it; their
-// summaries go to the log (they hold no attribute values).
-func parseQuery(out io.Reader, w io.Writer) (map[string][]found, error) {
+// parseQuery reads terraform query -json: the resources found by type, and the list types the provider doesn't
+// support. Other error diagnostics fail it; their summaries go to the log (they hold no attribute values).
+func parseQuery(out io.Reader, w io.Writer) (map[string][]found, []string, error) {
 	byType := map[string][]found{}
+	var unsupported []string
 	sc := bufio.NewScanner(out)
 	sc.Buffer(nil, 64<<20) // one line per resource, with all its attributes
 	for sc.Scan() {
@@ -128,7 +145,10 @@ func parseQuery(out io.Reader, w io.Writer) (map[string][]found, error) {
 			Type    string `json:"type"`
 			Level   string `json:"@level"`
 			Message string `json:"@message"`
-			Found   *struct {
+			Diag    struct {
+				Detail string `json:"detail"`
+			} `json:"diagnostic"`
+			Found *struct {
 				Type   string         `json:"resource_type"`
 				Name   string         `json:"display_name"`
 				Object map[string]any `json:"resource_object"`
@@ -141,13 +161,20 @@ func parseQuery(out io.Reader, w io.Writer) (map[string][]found, error) {
 		case line.Type == "list_resource_found" && line.Found != nil:
 			byType[line.Found.Type] = append(byType[line.Found.Type], found{line.Found.Name, line.Found.Object})
 		case line.Type == "diagnostic" && line.Level == "error":
-			return nil, fmt.Errorf("%s", line.Message)
+			if m := unsupportedList.FindStringSubmatch(line.Diag.Detail); m != nil {
+				unsupported = append(unsupported, m[1])
+				continue
+			}
+			return nil, nil, fmt.Errorf("%s", line.Message)
 		case line.Type == "list_complete" || line.Type == "diagnostic":
 			fmt.Fprintln(w, line.Message)
 		}
 	}
-	return byType, sc.Err()
+	return byType, unsupported, sc.Err()
 }
+
+// unsupportedList matches Terraform's "The provider hashicorp/azurerm does not support list resource "x"."
+var unsupportedList = regexp.MustCompile(`does not support list resource "([a-z0-9_]+)"`)
 
 // candidates maps what the query found to template t: one candidate per resource of a primary entry (that
 // has Require set), its inputs and related resources (IDFrom) filled in, checked like the form checks them.

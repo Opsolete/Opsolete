@@ -109,6 +109,12 @@ runs that take the state lock index it at their plan phase too, so older states 
 subscription: both VMs found, every input filled as typed by hand before, IDs' casing normalized, both "fits",
 25 s.
 
+**Built (generate):** the builder's Generate from module (`registry/adopt.go`) writes the adopt entries from the
+registry module's HCL (count conditions → show_if, var references → inputs, resource id references → id_from,
+sensitive + ignore_changes → placeholder; azurerm VM list quirk from a small table); without a pattern an azurerm
+ID is checked for Azure's shape; the runner drops list types the provider can't list and queries again. For the
+example VM module it generates exactly the entries written by hand before.
+
 Decisions for phases 2 and 3 (November 2026): a scan starts from a workspace (its credentials); adopted Windows VMs
 get a generated placeholder for the admin password (the module ignores password changes); the fit check runs
 automatically after a scan; adoption stays one resource at a time (pre-filled form), bulk later.

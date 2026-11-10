@@ -129,3 +129,20 @@ func TestFitPlan(t *testing.T) {
 		t.Fatalf("got  %+v\nwant %+v", got, want)
 	}
 }
+
+// TestParseQuery: found resources by type; list types the provider lacks are reported, not fatal; other errors are.
+func TestParseQuery(t *testing.T) {
+	out := `{"type":"version","@message":"Terraform 1.15.3"}
+{"type":"diagnostic","@level":"error","@message":"Error: Invalid list resource","diagnostic":{"detail":"The provider hashicorp/azurerm does not support list resource \"azurerm_managed_disk\"."}}
+{"type":"list_resource_found","list_resource_found":{"resource_type":"azurerm_network_interface","display_name":"nic1","resource_object":{"id":"/x/nic1"}}}
+{"type":"list_complete","@message":"list.azurerm_network_interface.l1: List complete"}`
+	var log strings.Builder
+	byType, unsupported, err := parseQuery(strings.NewReader(out), &log)
+	if err != nil || len(byType["azurerm_network_interface"]) != 1 || byType["azurerm_network_interface"][0].obj["id"] != "/x/nic1" ||
+		!reflect.DeepEqual(unsupported, []string{"azurerm_managed_disk"}) || !strings.Contains(log.String(), "List complete") {
+		t.Fatalf("%v %v %v\n%s", byType, unsupported, err, log.String())
+	}
+	if _, _, err := parseQuery(strings.NewReader(`{"type":"diagnostic","@level":"error","@message":"Error: building account"}`), &log); err == nil {
+		t.Fatal("an error diagnostic must fail the query")
+	}
+}

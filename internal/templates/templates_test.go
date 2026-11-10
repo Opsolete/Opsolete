@@ -235,8 +235,19 @@ func TestAdoptIDs(t *testing.T) {
 	if _, errs = vm.AdoptIDs(win, []string{vmID + "\nx", "", nicID}); errs[AdoptField(0)] != "This is not a resource ID." {
 		t.Errorf("line break: %v", errs)
 	}
-	if got, errs = vm.AdoptIDs(map[string]string{"os_type": "linux"}, []string{"", "anything", nicID}); len(errs) != 0 || got["azurerm_linux_virtual_machine.self[0]"] != "anything" {
+	// without a pattern an azurerm resource's ID must have Azure's shape
+	if _, errs = vm.AdoptIDs(map[string]string{"os_type": "linux"}, []string{"", "anything", nicID}); !strings.HasPrefix(errs[AdoptField(1)], "Not an Azure resource ID") {
+		t.Errorf("linux, no pattern, not an ID: %v", errs)
+	}
+	linuxID := "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/l1"
+	if got, errs = vm.AdoptIDs(map[string]string{"os_type": "linux"}, []string{"", linuxID, nicID}); len(errs) != 0 || got["azurerm_linux_virtual_machine.self[0]"] != linuxID {
 		t.Errorf("linux, no pattern: %v %v", got, errs)
+	}
+	for id, ok := range map[string]bool{"/subscriptions/s/resourceGroups/rg": true, "/subscriptions/s/resourcegroups/rg/providers/Microsoft.Sql/servers/a/databases/b": true,
+		"/subscriptions/s/resourceGroups/rg/providers/Microsoft.Sql/servers": false, "/subscriptions/s": false, "rg": false} {
+		if azureID.MatchString(id) != ok {
+			t.Errorf("azureID(%s) = %v", id, !ok)
+		}
 	}
 }
 

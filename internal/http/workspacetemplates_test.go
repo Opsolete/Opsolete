@@ -374,7 +374,7 @@ func TestAdoptForm(t *testing.T) {
 	if page := get(h, "/workspaces/"+ws+"/templates/"+mod).Body.String(); strings.Contains(page, "ops-adopt-") {
 		t.Fatalf("configure form with adopt fields:\n%s", page)
 	}
-	add := url.Values{"name": {"vm2"}, "os_type": {"linux"}, "ops-adopt-1": {"/any/linux/vm"}, "ops-adopt-2": {""}}
+	add := url.Values{"name": {"vm2"}, "os_type": {"linux"}, "ops-adopt-1": {"/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/l1"}, "ops-adopt-2": {""}}
 	if rec := post(h, "/workspaces/"+ws+"/templates/new?template=vm", add); rec.Code != http.StatusUnprocessableEntity ||
 		!strings.Contains(rec.Body.String(), "Paste this resource") {
 		t.Fatalf("one ID missing: %d %s", rec.Code, rec.Body.String())
@@ -383,7 +383,7 @@ func TestAdoptForm(t *testing.T) {
 	if rec := post(h, "/workspaces/"+ws+"/templates/new?template=vm", add); rec.Code != http.StatusSeeOther {
 		t.Fatalf("add adopting: %d %s", rec.Code, rec.Body.String())
 	}
-	if j = claim(); len(j.Imports) != 2 || !strings.HasSuffix(j.Imports[0].To, ".azurerm_linux_virtual_machine.self[0]") || j.Imports[0].ID != "/any/linux/vm" {
+	if j = claim(); len(j.Imports) != 2 || !strings.HasSuffix(j.Imports[0].To, ".azurerm_linux_virtual_machine.self[0]") || j.Imports[0].ID != "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/l1" {
 		t.Fatalf("add imports: %+v", j.Imports)
 	}
 	// without IDs it creates, as before
