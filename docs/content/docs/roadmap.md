@@ -1,11 +1,11 @@
 ---
 title: Roadmap
-weight: 6
+weight: 8
 ---
 
 ## Done in 0.6
 
-0.6.0 rebuilt Opsolete on one database schema, a service layer with one access rule, a scheduler that runs background work on one replica, `LISTEN`/`NOTIFY` instead of polling, two-phase job claims, job timeouts with a grace period for Terraform to save state, key rotation without downtime, retention, and template format 1.0. See [Upgrading to 0.6]({{< relref "/docs/operations/upgrading" >}}).
+0.6.0 rebuilt Opsolete on one database schema, a service layer with one access rule, a scheduler that runs background work on one replica, `LISTEN`/`NOTIFY` instead of polling, two-phase job claims, job timeouts with a grace period for Terraform to save state, key rotation without downtime, retention, and template format 1.0. See [Upgrading to 0.6]({{< relref "/docs/install/upgrading" >}}).
 
 ## Next: 1.0
 

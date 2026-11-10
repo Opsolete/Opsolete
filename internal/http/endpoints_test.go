@@ -14,7 +14,7 @@ import (
 func TestEndpointsDocumented(t *testing.T) {
 	s := New(&app.App{}, nil, Features{Deployments: true, Registry: true, Editor: true, VCS: true})
 	s.Handler()
-	doc, err := os.ReadFile("../../docs/content/docs/operations/endpoints.md")
+	doc, err := os.ReadFile("../../docs/content/docs/endpoints.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func TestEndpointsDocumented(t *testing.T) {
 	}
 	for _, p := range s.patterns {
 		if !slices.Contains(documented, p) {
-			t.Errorf("route %q is not in docs/content/docs/operations/endpoints.md", p)
+			t.Errorf("route %q is not in docs/content/docs/endpoints.md", p)
 		}
 	}
 	for _, d := range documented {

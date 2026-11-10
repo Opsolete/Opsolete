@@ -578,7 +578,7 @@ Closed alongside P2: `opsolete token` (`cmd/opsolete/main_test.go:TestCreateToke
 
 ## Docs vs implementation
 
-Checked page by page against the code in Phase 8 step 4: the mismatches listed here before are fixed in the docs. `internal/config` `TestDocumented` (env vars in `operations/configuration.md`) and `internal/http` `TestEndpointsDocumented` (routes in `operations/endpoints.md`, both ways) keep the two reference pages from drifting.
+Checked page by page against the code in Phase 8 step 4: the mismatches listed here before are fixed in the docs. `internal/config` `TestDocumented` (env vars in `config/reference.md`) and `internal/http` `TestEndpointsDocumented` (routes in `endpoints.md`, both ways) keep the two reference pages from drifting.
 
 Remaining, code rather than docs (not changed):
 
