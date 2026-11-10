@@ -82,7 +82,7 @@ func (q *Queries) GetVCSConnection(ctx context.Context, id uuid.UUID) (VcsConnec
 }
 
 const getVCSModule = `-- name: GetVCSModule :one
-SELECT m.namespace, m.name, m.system, m.connection_id, c.name AS connection, c.provider, m.repo, m.dir, m.synced_at, m.sync_error
+SELECT m.namespace, m.name, m.system, m.connection_id, c.name AS connection, c.provider, m.repo, m.dir, m.tag_prefix, m.synced_at, m.sync_error
 FROM vcs_modules m JOIN vcs_connections c ON c.id = m.connection_id
 WHERE m.namespace = $1::text AND m.name = $2::text AND m.system = $3::text
 `
@@ -102,6 +102,7 @@ type GetVCSModuleRow struct {
 	Provider     string
 	Repo         string
 	Dir          string
+	TagPrefix    string
 	SyncedAt     *time.Time
 	SyncError    string
 }
@@ -118,6 +119,7 @@ func (q *Queries) GetVCSModule(ctx context.Context, arg GetVCSModuleParams) (Get
 		&i.Provider,
 		&i.Repo,
 		&i.Dir,
+		&i.TagPrefix,
 		&i.SyncedAt,
 		&i.SyncError,
 	)
@@ -125,8 +127,9 @@ func (q *Queries) GetVCSModule(ctx context.Context, arg GetVCSModuleParams) (Get
 }
 
 const linkVCSModule = `-- name: LinkVCSModule :exec
-INSERT INTO vcs_modules (namespace, name, system, connection_id, repo, dir)
-VALUES ($1::text, $2::text, $3::text, $4::uuid, $5::text, $6::text)
+INSERT INTO vcs_modules (namespace, name, system, connection_id, repo, dir, tag_prefix)
+VALUES ($1::text, $2::text, $3::text, $4::uuid, $5::text, $6::text,
+    $7::text)
 `
 
 type LinkVCSModuleParams struct {
@@ -136,6 +139,7 @@ type LinkVCSModuleParams struct {
 	ConnectionID uuid.UUID
 	Repo         string
 	Dir          string
+	TagPrefix    string
 }
 
 func (q *Queries) LinkVCSModule(ctx context.Context, arg LinkVCSModuleParams) error {
@@ -146,6 +150,7 @@ func (q *Queries) LinkVCSModule(ctx context.Context, arg LinkVCSModuleParams) er
 		arg.ConnectionID,
 		arg.Repo,
 		arg.Dir,
+		arg.TagPrefix,
 	)
 	return err
 }
@@ -274,7 +279,7 @@ func (q *Queries) VCSConnections(ctx context.Context) ([]VcsConnectionList, erro
 }
 
 const vCSModules = `-- name: VCSModules :many
-SELECT m.namespace, m.name, m.system, m.connection_id, c.name AS connection, c.provider, m.repo, m.dir, m.synced_at, m.sync_error
+SELECT m.namespace, m.name, m.system, m.connection_id, c.name AS connection, c.provider, m.repo, m.dir, m.tag_prefix, m.synced_at, m.sync_error
 FROM vcs_modules m JOIN vcs_connections c ON c.id = m.connection_id ORDER BY m.namespace, m.name, m.system
 `
 
@@ -287,6 +292,7 @@ type VCSModulesRow struct {
 	Provider     string
 	Repo         string
 	Dir          string
+	TagPrefix    string
 	SyncedAt     *time.Time
 	SyncError    string
 }
@@ -309,6 +315,7 @@ func (q *Queries) VCSModules(ctx context.Context) ([]VCSModulesRow, error) {
 			&i.Provider,
 			&i.Repo,
 			&i.Dir,
+			&i.TagPrefix,
 			&i.SyncedAt,
 			&i.SyncError,
 		); err != nil {

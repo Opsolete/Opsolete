@@ -81,6 +81,22 @@ UPDATE runs SET rollout_id = sqlc.arg(rollout_id)::uuid WHERE id = sqlc.arg(id):
 -- name: SetRunAlwaysConfirm :exec
 UPDATE runs SET always_confirm = true WHERE id = sqlc.arg(id)::uuid;
 
+-- name: SetRunScanResourceGroup :exec
+UPDATE runs SET scan_resource_group = sqlc.arg(resource_group)::text WHERE id = sqlc.arg(id)::uuid;
+
+-- name: SetRunScanResult :exec
+UPDATE runs SET candidates = sqlc.arg(candidates)::jsonb, inventory = sqlc.arg(inventory)::jsonb WHERE id = sqlc.arg(id)::uuid;
+
+-- name: RunScan :one
+SELECT COALESCE(scan_resource_group, '')::text AS resource_group, candidates, inventory FROM runs WHERE id = sqlc.arg(id)::uuid AND action = 'scan';
+
+-- name: RunImports :one
+SELECT imports FROM runs WHERE id = sqlc.arg(id)::uuid;
+
+-- name: SetRunImports :exec
+-- An adoption: it always waits for a human, also with auto-apply.
+UPDATE runs SET imports = sqlc.arg(imports)::jsonb, always_confirm = true WHERE id = sqlc.arg(id)::uuid;
+
 -- name: LockRunStatus :one
 SELECT status FROM runs WHERE id = sqlc.arg(id)::uuid FOR UPDATE;
 
@@ -178,12 +194,12 @@ UPDATE runs SET log_removed_at = now() FROM r WHERE runs.id = r.id
 RETURNING (runs.log_bytes > 0)::boolean AS had_log;
 
 -- name: PruneSpeculativeRuns :execrows
--- Drift checks and speculative plans, history and logs with them (cascade), except what readers
+-- Drift checks, speculative plans and scans, history and logs with them (cascade), except what readers
 -- need: a workspace's latest drift check (LatestAssessment) and latest one that found drift or none
 -- (workspace_list.drifted), and a pull request's latest plan (QueueVCSRun's dedupe). Plans run by
 -- hand (no pull request) have no exception.
 DELETE FROM runs WHERE id IN (
-    SELECT r.id FROM runs r WHERE r.action IN ('assess', 'plan') AND NOT run_active(r.status)
+    SELECT r.id FROM runs r WHERE r.action IN ('assess', 'plan', 'scan') AND NOT run_active(r.status)
         AND r.updated_at < now() - make_interval(secs => sqlc.arg(older_secs)::float8)
         AND CASE WHEN r.action = 'assess' THEN
                 EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = r.workspace_id AND a.action = 'assess' AND a.created_at > r.created_at)

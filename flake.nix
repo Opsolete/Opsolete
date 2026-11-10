@@ -9,6 +9,33 @@
   }: let
     forEachSystem = nixpkgs.lib.genAttrs ["x86_64-linux" "aarch64-linux" "aarch64-darwin"];
     pkgsFor = system: nixpkgs.legacyPackages.${system};
+    # HashiCorp's release binary pinned by checksum, in the images, CI and the dev shell alike: nixpkgs' terraform
+    # lags behind. The version is .terraform-version (also read by CI and `just test-linux`); update the checksums with it.
+    terraformFor = pkgs: system: let
+      tfVersion = pkgs.lib.trim (builtins.readFile ./.terraform-version);
+      platform =
+        {
+          x86_64-linux = "linux_amd64";
+          aarch64-linux = "linux_arm64";
+          aarch64-darwin = "darwin_arm64";
+        }.${
+          system
+        };
+    in
+      pkgs.runCommand "terraform-${tfVersion}" {
+        src = pkgs.fetchurl {
+          url = "https://releases.hashicorp.com/terraform/${tfVersion}/terraform_${tfVersion}_${platform}.zip";
+          sha256 =
+            {
+              linux_amd64 = "4638628058e71a55212b1c563712eac03b902128f40740f3dc8174df12135061";
+              linux_arm64 = "988e950a1c23058093b0e66ab2d5fb53fc18345ecfbd5871acf51dbac9325edd";
+              darwin_arm64 = "b1ecb3fe0d0a0290c1ab6f83d967d43f25da05d0b671ee0fb355252268dce95a";
+            }.${
+              platform
+            };
+        };
+        nativeBuildInputs = [pkgs.unzip];
+      } "mkdir -p $out/bin && unzip -q $src terraform -d $out/bin";
   in {
     packages = forEachSystem (system: let
       pkgs = pkgsFor system;
@@ -31,22 +58,7 @@
         }.${
           system
         };
-      # HashiCorp's release binary pinned by checksum: nixpkgs' terraform lags behind the version CI tests with.
-      # The version is .terraform-version (also read by CI and `just test-linux`); update the checksums with it.
-      tfVersion = pkgs.lib.trim (builtins.readFile ./.terraform-version);
-      terraform = pkgs.runCommand "terraform-${tfVersion}" {
-        src = pkgs.fetchurl {
-          url = "https://releases.hashicorp.com/terraform/${tfVersion}/terraform_${tfVersion}_linux_${arch}.zip";
-          sha256 =
-            {
-              amd64 = "c168cab7c637a8769fdb90089ddd19de701bc6ff8aca64dc2e2185fe46f59f67";
-              arm64 = "f32478134ffc6d710eec474bbd316652cdddc0f4e336973a3745e8d3a3309cdf";
-            }.${
-              arch
-            };
-        };
-        nativeBuildInputs = [pkgs.unzip];
-      } "mkdir -p $out/bin && unzip -q $src terraform -d $out/bin";
+      terraform = terraformFor pkgs system;
       # Cost estimation; only used when the runner has OPS_INFRACOST_API_KEY.
       infracost = pkgs.runCommand "infracost-0.10.47" {
         src = pkgs.fetchurl {
@@ -127,11 +139,8 @@
       });
 
     devShells = forEachSystem (system: let
-      # terraform is BSL-licensed (unfree in nixpkgs); allow just that one.
-      pkgs = import nixpkgs {
-        inherit system;
-        config.allowUnfreePredicate = p: nixpkgs.lib.getName p == "terraform";
-      };
+      pkgs = pkgsFor system;
+      terraform = terraformFor pkgs system; # shadows pkgs.terraform in the list below
       # postgres runs project-local on a unix socket in .devdata/ (no port clash); see justfile.
     in {
       default = pkgs.mkShell {

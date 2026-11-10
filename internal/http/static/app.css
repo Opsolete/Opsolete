@@ -384,6 +384,7 @@ h1 .status { font-size: .85rem; }
 .plan { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9em; }
 .change { font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
 .change.create { color: var(--ok); }
+.change.import { color: var(--tf); }
 .change.update { color: var(--warn); }
 .change.delete, .change.replace { color: var(--danger); }
 @keyframes pulse { 50% { opacity: .2; } }
@@ -492,3 +493,14 @@ select.flex-9 { flex: 0 0 9rem; }
 .pre-wrap { white-space: pre-wrap; }
 .text-brand { color: var(--brand); }
 hr.rule { border: 0; border-top: 1px solid var(--border); margin: 2rem 0 0; max-width: 60rem; }
+/* a scan's results (run.html): rows like the run list, one line of details each */
+.scan { margin: 1.5rem 0; }
+.scan h3 { margin: 1.5rem 0 .25rem; }
+.scan .chips strong { margin-left: .3rem; }
+.scanrow { display: flex; gap: 1rem; align-items: center; padding: .75rem 1rem; border-bottom: 1px solid var(--border); }
+.scanrow:last-child { border-bottom: 0; }
+.scanrow > span:first-child { flex: 1; min-width: 0; }
+.scanrow small { display: block; margin-top: .15rem; overflow: hidden; text-overflow: ellipsis; }
+.scanrow .end { display: flex; gap: .75rem; align-items: center; flex: none; }
+.text-warn { color: var(--warn); }
+.text-danger { color: var(--danger); }

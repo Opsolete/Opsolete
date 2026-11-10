@@ -3,6 +3,7 @@ package httpserver
 import (
 	"maps"
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 
@@ -28,6 +29,18 @@ func (s *Server) loadTemplateForm(w http.ResponseWriter, r *http.Request) (formP
 		inputs, page.Cur = f.Current.Inputs, templates.Module{Source: f.Current.ModuleSource, Ref: f.Current.ModuleRef}
 	}
 	page.Values, page.Set = app.FormDefaults(f.Template, inputs)
+	if from := foundParam(r); page.Adding && from != nil { // importing what a scan found: its values
+		c, err := s.App.ScanCandidate(r.Context(), actor(r), r.PathValue("name"), *from)
+		if err != nil {
+			s.uiError(w, r, err)
+			return formPage{}, false
+		}
+		maps.Copy(page.Values, c.Inputs)
+		page.Found, page.Placeholder = &c, map[string]bool{}
+		for _, in := range c.Placeholder {
+			page.Placeholder[in] = true
+		}
+	}
 	if err := s.lock(r, &page, storage.Project{ID: f.Workspace.ProjectID, Name: f.Workspace.ProjectName}); err != nil {
 		s.internalError(w, "environment values", err)
 		return formPage{}, false
@@ -53,7 +66,11 @@ func (s *Server) saveWorkspaceTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page.Values = formValues(f, page.T)
-	_, run, err := s.App.SaveTemplate(r.Context(), actor(r), r.PathValue("name"), r.PathValue("module"), page.T.ID, page.Values)
+	var from *app.Found
+	if page.Adding {
+		from = foundParam(r)
+	}
+	_, run, err := s.App.SaveTemplate(r.Context(), actor(r), r.PathValue("name"), r.PathValue("module"), page.T.ID, page.Values, from)
 	if s.failed(w, r, err, "template", f, func(status int, fs *formState) {
 		fs.Labels, page.F = inputLabels(page.T), fs
 		maps.Copy(page.Values, page.Locked) // shown as before, not as posted
@@ -62,6 +79,17 @@ func (s *Server) saveWorkspaceTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/workspaces/"+page.Configure.Name+"/runs/"+run.ID.String(), http.StatusSeeOther)
+}
+
+// foundParam is the scan result the add form imports: ?scan=<run>&n=<index>; nil without.
+func foundParam(r *http.Request) *app.Found {
+	q := r.URL.Query()
+	id, err := uuid.Parse(q.Get("scan"))
+	n, nerr := strconv.Atoi(q.Get("n"))
+	if err != nil || nerr != nil {
+		return nil
+	}
+	return &app.Found{Run: id, N: n}
 }
 
 // removeWorkspaceTemplate removes an added template, and starts the plan that destroys its resources.

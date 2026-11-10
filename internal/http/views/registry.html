@@ -44,7 +44,7 @@
 {{range .}}
 <tr>
   <td><code>{{.Namespace}}/{{.Name}}/{{.System}}</code></td>
-  <td><span class="tag">{{.Connection}}</span> {{.Repo}}{{with .Dir}} <code>/{{.}}</code>{{end}}</td>
+  <td><span class="tag">{{.Connection}}</span> {{.Repo}}{{with .Dir}} <code>/{{.}}</code>{{end}}{{with .TagPrefix}} <span class="muted">tags</span> <code>{{.}}*</code>{{end}}</td>
   <td>{{with .SyncedAt}}{{.Format "2006-01-02 15:04"}}{{else}}<span class="muted">never</span>{{end}}
     {{with .SyncError}}<p class="err">{{.}}</p>{{end}}</td>
   <td class="nowrap"><form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/sync" class="d-inline"><button type="submit" class="secondary small">Sync now</button></form>

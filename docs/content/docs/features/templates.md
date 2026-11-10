@@ -155,6 +155,35 @@ A template's module is deployed by people who never write Terraform, so it has t
 - **Defaults wherever possible**, and a `select` input for variables that have no default, so users pick from approved values instead of typing them.
 - **Pin an approved version** in the template's `ref`. Moving the template to a newer one offers existing workspaces a module update, which admins can [roll out]({{< relref "/docs/features/workspaces#update-to-a-new-module-version" >}}) to all of them, in batches and per project. Give inputs that are new and required a `default`, or each workspace needs its update form.
 
+### Writing modules that can import
+
+To [import existing resources]({{< relref "/docs/features/workspaces#import-existing-resources" >}}) the module
+must be able to describe them as they are, or the import plans changes, or replaces them:
+
+- Make every setting people choose differently, and that forces replacement when changed (names of sub-resources,
+  image, disk type, security settings), an optional input whose default is the module's usual behavior. New
+  deployments then stay the same.
+- Pass inputs straight through (`attr = var.x` or `coalesce(var.x, …)`), so the import can read which input sets
+  which attribute.
+- Put values the cloud never returns (`admin_password`, `custom_data`) in `lifecycle { ignore_changes }`.
+- Use `count = var.x == "value" ? 1 : 0` for resources that depend on a choice (Windows or Linux VM).
+- For parts the scan can't find (Terraform can't list them: data disks, an auto-shutdown schedule, a security
+  group's link to a NIC), let the module import them itself: an input `existing` and an `import` block in the
+  module (Terraform ≥ 1.16) whose ID it builds from its own inputs. People fill in those parts on the import form,
+  with `existing` on; once in state, Terraform skips the block, so it stays in the module:
+
+  ```hcl
+  import {
+    for_each = var.existing ? toset(["main"]) : toset([])
+    to       = azurerm_virtual_machine_data_disk_attachment.main
+    id       = "${var.virtual_machine_id}/dataDisks/${var.name}" # azurerm's ID for the attachment
+  }
+  ```
+
+The [example VM module](https://github.com/Opsolete/terraform-modules-examples/tree/main/virtualmachine) does this:
+its data disks (`"existing": true` per disk in `data_disks_json`), schedule (`auto_shutdown_existing`) and
+security group (`nsg_existing`).
+
 ## Conditional inputs
 
 Add `"show_if": {"input": "<name>", "equals": ["<value>", ...]}` to an input to show it only while an earlier `select` input has one of the values, or an earlier `bool` input is `true` or `false`. The values are typed like the input they refer to: strings for a `select` (its option values), JSON booleans for a `bool` (e.g. `{"input": "backups", "equals": [true]}`). At least one value is required. In the [template builder]({{< relref "/docs/features/template-builder" >}}) this is a field's **Show when … is …** row. Conditions can be chained (a hidden dropdown hides the inputs that depend on it). A hidden input isn't validated or sent to Terraform, so the module's own default applies. Switching a workspace away from a condition drops that input's stored value, sensitive ones included.

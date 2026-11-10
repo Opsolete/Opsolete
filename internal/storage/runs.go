@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -288,7 +289,7 @@ func (s *Store) PruneRunLogs(ctx context.Context, olderThan time.Duration) (int6
 	return logs, err
 }
 
-// PruneSpeculativeRuns deletes drift checks and speculative plans that ended more than olderThan
+// PruneSpeculativeRuns deletes drift checks, speculative plans and scans that ended more than olderThan
 // ago, except the latest ones their readers need (see the query). It returns how many it deleted.
 func (s *Store) PruneSpeculativeRuns(ctx context.Context, olderThan time.Duration) (int64, error) {
 	return prune(func(lim int32) (int64, error) {
@@ -306,4 +307,57 @@ func prune(batch func(lim int32) (int64, error), lim int32) (int64, error) {
 			return total, err
 		}
 	}
+}
+
+// CreateScan queues a scan of the workspace for existing resources (runner.scan), in resourceGroup ("" the
+// whole subscription). ErrRunActive, ErrLocalExecution: as for CreateRun.
+func (s *Store) CreateScan(ctx context.Context, workspaceID uuid.UUID, resourceGroup string, createdBy uuid.UUID) (Run, error) {
+	var r Run
+	err := s.tx(ctx, func(q *db.Queries) error {
+		var err error
+		if r, err = createRun(ctx, q, workspaceID, "scan", createdBy); err != nil {
+			return err
+		}
+		return q.SetRunScanResourceGroup(ctx, db.SetRunScanResourceGroupParams{ID: r.ID, ResourceGroup: resourceGroup})
+	})
+	return r, err
+}
+
+// Scan is a scan run's resource group ("" the whole subscription) and what it found (nil until it finished):
+// what templates can import, and every resource it saw (nil: it couldn't take stock).
+type Scan struct {
+	ResourceGroup string
+	Candidates    []runnerapi.Candidate
+	Inventory     []runnerapi.Found
+}
+
+// RunScan loads scan run runID; ErrNotFound if it isn't a scan.
+func (s *Store) RunScan(ctx context.Context, runID uuid.UUID) (Scan, error) {
+	row, err := s.q.RunScan(ctx, runID)
+	if err != nil {
+		return Scan{}, notFound(err)
+	}
+	sc := Scan{ResourceGroup: row.ResourceGroup}
+	if row.Candidates != nil {
+		err = json.Unmarshal(row.Candidates, &sc.Candidates)
+	}
+	if row.Inventory != nil && err == nil {
+		err = json.Unmarshal(row.Inventory, &sc.Inventory)
+	}
+	return sc, err
+}
+
+// ManagedBy returns, for those of ids (any case) a workspace's current state manages, that workspace's name,
+// by lowercase ID.
+func (s *Store) ManagedBy(ctx context.Context, ids []string) (map[string]string, error) {
+	lower := make([]string, len(ids))
+	for i, id := range ids {
+		lower[i] = strings.ToLower(id)
+	}
+	rows, err := s.q.ManagedResourceIDs(ctx, lower)
+	out := map[string]string{}
+	for _, r := range rows {
+		out[r.ID] = r.Workspace
+	}
+	return out, err
 }

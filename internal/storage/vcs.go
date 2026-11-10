@@ -103,6 +103,7 @@ type VCSModule struct {
 	Connection, Provider    string // name and provider of the connection, for display
 	Repo                    string
 	Dir                     string // folder of the module in the repository; "" = the root
+	TagPrefix               string // only tags starting with it publish, the rest being the version; "" = every semver tag
 	SyncedAt                *time.Time
 	SyncError               string
 }
@@ -110,7 +111,7 @@ type VCSModule struct {
 // LinkVCSModule returns ErrExists if the module is already linked to a repo.
 func (s *Store) LinkVCSModule(ctx context.Context, m VCSModule) error {
 	err := s.q.LinkVCSModule(ctx, db.LinkVCSModuleParams{Namespace: m.Namespace, Name: m.Name, System: m.System,
-		ConnectionID: m.ConnectionID, Repo: m.Repo, Dir: m.Dir})
+		ConnectionID: m.ConnectionID, Repo: m.Repo, Dir: m.Dir, TagPrefix: m.TagPrefix})
 	if isUnique(err) {
 		return ErrExists
 	}
@@ -119,7 +120,7 @@ func (s *Store) LinkVCSModule(ctx context.Context, m VCSModule) error {
 
 func toVCSModule(m db.VCSModulesRow) VCSModule {
 	return VCSModule{Namespace: m.Namespace, Name: m.Name, System: m.System, ConnectionID: m.ConnectionID, Connection: m.Connection,
-		Provider: m.Provider, Repo: m.Repo, Dir: m.Dir, SyncedAt: m.SyncedAt, SyncError: m.SyncError}
+		Provider: m.Provider, Repo: m.Repo, Dir: m.Dir, TagPrefix: m.TagPrefix, SyncedAt: m.SyncedAt, SyncError: m.SyncError}
 }
 
 func (s *Store) VCSModules(ctx context.Context) ([]VCSModule, error) {

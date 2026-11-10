@@ -180,6 +180,12 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	env["TF_HTTP_USERNAME"], env["TF_HTTP_PASSWORD"] = job.WorkspaceID, job.StateToken
 	env["HOME"] = home
 	delete(env, "XDG_DATA_HOME") // Terraform's other implied provider mirror; defaults to under HOME
+	if job.Registry != nil {     // modules from the server's registry, e.g. ones a template's module calls
+		modules := strings.TrimSuffix(r.ServerURL.String(), "/") + "/v1/modules/"
+		if env["TF_CLI_CONFIG_FILE"], err = writeCLIConfig(home, *job.Registry, modules, env["TF_CLI_CONFIG_FILE"]); err != nil {
+			return fail("prepare workdir", err)
+		}
+	}
 	// CleanEnv drops the variables terraform-exec manages (TF_LOG, TF_INPUT, TF_CLI_ARGS, ...).
 	tf.env = []string{"TF_IN_AUTOMATION=1"} // what terraform-exec adds
 	for k, v := range tfexec.CleanEnv(env) {
@@ -195,6 +201,13 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	}
 
 	fmt.Fprintf(w, "==> runner %s: %s phase of %s run %s\n", r.Name, job.Phase, job.Action, job.RunID)
+	if !slices.Contains([]string{"apply", "destroy", "refresh", "assess", "plan", "scan"}, job.Action) {
+		// a server newer than this runner: runners and servers run the same version
+		return fail("job", fmt.Errorf("this runner doesn't know the action %q: upgrade it to the server's version", job.Action))
+	}
+	if job.Action == "scan" {
+		return r.scan(ctx, tf, dir, job, w, fail)
+	}
 	if src != "" {
 		fmt.Fprintln(w, "==> terraform init (fetch module)")
 		if _, err := run("init", "-input=false", "-from-module="+src, "-backend=false"); err != nil {
@@ -204,6 +217,11 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	if len(job.Modules) > 0 {
 		if err := writeModules(dir, job.Modules); err != nil {
 			return fail("write templates", err)
+		}
+	}
+	if len(job.Imports) > 0 { // both phases: the apply's configuration must match the plan's
+		if err := writeImports(dir, job.Imports); err != nil {
+			return fail("write imports", err)
 		}
 	}
 	backend := "terraform {\n  backend \"http\" {}\n}\n"
@@ -239,7 +257,13 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 		}
 	}
 	if job.Phase == "plan" {
-		return r.plan(ctx, tf, run, dir, job, w, fail)
+		res := r.plan(ctx, tf, run, dir, job, w, fail)
+		if res.Status == "succeeded" && job.Action != "plan" && job.Action != "assess" {
+			// Index the state as it is (the run holds its lock): the import guard (storage.adoptionConflict)
+			// checks the resources it holds, and scans mark them managed, without waiting for an apply.
+			res.Resources = inventory(ctx, tf)
+		}
+		return res
 	}
 
 	// The apply writes state: report what's in it however it ends, since a failed apply can
@@ -364,7 +388,7 @@ func (r *Runner) plan(ctx context.Context, tf *tfProc, run func(...string) (bool
 		fmt.Fprintf(w, "\n==> drift: %d changed, %d deleted outside Terraform\n", sum.Change, sum.Destroy)
 		return runnerapi.FinishRequest{Status: "succeeded", Plan: &sum}
 	case "plan":
-		fmt.Fprintf(w, "\n==> speculative plan: %d to add, %d to change, %d to destroy (never applied)\n", sum.Add, sum.Change, sum.Destroy)
+		fmt.Fprintf(w, "\n==> speculative plan: %s (never applied)\n", counts(sum))
 		return runnerapi.FinishRequest{Status: "succeeded", Plan: &sum}
 	}
 	for _, a := range []struct{ name, file string }{{runnerapi.ArtifactPlan, planFile}, {runnerapi.ArtifactLockfile, lockFile}} {
@@ -379,7 +403,7 @@ func (r *Runner) plan(ctx context.Context, tf *tfProc, run func(...string) (bool
 			return fail("save plan", err)
 		}
 	}
-	fmt.Fprintf(w, "\n==> plan saved: %d to add, %d to change, %d to destroy\n", sum.Add, sum.Change, sum.Destroy)
+	fmt.Fprintf(w, "\n==> plan saved: %s\n", counts(sum))
 	return runnerapi.FinishRequest{Status: "succeeded", Plan: &sum}
 }
 

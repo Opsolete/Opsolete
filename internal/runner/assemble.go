@@ -22,6 +22,7 @@ const (
 	lockFile    = ".terraform.lock.hcl"
 	modulesFile = "opsolete_templates.tf.json" // module blocks of the workspace's added templates
 	outputsFile = "opsolete_outputs.tf.json"   // their outputs, as root outputs
+	importsFile = "opsolete_imports.tf.json"   // import blocks of the existing resources the run adopts
 )
 
 // dropRemoved finishes removing templates after the destroy limited to them (-target=module.<name>):
@@ -105,6 +106,20 @@ func writeModules(dir string, mods []runnerapi.Module) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(dir, modulesFile), j, 0o600)
+}
+
+// writeImports writes an import block per adopted resource. The ID is escaped like an input: it's a string
+// in .tf.json, so "${...}" in it would be evaluated.
+func writeImports(dir string, imports []runnerapi.Import) error {
+	blocks := make([]map[string]string, len(imports))
+	for i, im := range imports {
+		blocks[i] = map[string]string{"to": im.To, "id": templateEscape.Replace(im.ID)}
+	}
+	j, err := json.Marshal(map[string]any{"import": blocks})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, importsFile), j, 0o600)
 }
 
 // writeOutputs exposes every output of the added templates as root output <name>__<output>, with

@@ -101,6 +101,10 @@
   <input id="dir" name="dir" value="{{index .Form "dir"}}" placeholder="modules/storage-account"{{aria $.F "dir" "dir-hint"}}>
   {{template "fielderror" (dict "F" $.F "N" "dir")}}
   <p class="hint" id="dir-hint">Folder of the module's <code>.tf</code> files, for a repository with several modules. Empty: the repository root.</p>
+  <label for="tag_prefix">Tag prefix</label>
+  <input id="tag_prefix" name="tag_prefix" value="{{index .Form "tag_prefix"}}" placeholder="storage-account-" autocomplete="off" spellcheck="false"{{aria $.F "tag_prefix" "tag_prefix-hint"}}>
+  {{template "fielderror" (dict "F" $.F "N" "tag_prefix")}}
+  <p class="hint" id="tag_prefix-hint">For a repository whose modules are released separately: only tags starting with it publish, the rest being the version, e.g. <code>storage-account-</code> for <code>storage-account-v1.2.0</code> (release-please's tags). Empty: every <code>v1.2.0</code> tag.</p>
   <label for="namespace">Namespace <span class="req" aria-hidden="true">*</span></label>
   <input id="namespace" name="namespace" value="{{index .Form "namespace"}}" required placeholder="platform"{{aria $.F "namespace"}}>
   {{template "fielderror" (dict "F" $.F "N" "namespace")}}

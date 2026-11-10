@@ -185,6 +185,11 @@ Test paths are relative to `internal/`, except `cmd/opsolete/…` (from the repo
 **D6. Form rules (validation, help, show_if, defaults)** — `full`
 - Coverage: `http/templates_test.go:TestInvalidSubmitRerendersForm`; `http/render_test.go:TestRenderShowIf`; `templates/templates_test.go:TestShowIf`, `TestShowIfBool`, `TestValidateEdgeCases`, `TestLoadCatalogAndValidate`; `templates/json_test.go:TestSchema`, `TestJSONRoundTrip`.
 
+**D7. Import existing resources** — `partial`
+- Actor: operate. Steps: Import… → optional resource group → Scan (run action `scan`: runner `terraform query`, fit plan into a throwaway state) → scan page: found resources with template, related resources, fit (fits / differs / doesn't fit / incomplete / managed) → Import → the template's add form filled in → plan with import blocks into `module.<name>` → confirm (always, also with auto-apply) → imported. Design: `docs/resource-import.md`.
+- Failures: invalid resource group name → 422; no registry template can import → 422; candidate of another template → 404; a resource a workspace manages (index) → 422; plan replaces or deletes, or imports a resource a state has (as the plan read it) → run errored, template removed again.
+- Coverage: `http/scan_test.go:TestImportFlow` (import page, scan job with the derived entries, results page, filled form without IDs, imports and placeholder in the job, managed after apply, refused again); `registry/adopt_test.go:TestAdoptable` (the example VM module), `TestAdoptableSkips`, `adopt_tree_test.go:TestAdoptableTree` (the composed VM module and its registry building blocks; optional parts left for the form); `runner/scan_test.go:TestCandidates`, `TestFit` (real Terraform fit plan), `TestFitPlan`, `TestParseQuery` (unsupported list types), `TestQueryFile` (resource group), `TestPath`, `TestUses`; `runner/assemble_test.go:TestImports` (real Terraform import), `TestSummarizeImport`; `storage/runconfig_test.go:TestAdoption` (imports in both phases, auto-apply waits, replace → errored, managed → errored). Missing: `terraform query` and the inventory plan themselves (need cloud credentials; checked live, see the design doc), the 50-candidate cap.
+
 ---
 
 ## E. State
@@ -329,9 +334,9 @@ Test paths are relative to `internal/`, except `cmd/opsolete/…` (from the repo
 - Coverage: `http/registry_test.go:TestRegistry`; `http/catalog_test.go:TestModuleUploadsSetting`; `http/builder_test.go:TestEditorIsAdminOnly`; `app/catalog_test.go:TestUploadModuleRefused`; `registry/registry_test.go:TestInspectAndInputs`, `TestInspectRejects`.
 
 **J2. Publish from VCS tags; sync; unlink** — `full` (manual sync), `partial` (scheduled)
-- Wizard (connection → repo → name/system from `terraform-<system>-<name>`, optional folder); semver tags become versions; folder missing in older tags skipped; Sync now; unlink keeps versions.
-- Failures: folder escaping the repo 422; missing folder → sync error shown; unlink twice 404.
-- Coverage: `http/vcs_test.go:TestVCSPublishAndUpdate`; `app/vcssync_test.go:TestNoFolderCache` (the leader job `PollVCSModules`, cache only).
+- Wizard (connection → repo → name/system from `terraform-<system>-<name>`, optional folder, optional tag prefix); semver tags become versions (with a prefix: only tags `<prefix><semver>`, e.g. release-please's `data-disk-v1.0.0`); folder missing in older tags skipped; Sync now; unlink keeps versions.
+- Failures: folder escaping the repo 422; invalid tag prefix 422; missing folder → sync error shown; unlink twice 404.
+- Coverage: `http/vcs_test.go:TestVCSPublishAndUpdate`; `app/vcssync_test.go:TestNoFolderCache` (the leader job `PollVCSModules`, cache only), `TestTagPrefix` (modules released separately from one repo).
 
 **J3. Module docs pages** — `full`
 - Coverage: `http/registry_test.go:TestRegistry` (HTML, README escaped, `docs.md`, unknown version 404).
@@ -342,7 +347,8 @@ Test paths are relative to `internal/`, except `cmd/opsolete/…` (from the repo
 
 **J5. `terraform init` against the registry** — `full`
 - Registry token (`opsolete token`) or `terraform login` token; versions → download (`X-Terraform-Get` signed 10-min URL) → archive; tampered signature 403.
-- Coverage: `http/registry_test.go:TestRegistry`; `http/access_test.go:TestAccessMatrix` (registry rows: user and registry tokens allowed, the runner token refused); `registry/registry_test.go:TestAddressAndSigning`.
+- Runs: a job's registry token (its run's, read-only, only while a runner works on it) lets a template's module call other registry modules; the runner writes it as a CLI `credentials` block.
+- Coverage: `http/registry_test.go:TestRegistry`; `http/access_test.go:TestAccessMatrix` (registry rows: user and registry tokens allowed, the runner token refused); `registry/registry_test.go:TestAddressAndSigning`; `http/scan_test.go:TestRunRegistryToken` (valid while working, not after, not tampered); `runner/scan_test.go:TestCLIConfig`; `e2e/e2e_test.go:TestRealRunner/a_template's_module_calls_another_registry_module…` (real runner and Terraform, over plain HTTP: the nested module downloads with the run's token).
 
 **J6. Registry module in a template (no-code)** — `full`
 - Builder "Start from a registry module" prefills fields; module page shows *No-code ready* + Provision workspace; runner gets a signed source.

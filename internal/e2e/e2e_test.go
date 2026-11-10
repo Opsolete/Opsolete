@@ -87,7 +87,9 @@ func TestRealRunner(t *testing.T) {
 	if !strings.Contains(secret, `"sensitive": true`) || !strings.Contains(secret, "greeting-secret") {
 		t.Fatalf("sensitive template: %s", secret)
 	}
-	for name, body := range map[string]string{"greeting.json": string(greeting), "greeting-secret.json": secret} {
+	// a template whose module calls another module of the registry, as a VM module composes its building blocks
+	nested := `{"id": "nested", "name": "Nested", "module": {"source": "opsolete.localhost:8080/examples/nested/terraform", "ref": "1.0.0"}, "inputs": []}`
+	for name, body := range map[string]string{"greeting.json": string(greeting), "greeting-secret.json": secret, "nested.json": nested} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -160,6 +162,7 @@ func TestRealRunner(t *testing.T) {
 	}
 	ws := "e2e-greeting" // the workspace await, confirm and runLog look at
 	var runID uuid.UUID
+	runLog := func(t *testing.T) string { return page(t, "/workspaces/"+ws+"/runs/"+runID.String()+"/logs") }
 	// await waits for the run to reach status, failing on any other ended status.
 	await := func(t *testing.T, status string) {
 		t.Helper()
@@ -224,8 +227,35 @@ func TestRealRunner(t *testing.T) {
 			t.Fatalf("log: %s", log)
 		}
 	})
+	t.Run("a template's module calls another registry module: the run fetches it with its registry token", func(t *testing.T) {
+		nested := t.TempDir()
+		os.WriteFile(filepath.Join(nested, "main.tf"), []byte(`
+module "inner" {
+  source   = "opsolete.localhost:8080/examples/greeting/terraform"
+  version  = "~> 1.1"
+  greeting = "nested"
+  name     = "Opsolete"
+}
+output "message" { value = module.inner.message }
+`), 0o600)
+		var body bytes.Buffer
+		mw := multipart.NewWriter(&body)
+		for k, v := range map[string]string{"namespace": "examples", "name": "nested", "system": "terraform", "version": "1.0.0"} {
+			mw.WriteField(k, v)
+		}
+		fw, _ := mw.CreateFormFile("archive", "nested.tar.gz")
+		fw.Write(tarGz(t, nested))
+		mw.Close()
+		send(t, "/registry", mw.FormDataContentType(), &body)
+		runOf(postForm(t, "/workspaces/"+ws+"/templates/new?template=nested", url.Values{}))
+		await(t, storage.NeedsConfirmation)
+		if log := runLog(t); !strings.Contains(log, "Downloading opsolete.localhost:8080/examples/greeting/terraform 1.1.0 for") ||
+			!strings.Contains(log, "nested, Opsolete!") {
+			t.Fatalf("plan log: %s", log)
+		}
+		postForm(t, "/workspaces/"+ws+"/runs/"+runID.String()+"/discard", nil) // the template goes again
+	})
 	const password = "Hunter2secret"
-	runLog := func(t *testing.T) string { return page(t, "/workspaces/"+ws+"/runs/"+runID.String()+"/logs") }
 	var secretModule string
 	t.Run("a sensitive input reaches Terraform, masked in the log and on no page", func(t *testing.T) {
 		runOf(postForm(t, "/workspaces/"+ws+"/templates/new?template=greeting-secret", url.Values{"greeting": {"hey"}, "secret.name": {password}}))

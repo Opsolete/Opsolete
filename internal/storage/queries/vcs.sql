@@ -30,15 +30,16 @@ SELECT EXISTS (SELECT 1 FROM runs r JOIN workspace_vcs v ON v.workspace_id = r.w
 DELETE FROM vcs_connections WHERE id = sqlc.arg(id)::uuid;
 
 -- name: LinkVCSModule :exec
-INSERT INTO vcs_modules (namespace, name, system, connection_id, repo, dir)
-VALUES (sqlc.arg(namespace)::text, sqlc.arg(name)::text, sqlc.arg(system)::text, sqlc.arg(connection_id)::uuid, sqlc.arg(repo)::text, sqlc.arg(dir)::text);
+INSERT INTO vcs_modules (namespace, name, system, connection_id, repo, dir, tag_prefix)
+VALUES (sqlc.arg(namespace)::text, sqlc.arg(name)::text, sqlc.arg(system)::text, sqlc.arg(connection_id)::uuid, sqlc.arg(repo)::text, sqlc.arg(dir)::text,
+    sqlc.arg(tag_prefix)::text);
 
 -- name: VCSModules :many
-SELECT m.namespace, m.name, m.system, m.connection_id, c.name AS connection, c.provider, m.repo, m.dir, m.synced_at, m.sync_error
+SELECT m.namespace, m.name, m.system, m.connection_id, c.name AS connection, c.provider, m.repo, m.dir, m.tag_prefix, m.synced_at, m.sync_error
 FROM vcs_modules m JOIN vcs_connections c ON c.id = m.connection_id ORDER BY m.namespace, m.name, m.system;
 
 -- name: GetVCSModule :one
-SELECT m.namespace, m.name, m.system, m.connection_id, c.name AS connection, c.provider, m.repo, m.dir, m.synced_at, m.sync_error
+SELECT m.namespace, m.name, m.system, m.connection_id, c.name AS connection, c.provider, m.repo, m.dir, m.tag_prefix, m.synced_at, m.sync_error
 FROM vcs_modules m JOIN vcs_connections c ON c.id = m.connection_id
 WHERE m.namespace = sqlc.arg(namespace)::text AND m.name = sqlc.arg(name)::text AND m.system = sqlc.arg(system)::text;
 

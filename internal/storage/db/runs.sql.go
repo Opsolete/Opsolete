@@ -269,7 +269,7 @@ func (q *Queries) PruneRunLogs(ctx context.Context, arg PruneRunLogsParams) ([]b
 
 const pruneSpeculativeRuns = `-- name: PruneSpeculativeRuns :execrows
 DELETE FROM runs WHERE id IN (
-    SELECT r.id FROM runs r WHERE r.action IN ('assess', 'plan') AND NOT run_active(r.status)
+    SELECT r.id FROM runs r WHERE r.action IN ('assess', 'plan', 'scan') AND NOT run_active(r.status)
         AND r.updated_at < now() - make_interval(secs => $1::float8)
         AND CASE WHEN r.action = 'assess' THEN
                 EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = r.workspace_id AND a.action = 'assess' AND a.created_at > r.created_at)
@@ -286,7 +286,7 @@ type PruneSpeculativeRunsParams struct {
 	Lim       int32
 }
 
-// Drift checks and speculative plans, history and logs with them (cascade), except what readers
+// Drift checks, speculative plans and scans, history and logs with them (cascade), except what readers
 // need: a workspace's latest drift check (LatestAssessment) and latest one that found drift or none
 // (workspace_list.drifted), and a pull request's latest plan (QueueVCSRun's dedupe). Plans run by
 // hand (no pull request) have no exception.
@@ -571,6 +571,34 @@ func (q *Queries) RestoreTemplate(ctx context.Context, arg RestoreTemplateParams
 	return err
 }
 
+const runImports = `-- name: RunImports :one
+SELECT imports FROM runs WHERE id = $1::uuid
+`
+
+func (q *Queries) RunImports(ctx context.Context, id uuid.UUID) ([]byte, error) {
+	row := q.db.QueryRow(ctx, runImports, id)
+	var imports []byte
+	err := row.Scan(&imports)
+	return imports, err
+}
+
+const runScan = `-- name: RunScan :one
+SELECT COALESCE(scan_resource_group, '')::text AS resource_group, candidates, inventory FROM runs WHERE id = $1::uuid AND action = 'scan'
+`
+
+type RunScanRow struct {
+	ResourceGroup string
+	Candidates    []byte
+	Inventory     []byte
+}
+
+func (q *Queries) RunScan(ctx context.Context, id uuid.UUID) (RunScanRow, error) {
+	row := q.db.QueryRow(ctx, runScan, id)
+	var i RunScanRow
+	err := row.Scan(&i.ResourceGroup, &i.Candidates, &i.Inventory)
+	return i, err
+}
+
 const setConfigChanges = `-- name: SetConfigChanges :exec
 UPDATE runs SET config_changes = $1::jsonb WHERE id = $2::uuid
 `
@@ -591,6 +619,21 @@ UPDATE runs SET always_confirm = true WHERE id = $1::uuid
 
 func (q *Queries) SetRunAlwaysConfirm(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, setRunAlwaysConfirm, id)
+	return err
+}
+
+const setRunImports = `-- name: SetRunImports :exec
+UPDATE runs SET imports = $1::jsonb, always_confirm = true WHERE id = $2::uuid
+`
+
+type SetRunImportsParams struct {
+	Imports []byte
+	ID      uuid.UUID
+}
+
+// An adoption: it always waits for a human, also with auto-apply.
+func (q *Queries) SetRunImports(ctx context.Context, arg SetRunImportsParams) error {
+	_, err := q.db.Exec(ctx, setRunImports, arg.Imports, arg.ID)
 	return err
 }
 
@@ -647,6 +690,35 @@ type SetRunRolloutParams struct {
 
 func (q *Queries) SetRunRollout(ctx context.Context, arg SetRunRolloutParams) error {
 	_, err := q.db.Exec(ctx, setRunRollout, arg.RolloutID, arg.ID)
+	return err
+}
+
+const setRunScanResourceGroup = `-- name: SetRunScanResourceGroup :exec
+UPDATE runs SET scan_resource_group = $1::text WHERE id = $2::uuid
+`
+
+type SetRunScanResourceGroupParams struct {
+	ResourceGroup string
+	ID            uuid.UUID
+}
+
+func (q *Queries) SetRunScanResourceGroup(ctx context.Context, arg SetRunScanResourceGroupParams) error {
+	_, err := q.db.Exec(ctx, setRunScanResourceGroup, arg.ResourceGroup, arg.ID)
+	return err
+}
+
+const setRunScanResult = `-- name: SetRunScanResult :exec
+UPDATE runs SET candidates = $1::jsonb, inventory = $2::jsonb WHERE id = $3::uuid
+`
+
+type SetRunScanResultParams struct {
+	Candidates []byte
+	Inventory  []byte
+	ID         uuid.UUID
+}
+
+func (q *Queries) SetRunScanResult(ctx context.Context, arg SetRunScanResultParams) error {
+	_, err := q.db.Exec(ctx, setRunScanResult, arg.Candidates, arg.Inventory, arg.ID)
 	return err
 }
 

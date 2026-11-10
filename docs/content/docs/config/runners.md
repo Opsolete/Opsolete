@@ -5,7 +5,7 @@ aliases:
   - /docs/operations/runners/
 ---
 
-`opsolete runner` executes runs, one phase (plan or apply) at a time. It's the same binary as the server, packaged as the `runner` image (built with nix): git, ssh, coreutils and Terraform 1.17.0 pinned by checksum, running as a non-root user. See [Install]({{< relref "/docs/install" >}}) for how to run it and [option reference]({{< relref "/docs/config/reference#runner" >}}) for its settings.
+`opsolete runner` executes runs, one phase (plan or apply) at a time. It's the same binary as the server, packaged as the `runner` image (built with nix): git, ssh, coreutils and Terraform 1.17.1 pinned by checksum, running as a non-root user. See [Install]({{< relref "/docs/install" >}}) for how to run it and [option reference]({{< relref "/docs/config/reference#runner" >}}) for its settings.
 
 ## How it works
 

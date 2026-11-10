@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage/db"
 )
 
@@ -18,6 +19,21 @@ type WorkspaceTemplate struct {
 	ModuleSource string
 	ModuleRef    string
 	Inputs       map[string]any
+	// Imports: the run queued with this change adopts these existing resources (setImports). Not stored with
+	// the template, and empty when read back.
+	Imports []runnerapi.Import
+}
+
+// setImports makes run r adopt imports (none: nothing to do).
+func setImports(ctx context.Context, q *db.Queries, r Run, imports []runnerapi.Import) error {
+	if len(imports) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(imports)
+	if err != nil {
+		return err
+	}
+	return q.SetRunImports(ctx, db.SetRunImportsParams{ID: r.ID, Imports: b})
 }
 
 // TemplateInputs is one added template's inputs as stored, for re-sealing them under a new SECRET_KEY.
@@ -79,7 +95,7 @@ func (s *Store) SetWorkspaceTemplate(ctx context.Context, workspaceID uuid.UUID,
 		return q.UpdateWorkspaceTemplate(ctx, db.UpdateWorkspaceTemplateParams{WorkspaceID: workspaceID, Name: t.Name,
 			TemplateID: t.TemplateID, ModuleSource: t.ModuleSource, ModuleRef: t.ModuleRef, Inputs: raw})
 	}
-	return s.changeTemplates(ctx, workspaceID, t.Name, createdBy, change)
+	return s.changeTemplates(ctx, workspaceID, t.Name, t.Imports, createdBy, change)
 }
 
 // RemoveWorkspaceTemplate removes an added template. A template's module may configure its own
@@ -115,7 +131,7 @@ func (s *Store) RemoveWorkspaceTemplate(ctx context.Context, workspaceID uuid.UU
 
 // changeTemplates runs change (which must change one row, added template name's, else ErrNotFound)
 // and queues a plan, atomically; if the run ends before its apply, the change is undone (configChange).
-func (s *Store) changeTemplates(ctx context.Context, workspaceID uuid.UUID, name string, createdBy uuid.UUID,
+func (s *Store) changeTemplates(ctx context.Context, workspaceID uuid.UUID, name string, imports []runnerapi.Import, createdBy uuid.UUID,
 	change func(q *db.Queries) (int64, error)) (Run, error) {
 	var r Run
 	err := s.tx(ctx, func(q *db.Queries) error {
@@ -131,6 +147,9 @@ func (s *Store) changeTemplates(ctx context.Context, workspaceID uuid.UUID, name
 			return err
 		}
 		if r, err = createRun(ctx, q, workspaceID, "apply", createdBy); err != nil {
+			return err
+		}
+		if err := setImports(ctx, q, r, imports); err != nil {
 			return err
 		}
 		return recordConfigChanges(ctx, q, r.ID, workspaceID, []configChange{{Module: name, Before: before}})

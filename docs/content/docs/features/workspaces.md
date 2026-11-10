@@ -40,6 +40,49 @@ Add any number of templates (**Deploy…** in a workspace's menu, operate access
   - *Possible improvement:* the runner has every template's module on disk after `terraform init`, `git::` ones too. It could add the workspace Terraform variables each module declares itself, if the job also lists the inputs each template's form asks for, so those keep winning.
 - Each template's module configures its own providers (see [Writing modules for templates]({{< relref "/docs/features/templates#writing-modules-for-templates" >}})).
 
+## Import existing resources
+
+Resources built outside Opsolete (in the Azure portal, by scripts) can be taken over without being created again:
+**Import…** in a workspace's menu (operate access).
+
+1. **Scan**, optionally in one resource group. A scan is a run (action `scan`) with the workspace's credentials that
+   lists every resource in the subscription (or the resource group), and changes nothing: no state, no lock, no apply.
+2. The scan's page sorts them into four groups. Resources one imports or uses (a VM's network interface, its OS
+   disk) are listed with it.
+   - **Can be imported**: a catalog template can manage it. Each was planned as if imported, into a throwaway state:
+     **fits** (imported as it is, nothing changes), **differs** (the plan would also change the attributes listed:
+     the template's defaults differ from the resource), **incomplete** (values the form requires weren't found; fill
+     them in when importing).
+   - **Template needs work**: a template matches, but importing with it would replace the resource; the attributes
+     that force it say what its module must make an input.
+   - **No template**: no catalog template can import its type yet.
+   - **Already managed**: a workspace's state has it, with a link to that workspace.
+3. **Import** opens the template's form filled in from what was found. Check it and start the plan: it imports the
+   resources (`N to import, 0 to add, 0 to change, 0 to destroy` when it fits) and always waits for confirmation,
+   also with auto-apply. From then on it's an ordinary template in the workspace.
+
+What a template can find, and how that fills its form, is read from its module's code: templates need nothing for
+it, but their module must be in the [registry]({{< relref "/docs/features/module-registry" >}}). Each managed
+resource of the module is searched by its type (`terraform query`, azurerm ≥ 5.7 for VMs); `count = var.x == "v" ?
+1 : 0` makes it exist for that value of `x`; `attr = var.x` and `coalesce(var.x, …)`, also in nested blocks, fill
+input `x`; a `dynamic` block with `for_each = var.x ? … : []` fills the yes / no input `x`; `[other.res.id]` makes
+`other` a related resource; a sensitive input in `lifecycle { ignore_changes }` gets a random placeholder. Module
+calls are followed: local ones (`./x`) and ones from the registry (its newest version the constraint allows), with
+values through arguments, `locals` and outputs. Optional and repeated parts (a module call with
+`count = var.x != null ? 1 : 0` or `for_each`: a VM's data disks, its auto-shutdown schedule, its security group)
+aren't searched, as Terraform can't list most of them: fill them in on the form, and a module that imports them
+itself (an `existing` input, see the link below) takes the existing ones over too; the fit check shows any value that differs. Other
+expressions are left for the form; the scan's log names what was skipped. See
+[Writing modules that can import]({{< relref "/docs/features/templates#writing-modules-that-can-import" >}}).
+
+Safety: a resource can be in one state only. Importing one a workspace manages already is refused, and the plan
+checks again against the state it reads; an import whose plan would replace or delete anything ends as errored,
+nothing applied. The IDs to import come from the scan, never from the form.
+
+Limits: listing every resource is Azure's (`azurerm_resources`, per resource group); without it the page shows only
+what templates can import. At most 50 resources per scan get a fit check (the rest are listed unchecked); types the
+provider can't list (e.g. managed disks) are imported by ID only, their inputs not filled.
+
 ## Promote to another workspace
 
 **Promote to…** in a workspace's menu (read access) makes another workspace, existing (operate) or new, an exact copy of its templates, e.g. dev's in test. A preview shows every change first, and the target's run always waits for confirmation. See [Environments and promotion]({{< relref "/docs/features/environments#promote-a-workspace" >}}).

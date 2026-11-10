@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/opsolete/opsolete/internal/registry"
+	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
 )
@@ -80,8 +81,10 @@ func (a *App) TemplateForm(ctx context.Context, actor Actor, workspace, module, 
 
 // SaveTemplate adds templateID to the workspace (module "") or saves the added template module's
 // inputs (raw: as typed, by input name) and the template's current module version, and queues the
-// plan that applies it. It returns the module name. ValidationError: the inputs (Fields by input name).
-func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, templateID string, raw map[string]string) (string, storage.Run, error) {
+// plan that applies it. Adding, from (nil: none) is a scan's result to import (Import): the plan imports
+// its resources instead of creating them. It returns the module name. ValidationError: the inputs
+// (Fields by input name), or the import.
+func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, templateID string, raw map[string]string, from *Found) (string, storage.Run, error) {
 	f, err := a.TemplateForm(ctx, actor, workspace, module, templateID)
 	if err != nil {
 		return module, storage.Run{}, err
@@ -98,16 +101,29 @@ func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, 
 	}
 	locked := env.Locked(t)
 	raw = lockInputs(raw, locked)
+	var c *runnerapi.Candidate
+	if adding && from != nil {
+		if c, err = a.importing(ctx, actor, f.Workspace, t, *from); err != nil {
+			return module, storage.Run{}, err
+		}
+		raw = withPlaceholders(raw, c.Placeholder)
+	}
 	vals, errs := t.Validate(raw)
 	if err := a.SealInputs(t, raw, vals, old, errs, f.Workspace.ID, module); err != nil {
 		return module, storage.Run{}, err
 	}
 	keepOwn(vals, errs, locked, old)
+	var imports []runnerapi.Import
+	if c != nil {
+		for _, im := range c.Imports {
+			imports = append(imports, runnerapi.Import{To: "module." + module + "." + im.To, ID: im.ID})
+		}
+	}
 	if len(errs) > 0 {
 		return module, storage.Run{}, &ValidationError{Fields: errs}
 	}
 	run, err := a.Store.SetWorkspaceTemplate(ctx, f.Workspace.ID, storage.WorkspaceTemplate{Name: module, TemplateID: t.ID,
-		ModuleSource: t.Module.Source, ModuleRef: t.Module.Ref, Inputs: vals}, adding, actor.UserID)
+		ModuleSource: t.Module.Source, ModuleRef: t.Module.Ref, Inputs: vals, Imports: imports}, adding, actor.UserID)
 	if errors.Is(err, storage.ErrExists) {
 		return module, run, &ValidationError{Message: "this workspace already has a template named " + module + " (added meanwhile), try again"}
 	}
@@ -115,7 +131,7 @@ func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, 
 		return module, run, err
 	}
 	a.Log.Info("workspace template saved", "workspace", f.Workspace.Name, "module", module, "template", t.ID, "added", adding,
-		"ref", t.Module.Ref, "run", run.ID, "user", actor.Email)
+		"ref", t.Module.Ref, "run", run.ID, "imports", len(imports), "user", actor.Email)
 	return module, run, nil
 }
 

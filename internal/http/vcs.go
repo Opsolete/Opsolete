@@ -348,10 +348,10 @@ func (s *Server) publishModule(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	form := trimmed(f, "repo", "dir", "namespace", "name", "system")
+	form := trimmed(f, "repo", "dir", "tag_prefix", "namespace", "name", "system")
 	connID := f.Get("connection")
 	cid, _ := parseID(connID) // not an id: not found
-	m, added, err := s.App.PublishVCSModule(r.Context(), actor(r), app.NewVCSModule{ConnectionID: cid, Repo: form["repo"], Dir: form["dir"],
+	m, added, err := s.App.PublishVCSModule(r.Context(), actor(r), app.NewVCSModule{ConnectionID: cid, Repo: form["repo"], Dir: form["dir"], TagPrefix: form["tag_prefix"],
 		Namespace: form["namespace"], Name: form["name"], System: form["system"]})
 	if s.failed(w, r, err, "module", f, func(status int, fs *formState) { s.renderPublish(w, r, status, connID, fs, form) }) {
 		return

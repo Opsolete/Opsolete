@@ -321,7 +321,7 @@ const listWorkspaces = `-- name: ListWorkspaces :many
 SELECT w.id, w.name, w.project_id, w.project_name, w.created_by, w.created_by_email, w.auto_apply, w.drift_detection, w.global_remote_state, w.execution_mode, w.created_at, w.vcs_connection_id, w.vcs_repo, w.vcs_branch, w.vcs_trigger, w.vcs_pull_requests, w.vcs_tags_regex, w.vcs_tag_baseline, w.templates, w.drifted, l.status AS latest_status, l.action AS latest_action, l.updated_at AS latest_updated_at
 FROM workspace_list w
 LEFT JOIN runs l ON l.id = (SELECT r.id FROM runs r
-    WHERE r.workspace_id = w.id AND r.action NOT IN ('assess', 'plan') ORDER BY r.created_at DESC LIMIT 1)
+    WHERE r.workspace_id = w.id AND r.action NOT IN ('assess', 'plan', 'scan') ORDER BY r.created_at DESC LIMIT 1)
 WHERE ($1::boolean OR access_level(w.id, $2::uuid) IS NOT NULL)
     AND ($3::text = '' OR w.project_name = $3::text)
 ORDER BY COALESCE(l.updated_at, w.created_at) DESC LIMIT 200
@@ -340,7 +340,7 @@ type ListWorkspacesRow struct {
 	LatestUpdatedAt *time.Time
 }
 
-// latest_*: the most recent run that isn't a drift check or speculative plan; NULL without one.
+// latest_*: the most recent run that isn't a drift check, speculative plan or scan; NULL without one.
 func (q *Queries) ListWorkspaces(ctx context.Context, arg ListWorkspacesParams) ([]ListWorkspacesRow, error) {
 	rows, err := q.db.Query(ctx, listWorkspaces, arg.Admin, arg.Viewer, arg.Project)
 	if err != nil {

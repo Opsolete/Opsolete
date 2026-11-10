@@ -39,6 +39,7 @@
     <span class="nav-head">{{.}}</span>
     <a href="/workspaces/{{.}}"{{if eq $t "overview"}} aria-current="page"{{end}}>Overview</a>
     <a href="/workspaces/{{.}}/deploy"{{if eq $t "deploy"}} aria-current="page"{{end}}>Deploy…</a>
+    <a href="/workspaces/{{.}}/import"{{if eq $t "import"}} aria-current="page"{{end}}>Import…</a>
     <a href="/workspaces/{{.}}/promote"{{if eq $t "promote"}} aria-current="page"{{end}}>Promote to…</a>
     <a href="/workspaces/{{.}}/runs"{{if eq $t "runs"}} aria-current="page"{{end}}>Runs</a>
     <a href="/workspaces/{{.}}/states"{{if eq $t "states"}} aria-current="page"{{end}}>States</a>

@@ -41,3 +41,15 @@ func TestDefaultModule(t *testing.T) {
 		}
 	}
 }
+
+func TestWords(t *testing.T) {
+	for in, want := range map[string]string{"networkSecurityGroups": "network security groups", "publicIPAddresses": "public IP addresses",
+		"virtualMachines": "virtual machines", "disks": "disks", "schedules": "schedules", "networkWatchers": "network watchers"} {
+		if got := words(in); got != want {
+			t.Errorf("words(%s) = %q, want %q", in, got, want)
+		}
+	}
+	if rgOf("/subscriptions/s/resourceGroups/rg_test/providers/x/y/z") != "rg_test" || rgOf("/x") != "" {
+		t.Error("rgOf")
+	}
+}
