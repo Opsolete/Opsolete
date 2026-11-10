@@ -12,10 +12,10 @@ import (
 	"github.com/opsolete/opsolete/internal/templates"
 )
 
-// Sensitive template inputs are stored in a workspace's inputs as {"sealed": "<base64 secrets.Seal>"}.
-// A form value is a string, number or bool, never an object, so it can't pass for a sealed one.
+// Sensitive template inputs are stored in a workspace's inputs as {"sealed": "<base64 secrets.Seal>"}: that key
+// only (templates.IsSealed), which a map or object input's value can't be.
 
-func IsSealed(v any) bool { _, ok := v.(map[string]any); return ok }
+func IsSealed(v any) bool { return templates.IsSealed(v) }
 
 // FormDefaults fills a form from stored inputs: sensitive ones stay empty, set lists those with a value.
 func FormDefaults(t templates.Template, stored map[string]any) (vals map[string]string, set map[string]bool) {
@@ -74,11 +74,10 @@ func (a *App) OpenInputs(inputs map[string]any, wsID uuid.UUID, module string) (
 	var secrets []string // the opened values, for the runner to mask in the log
 	out := maps.Clone(inputs)
 	for k, v := range inputs {
-		m, ok := v.(map[string]any)
-		if !ok {
+		if !IsSealed(v) { // plain, a map or object input's too
 			continue
 		}
-		str, _ := m["sealed"].(string)
+		str, _ := v.(map[string]any)["sealed"].(string)
 		sealed, err := base64.StdEncoding.DecodeString(str)
 		if err != nil {
 			return nil, nil, fmt.Errorf("input %s: %w", k, err)

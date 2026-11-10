@@ -81,7 +81,7 @@ func TestInspectAndInputs(t *testing.T) {
 		t.Fatalf("docs data: %+v", ins.Module)
 	}
 	inputs, skipped := Inputs(vars)
-	if len(inputs) != 5 || len(skipped) != 1 || skipped[0] != "tags (map(string))" {
+	if len(inputs) != 6 || len(skipped) != 0 || inputs[5].Type != "map" || inputs[5].Default != "{}" {
 		t.Fatalf("inputs %+v skipped %v", inputs, skipped)
 	}
 	if in := inputs[0]; in.Name != "name" || in.Label != "Account name" || !in.Required || in.Type != "string" ||

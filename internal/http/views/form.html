@@ -59,10 +59,22 @@
     <label>{{.Title}}</label>
     <input type="hidden" id="{{.Name}}" name="{{.Name}}" value="{{$lock}}" disabled data-locked>
     <p><code>{{$.LockedText .}}</code> <span class="hint">Set by project <a href="/projects/{{$.LockedBy}}/environment">{{$.LockedBy}}</a></span></p>
+  {{else if or .RowFields (eq .Type "object")}}
+    <p class="field" id="{{.Name}}-label">{{.Title}}</p>
   {{else}}
     <label for="{{.Name}}">{{.Title}}{{if .Required}} <span class="req" aria-hidden="true">*</span>{{end}}</label>
   {{end}}
-  {{if $lock}}{{else if eq .Type "bool"}}
+  {{if $lock}}{{else if .RowFields}}{{$in := .}}
+    <!-- rows of fields, posted as <list>.<row>.<field>; "+ Add row" copies the template below (the fields' defaults) -->
+    <div class="list-input" role="group" aria-labelledby="{{.Name}}-label"{{aria $.F .Name $help}}>
+      <div class="list-rows">{{range $i, $r := rows (index $v .Name)}}{{template "fieldgroup" (dict "In" $in "Fields" $in.RowFields "Prefix" (print $in.Name "." $i) "Row" $r "I" (print $i))}}{{end}}</div>
+      <template>{{template "fieldgroup" (dict "In" $in "Fields" $in.RowFields "Prefix" (print $in.Name ".__i__") "Row" nil "I" "__i__")}}</template>
+      <button type="button" class="secondary small" data-list-add>+ Add row</button>
+    </div>
+  {{else if eq .Type "object"}}{{$in := .}}
+    <!-- one group of fields, posted as <object>.<field> -->
+    <div aria-labelledby="{{.Name}}-label"{{aria $.F .Name $help}}>{{template "fieldgroup" (dict "In" $in "Fields" $in.Fields "Prefix" $in.Name "Row" (fields (index $v .Name)) "I" "")}}</div>
+  {{else if eq .Type "bool"}}
     <input type="checkbox" id="{{.Name}}" name="{{.Name}}"{{if eq (index $v .Name) "on" "true"}} checked{{end}}{{aria $.F .Name $help}}>
   {{else if eq .Type "select"}}
     <select id="{{.Name}}" name="{{.Name}}"{{aria $.F .Name $help}}>
@@ -99,3 +111,24 @@
   </div>
 </form>
 {{template "bottom"}}
+
+{{/* a group of fields: a row of a list input (I its number) or an object input (I ""): In the input, Fields its
+fields, named Prefix.<field>, Row their values (nil: a new row, the defaults) */}}
+{{define "fieldgroup"}}{{$in := .In}}{{$i := .I}}{{$row := .Row}}{{$prefix := .Prefix}}
+<div class="list-row{{if eq $i ""}} object{{end}}"{{if ne $i ""}} data-row="{{$i}}" role="group" aria-label="{{$in.Title}}, row"{{end}}>
+  {{range .Fields}}{{$id := print $prefix "." .Name}}{{$val := .Default}}{{if $row}}{{$val = index $row .Name}}{{end}}
+  <div class="list-field">
+    <label for="{{$id}}">{{.Title}}{{if .Required}} <span class="req" aria-hidden="true">*</span>{{end}}</label>
+    {{if eq .Type "bool"}}
+    <input type="checkbox" id="{{$id}}" name="{{$id}}"{{if eq $val "true" "on"}} checked{{end}}>
+    {{else if eq .Type "select"}}
+    <select id="{{$id}}" name="{{$id}}">{{range .Options}}<option value="{{.Value}}"{{if eq .Value $val}} selected{{end}}>{{.Text}}</option>{{end}}</select>
+    {{else}}
+    <input id="{{$id}}" name="{{$id}}" value="{{$val}}" autocomplete="off" spellcheck="false"{{if eq .Type "number"}} type="number" step="any" inputmode="decimal"{{end}}
+      {{if .Pattern}} pattern="{{.Pattern}}"{{with .Help}} title="{{.}}"{{end}}{{end}}{{if .Required}} required{{end}}>
+    {{end}}
+  </div>
+  {{end}}
+  {{if ne $i ""}}<button type="button" class="secondary small" data-list-remove>Remove</button>{{end}}
+</div>
+{{end}}

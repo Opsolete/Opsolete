@@ -4,7 +4,7 @@
 
 locals {
   # by LUN: unique per VM, so adding or removing one disk leaves the others alone
-  data_disks = { for d in jsondecode(var.data_disks_json) : tostring(d.lun) => d }
+  data_disks = { for d in var.data_disks : tostring(d.lun) => d }
   vm_id      = coalesce(one(module.windows[*].id), one(module.linux[*].id))
 }
 
@@ -63,15 +63,15 @@ module "data_disk" {
   source              = "opsolete.localhost:8080/terraform-modules-examples/data-disk/azurerm"
   version             = "~> 1.1" # existing
   for_each            = local.data_disks
-  name                = coalesce(try(each.value.name, null), "${var.name}-data-${each.key}")
+  name                = coalesce(each.value.name, "${var.name}-data-${each.key}")
   resource_group_name = var.resource_group_name
   location            = var.location
   virtual_machine_id  = local.vm_id
   lun                 = each.value.lun
   size_gb             = each.value.size_gb
-  type                = try(each.value.type, "Standard_LRS")
-  caching             = try(each.value.caching, "ReadWrite")
-  existing            = try(each.value.existing, false)
+  type                = each.value.type
+  caching             = each.value.caching
+  existing            = each.value.existing
 }
 
 module "shutdown_schedule" {
@@ -95,6 +95,6 @@ module "nsg" {
   resource_group_name  = var.resource_group_name
   location             = var.location
   network_interface_id = module.nic.id
-  rules                = jsondecode(var.nsg_rules_json)
+  rules                = var.nsg_rules
   existing             = var.nsg_existing
 }

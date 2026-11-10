@@ -148,12 +148,12 @@ data "terraform_remote_state" "net" {
 		t.Fatalf("tampered signature: %d", rec.Code)
 	}
 
-	// Builder: pick the module, get its variables as fields; complex types are flagged.
+	// Builder: pick the module, get its variables as fields (a map(string) as key / value rows).
 	rec = get(h, "/templates/new?module="+ns+"/storage/azurerm/1.2.0")
 	page = rec.Body.String()
 	if !strings.Contains(page, `value="ops.example.com/`+ns+`/storage/azurerm"`) || !strings.Contains(page, `value="Account name"`) ||
 		!strings.Contains(page, `name="in_help" value="3-24 lowercase letters"`) || // the description's "Title: help", split at import
-		!strings.Contains(page, "tags (map(string))") {
+		!strings.Contains(page, `<option value="map" selected>Key / value</option>`) {
 		t.Fatalf("builder prefill: %d %s", rec.Code, page)
 	}
 	form := url.Values{"name": {"Storage"}, "module_source": {"ops.example.com/" + ns + "/storage/azurerm"}, "module_ref": {"9.9.9"},

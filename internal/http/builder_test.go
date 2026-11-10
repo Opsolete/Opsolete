@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"encoding/json"
 	"maps"
 	"net/http"
 	"net/url"
@@ -156,5 +157,69 @@ func TestBuilderRoundTrip(t *testing.T) {
 	ts, _, err := templates.Parse(map[string][]byte{"vm.json": b})
 	if err != nil || !reflect.DeepEqual(ts["vm"], tpl) {
 		t.Errorf("round trip: %v\n%+v\n%+v", err, ts["vm"], tpl)
+	}
+}
+
+// TestBuilderListInput: a list card renders its fields (name, type, an editable label) and posts them back as
+// they were, with the labels typed; the default (JSON) goes along; the template encodes and parses the same.
+func TestBuilderListInput(t *testing.T) {
+	fields := []templates.Input{{Name: "lun", Label: "lun", Type: "number", Required: true}, {Name: "type", Label: "type", Type: "string", Default: "Standard_LRS"}}
+	f, _ := json.Marshal(fields)
+	tpl := templateFromForm(url.Values{
+		"name": {"VM"}, "module_source": {"git::https://x//vm"}, "module_ref": {"v1"},
+		"in_name": {"size", "data_disks"}, "in_label": {"Size", "Data disks"}, "in_type": {"string", "list"},
+		"in_default": {"", `[{"lun":0}]`}, "in_bool_default": {"", ""}, "in_fields": {"", string(f)}, "in_required": {"1"},
+		"in_field_label_1": {"LUN", ""}, "in_show_input": {"", ""}, "in_show_equals": {"", ""},
+	})
+	tpl.ID = "vm"
+	in := tpl.Inputs[1]
+	if in.Type != "list" || in.Required || in.Default != `[{"lun":0}]` || len(in.Fields) != 2 || in.Fields[0].Label != "LUN" || in.Fields[1].Label != "" ||
+		in.Fields[1].Default != "Standard_LRS" || len(tpl.Inputs[0].Fields) != 0 {
+		t.Fatalf("%+v", tpl.Inputs)
+	}
+	b, err := templates.Encode(tpl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ts, _, err := templates.Parse(map[string][]byte{"vm.json": b}); err != nil || !reflect.DeepEqual(ts["vm"], tpl) {
+		t.Fatalf("round trip: %v\n%s", err, b)
+	}
+	store := testStore(t)
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "vm.json"), b, 0o644)
+	page := get(newServer(t, dir, true, store), "/templates/vm/edit").Body.String()
+	for _, want := range []string{`<option value="list" selected>List of rows</option>`, `name="in_field_label_1" value="LUN" placeholder="lun"`, `<code>type</code> <small class="muted">string</small>`} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("builder lacks %s:\n%s", want, page)
+		}
+	}
+}
+
+// TestBuilderComplexTypes: a group of fields (object) keeps its fields like a list; a list of text and a key /
+// value card keep their type; none is required.
+func TestBuilderComplexTypes(t *testing.T) {
+	f, _ := json.Marshal([]templates.Input{{Name: "cidr", Label: "cidr", Type: "string", Required: true}})
+	tpl := templateFromForm(url.Values{
+		"name": {"Net"}, "module_source": {"git::https://x//net"}, "module_ref": {"v1"},
+		"in_name": {"dns", "tags", "network"}, "in_type": {"string_list", "map", "object"}, "in_required": {"0", "1", "2"},
+		"in_fields": {"", "", string(f)}, "in_field_label_2": {"CIDR"}, "in_default": {`["10.0.0.4"]`, "", ""},
+	})
+	tpl.ID = "net"
+	if in := tpl.Inputs; in[0].Type != "string_list" || in[0].Default != `["10.0.0.4"]` || in[1].Type != "map" || in[2].Fields[0].Label != "CIDR" ||
+		in[0].Required || in[1].Required || in[2].Required {
+		t.Fatalf("%+v", in)
+	}
+	b, err := templates.Encode(tpl)
+	if ts, _, perr := templates.Parse(map[string][]byte{"net.json": b}); err != nil || perr != nil || !reflect.DeepEqual(ts["net"], tpl) {
+		t.Fatalf("round trip: %v %v\n%s", err, perr, b)
+	}
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "net.json"), b, 0o644)
+	page := get(newServer(t, dir, true, testStore(t)), "/templates/net/edit").Body.String()
+	for _, want := range []string{`<option value="string_list" selected>List of text</option>`, `<option value="map" selected>Key / value</option>`,
+		`<option value="object" selected>Group of fields</option>`, `name="in_field_label_2" value="CIDR"`} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("builder lacks %s", want)
+		}
 	}
 }

@@ -46,17 +46,45 @@ See also [`catalog/storage-account.json`](https://github.com/Opsolete/Opsolete/b
 | Field | Type | | |
 |---|---|---|---|
 | `name` | string | required | The Terraform variable it sets: `^[a-z_][a-z0-9_]*$`, not `source`, `version`, `providers`, `count`, `for_each`, `lifecycle`, `depends_on` or `locals`. Unique in the template. |
-| `type` | string | required | `string`, `number`, `bool` (a checkbox) or `select` (a dropdown). |
+| `type` | string | required | `string`, `number`, `bool` (a checkbox), `select` (a dropdown), or for Terraform's complex types `list` (rows of fields), `string_list` (rows of text), `map` (key / value rows) or `object` (a group of fields); see [lists, maps and objects](#lists-maps-and-objects). |
 | `label` | string | optional | The question the form asks. Empty: the form shows the name. |
 | `help` | string | optional | Shown under the field (and linked to it for screen readers), and the error message when a value doesn't match `pattern`, so say there what fits. Without help, the error shows the pattern. |
 | `required` | boolean | optional | The value can't be empty. Dropdowns and checkboxes always have a value. A hidden input is never required. |
 | `pattern` | string | optional | A Go (RE2) regular expression the whole value must match. The browser checks it too, as a JavaScript one. |
 | `options` | array | `select` only, required there | One entry per choice: a string (shorthand for `{"value": "<string>"}`) or `{"value": "...", "label": "..."}`: the form shows `label`, Terraform gets `value`. `value` is required and not empty. |
-| `default` | typed | optional | Filled in when the form opens. Typed by `type`: `string` and `select` a JSON string (a select's must be one of its option values), `number` a JSON number (`7`, `0.5`), `bool` a JSON boolean (`true`, `false`). It must pass the input's own checks (`pattern`). |
+| `default` | typed | optional | Filled in when the form opens. Typed by `type`: `string` and `select` a JSON string (a select's must be one of its option values), `number` a JSON number (`7`, `0.5`), `bool` a JSON boolean (`true`, `false`), `list` a JSON array of objects (the rows), `string_list` an array of strings, `map` an object of strings, `object` an object. It must pass the input's own checks (`pattern`). |
 | `sensitive` | boolean | optional | `string` and `number` only, no `default`; see below. |
 | `show_if` | object | optional | `{"input": "<name>", "equals": [...]}`; see [conditional inputs](#conditional-inputs). |
 | `key` | boolean | optional | At most one input, not `bool` or sensitive; see below. |
 | `per_environment` | boolean | optional | Not with `sensitive` or `key`. Each project may set the value for all its workspaces; see below. |
+| `fields` | array | `list` and `object` only, required there | A list's fields of each row, an object's fields: inputs of type `string`, `number`, `bool` or `select`, without `show_if`, `sensitive`, `key` or `per_environment`. |
+
+### Lists, maps and objects
+
+Terraform's complex types get a form of their own, so nobody types JSON:
+
+| Module variable | Input `type` | The form |
+|---|---|---|
+| `list(object({...}))` of strings, numbers and bools (data disks, firewall rules) | `list` | a row per element, a field per attribute |
+| `list(string)`, `set(string)` (DNS servers, IP ranges) | `string_list` | a row per value |
+| `map(string)` (tags) | `map` | a row per key, with a value |
+| `object({...})` of strings, numbers and bools | `object` | one group of fields |
+
+Rows have **+ Add row** and **Remove**. For a template on a registry module the fields come from the variable's type, in the order written:
+`optional(...)` attributes aren't required, and `optional(type, default)`'s default fills a new row. A template can
+give a field a label, help, a pattern, a default or dropdown options in `fields`, by name, like an input:
+
+```json
+{ "name": "data_disks", "label": "Data disks", "type": "list", "fields": [
+    { "name": "lun", "label": "LUN" },
+    { "name": "type", "label": "Disk type", "type": "select", "options": ["Standard_LRS", "Premium_LRS"] } ] }
+```
+
+Optional fields left empty are left out, so Terraform's `optional()` default applies. Rows left wholly empty are
+dropped, and a map key without a value. A `string_list`'s or `map`'s `pattern` checks each value. None of these
+can be sensitive, the key or per-environment, nor be what `show_if` refers to; a map or object whose only key is
+`sealed` is refused (that's how sealed values are stored). Other complex types (lists of lists, maps of objects,
+`map(number)`) aren't form fields yet.
 
 **Strict parsing.** Every object accepts only the fields above: an unknown field (a typo such as `"lable"`) is an error, as is a value of the wrong JSON type. Any invalid file fails the whole catalog: from Git, the last good commit stays loaded and **Settings → Templates** shows the error; from `TEMPLATES_DIR`, the server doesn't start. The error names the file, template, input and field:
 
@@ -151,7 +179,7 @@ A template's module is deployed by people who never write Terraform, so it has t
 - **No credentials in the module.** Pass them as environment variables (`ARM_CLIENT_ID`, `AWS_ACCESS_KEY_ID`, …) through a [variable set]({{< relref "/docs/features/variables" >}}). Environment variables reach every template in the workspace.
 - **Resources in the module's root directory**, in the standard module structure (`main.tf`, `variables.tf`, `outputs.tf`), so the [registry]({{< relref "/docs/features/module-registry" >}}) can generate the docs and the form from it.
 - **One specific use case, few decisions.** Hard-code what your standards fix (SKU, region list, logging, network rules) and expose only what users must choose.
-- **Settings outside the form:** a variable the form doesn't ask can still be set per project with a variable set. Give it a safe default, and take maps and lists as a JSON string (see [Settings outside the template's form]({{< relref "/docs/features/variables#settings-outside-the-templates-form" >}})).
+- **Settings outside the form:** a variable the form doesn't ask can still be set per project with a variable set. Give it a safe default, and take maps as a JSON string (see [Settings outside the template's form]({{< relref "/docs/features/variables#settings-outside-the-templates-form" >}})).
 - **Defaults wherever possible**, and a `select` input for variables that have no default, so users pick from approved values instead of typing them.
 - **Pin an approved version** in the template's `ref`. Moving the template to a newer one offers existing workspaces a module update, which admins can [roll out]({{< relref "/docs/features/workspaces#update-to-a-new-module-version" >}}) to all of them, in batches and per project. Give inputs that are new and required a `default`, or each workspace needs its update form.
 
@@ -181,7 +209,7 @@ must be able to describe them as they are, or the import plans changes, or repla
   ```
 
 The [example VM module](https://github.com/Opsolete/terraform-modules-examples/tree/main/virtualmachine) does this:
-its data disks (`"existing": true` per disk in `data_disks_json`), schedule (`auto_shutdown_existing`) and
+its data disks (**existing** per disk in `data_disks`), schedule (`auto_shutdown_existing`) and
 security group (`nsg_existing`).
 
 ## Conditional inputs

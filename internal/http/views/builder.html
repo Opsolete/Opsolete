@@ -80,6 +80,10 @@
               <option value="number"{{if eq .Type "number"}} selected{{end}}>Number</option>
               <option value="bool"{{if eq .Type "bool"}} selected{{end}}>Yes / no</option>
               <option value="select"{{if eq .Type "select"}} selected{{end}}>Dropdown</option>
+              {{if eq .Type "list"}}<option value="list" selected>List of rows</option>{{end}}
+              {{if eq .Type "string_list"}}<option value="string_list" selected>List of text</option>{{end}}
+              {{if eq .Type "map"}}<option value="map" selected>Key / value</option>{{end}}
+              {{if eq .Type "object"}}<option value="object" selected>Group of fields</option>{{end}}
             </select></label>
           <div class="fcard-tools" hidden>
             <button type="button" class="icon" data-act="up" aria-label="Move field up" title="Move up">↑</button>
@@ -88,6 +92,12 @@
           </div>
         </div>
         <div class="fcard-body">
+          <!-- a list's fields come from the module's variable type; their labels can be set here, the rest posts as is -->
+          <input type="hidden" name="in_fields" value="{{with .Fields}}{{json .}}{{end}}">
+          {{with .Fields}}<div class="f only-list" role="group" aria-label="Fields"><span class="f-head">Fields{{template "tip" "The fields of each row of this list, or of this group, from the module's variable type (list(object({...})) or object({...})): their names and types are set there. Give a field a label end users see; leave it empty to show its name."}}</span>
+            <div class="lfields">{{range .}}<div class="lfield"><code>{{.Name}}</code> <small class="muted">{{.Type}}{{if .Required}}, required{{end}}</small>
+              <input name="in_field_label_{{$i}}" value="{{.Label}}" placeholder="{{.Name}}" aria-label="Label of {{.Name}}"></div>{{end}}</div>
+          </div>{{end}}
           <div class="f opts only-select" role="group" aria-label="Dropdown options"><span class="f-head">Options{{template "tip" "One row per choice. Value is what Terraform gets, for example Standard_D2s_v5. Shown as is the optional friendly name end users see, for example Small (2 vCPU, 8 GB). Clear a value to remove its row."}}</span>
             <div class="opt-rows">
             {{range .Options}}<div class="opt-row">

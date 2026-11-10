@@ -188,6 +188,17 @@ label:is(:hover, :focus-within, :has(+ :focus)) > .tip-text { opacity: 1; }
 .icon[data-act$="remove"]:hover { background: var(--danger-soft); color: var(--danger); }
 .opts { grid-column: 1 / -1; }
 .opt-rows { display: grid; gap: .4rem; }
+/* list inputs (form.html): a row per element, its fields side by side, wrapping on narrow screens */
+.list-input { display: grid; gap: .5rem; justify-items: start; }
+.list-rows { display: grid; gap: .5rem; width: 100%; }
+.list-rows:empty { display: none; }
+.list-row { display: flex; flex-wrap: wrap; gap: .5rem .75rem; align-items: end; padding: .6rem .75rem;
+  border: 1px solid var(--border); border-radius: var(--radius); }
+.list-field { display: grid; gap: .2rem; }
+.list-field label { font-size: .8rem; font-weight: 600; }
+.list-field input[type=number] { width: 7rem; }
+.list-field input[type=checkbox] { justify-self: start; }
+.list-row [data-list-remove] { margin-left: auto; }
 .opt-row { display: flex; gap: .5rem; align-items: center; }
 .opt-row input { flex: 1; }
 .opt-add { align-self: flex-start; }
@@ -214,7 +225,11 @@ label:is(:hover, :focus-within, :has(+ :focus)) > .tip-text { opacity: 1; }
 .fcard:has(.ftype [value="bool"]:checked) .not-bool,
 .fcard:not(:has(.ftype [value="string"]:checked)) .only-string,
 .fcard:has(.ftype :is([value="bool"], [value="select"]):checked) .only-secret,
-.fcard:has(.ftype :is([value="bool"], [value="select"]):checked) .only-typed { display: none; }
+.fcard:has(.ftype :is([value="bool"], [value="select"]):checked) .only-typed,
+.fcard:not(:has(.ftype :is([value="list"], [value="object"]):checked)) .only-list,
+.fcard:has(.ftype :is([value="list"], [value="string_list"], [value="map"], [value="object"]):checked) :is(.not-bool, .only-string, .checks) { display: none; }
+.lfields { display: grid; gap: .3rem; }
+.lfield { display: grid; grid-template-columns: 9rem 7rem 1fr; gap: .5rem; align-items: center; }
 .actions.sticky { position: sticky; bottom: 0; z-index: 2; background: var(--bg); padding: .9rem 0; border-top: 1px solid var(--border); }
 @media (max-width: 52rem) {
   .bgrid { grid-template-columns: 1fr; }
@@ -414,7 +429,7 @@ h1 .status { font-size: .85rem; }
   background: var(--code); border: 1px solid var(--border); border-radius: var(--radius); }
 .inputs dt code { background: none; padding: 0; color: var(--muted); }
 .inputs dd { margin: 0; overflow-wrap: anywhere; }
-.inputs dd code { background: var(--surface); }
+.inputs dd code { background: var(--surface); white-space: pre-line; } /* a list: a row per line */
 .section.skipped { padding: .75rem 1rem; font-weight: 600; color: var(--muted); }
 .steps { font-size: .8rem; color: var(--muted); padding-bottom: .75rem; border-bottom: 1px solid var(--border); }
 .steps strong { color: var(--text); }

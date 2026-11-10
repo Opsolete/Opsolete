@@ -34,7 +34,7 @@ type Input struct {
 	Name     string   `json:"name"`
 	Label    string   `json:"label"`
 	Help     string   `json:"help,omitempty"` // shown under the field, and as the error when Pattern doesn't match
-	Type     string   `json:"type"`           // string | number | bool | select
+	Type     string   `json:"type"`           // string | number | bool | select | list | string_list | map | object
 	Required bool     `json:"required"`
 	Pattern  string   `json:"pattern,omitempty"`
 	Options  []Option `json:"options,omitempty"`
@@ -49,10 +49,47 @@ type Input struct {
 	Key bool `json:"key,omitempty"`
 	// PerEnvironment: a project ("environment") may set the value for all its workspaces, overriding theirs at every run.
 	PerEnvironment bool `json:"per_environment,omitempty"`
+	// Fields of a list input (a Terraform list(object({...}))), whose form has rows of them, or of an object input
+	// (object({...})), one group of them. Each is a string, number, bool or select field; optional ones (Required
+	// false) left empty are left out, so the type's default applies.
+	Fields []Input `json:"fields,omitempty"`
 }
 
+// The complex types' form values are JSON: a list's an array of objects, a string_list's (list(string)) an array of
+// strings, a map's (map(string)) an object of strings, an object's an object. The form also posts the rows of a
+// string_list or map as objects (RowFields); Validate takes either.
+
 // InputTypes are the input types; the JSON Schema's enum must match (TestSchema).
-var InputTypes = []string{"string", "number", "bool", "select"}
+var InputTypes = []string{"string", "number", "bool", "select", "list", "string_list", "map", "object"}
+
+// complexTypes are the input types whose value is JSON, never sensitive, the key or per-environment.
+var complexTypes = []string{"list", "string_list", "map", "object"}
+
+// RowFields are the fields of each row of a list, string_list (one: value) or map (key and value) input; nil for
+// the other types.
+func (in Input) RowFields() []Input {
+	switch in.Type {
+	case "list":
+		return in.Fields
+	case "string_list":
+		return []Input{{Name: "value", Label: "Value", Type: "string", Pattern: in.Pattern, Help: in.Help}}
+	case "map":
+		return []Input{{Name: "key", Label: "Key", Type: "string", Required: true},
+			{Name: "value", Label: "Value", Type: "string", Pattern: in.Pattern, Help: in.Help}}
+	}
+	return nil
+}
+
+// IsSealed reports whether a stored input value is a sealed sensitive one: {"sealed": "<base64>"}, that key only.
+// A map or object input can't be stored with only that key (Validate), so it never passes for one.
+func IsSealed(v any) bool {
+	m, ok := v.(map[string]any)
+	_, str := m["sealed"].(string)
+	return ok && len(m) == 1 && str
+}
+
+// FieldTypes are the types a list's fields can have.
+var FieldTypes = []string{"string", "number", "bool", "select"}
 
 // Title is what the form calls the input: its label, else its name.
 func (in Input) Title() string { return cmp.Or(in.Label, in.Name) }
@@ -343,6 +380,9 @@ func (t Template) check() error {
 		if in.Type == "select" && len(in.Options) == 0 {
 			return fmt.Errorf("input %q: select needs options", in.Name)
 		}
+		if err := in.checkList(); err != nil {
+			return err
+		}
 		if in.Sensitive && in.Type != "string" && in.Type != "number" {
 			return fmt.Errorf("input %q: only string and number inputs can be sensitive", in.Name)
 		}
@@ -388,6 +428,39 @@ func (t Template) check() error {
 			}
 		}
 		before[in.Name] = in
+	}
+	return nil
+}
+
+// checkList checks a complex input: its fields (a list's or object's), and that it's none of what it can't be (yet).
+func (in Input) checkList() error {
+	hasFields := in.Type == "list" || in.Type == "object"
+	if !hasFields && len(in.Fields) > 0 {
+		return fmt.Errorf("input %q: only a list or an object has fields", in.Name)
+	}
+	if !slices.Contains(complexTypes, in.Type) {
+		return nil
+	}
+	if in.Sensitive || in.Key || in.PerEnvironment {
+		return fmt.Errorf("input %q: a %s can't be sensitive, the key or per-environment", in.Name, in.Type)
+	}
+	if hasFields && len(in.Fields) == 0 {
+		return fmt.Errorf("input %q: a %s needs fields", in.Name, in.Type)
+	}
+	names := map[string]bool{}
+	for _, f := range in.Fields {
+		switch {
+		case !nameRe.MatchString(f.Name) || names[f.Name]:
+			return fmt.Errorf("input %q: invalid or duplicate field name %q", in.Name, f.Name)
+		case !slices.Contains(FieldTypes, f.Type):
+			return fmt.Errorf("input %q, field %q: unknown type %q (%s)", in.Name, f.Name, f.Type, strings.Join(FieldTypes, ", "))
+		case f.Sensitive || f.Key || f.PerEnvironment || f.ShowIf != nil || len(f.Fields) > 0:
+			return fmt.Errorf("input %q, field %q: a field can't be sensitive, the key, per-environment, shown conditionally or a list", in.Name, f.Name)
+		}
+		names[f.Name] = true
+		if err := (Template{ID: "x", Name: "x", Module: Module{"x", "x"}, Inputs: []Input{f}}).check(); err != nil {
+			return fmt.Errorf("input %q, field %s", in.Name, strings.TrimPrefix(err.Error(), "input "))
+		}
 	}
 	return nil
 }
@@ -453,10 +526,33 @@ func (t Template) Describe(stored map[string]any) []StoredValue {
 	add := func(in Input, v any) {
 		sv := StoredValue{Name: in.Name, Title: in.Title()}
 		switch x := v.(type) {
-		case map[string]any: // {"sealed": ...}
-			sv.Sensitive = true
 		case bool:
 			sv.Text = map[bool]string{true: "Yes", false: "No"}[x]
+		case []any: // a list: a row per line, its fields in the form's words
+			var rows []string
+			for _, r := range x {
+				row, isObj := r.(map[string]any)
+				if !isObj { // a string_list's
+					rows = append(rows, FormatValue(r))
+					continue
+				}
+				rows = append(rows, in.describeFields(row))
+			}
+			sv.Text = cmp.Or(strings.Join(rows, "\n"), "(none)")
+		case map[string]any:
+			if IsSealed(x) {
+				sv.Sensitive = true
+				break
+			}
+			if in.Type == "object" { // its fields on a line
+				sv.Text = cmp.Or(in.describeFields(x), "(none)")
+				break
+			}
+			var rows []string // a map: a key per line
+			for _, k := range slices.Sorted(maps.Keys(x)) {
+				rows = append(rows, k+": "+FormatValue(x[k]))
+			}
+			sv.Text = cmp.Or(strings.Join(rows, "\n"), "(none)")
 		default:
 			sv.Text = FormatValue(v)
 			for _, o := range in.Options {
@@ -482,10 +578,26 @@ func (t Template) Describe(stored map[string]any) []StoredValue {
 	return out
 }
 
+// describeFields shows an object (a list's row, or an object input's value) in the form's words: Field: value, ….
+func (in Input) describeFields(row map[string]any) string {
+	var parts []string
+	for _, f := range in.Fields {
+		if v, ok := row[f.Name]; ok && v != nil {
+			parts = append(parts, f.Title()+": "+FormatValue(v))
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
 // FormatValue shows a stored input value or module default as typed: fmt prints the float64 1000000 as 1e+06.
+// A list (or object) is its JSON, the form's value of a list input.
 func FormatValue(v any) string {
-	if f, ok := v.(float64); ok {
-		return strconv.FormatFloat(f, 'f', -1, 64)
+	switch x := v.(type) {
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	case []any, map[string]any:
+		b, _ := json.Marshal(x)
+		return string(b)
 	}
 	return fmt.Sprint(v)
 }
@@ -506,6 +618,15 @@ func (t Template) Validate(raw map[string]string) (map[string]any, map[string]st
 		}
 		if in.Type == "bool" {
 			vals[in.Name] = v == "on" || v == "true"
+			continue
+		}
+		if slices.Contains(complexTypes, in.Type) {
+			val, msg := in.validateComplex(v)
+			if msg != "" {
+				errs[in.Name] = msg
+				continue
+			}
+			vals[in.Name] = val
 			continue
 		}
 		if v == "" {
@@ -538,4 +659,94 @@ func (t Template) Validate(raw map[string]string) (map[string]any, map[string]st
 		}
 	}
 	return vals, errs
+}
+
+// validateComplex checks a complex input's form value (JSON, "" none; see InputTypes), and returns its typed value
+// or the first error. A list's rows and an object are checked field by field, each as an input of its own,
+// optional fields left empty left out; a string_list's and map's rows may be objects (RowFields) too.
+func (in Input) validateComplex(v string) (any, string) {
+	var x any
+	if v != "" && json.Unmarshal([]byte(v), &x) != nil {
+		return nil, "Enter a valid value."
+	}
+	if in.Type == "object" {
+		obj, ok := x.(map[string]any)
+		if !ok && x != nil {
+			return nil, "Enter the fields."
+		}
+		val, msg := in.validateFields(obj, "")
+		if len(val) == 1 && IsSealed(val) { // would pass for a sealed value
+			return nil, "An object with only the field sealed can't be stored."
+		}
+		return val, msg
+	}
+	var rows []any
+	switch y := x.(type) {
+	case nil:
+	case []any:
+		rows = y
+	case map[string]any: // a map as stored: a row per key
+		if in.Type != "map" {
+			return nil, "Enter a list of rows."
+		}
+		for _, k := range slices.Sorted(maps.Keys(y)) {
+			rows = append(rows, map[string]any{"key": k, "value": y[k]})
+		}
+	default:
+		return nil, "Enter a list of rows."
+	}
+	list, m := []any{}, map[string]any{}
+	for i, r := range rows {
+		row, ok := r.(map[string]any)
+		if !ok && in.Type == "string_list" { // as stored: a string per element
+			row, ok = map[string]any{"value": r}, true
+		}
+		if !ok {
+			return nil, "Enter a list of rows."
+		}
+		val, msg := in.validateFields(row, fmt.Sprintf("Row %d, ", i+1))
+		switch {
+		case msg != "":
+			return nil, msg
+		case in.Type == "list":
+			list = append(list, val)
+		case in.Type == "string_list" && val["value"] != nil:
+			list = append(list, val["value"])
+		case in.Type == "map" && val["value"] != nil:
+			k, _ := val["key"].(string)
+			if _, dup := m[k]; dup {
+				return nil, fmt.Sprintf("Row %d, Key: %s is there already.", i+1, k)
+			}
+			m[k] = val["value"]
+		}
+	}
+	if in.Type == "map" {
+		if IsSealed(m) { // would pass for a sealed value
+			return nil, "A map with only the key sealed can't be stored."
+		}
+		return m, ""
+	}
+	return list, ""
+}
+
+// validateFields checks an object (a row of RowFields, or an object input's value) field by field, each as an
+// input of its own, and returns its typed fields, or the first error, prefixed by where.
+func (in Input) validateFields(obj map[string]any, where string) (map[string]any, string) {
+	fields := in.RowFields()
+	if in.Type == "object" {
+		fields = in.Fields
+	}
+	raw := map[string]string{}
+	for k, x := range obj {
+		if x != nil {
+			raw[k] = FormatValue(x)
+		}
+	}
+	vals, errs := Template{Inputs: fields}.Validate(raw)
+	for _, f := range fields {
+		if e := errs[f.Name]; e != "" {
+			return nil, where + f.Title() + ": " + e
+		}
+	}
+	return vals, ""
 }
