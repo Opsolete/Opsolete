@@ -24,6 +24,7 @@ type (
 		Description string            `json:"description"`
 		Module      json.RawMessage   `json:"module"`
 		Inputs      []json.RawMessage `json:"inputs"`
+		Adopt       []json.RawMessage `json:"adopt,omitempty"`
 	}
 	fileInput struct {
 		Name      string          `json:"name"`
@@ -38,6 +39,13 @@ type (
 		ShowIf    *fileShowIf     `json:"show_if,omitempty"`
 		Key       bool            `json:"key,omitempty"`
 		PerEnv    bool            `json:"per_environment,omitempty"`
+	}
+	fileAdopt struct {
+		To      string      `json:"to"`
+		Label   string      `json:"label,omitempty"`
+		Help    string      `json:"help,omitempty"`
+		Pattern string      `json:"pattern,omitempty"`
+		ShowIf  *fileShowIf `json:"show_if,omitempty"`
 	}
 	fileShowIf struct {
 		Input  string            `json:"input"`
@@ -89,20 +97,41 @@ func (t *Template) UnmarshalJSON(b []byte) error {
 				return fmt.Errorf("%s: default %w", where, err)
 			}
 		}
-		if fi.ShowIf != nil {
-			in.ShowIf = &ShowIf{Input: fi.ShowIf.Input}
-			for _, raw := range fi.ShowIf.Equals {
-				v, err := fromJSON(types[fi.ShowIf.Input], raw) // typed by the input it refers to
-				if err != nil {
-					return fmt.Errorf("%s: show_if.equals: each value %w", where, err)
-				}
-				in.ShowIf.Equals = append(in.ShowIf.Equals, v)
-			}
+		if in.ShowIf, err = fi.ShowIf.decode(types); err != nil {
+			return fmt.Errorf("%s: %w", where, err)
 		}
 		out.Inputs = append(out.Inputs, in)
 	}
+	for i, raw := range f.Adopt {
+		var fa fileAdopt
+		if err := strict(raw, &fa); err != nil {
+			return fmt.Errorf("%s, adopt #%d: %w", where, i+1, err)
+		}
+		a := Adopt{To: fa.To, Label: fa.Label, Help: fa.Help, Pattern: fa.Pattern}
+		var err error
+		if a.ShowIf, err = fa.ShowIf.decode(types); err != nil {
+			return fmt.Errorf("%s, adopt %q: %w", where, fa.To, err)
+		}
+		out.Adopt = append(out.Adopt, a)
+	}
 	*t = out
 	return nil
+}
+
+// decode reads show_if (nil: none), its values typed by the input it refers to (types: input types by name).
+func (f *fileShowIf) decode(types map[string]string) (*ShowIf, error) {
+	if f == nil {
+		return nil, nil
+	}
+	c := &ShowIf{Input: f.Input}
+	for _, raw := range f.Equals {
+		v, err := fromJSON(types[f.Input], raw)
+		if err != nil {
+			return nil, fmt.Errorf("show_if.equals: each value %w", err)
+		}
+		c.Equals = append(c.Equals, v)
+	}
+	return c, nil
 }
 
 func (t Template) MarshalJSON() ([]byte, error) {
@@ -131,18 +160,36 @@ func (t Template) MarshalJSON() ([]byte, error) {
 			}
 		}
 	}
-	for i, in := range t.Inputs {
-		if in.ShowIf == nil {
-			continue
+	encode := func(c *ShowIf) (*showIf, error) {
+		if c == nil {
+			return nil, nil
 		}
-		inputs[i].ShowIf = &showIf{Input: in.ShowIf.Input, Equals: []any{}}
-		for _, v := range in.ShowIf.Equals {
-			j, err := toJSON(types[in.ShowIf.Input], v)
+		out := &showIf{Input: c.Input, Equals: []any{}}
+		for _, v := range c.Equals {
+			j, err := toJSON(types[c.Input], v)
 			if err != nil {
-				return nil, fmt.Errorf("input %s: show_if.equals: %w", in.Name, err)
+				return nil, fmt.Errorf("show_if.equals: %w", err)
 			}
-			inputs[i].ShowIf.Equals = append(inputs[i].ShowIf.Equals, j)
+			out.Equals = append(out.Equals, j)
 		}
+		return out, nil
+	}
+	for i, in := range t.Inputs {
+		if inputs[i].ShowIf, err = encode(in.ShowIf); err != nil {
+			return nil, fmt.Errorf("input %s: %w", in.Name, err)
+		}
+	}
+	type adopt struct {
+		Adopt
+		ShowIf *showIf `json:"show_if,omitempty"`
+	}
+	var adopts []adopt
+	for _, a := range t.Adopt {
+		s, err := encode(a.ShowIf)
+		if err != nil {
+			return nil, fmt.Errorf("adopt %s: %w", a.To, err)
+		}
+		adopts = append(adopts, adopt{a, s})
 	}
 	return json.Marshal(struct {
 		Schema      string          `json:"$schema"`
@@ -151,7 +198,8 @@ func (t Template) MarshalJSON() ([]byte, error) {
 		Description string          `json:"description"`
 		Module      json.RawMessage `json:"module"`
 		Inputs      []input         `json:"inputs"`
-	}{SchemaURL, t.ID, t.Name, t.Description, module, inputs})
+		Adopt       []adopt         `json:"adopt,omitempty"`
+	}{SchemaURL, t.ID, t.Name, t.Description, module, inputs, adopts})
 }
 
 // inputRef names an input (i -1: the template) in errors: its name, else its position.

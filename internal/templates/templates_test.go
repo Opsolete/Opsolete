@@ -198,3 +198,43 @@ func TestParseLimits(t *testing.T) {
 		}
 	}
 }
+
+func TestAdoptIDs(t *testing.T) {
+	ts, _, err := Parse(map[string][]byte{"vm.json": []byte(`{"id": "vm", "name": "VM", "module": {"source": "s", "ref": "r"}, "inputs": [
+		{"name": "os_type", "type": "select", "options": ["windows", "linux"]}],
+		"adopt": [
+		{"to": "azurerm_windows_virtual_machine.self[0]", "pattern": "(?i)/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Compute/virtualMachines/[^/]+",
+			"show_if": {"input": "os_type", "equals": ["windows"]}},
+		{"to": "azurerm_linux_virtual_machine.self[0]", "show_if": {"input": "os_type", "equals": ["linux"]}},
+		{"to": "azurerm_network_interface.self", "help": "A NIC ID", "pattern": "/subscriptions/.+/networkInterfaces/[^/]+"}]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	vm := ts["vm"]
+	const vmID, nicID = "/subscriptions/s/resourcegroups/rg/providers/Microsoft.Compute/virtualMachines/vm", "/subscriptions/s/resourceGroups/rg/providers/Microsoft.Network/networkInterfaces/nic"
+	win := map[string]string{"os_type": "windows"}
+
+	if got, errs := vm.AdoptIDs(win, []string{" ", "", ""}); got != nil || len(errs) != 0 {
+		t.Errorf("no IDs: create, got %v %v", got, errs)
+	}
+	// the linux VM's field is hidden on windows: what it holds is ignored, also for "any given"
+	if got, errs := vm.AdoptIDs(win, []string{"", "stale", ""}); got != nil || len(errs) != 0 {
+		t.Errorf("only a hidden ID: %v %v", got, errs)
+	}
+	got, errs := vm.AdoptIDs(win, []string{" " + vmID + " ", "stale", nicID})
+	if len(errs) != 0 || len(got) != 2 || got["azurerm_windows_virtual_machine.self[0]"] != vmID || got["azurerm_network_interface.self"] != nicID {
+		t.Errorf("windows: %v %v", got, errs)
+	}
+	if _, errs = vm.AdoptIDs(win, []string{vmID}); errs[AdoptField(2)] == "" || len(errs) != 1 {
+		t.Errorf("one given, one missing: %v", errs)
+	}
+	if _, errs = vm.AdoptIDs(win, []string{nicID, "", vmID}); !strings.Contains(errs[AdoptField(0)], "expected format") || errs[AdoptField(2)] != "A NIC ID" {
+		t.Errorf("wrong type pasted: %v", errs)
+	}
+	if _, errs = vm.AdoptIDs(win, []string{vmID + "\nx", "", nicID}); errs[AdoptField(0)] != "This is not a resource ID." {
+		t.Errorf("line break: %v", errs)
+	}
+	if got, errs = vm.AdoptIDs(map[string]string{"os_type": "linux"}, []string{"", "anything", nicID}); len(errs) != 0 || got["azurerm_linux_virtual_machine.self[0]"] != "anything" {
+		t.Errorf("linux, no pattern: %v %v", got, errs)
+	}
+}

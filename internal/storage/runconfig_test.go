@@ -136,3 +136,63 @@ func TestRunConfigRestore(t *testing.T) {
 		t.Fatalf("a changed added template after cancel: %s", ref)
 	}
 }
+
+// An adoption (a template added with imports) hands its imports to the runner in both phases, always waits for a
+// human, also with auto-apply, and ends errored, the template removed again, when its plan replaces or deletes.
+func TestAdoption(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	w, run := newWorkspace(t, s, true)
+	if j := claim(t, s, "plan"); j.Imports != nil {
+		t.Fatalf("a run without imports: %+v", j.Imports)
+	} else if _, err := s.FinishJob(ctx, run.ID, j.LeaseID, "succeeded", "", nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	imports := []runnerapi.Import{{To: "module.vm.a.b", ID: "/x/1"}, {To: "module.vm.c.d", ID: "/x/2"}}
+	adopt := func(plan runnerapi.Plan) (Run, string) {
+		t.Helper()
+		r, err := s.SetWorkspaceTemplate(ctx, w.ID, WorkspaceTemplate{Name: "vm", TemplateID: "job-test", ModuleSource: "git::x", ModuleRef: "v1",
+			Inputs: map[string]any{}, Imports: imports}, true, uuid.Nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		j := claim(t, s, "plan")
+		if len(j.Imports) != 2 || j.Imports[1] != imports[1] {
+			t.Fatalf("plan phase imports: %+v", j.Imports)
+		}
+		status, err := s.FinishJob(ctx, r.ID, j.LeaseID, "succeeded", "", nil, &plan, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r, status
+	}
+	added := func() bool {
+		var n int
+		s.Pool.QueryRow(ctx, `SELECT count(*) FROM workspace_templates WHERE workspace_id = $1 AND name = 'vm'`, w.ID).Scan(&n)
+		return n == 1
+	}
+
+	if _, status := adopt(runnerapi.Plan{Import: 2, Add: 1, Destroy: 1}); status != Errored || added() {
+		t.Fatalf("a replacing adoption: %s, template kept %v", status, added())
+	}
+	r, status := adopt(runnerapi.Plan{Import: 2, Change: 1})
+	if status != NeedsConfirmation { // not apply_queued: the workspace auto-applies
+		t.Fatalf("an adoption with auto-apply: %s", status)
+	}
+	if err := s.ConfirmRun(ctx, r.ID, uuid.Nil, "x"); err != nil {
+		t.Fatal(err)
+	}
+	if j := claim(t, s, "apply"); len(j.Imports) != 2 {
+		t.Fatalf("apply phase imports: %+v", j.Imports)
+	}
+
+	// a workspace created for an adoption
+	tpl := testTemplate(nil)
+	tpl.Imports = imports[:1]
+	if _, _, err := s.CreateWorkspace(ctx, uuid.Nil, w.Name+"-new", "", tpl, false, uuid.Nil); err != nil {
+		t.Fatal(err)
+	}
+	if j := claim(t, s, "plan"); len(j.Imports) != 1 || j.Imports[0] != imports[0] {
+		t.Fatalf("new workspace's imports: %+v", j.Imports)
+	}
+}

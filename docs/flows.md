@@ -185,6 +185,11 @@ Test paths are relative to `internal/`, except `cmd/opsolete/…` (from the repo
 **D6. Form rules (validation, help, show_if, defaults)** — `full`
 - Coverage: `http/templates_test.go:TestInvalidSubmitRerendersForm`; `http/render_test.go:TestRenderShowIf`; `templates/templates_test.go:TestShowIf`, `TestShowIfBool`, `TestValidateEdgeCases`, `TestLoadCatalogAndValidate`; `templates/json_test.go:TestSchema`, `TestJSONRoundTrip`.
 
+**D7. Adopt existing resources when adding a template** — `partial`
+- Actor: operate. Steps: deploy or add form of a template with `adopt` → paste resource IDs (+ current settings) → plan with import blocks into `module.<name>` → confirm (always, also with auto-apply) → imported. Design: `docs/resource-import.md`.
+- Failures: ID missing for a shown entry, wrong format, control characters → 422; plan replaces or deletes → run errored, added template removed again.
+- Coverage: `http/workspacetemplates_test.go:TestAdoptForm` (both forms, IDs to the job's imports, configure asks none); `storage/runconfig_test.go:TestAdoption` (imports in both phases, auto-apply waits, replace → errored + removed); `templates/templates_test.go:TestAdoptIDs`; `templates/json_test.go:TestSchema`, `TestJSONRoundTrip`; `runner/assemble_test.go:TestImports` (real Terraform: import counted and applied, ID kept literal), `TestSummarizeImport`; builder: `http/builder_test.go:TestTemplateBuilder` (adopt rows saved and shown again), `TestBuilderRoundTrip`; `http/registry_test.go:TestRegistry` (the module's resources suggested). Missing: the run page's import counts (rendering), a real cloud resource (spike only, see the design doc).
+
 ---
 
 ## E. State

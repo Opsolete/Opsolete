@@ -129,6 +129,7 @@ type Run struct {
 	AlwaysConfirm   bool
 	RemoveTemplates []string
 	Promotion       []byte
+	Imports         []byte
 }
 
 type RunList struct {

@@ -111,7 +111,7 @@ func (a *App) assembleJob(ctx context.Context, j storage.Job) ([]byte, error) {
 		return nil, err
 	}
 	body, err := json.Marshal(runnerapi.Job{
-		RunID: j.RunID.String(), WorkspaceID: j.WorkspaceID.String(), Phase: j.Phase, Action: j.Action, Replace: j.Replace, Target: j.Target, LeaseID: j.LeaseID,
+		RunID: j.RunID.String(), WorkspaceID: j.WorkspaceID.String(), Phase: j.Phase, Action: j.Action, Replace: j.Replace, Target: j.Target, Imports: j.Imports, LeaseID: j.LeaseID,
 		LeaseSeconds: int(LeaseTTL.Seconds()), StateToken: a.StateToken(j.WorkspaceID, j.RunID), Vars: vars, Env: env, Secrets: secrets,
 		ModuleSource: src, Modules: mods, Currency: currency,
 	})

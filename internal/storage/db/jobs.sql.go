@@ -186,7 +186,7 @@ const leaseRun = `-- name: LeaseRun :one
 UPDATE runs SET runner = $1::text, lease_id = $2::text,
     lease_until = now() + make_interval(secs => $3::float8)
 WHERE id = $4::uuid
-RETURNING workspace_id, action, replace, COALESCE(vcs_commit, '')::text AS vcs_commit, remove_templates
+RETURNING workspace_id, action, replace, COALESCE(vcs_commit, '')::text AS vcs_commit, remove_templates, imports
 `
 
 type LeaseRunParams struct {
@@ -202,6 +202,7 @@ type LeaseRunRow struct {
 	Replace         []byte
 	VcsCommit       string
 	RemoveTemplates []string
+	Imports         []byte
 }
 
 func (q *Queries) LeaseRun(ctx context.Context, arg LeaseRunParams) (LeaseRunRow, error) {
@@ -218,12 +219,14 @@ func (q *Queries) LeaseRun(ctx context.Context, arg LeaseRunParams) (LeaseRunRow
 		&i.Replace,
 		&i.VcsCommit,
 		&i.RemoveTemplates,
+		&i.Imports,
 	)
 	return i, err
 }
 
 const lockLeasedRun = `-- name: LockLeasedRun :one
-SELECT r.status, r.action, r.workspace_id, w.auto_apply, (r.rollout_id IS NOT NULL OR r.always_confirm)::boolean AS needs_confirmation, r.cancel_requested
+SELECT r.status, r.action, r.workspace_id, w.auto_apply, (r.rollout_id IS NOT NULL OR r.always_confirm)::boolean AS needs_confirmation, r.cancel_requested,
+    (r.imports IS NOT NULL)::boolean AS adopting
 FROM runs r JOIN workspaces w ON w.id = r.workspace_id
 WHERE r.id = $1::uuid AND r.lease_id = $2::text AND run_working(r.status) AND r.lease_acked_at IS NOT NULL
 FOR UPDATE OF r
@@ -241,6 +244,7 @@ type LockLeasedRunRow struct {
 	AutoApply         bool
 	NeedsConfirmation bool
 	CancelRequested   bool
+	Adopting          bool
 }
 
 // The run, if lease_id holds it; the lease is checked here, setStatus then checks the transition.
@@ -255,6 +259,7 @@ func (q *Queries) LockLeasedRun(ctx context.Context, arg LockLeasedRunParams) (L
 		&i.AutoApply,
 		&i.NeedsConfirmation,
 		&i.CancelRequested,
+		&i.Adopting,
 	)
 	return i, err
 }

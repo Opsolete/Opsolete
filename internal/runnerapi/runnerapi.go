@@ -41,6 +41,7 @@ type Job struct {
 	Action       string         `json:"action"`
 	Replace      []string       `json:"replace,omitempty"` // resource addresses the plan replaces (-replace)
 	Target       []string       `json:"target,omitempty"`  // addresses the plan is limited to (-target)
+	Imports      []Import       `json:"imports,omitempty"` // existing resources the run adopts (import blocks)
 	LeaseID      string         `json:"lease_id"`
 	LeaseSeconds int            `json:"lease_seconds"`
 	ModuleSource string         `json:"module_source"` // root configuration (a VCS commit archive): go-getter address; a leading "/" is relative to the server URL; "" = none
@@ -65,6 +66,12 @@ type Module struct {
 	Inputs map[string]any `json:"inputs"`
 }
 
+// Import adopts an existing resource: Terraform imports ID into the address To (an import block).
+type Import struct {
+	To string `json:"to"` // e.g. module.vm_c8ad.azurerm_linux_virtual_machine.this
+	ID string `json:"id"`
+}
+
 type FinishRequest struct {
 	Status  string         `json:"status"` // succeeded | failed | canceled
 	Message string         `json:"message,omitempty"`
@@ -82,6 +89,7 @@ type Plan struct {
 	Add     int      `json:"add"`
 	Change  int      `json:"change"`
 	Destroy int      `json:"destroy"`
+	Import  int      `json:"import,omitempty"` // existing resources imported, with or without changes
 	Changes []Change `json:"changes"`
 	Cost    *Cost    `json:"cost,omitempty"` // nil: cost estimation is off or failed
 }
@@ -98,7 +106,7 @@ type Cost struct {
 
 type Change struct {
 	Address string `json:"address"`
-	Action  string `json:"action"` // create | update | delete | replace
+	Action  string `json:"action"` // create | update | delete | replace | import (imported without changes)
 }
 
 // Resource is one managed resource in a workspace's state; never its attribute values.

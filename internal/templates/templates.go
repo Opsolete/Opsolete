@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 )
 
 type Template struct {
@@ -22,6 +23,65 @@ type Template struct {
 	Description string  `json:"description"`
 	Module      Module  `json:"module"`
 	Inputs      []Input `json:"inputs"`
+	// Adopt lists the module's resources that can take over existing ones when the template is added (AdoptIDs).
+	Adopt []Adopt `json:"adopt,omitempty"`
+}
+
+// Adopt is a resource of the module that can adopt an existing cloud resource: the user pastes its ID when
+// adding the template, and the run imports it into module.<name>.<To> instead of creating it.
+type Adopt struct {
+	To      string  `json:"to"` // its address in the module, e.g. azurerm_windows_virtual_machine.self[0]
+	Label   string  `json:"label,omitempty"`
+	Help    string  `json:"help,omitempty"`    // shown under the field, and as the error when Pattern doesn't match
+	Pattern string  `json:"pattern,omitempty"` // the ID's format: a Go regexp the whole ID must match
+	ShowIf  *ShowIf `json:"show_if,omitempty"` // as for inputs, e.g. a VM resource that depends on an os_type input
+}
+
+// Title is what the form calls the field: its label, else its address.
+func (a Adopt) Title() string { return cmp.Or(a.Label, a.To) }
+
+// AdoptField is the form field of the ID for Adopt[i].
+func AdoptField(i int) string { return "ops-adopt-" + strconv.Itoa(i) }
+
+// maxIDLen bounds a pasted resource ID (Azure's are at most a few hundred characters).
+const maxIDLen = 1024
+
+// AdoptIDs checks the IDs pasted to adopt existing resources (ids[i] for Adopt[i]; the form values raw decide
+// show_if) and returns them by the address they're imported to. All empty: nil, the template creates its
+// resources. Otherwise every shown entry needs one; hidden ones are ignored. errs is keyed by AdoptField.
+func (t Template) AdoptIDs(raw map[string]string, ids []string) (map[string]string, map[string]string) {
+	errs := map[string]string{}
+	shown, cur := t.eval(raw)
+	id := func(i int) string {
+		if i < len(ids) {
+			return strings.TrimSpace(ids[i])
+		}
+		return ""
+	}
+	given := false
+	for i, a := range t.Adopt {
+		given = given || a.ShowIf.holds(shown, cur) && id(i) != ""
+	}
+	if !given {
+		return nil, errs
+	}
+	out := map[string]string{}
+	for i, a := range t.Adopt {
+		if !a.ShowIf.holds(shown, cur) {
+			continue
+		}
+		switch v := id(i); {
+		case v == "":
+			errs[AdoptField(i)] = "Paste this resource's ID too, or leave all IDs empty to create new resources."
+		case len(v) > maxIDLen || strings.ContainsFunc(v, unicode.IsControl):
+			errs[AdoptField(i)] = "This is not a resource ID."
+		case a.Pattern != "" && !regexp.MustCompile(anchored(a.Pattern)).MatchString(v):
+			errs[AdoptField(i)] = cmp.Or(a.Help, "Doesn't have the expected format: "+a.Pattern)
+		default:
+			out[a.To] = v
+		}
+	}
+	return out, errs
 }
 
 // Module points at an existing Terraform module at an approved revision.
@@ -389,8 +449,30 @@ func (t Template) check() error {
 		}
 		before[in.Name] = in
 	}
+	adopted := map[string]bool{}
+	for _, a := range t.Adopt {
+		if !addrRe.MatchString(a.To) {
+			return fmt.Errorf("adopt %q: not a resource address in the module, e.g. azurerm_linux_virtual_machine.this or x.this[0]", a.To)
+		}
+		if adopted[a.To] {
+			return fmt.Errorf("adopt %q: listed twice", a.To)
+		}
+		adopted[a.To] = true
+		if a.Pattern != "" {
+			if _, err := regexp.Compile(anchored(a.Pattern)); err != nil {
+				return fmt.Errorf("adopt %q: %w", a.To, err)
+			}
+		}
+		if err := a.ShowIf.check(before); err != nil {
+			return fmt.Errorf("adopt %q: %w", a.To, err)
+		}
+	}
 	return nil
 }
+
+// addrRe is a managed resource address, optionally in nested modules and with an index; it goes into an
+// import block's "to" as is.
+var addrRe = regexp.MustCompile(`^(module\.[A-Za-z_][\w-]*(\[(\d+|"[\w.-]+")\])?\.)*[A-Za-z_][\w-]*\.[A-Za-z_][\w-]*(\[(\d+|"[\w.-]+")\])?$`)
 
 func (c *ShowIf) check(before map[string]Input) error {
 	if c == nil {

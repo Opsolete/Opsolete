@@ -83,6 +83,22 @@
 {{end}}
   </div>
 {{end}}
+{{if and .T.Adopt (or (not .Configure) .Adding)}}
+  <div class="rows-head"><h2>Adopt existing resources</h2></div>
+  <p class="hint" id="ops-adopt-hint">Optional. To take over resources that already exist instead of creating new ones, paste their IDs
+    (Azure portal: the resource's <em>Properties → Resource ID</em>) and enter their current settings above. The plan then imports them
+    and always waits for your confirmation; if it would replace or delete anything, it stops and nothing is applied. Leave all IDs empty to create new resources.</p>
+  <div class="rows">
+{{range $i, $a := .T.Adopt}}{{$n := adoptField $i}}{{$help := and .Help (print $n "-help")}}
+  <fieldset class="row{{if .ShowIf}} show-if{{end}}{{if fieldError $.F $n}} invalid{{end}}"{{with .ShowIf}} data-show-if="{{json .}}"{{if not ($.T.Match . $v)}} hidden disabled{{end}}{{end}}>
+    <label for="{{$n}}">{{.Title}}</label>
+    <input id="{{$n}}" name="{{$n}}" value="{{with $.Adopt}}{{index . $i}}{{end}}" autocomplete="off" spellcheck="false"{{aria $.F $n "ops-adopt-hint" $help}}>
+    {{if .Help}}<p class="hint" id="{{$n}}-help">{{.Help}}</p>{{end}}
+    {{template "fielderror" (dict "F" $.F "N" $n)}}
+  </fieldset>
+{{end}}
+  </div>
+{{end}}
   <div class="form-foot">
     <p class="hint">Deploys <code>{{.T.Module.Source}}</code> at <code>{{.T.Module.Ref}}</code>.</p>
     <div class="actions">

@@ -594,6 +594,21 @@ func (q *Queries) SetRunAlwaysConfirm(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const setRunImports = `-- name: SetRunImports :exec
+UPDATE runs SET imports = $1::jsonb, always_confirm = true WHERE id = $2::uuid
+`
+
+type SetRunImportsParams struct {
+	Imports []byte
+	ID      uuid.UUID
+}
+
+// An adoption: it always waits for a human, also with auto-apply.
+func (q *Queries) SetRunImports(ctx context.Context, arg SetRunImportsParams) error {
+	_, err := q.db.Exec(ctx, setRunImports, arg.Imports, arg.ID)
+	return err
+}
+
 const setRunPromotion = `-- name: SetRunPromotion :exec
 UPDATE runs SET promotion = $1::jsonb WHERE id = $2::uuid
 `

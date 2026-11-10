@@ -52,8 +52,8 @@ func (s *Server) saveWorkspaceTemplate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	page.Values = formValues(f, page.T)
-	_, run, err := s.App.SaveTemplate(r.Context(), actor(r), r.PathValue("name"), r.PathValue("module"), page.T.ID, page.Values)
+	page.Values, page.Adopt = formValues(f, page.T), adoptIDs(f, page.T)
+	_, run, err := s.App.SaveTemplate(r.Context(), actor(r), r.PathValue("name"), r.PathValue("module"), page.T.ID, page.Values, page.Adopt)
 	if s.failed(w, r, err, "template", f, func(status int, fs *formState) {
 		fs.Labels, page.F = inputLabels(page.T), fs
 		maps.Copy(page.Values, page.Locked) // shown as before, not as posted

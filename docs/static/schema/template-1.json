@@ -17,7 +17,12 @@
     "name": { "type": "string", "minLength": 1 },
     "description": { "type": "string" },
     "module": { "$ref": "#/$defs/module" },
-    "inputs": { "type": "array", "items": { "$ref": "#/$defs/input" } }
+    "inputs": { "type": "array", "items": { "$ref": "#/$defs/input" } },
+    "adopt": {
+      "description": "Resources of the module that can adopt existing cloud resources when the template is added: the user pastes their IDs, the run imports them instead of creating them.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/adopt" }
+    }
   },
   "$defs": {
     "module": {
@@ -93,6 +98,18 @@
           }
         }
       ]
+    },
+    "adopt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["to"],
+      "properties": {
+        "to": { "description": "The resource's address in the module, e.g. azurerm_linux_virtual_machine.this or azurerm_windows_virtual_machine.self[0]; unique.", "type": "string", "minLength": 1 },
+        "label": { "description": "The field end users see; empty: the address.", "type": "string" },
+        "help": { "description": "Shown under the field, and as the error when the pattern doesn't match.", "type": "string" },
+        "pattern": { "description": "A Go regular expression the whole ID must match, e.g. (?i)/subscriptions/[^/]+/resourceGroups/[^/]+.", "type": "string" },
+        "show_if": { "$ref": "#/$defs/show_if" }
+      }
     },
     "show_if": {
       "description": "Show the input only while an earlier select or bool input has one of these values (typed like that input: strings for a select, booleans for a bool).",

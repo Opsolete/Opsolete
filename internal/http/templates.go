@@ -40,6 +40,7 @@ type formPage struct {
 	Editor    bool
 	Preview   bool // the builder's unsaved template: shown, never submitted
 	Values    map[string]string
+	Adopt     []string   // the IDs pasted to adopt existing resources, by templates.AdoptField index
 	F         *formState // a refused submit
 	Workspace string
 	AutoApply bool

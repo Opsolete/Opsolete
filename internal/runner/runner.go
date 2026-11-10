@@ -206,6 +206,11 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 			return fail("write templates", err)
 		}
 	}
+	if len(job.Imports) > 0 { // both phases: the apply's configuration must match the plan's
+		if err := writeImports(dir, job.Imports); err != nil {
+			return fail("write imports", err)
+		}
+	}
 	backend := "terraform {\n  backend \"http\" {}\n}\n"
 	if err := os.WriteFile(filepath.Join(dir, "opsolete_backend.tf"), []byte(backend), 0o600); err != nil {
 		return fail("write backend", err)
@@ -364,7 +369,7 @@ func (r *Runner) plan(ctx context.Context, tf *tfProc, run func(...string) (bool
 		fmt.Fprintf(w, "\n==> drift: %d changed, %d deleted outside Terraform\n", sum.Change, sum.Destroy)
 		return runnerapi.FinishRequest{Status: "succeeded", Plan: &sum}
 	case "plan":
-		fmt.Fprintf(w, "\n==> speculative plan: %d to add, %d to change, %d to destroy (never applied)\n", sum.Add, sum.Change, sum.Destroy)
+		fmt.Fprintf(w, "\n==> speculative plan: %s (never applied)\n", counts(sum))
 		return runnerapi.FinishRequest{Status: "succeeded", Plan: &sum}
 	}
 	for _, a := range []struct{ name, file string }{{runnerapi.ArtifactPlan, planFile}, {runnerapi.ArtifactLockfile, lockFile}} {
@@ -379,7 +384,7 @@ func (r *Runner) plan(ctx context.Context, tf *tfProc, run func(...string) (bool
 			return fail("save plan", err)
 		}
 	}
-	fmt.Fprintf(w, "\n==> plan saved: %d to add, %d to change, %d to destroy\n", sum.Add, sum.Change, sum.Destroy)
+	fmt.Fprintf(w, "\n==> plan saved: %s\n", counts(sum))
 	return runnerapi.FinishRequest{Status: "succeeded", Plan: &sum}
 }
 

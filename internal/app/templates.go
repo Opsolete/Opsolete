@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/opsolete/opsolete/internal/registry"
+	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
 )
@@ -80,8 +82,10 @@ func (a *App) TemplateForm(ctx context.Context, actor Actor, workspace, module, 
 
 // SaveTemplate adds templateID to the workspace (module "") or saves the added template module's
 // inputs (raw: as typed, by input name) and the template's current module version, and queues the
-// plan that applies it. It returns the module name. ValidationError: the inputs (Fields by input name).
-func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, templateID string, raw map[string]string) (string, storage.Run, error) {
+// plan that applies it. Adding, adopt are the IDs of existing resources to import (see adoptions;
+// ignored when configuring). It returns the module name. ValidationError: the inputs (Fields by input
+// name) and IDs (by templates.AdoptField).
+func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, templateID string, raw map[string]string, adopt []string) (string, storage.Run, error) {
 	f, err := a.TemplateForm(ctx, actor, workspace, module, templateID)
 	if err != nil {
 		return module, storage.Run{}, err
@@ -103,11 +107,15 @@ func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, 
 		return module, storage.Run{}, err
 	}
 	keepOwn(vals, errs, locked, old)
+	var imports []runnerapi.Import
+	if adding {
+		imports = adoptions(t, raw, adopt, module, errs)
+	}
 	if len(errs) > 0 {
 		return module, storage.Run{}, &ValidationError{Fields: errs}
 	}
 	run, err := a.Store.SetWorkspaceTemplate(ctx, f.Workspace.ID, storage.WorkspaceTemplate{Name: module, TemplateID: t.ID,
-		ModuleSource: t.Module.Source, ModuleRef: t.Module.Ref, Inputs: vals}, adding, actor.UserID)
+		ModuleSource: t.Module.Source, ModuleRef: t.Module.Ref, Inputs: vals, Imports: imports}, adding, actor.UserID)
 	if errors.Is(err, storage.ErrExists) {
 		return module, run, &ValidationError{Message: "this workspace already has a template named " + module + " (added meanwhile), try again"}
 	}
@@ -115,8 +123,21 @@ func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, 
 		return module, run, err
 	}
 	a.Log.Info("workspace template saved", "workspace", f.Workspace.Name, "module", module, "template", t.ID, "added", adding,
-		"ref", t.Module.Ref, "run", run.ID, "user", actor.Email)
+		"ref", t.Module.Ref, "run", run.ID, "adopts", len(imports), "user", actor.Email)
 	return module, run, nil
+}
+
+// adoptions checks the IDs pasted to adopt existing resources into template t added as module (raw: the
+// form values, for show_if), adds their errors to errs, and returns the run's imports, sorted by address
+// (nil: adopt nothing).
+func adoptions(t templates.Template, raw map[string]string, ids []string, module string, errs map[string]string) []runnerapi.Import {
+	byAddr, idErrs := t.AdoptIDs(raw, ids)
+	maps.Copy(errs, idErrs)
+	var out []runnerapi.Import
+	for _, to := range slices.Sorted(maps.Keys(byAddr)) {
+		out = append(out, runnerapi.Import{To: "module." + module + "." + to, ID: byAddr[to]})
+	}
+	return out
 }
 
 // RemoveTemplate removes an added template and queues the plan that destroys its resources; with

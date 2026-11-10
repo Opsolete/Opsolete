@@ -38,6 +38,7 @@ See also [`catalog/storage-account.json`](https://github.com/Opsolete/Opsolete/b
 | `description` | string | optional | One sentence, shown on the catalog card. |
 | `module` | object | required | `source`: a `git::` URL or a [registry]({{< relref "module-registry" >}}) module address; `ref`: the approved Git ref or registry version. Both required. |
 | `inputs` | array | optional | The form's fields, in order. |
+| `adopt` | array | optional | Resources of the module that can take over existing ones; see [adopting existing resources](#adopting-existing-resources). |
 
 **Input:**
 
@@ -170,6 +171,51 @@ Things to know:
 - **Module variables need a default.** Every variable behind a conditional input needs one (e.g. `default = null`). Without it, Terraform fails with a missing variable whenever that input is hidden.
 - **Registry modules drop unknown inputs.** For a template on a [registry]({{< relref "module-registry" >}}) module, the form follows the module's variables, and JSON inputs the module doesn't declare are dropped. If the dropdown or yes / no input a `show_if` refers to (such as `os`) isn't a module variable, every input that depends on it stays hidden. Add it to the module as a variable.
 - **A dropdown without a value counts as its first option**, the one the browser shows selected.
+
+## Adopting existing resources
+
+Resources built by hand (in the Azure portal, by scripts) can be brought under a template without being created again.
+List the module's resources that can do that in `adopt`:
+
+```json
+"adopt": [
+  { "to": "azurerm_windows_virtual_machine.self[0]", "label": "VM resource ID",
+    "pattern": "(?i)/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Compute/virtualMachines/[^/]+",
+    "help": "The VM's Resource ID, from Properties in the Azure portal.",
+    "show_if": { "input": "os_type", "equals": ["windows"] } },
+  { "to": "azurerm_network_interface.self", "label": "Network interface resource ID",
+    "pattern": "(?i)/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/networkInterfaces/[^/]+" }
+]
+```
+
+| Field | Type | | |
+|---|---|---|---|
+| `to` | string | required | The resource's address in the module, e.g. `azurerm_linux_virtual_machine.this` or `azurerm_windows_virtual_machine.self[0]` (with `count`). Unique. |
+| `label` | string | optional | The field's title. Empty: the address. |
+| `help` | string | optional | Shown under the field, and the error when the ID doesn't match `pattern`. |
+| `pattern` | string | optional | A Go (RE2) regular expression the whole ID must match, e.g. to tell a VM ID from a NIC ID. Start it with `(?i)`: Azure isn't consistent about casing. |
+| `show_if` | object | optional | As for inputs, e.g. for a resource that exists only for one `os_type`. |
+
+When the template is added (to a new workspace or an existing one), the form has an **Adopt existing resources**
+section with one field per shown entry. With all fields empty the template creates its resources as usual. With any
+ID filled in, every shown field needs one, and the user types the resource's **current** settings into the inputs
+above. The run then imports the resources into `module.<name>`:
+
+- The plan lists them as **import** ("1 to import, 0 to add, 0 to change, 0 to destroy" when the template matches
+  the resource exactly). Changes in the same plan show where the inputs or the module differ from what exists.
+- It always waits for confirmation, even with auto-apply.
+- If it would replace or delete anything, the run ends as errored and nothing is applied: the template doesn't fit
+  the resource. Added to an existing workspace, the template is removed again.
+- After the apply the resources are ordinary template resources. Configuring the template later asks for no IDs.
+
+**Modules that can adopt.** Portal-made resources rarely match a module's fixed choices, and a different value of a
+setting that forces replacement makes the plan replace the resource. Make such settings optional inputs whose default
+is the module's current behavior (names of sub-resources such as the NIC, image, OS disk type, secure boot and vTPM),
+write blocks Azure always reports explicitly (`additional_capabilities {}`), and put values Azure never returns in
+`ignore_changes` (`admin_password`, `custom_data`). Use the casing of the resource ID for names such as
+`resource_group_name`: a different casing forces replacement.
+
+The [template builder]({{< relref "template-builder" >}}) edits `adopt` under **Adopt existing resources**.
 
 ## Where templates live
 

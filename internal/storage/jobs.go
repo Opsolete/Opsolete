@@ -25,6 +25,7 @@ type Job struct {
 	Action      string // apply | destroy | refresh | assess | plan
 	Replace     []string
 	Target      []string // -target: module.<name> of each template a destroy run removes
+	Imports     []runnerapi.Import
 	LeaseID     string
 	VCS         bool                // the root configuration comes from the workspace's VCS branch
 	VCSCommit   string              // commit pinned when the run was queued (VCS-triggered runs), or by an earlier phase
@@ -62,6 +63,11 @@ func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration
 		j.WorkspaceID, j.Action, j.VCSCommit = r.WorkspaceID, r.Action, r.VcsCommit
 		if r.Replace != nil {
 			if err := json.Unmarshal(r.Replace, &j.Replace); err != nil {
+				return err
+			}
+		}
+		if r.Imports != nil {
+			if err := json.Unmarshal(r.Imports, &j.Imports); err != nil {
 				return err
 			}
 		}
@@ -186,6 +192,8 @@ func (s *Store) CancelRun(ctx context.Context, id uuid.UUID, email string, force
 //   - plan with changes: needs_confirmation, or apply_queued for apply runs of auto-apply workspaces
 //     (destroys, refresh-only runs and template rollouts always wait for a human), or drifted for assess runs and
 //     planned for speculative plans, which are never applied; without changes: no_changes
+//   - plan of an adoption (runs.imports) that would replace or delete anything: errored, and the template
+//     change is undone like any run that ends before its apply (adoptions always wait for a human)
 //   - apply: applied
 //   - failed / canceled: errored / canceled
 //
@@ -208,6 +216,9 @@ func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 		case final != "":
 		case r.Status == Applying:
 			final = Applied
+		case r.Adopting && plan != nil && plan.Destroy > 0: // the template doesn't fit what exists
+			final, message = Errored, "adoption refused: the plan would replace or delete existing resources, so the template's "+
+				"inputs or module don't match them; nothing was applied"
 		case plan == nil:
 			final = NoChanges
 		case r.Action == "assess":

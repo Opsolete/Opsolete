@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	tfjson "github.com/hashicorp/terraform-json"
+
 	"github.com/opsolete/opsolete/internal/runnerapi"
 )
 
@@ -81,5 +83,48 @@ func TestAddedTemplates(t *testing.T) {
 	json.Unmarshal(f.states["ws1"], &st)
 	if res.Status != "succeeded" || len(st.Outputs) != 0 || len(res.Resources) != 0 || strings.Contains(logs, "outputs kept") {
 		t.Fatalf("destroy of the last template: %+v, outputs %v\n%s", res, st.Outputs, logs)
+	}
+}
+
+// TestImports: a run that adopts an existing resource writes import blocks; the plan counts the import (an
+// import with changes is also an update), the apply imports it, and the ID stays a literal string.
+func TestImports(t *testing.T) {
+	f := &fakeServer{}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	r := testRunner(t, srv)
+	j := job("i1", "plan", "apply", "", nil)
+	j.Modules = []runnerapi.Module{{Name: "a", Source: f.module(t, helloModule), Inputs: map[string]any{"greeting": "hi"}}}
+	j.Imports = []runnerapi.Import{{To: "module.a.terraform_data.this", ID: `existing-${file("/etc/passwd")}`}}
+	res, logs := f.do(t, r, j)
+	want := []runnerapi.Change{{Address: "module.a.terraform_data.this", Action: "update"}} // terraform_data imports without its input
+	if res.Status != "succeeded" || res.Plan == nil || res.Plan.Import != 1 || res.Plan.Add != 0 || !reflect.DeepEqual(res.Plan.Changes, want) {
+		t.Fatalf("plan: %+v\n%s", res.Plan, logs)
+	}
+	if !strings.Contains(logs, "plan saved: 1 to import, 0 to add, 1 to change, 0 to destroy") {
+		t.Fatalf("plan log:\n%s", logs)
+	}
+	j.Phase = "apply"
+	if res, logs = f.do(t, r, j); res.Status != "succeeded" || len(res.Resources) != 1 {
+		t.Fatalf("apply: %+v\n%s", res, logs)
+	}
+	if !strings.Contains(string(f.states["ws1"]), `"id": "existing-${file(\"/etc/passwd\")}"`) {
+		t.Fatalf("imported ID not kept literally:\n%s", f.states["ws1"])
+	}
+}
+
+// TestSummarizeImport: an import without changes is listed as an import, not dropped like other no-ops.
+func TestSummarizeImport(t *testing.T) {
+	rc := func(addr string, imported bool, actions ...tfjson.Action) *tfjson.ResourceChange {
+		c := &tfjson.Change{Actions: actions}
+		if imported {
+			c.Importing = &tfjson.Importing{ID: "x"}
+		}
+		return &tfjson.ResourceChange{Address: addr, Change: c}
+	}
+	got := summarize([]*tfjson.ResourceChange{rc("a", true, tfjson.ActionNoop), rc("b", false, tfjson.ActionNoop), rc("c", true, tfjson.ActionUpdate)})
+	want := runnerapi.Plan{Change: 1, Import: 2, Changes: []runnerapi.Change{{Address: "a", Action: "import"}, {Address: "c", Action: "update"}}}
+	if !reflect.DeepEqual(got, want) || counts(got) != "2 to import, 0 to add, 1 to change, 0 to destroy" {
+		t.Fatalf("got %+v, %q", got, counts(got))
 	}
 }

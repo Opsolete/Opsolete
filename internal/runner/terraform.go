@@ -106,6 +106,10 @@ func summarize(rcs []*tfjson.ResourceChange) runnerapi.Plan {
 			continue
 		}
 		a := rc.Change.Actions
+		imported := rc.Change.Importing != nil
+		if imported {
+			sum.Import++
+		}
 		var action string
 		switch {
 		case a.Replace():
@@ -121,12 +125,23 @@ func summarize(rcs []*tfjson.ResourceChange) runnerapi.Plan {
 		case a.Delete():
 			sum.Destroy++
 			action = "delete"
+		case imported: // no changes otherwise
+			action = "import"
 		default: // no-op, read, forget
 			continue
 		}
 		sum.Changes = append(sum.Changes, runnerapi.Change{Address: rc.Address, Action: action})
 	}
 	return sum
+}
+
+// counts is Terraform's "Plan:" line for sum.
+func counts(sum runnerapi.Plan) string {
+	s := fmt.Sprintf("%d to add, %d to change, %d to destroy", sum.Add, sum.Change, sum.Destroy)
+	if sum.Import > 0 {
+		s = fmt.Sprintf("%d to import, %s", sum.Import, s)
+	}
+	return s
 }
 
 // inventory lists the managed resources in the workspace's state: names only, never attribute

@@ -81,6 +81,10 @@ UPDATE runs SET rollout_id = sqlc.arg(rollout_id)::uuid WHERE id = sqlc.arg(id):
 -- name: SetRunAlwaysConfirm :exec
 UPDATE runs SET always_confirm = true WHERE id = sqlc.arg(id)::uuid;
 
+-- name: SetRunImports :exec
+-- An adoption: it always waits for a human, also with auto-apply.
+UPDATE runs SET imports = sqlc.arg(imports)::jsonb, always_confirm = true WHERE id = sqlc.arg(id)::uuid;
+
 -- name: LockRunStatus :one
 SELECT status FROM runs WHERE id = sqlc.arg(id)::uuid FOR UPDATE;
 

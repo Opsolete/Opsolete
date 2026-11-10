@@ -28,5 +28,17 @@ func inputLabels(t templates.Template) map[string]string {
 	for _, in := range t.Inputs {
 		m[in.Name] = in.Title()
 	}
+	for i, a := range t.Adopt {
+		m[templates.AdoptField(i)] = a.Title()
+	}
 	return m
+}
+
+// adoptIDs reads the IDs pasted to adopt existing resources, one per adopt entry of t.
+func adoptIDs(f url.Values, t templates.Template) []string {
+	ids := make([]string, len(t.Adopt))
+	for i := range ids {
+		ids[i] = f.Get(templates.AdoptField(i))
+	}
+	return ids
 }

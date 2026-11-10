@@ -384,6 +384,7 @@ h1 .status { font-size: .85rem; }
 .plan { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9em; }
 .change { font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
 .change.create { color: var(--ok); }
+.change.import { color: var(--tf); }
 .change.update { color: var(--warn); }
 .change.delete, .change.replace { color: var(--danger); }
 @keyframes pulse { 50% { opacity: .2; } }
@@ -492,3 +493,4 @@ select.flex-9 { flex: 0 0 9rem; }
 .pre-wrap { white-space: pre-wrap; }
 .text-brand { color: var(--brand); }
 hr.rule { border: 0; border-top: 1px solid var(--border); margin: 2rem 0 0; max-width: 60rem; }
+.adopt-row + .adopt-row { margin-top: 1.25rem; padding-top: 1.25rem; border-top: 1px solid var(--border); }
