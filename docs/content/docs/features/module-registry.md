@@ -27,4 +27,6 @@ module "x" {
 }
 ```
 
-Tokens from [`terraform login`]({{< relref "/docs/features/terraform-cli" >}}) work too. Terraform only talks to registries over HTTPS on a hostname with a dot, so put the app behind TLS in production.
+Tokens from [`terraform login`]({{< relref "/docs/features/terraform-cli" >}}) work too.
+
+**Modules that call other registry modules** (a VM module composed of a network interface, data disk and so on, each its own module) work in runs too: every job gets a read-only registry token for its run, valid only while a runner works on it, which the runner hands Terraform as a `credentials` block for this registry's host (on top of a CLI config file the runner already has, `TF_CLI_CONFIG_FILE`). Terraform only talks to registries over HTTPS on a hostname with a dot, so put the app behind TLS in production.

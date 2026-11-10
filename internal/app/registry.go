@@ -2,9 +2,15 @@ package app
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/opsolete/opsolete/internal/registry"
 	"github.com/opsolete/opsolete/internal/storage"
@@ -24,7 +30,30 @@ var (
 
 // ValidToken reports whether token is a token of scope (storage.ValidToken).
 func (a *App) ValidToken(ctx context.Context, token, scope string) (bool, error) {
+	if rest, ok := strings.CutPrefix(token, runTokenPrefix); ok { // a run's (RegistryToken)
+		id, _, _ := strings.Cut(rest, ".")
+		run, err := uuid.Parse(id)
+		if err != nil || scope != "registry" || !hmac.Equal([]byte(token), []byte(a.RegistryToken(run))) {
+			return false, nil
+		}
+		r, err := a.Store.RunStatus(ctx, run)
+		if errors.Is(err, storage.ErrNotFound) {
+			return false, nil
+		}
+		return err == nil && (r.Status == storage.Planning || r.Status == storage.Applying), err
+	}
 	return a.Store.ValidToken(ctx, token, scope)
+}
+
+const runTokenPrefix = "opsrun."
+
+// RegistryToken is run runID's read-only registry token (runnerapi.Job.Registry): its Terraform fetches modules
+// from this registry with it, e.g. the ones a template's module calls. Valid only while a runner works on the run,
+// like the state password (StateToken).
+func (a *App) RegistryToken(runID uuid.UUID) string {
+	m := hmac.New(sha256.New, a.Registry.Key)
+	m.Write([]byte("opsolete registry\x00" + runID.String()))
+	return runTokenPrefix + runID.String() + "." + base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
 
 // Modules lists every module version, ordered by module.

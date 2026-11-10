@@ -3,8 +3,10 @@ package httpserver
 import (
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -139,5 +141,42 @@ func TestImportFlow(t *testing.T) {
 	}
 	if rec := post(h, link, values); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "managed already, in workspace "+ws) {
 		t.Fatalf("importing a managed resource again: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestRunRegistryToken: a job carries a registry token for its run: modules from the registry (the ones a
+// template's module calls) download with it while a runner works on the run, and not after, nor tampered.
+func TestRunRegistryToken(t *testing.T) {
+	store := testStore(t)
+	h := newServer(t, t.TempDir(), true, store)
+	r := &fakeRunner{h: h}
+	ns := "rt" + strings.ToLower(newID()[:8])
+	if rec := upload(h, map[string]string{"namespace": ns, "name": "disk", "system": "azurerm", "version": "1.0.0"},
+		registrytest.TarGz(t, map[string]string{"main.tf": `variable "size_gb" {}`})); rec.Code != http.StatusSeeOther {
+		t.Fatalf("upload: %d", rec.Code)
+	}
+	ws := "rt-" + strings.ToLower(newID()[:8])
+	if rec := post(h, "/workspaces/new", url.Values{fieldWorkspace: {ws}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("create: %d", rec.Code)
+	}
+	run := runID(t, post(h, "/workspaces/"+ws+"/scans", url.Values{}))
+	j := r.claim(t, run, "plan")
+	if j.Registry == nil || j.Registry.Host != "ops.example.com" || !slices.Contains(j.Secrets, j.Registry.Token) {
+		t.Fatalf("job's registry access: %+v (masked: %v)", j.Registry, j.Secrets)
+	}
+	versions := func(token string) int {
+		req := httptest.NewRequest("GET", "/v1/modules/"+ns+"/disk/azurerm/versions", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		return do(h, req).Code
+	}
+	if c := versions(j.Registry.Token); c != http.StatusOK {
+		t.Fatalf("while the run works: %d", c)
+	}
+	if c := versions(j.Registry.Token[:len(j.Registry.Token)-2] + "xx"); c != http.StatusUnauthorized {
+		t.Fatalf("tampered: %d", c)
+	}
+	r.finish(t, `{"status":"succeeded"}`)
+	if c := versions(j.Registry.Token); c != http.StatusUnauthorized {
+		t.Fatalf("after the run: %d", c)
 	}
 }

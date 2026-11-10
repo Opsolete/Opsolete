@@ -62,8 +62,17 @@ type Job struct {
 	Secrets []string `json:"secrets,omitempty"`
 	// Currency of the cost estimate (ISO 4217, e.g. EUR); "" is Infracost's default, USD.
 	Currency string `json:"currency,omitempty"`
+	// Registry lets the run's Terraform fetch modules from the server's registry (a template's module calling
+	// other registry modules): read-only, valid while a runner works on the run. nil: the registry is off.
+	Registry *RegistryAccess `json:"registry,omitempty"`
 	// Scan (action scan, plan phase only): what to look for. No state: nothing is written, nothing locked.
 	Scan *Scan `json:"scan,omitempty"`
+}
+
+// RegistryAccess is a registry host and the token for it, as a Terraform CLI credentials block.
+type RegistryAccess struct {
+	Host  string `json:"host"` // e.g. opsolete.example.com, or with a port
+	Token string `json:"token"`
 }
 
 // Scan finds existing resources the catalog's templates can take over (runner.scan).

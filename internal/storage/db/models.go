@@ -328,6 +328,7 @@ type VcsModule struct {
 	Dir          string
 	SyncedAt     *time.Time
 	SyncError    string
+	TagPrefix    string
 }
 
 type Workspace struct {

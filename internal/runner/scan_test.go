@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -203,5 +204,26 @@ func TestUses(t *testing.T) {
 	uses(c, inv)
 	if want := []string{"/subscriptions/s/resourceGroups/rg/providers/x/disk"}; !reflect.DeepEqual(c[0].Uses, want) {
 		t.Fatalf("uses %v, want %v (the subnet isn't the network; the VM and NIC are imported)", c[0].Uses, want)
+	}
+}
+
+// TestCLIConfig: the registry's credentials block, on top of the runner's own CLI config when it has one.
+func TestCLIConfig(t *testing.T) {
+	home := t.TempDir()
+	reg := runnerapi.RegistryAccess{Host: "ops.example.com:8443", Token: "opsrun.x.y"}
+	p, err := writeCLIConfig(home, reg, "")
+	b, _ := os.ReadFile(p)
+	if err != nil || string(b) != "credentials \"ops.example.com:8443\" {\n  token = \"opsrun.x.y\"\n}\n" {
+		t.Fatalf("%v %q", err, b)
+	}
+	own := filepath.Join(t.TempDir(), "runner.tfrc")
+	os.WriteFile(own, []byte(`plugin_cache_dir = "/cache"`), 0o600)
+	p, err = writeCLIConfig(home, reg, own)
+	b, _ = os.ReadFile(p)
+	if err != nil || !strings.HasPrefix(string(b), "plugin_cache_dir = \"/cache\"\ncredentials ") {
+		t.Fatalf("with the runner's own config: %v %q", err, b)
+	}
+	if _, err := writeCLIConfig(home, reg, "/nope"); err == nil {
+		t.Fatal("a missing runner config must fail the job, not be dropped")
 	}
 }

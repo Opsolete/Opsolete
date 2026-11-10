@@ -17,7 +17,10 @@ import (
 // when linked or asked, and every few minutes by the poller (PollVCSModules). Linking, syncing and
 // unlinking are admins only; a sync error is recorded on the module and shown with it.
 
-var dirRe = regexp.MustCompile(`^[A-Za-z0-9._/-]{0,255}$`)
+var (
+	dirRe       = regexp.MustCompile(`^[A-Za-z0-9._/-]{0,255}$`)
+	tagPrefixRe = regexp.MustCompile(`^[A-Za-z0-9._/-]{0,100}$`)
+)
 
 // RepoDir cleans a folder of a repository ("" = its root); ok is false if it isn't one.
 func RepoDir(raw string) (dir string, ok bool) {
@@ -50,6 +53,7 @@ func RepoModuleAddress(repo string) (namespace, name, system string) {
 type NewVCSModule struct {
 	ConnectionID            uuid.UUID
 	Repo, Dir               string
+	TagPrefix               string // only tags starting with it publish ("" every semver tag), e.g. data-disk- for data-disk-v1.0.0
 	Namespace, Name, System string // "" follows the repository (RepoModuleAddress)
 }
 
@@ -82,13 +86,17 @@ func (a *App) PublishVCSModule(ctx context.Context, actor Actor, in NewVCSModule
 	if !ok {
 		return storage.VCSModule{}, nil, invalid("dir", fmt.Sprintf("%q is not a folder of the repository", in.Dir))
 	}
-	m := storage.VCSModule{Namespace: ns, Name: name, System: sys, ConnectionID: sc.ID, Repo: in.Repo, Dir: dir}
+	prefix := strings.TrimSpace(in.TagPrefix)
+	if !tagPrefixRe.MatchString(prefix) {
+		return storage.VCSModule{}, nil, invalid("tag_prefix", "a tag prefix has at most 100 letters, digits and . _ / -, e.g. data-disk-")
+	}
+	m := storage.VCSModule{Namespace: ns, Name: name, System: sys, ConnectionID: sc.ID, Repo: in.Repo, Dir: dir, TagPrefix: prefix}
 	if err := a.Store.LinkVCSModule(ctx, m); errors.Is(err, storage.ErrExists) {
 		return m, nil, &ValidationError{Message: fmt.Sprintf("%s/%s/%s is already published from a repository", ns, name, sys)}
 	} else if err != nil {
 		return m, nil, err
 	}
-	a.Log.Info("module linked to vcs", "module", ns+"/"+name+"/"+sys, "repo", m.Repo, "dir", m.Dir, "user", actor.Email)
+	a.Log.Info("module linked to vcs", "module", ns+"/"+name+"/"+sys, "repo", m.Repo, "dir", m.Dir, "tag_prefix", m.TagPrefix, "user", actor.Email)
 	return m, a.syncVCSModule(ctx, m), nil
 }
 

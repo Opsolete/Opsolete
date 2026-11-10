@@ -180,6 +180,11 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	env["TF_HTTP_USERNAME"], env["TF_HTTP_PASSWORD"] = job.WorkspaceID, job.StateToken
 	env["HOME"] = home
 	delete(env, "XDG_DATA_HOME") // Terraform's other implied provider mirror; defaults to under HOME
+	if job.Registry != nil {     // modules from the server's registry, e.g. ones a template's module calls
+		if env["TF_CLI_CONFIG_FILE"], err = writeCLIConfig(home, *job.Registry, env["TF_CLI_CONFIG_FILE"]); err != nil {
+			return fail("prepare workdir", err)
+		}
+	}
 	// CleanEnv drops the variables terraform-exec manages (TF_LOG, TF_INPUT, TF_CLI_ARGS, ...).
 	tf.env = []string{"TF_IN_AUTOMATION=1"} // what terraform-exec adds
 	for k, v := range tfexec.CleanEnv(env) {

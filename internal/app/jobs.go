@@ -117,10 +117,15 @@ func (a *App) assembleJob(ctx context.Context, j storage.Job) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	var reg *runnerapi.RegistryAccess
+	if a.RegistryEnabled && a.Registry.PublicURL != nil {
+		reg = &runnerapi.RegistryAccess{Host: a.Registry.PublicURL.Host, Token: a.RegistryToken(j.RunID)}
+		secrets = append(secrets, reg.Token) // masked in the log, like the state password
+	}
 	body, err := json.Marshal(runnerapi.Job{
 		RunID: j.RunID.String(), WorkspaceID: j.WorkspaceID.String(), Phase: j.Phase, Action: j.Action, Replace: j.Replace, Target: j.Target, Imports: j.Imports, LeaseID: j.LeaseID,
 		LeaseSeconds: int(LeaseTTL.Seconds()), StateToken: a.StateToken(j.WorkspaceID, j.RunID), Vars: vars, Env: env, Secrets: secrets,
-		ModuleSource: src, Modules: mods, Currency: currency, Scan: scan,
+		ModuleSource: src, Modules: mods, Currency: currency, Scan: scan, Registry: reg,
 	})
 	if err == nil && len(body) > runnerapi.MaxJobSize {
 		err = fmt.Errorf("the job's variables and inputs are %d bytes, over the runner limit of %d", len(body), runnerapi.MaxJobSize)

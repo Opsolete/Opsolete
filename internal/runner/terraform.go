@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"sync/atomic"
@@ -157,4 +158,20 @@ func inventory(ctx context.Context, tf *tfProc) []runnerapi.Resource {
 		return nil
 	}
 	return runnerapi.Inventory(&st)
+}
+
+// writeCLIConfig writes a Terraform CLI config into the job's home with a credentials block for the registry, on
+// top of the runner's own config file (existing: its path, "" none), and returns its path for TF_CLI_CONFIG_FILE.
+func writeCLIConfig(home string, reg runnerapi.RegistryAccess, existing string) (string, error) {
+	var conf []byte
+	if existing != "" {
+		var err error
+		if conf, err = os.ReadFile(existing); err != nil {
+			return "", fmt.Errorf("the runner's CLI config (TF_CLI_CONFIG_FILE): %w", err)
+		}
+		conf = append(conf, '\n')
+	}
+	conf = fmt.Appendf(conf, "credentials %q {\n  token = %q\n}\n", reg.Host, reg.Token)
+	path := filepath.Join(home, "opsolete.tfrc")
+	return path, os.WriteFile(path, conf, 0o600)
 }

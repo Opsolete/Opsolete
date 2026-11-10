@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/opsolete/opsolete/internal/registry"
@@ -69,9 +70,10 @@ func (a *App) publishTags(ctx context.Context, m storage.VCSModule) ([]string, e
 	var errs, noFolder []error
 	for _, t := range tags {
 		tag := t.Name
-		ver, err := registry.CanonicalVersion(tag)
-		if err != nil || have[ver] {
-			continue // not a release tag, or already published (v1.0.0 and 1.0.0 are one version)
+		rest, ok := strings.CutPrefix(tag, m.TagPrefix)
+		ver, err := registry.CanonicalVersion(rest)
+		if !ok || err != nil || have[ver] {
+			continue // not this module's release tag, or already published (v1.0.0 and 1.0.0 are one version)
 		}
 		have[ver] = true
 		if known := seen[t.Commit]; known != nil && t.Commit != "" {

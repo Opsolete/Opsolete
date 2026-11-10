@@ -334,9 +334,9 @@ Test paths are relative to `internal/`, except `cmd/opsolete/…` (from the repo
 - Coverage: `http/registry_test.go:TestRegistry`; `http/catalog_test.go:TestModuleUploadsSetting`; `http/builder_test.go:TestEditorIsAdminOnly`; `app/catalog_test.go:TestUploadModuleRefused`; `registry/registry_test.go:TestInspectAndInputs`, `TestInspectRejects`.
 
 **J2. Publish from VCS tags; sync; unlink** — `full` (manual sync), `partial` (scheduled)
-- Wizard (connection → repo → name/system from `terraform-<system>-<name>`, optional folder); semver tags become versions; folder missing in older tags skipped; Sync now; unlink keeps versions.
-- Failures: folder escaping the repo 422; missing folder → sync error shown; unlink twice 404.
-- Coverage: `http/vcs_test.go:TestVCSPublishAndUpdate`; `app/vcssync_test.go:TestNoFolderCache` (the leader job `PollVCSModules`, cache only).
+- Wizard (connection → repo → name/system from `terraform-<system>-<name>`, optional folder, optional tag prefix); semver tags become versions (with a prefix: only tags `<prefix><semver>`, e.g. release-please's `data-disk-v1.0.0`); folder missing in older tags skipped; Sync now; unlink keeps versions.
+- Failures: folder escaping the repo 422; invalid tag prefix 422; missing folder → sync error shown; unlink twice 404.
+- Coverage: `http/vcs_test.go:TestVCSPublishAndUpdate`; `app/vcssync_test.go:TestNoFolderCache` (the leader job `PollVCSModules`, cache only), `TestTagPrefix` (modules released separately from one repo).
 
 **J3. Module docs pages** — `full`
 - Coverage: `http/registry_test.go:TestRegistry` (HTML, README escaped, `docs.md`, unknown version 404).
@@ -347,7 +347,8 @@ Test paths are relative to `internal/`, except `cmd/opsolete/…` (from the repo
 
 **J5. `terraform init` against the registry** — `full`
 - Registry token (`opsolete token`) or `terraform login` token; versions → download (`X-Terraform-Get` signed 10-min URL) → archive; tampered signature 403.
-- Coverage: `http/registry_test.go:TestRegistry`; `http/access_test.go:TestAccessMatrix` (registry rows: user and registry tokens allowed, the runner token refused); `registry/registry_test.go:TestAddressAndSigning`.
+- Runs: a job's registry token (its run's, read-only, only while a runner works on it) lets a template's module call other registry modules; the runner writes it as a CLI `credentials` block.
+- Coverage: `http/registry_test.go:TestRegistry`; `http/access_test.go:TestAccessMatrix` (registry rows: user and registry tokens allowed, the runner token refused); `registry/registry_test.go:TestAddressAndSigning`; `http/scan_test.go:TestRunRegistryToken` (valid while working, not after, not tampered); `runner/scan_test.go:TestCLIConfig`. Missing: a real `terraform init` of a nested registry module (Terraform requires HTTPS for registries).
 
 **J6. Registry module in a template (no-code)** — `full`
 - Builder "Start from a registry module" prefills fields; module page shows *No-code ready* + Provision workspace; runner gets a signed source.
