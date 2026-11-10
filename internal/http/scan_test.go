@@ -60,7 +60,7 @@ func TestScanFlow(t *testing.T) {
 			t.Fatalf("scan page lacks %q:\n%s", want, page)
 		}
 	}
-	if strings.Contains(page, "n=1") {
+	if strings.Contains(page, "&amp;n=1\"") {
 		t.Fatal("a resource that doesn't fit offers Adopt")
 	}
 
@@ -92,7 +92,7 @@ func TestScanFlow(t *testing.T) {
 	r.finish(t, `{"status":"succeeded","resources":[{"address":"module.testvm_x.azurerm_windows_virtual_machine.self[0]","type":"azurerm_windows_virtual_machine",
 		"name":"self","provider":"p","module":"module.testvm_x","id":"`+strings.ToUpper(vmID)+`"}]}`)
 	if page := get(h, "/workspaces/"+ws+"/runs/"+scan).Body.String(); !strings.Contains(page, `Already managed in workspace <a href="/workspaces/`+ws+`">`) ||
-		strings.Contains(page, "n=0") {
+		strings.Contains(page, "&amp;n=0\"") {
 		t.Fatalf("an adopted resource isn't shown as managed:\n%s", page)
 	}
 	// and adopting it again, by hand, is refused
