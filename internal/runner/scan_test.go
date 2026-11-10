@@ -62,7 +62,7 @@ func TestCandidates(t *testing.T) {
 		"azurerm_linux_virtual_machine":   {{"testvm", asLinux}},
 		"azurerm_network_interface":       {{"testvm807", nic}},
 	}
-	cands, vals := candidates(tpl, vmEntries, byType, func() string { return "Placeholder-1a!" })
+	cands, vals := candidates(tpl, vmEntries, byType, nil, func() string { return "Placeholder-1a!" })
 	if len(cands) != 2 {
 		t.Fatalf("candidates: %+v", cands)
 	}

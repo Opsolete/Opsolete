@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"regexp"
 	"slices"
@@ -52,7 +53,7 @@ func (a *App) importables(ctx context.Context) (out []importable, skipped []stri
 		if err != nil {
 			return nil, nil, err
 		}
-		entries, notes, err := registry.Adoptable(archive, t.Inputs)
+		entries, notes, err := registry.Adoptable(archive, t.Inputs, a.moduleFetch(ctx))
 		if err != nil {
 			skipped = append(skipped, t.Name+": reading its module: "+err.Error())
 			continue
@@ -64,6 +65,26 @@ func (a *App) importables(ctx context.Context) (out []importable, skipped []stri
 		out = append(out, importable{t, entries, notes})
 	}
 	return out, skipped, nil
+}
+
+// moduleFetch returns the archive of a module of this registry a module calls: the newest version its
+// constraint allows, as terraform init picks.
+func (a *App) moduleFetch(ctx context.Context) registry.Fetch {
+	return func(source, constraint string) ([]byte, error) {
+		ns, name, sys, ok := a.Registry.ParseSource(source)
+		if !ok {
+			return nil, fmt.Errorf("source %s isn't in this registry", source)
+		}
+		vs, err := a.Store.ModuleVersions(ctx, ns, name, sys)
+		if err != nil {
+			return nil, err
+		}
+		v, ok := registry.Newest(vs, constraint)
+		if !ok {
+			return nil, fmt.Errorf("no version of %s matches %q", source, constraint)
+		}
+		return a.Store.ModuleArchive(ctx, ns, name, sys, v)
+	}
 }
 
 // ImportPage is a workspace's Import page: what can be imported, and the latest scans.
@@ -246,7 +267,7 @@ func (a *App) ScanResult(ctx context.Context, runID uuid.UUID) (ScanResult, erro
 		switch {
 		case by != "":
 			f := byID[strings.ToLower(c.ID)]
-			res.Managed = append(res.Managed, ScanRow{Name: c.Name, Type: cmp.Or(f.Type, kind(c.Imports[len(c.Imports)-1].To)),
+			res.Managed = append(res.Managed, ScanRow{Name: c.Name, Type: cmp.Or(f.Type, cand.Kind),
 				ResourceGroup: f.ResourceGroup, ID: c.ID, ManagedBy: by})
 		case c.Fit == "replaces":
 			res.Rework = append(res.Rework, cand)
@@ -328,12 +349,15 @@ func ref(kind, name string) Ref {
 
 // kind names the resource type of an address in words: azurerm_network_interface.self → network interface.
 func kind(addr string) string {
-	typ, _, _ := strings.Cut(addr, ".")
+	parts := strings.Split(indexRe.ReplaceAllString(addr, ""), ".") // module.data_disk["2"].azurerm_managed_disk.this
+	typ := parts[max(len(parts)-2, 0)]
 	if _, rest, ok := strings.Cut(typ, "_"); ok {
 		typ = rest
 	}
 	return strings.ReplaceAll(typ, "_", " ")
 }
+
+var indexRe = regexp.MustCompile(`\[[^\]]*\]`)
 
 // Found is one result of a scan run: run's candidate N.
 type Found struct {

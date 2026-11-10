@@ -27,7 +27,11 @@ everything Opsolete creates, **without redeploying it**, and without Terraform, 
 module's code at scan time (`registry/adopt.go`, HashiCorp's HCL parser): every managed resource is searched by its
 type; `count = var.x == "v" ? 1 : 0` → exists for x = v; `attr = var.x` / `coalesce(var.x, …)`, nested blocks too →
 input x; `dynamic "b" { for_each = var.x ? … : [] }` → yes/no input x; `[other.res.id]` → other is related
-(`id_from`); sensitive input in `ignore_changes` → random placeholder. No naming convention: the code says which
+(`id_from`); sensitive input in `ignore_changes` → random placeholder. Module calls are followed (local, and this
+registry's newest version within the constraint), values through arguments, locals and outputs; extras
+(`count = var.x != null ? 1 : 0` or `for_each` over `jsondecode(var.x)` on a module call) belong to the resource they
+refer to (`of`, one entry per possible owner: a data disk refers to the Windows and the Linux VM), repeated ones
+fill a JSON list input (`repeat`), a `dynamic` block over a JSON list input fills it per block (`lists`). No naming convention: the code says which
 input sets which attribute. A small table covers azurerm's Linux VM list also returning Windows VMs (`require`).
 
 Rejected:
@@ -46,7 +50,11 @@ Rejected:
   as JSON; types the provider can't list are dropped and queried again), filtered by `resource_group_name`; per
   template, candidates from the primary entries, related ones through `id_from`, inputs filled, IDs given the case
   of the input values (Azure: `TEST1` in a VM's ID, `test1` in its NIC's: a different case of `resource_group_name`
-  forces replacement), validated like the form; then the fit plan (`fitPlan`). Sensitive values never leave it.
+  forces replacement), validated like the form; then the extras of what was found (`runner/relations.go`, one
+throwaway plan, azurerm only: NIC data source → NSG, the NSG's rules from its list; the VM imported as the legacy
+`azurerm_virtual_machine` with `-generate-config-out` → its data disks (that plan fails, `gen.tf` is still written);
+the schedule `shutdown-computevm-<vm>` when the inventory has it, generated config → its settings; attachment ID
+`<vm>/dataDisks/<disk>`, association ID `<nic>|<nsg>`), and the candidates again with them; then the fit plan (`fitPlan`). Sensitive values never leave it.
 - **Storage**: `runs.scan_resource_group`, `runs.candidates` (migration 005); `runs.imports` (004), written as import
   blocks in both phases; resource IDs in the state index (`state_version_resources.resource_id`), indexed at the plan
   phase of locking runs too.
@@ -68,7 +76,10 @@ Rejected:
 
 ## Open
 
-- Linux VMs, data disks, extensions: not tried on real resources.
+- The portal-made `vm-test` (data disk, auto-shutdown, NSG with an RDP rule) with `virtualmachine` 4.0.0 (composed of
+  building-block modules): scan found all 7 resources, every input filled, fit plan `7 to import, 0 to add, 0 to
+  change, 0 to destroy`.
+- Linux VMs, extensions: not tried on real resources.
 - More than 50 found per scan: fit-checked in batches; paging past `limit = 1000` per list type.
 - Resources no template can manage: listing them would show which templates to write next.
 - Import by resource ID (without a scan), bulk import of everything that fits.

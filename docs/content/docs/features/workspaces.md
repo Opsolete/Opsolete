@@ -66,7 +66,13 @@ it, but their module must be in the [registry]({{< relref "/docs/features/module
 resource of the module is searched by its type (`terraform query`, azurerm ≥ 5.7 for VMs); `count = var.x == "v" ?
 1 : 0` makes it exist for that value of `x`; `attr = var.x` and `coalesce(var.x, …)`, also in nested blocks, fill
 input `x`; a `dynamic` block with `for_each = var.x ? … : []` fills the yes / no input `x`; `[other.res.id]` makes
-`other` a related resource; a sensitive input in `lifecycle { ignore_changes }` gets a random placeholder. Other
+`other` a related resource; a sensitive input in `lifecycle { ignore_changes }` gets a random placeholder. Module
+calls are followed: local ones (`./x`) and ones from the registry (its newest version the constraint allows), with
+values through arguments, `locals` and outputs. A module call with `count = var.x != null ? 1 : 0` is optional, and
+one with `for_each = { for d in jsondecode(var.x) : tostring(d.k) => d }` repeats per element of the JSON list
+input `x`: their resources belong to the resource they refer to and are found from it (Azure: a VM's data disks with
+their attachments, its auto-shutdown schedule, its NIC's security group), filling `x` with one element per disk, and
+a `dynamic` block over a JSON list input (the security group's rules) with one element per block. Other
 expressions are left for the form; the scan's log names what was skipped. See
 [Writing modules that can import]({{< relref "/docs/features/templates#writing-modules-that-can-import" >}}).
 

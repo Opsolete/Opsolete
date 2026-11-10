@@ -33,7 +33,7 @@ func TestAdoptable(t *testing.T) {
 		in("size", "string"), in("admin_username", "string"), osType, pw, in("ssh_public_key", "string"), in("nic_name", "string"),
 		in("ip_configuration_name", "string"), in("public_ip_address_id", "string"), in("secure_boot_enabled", "bool"), in("vtpm_enabled", "bool"),
 		in("os_disk_type", "string"), in("image_publisher", "string"), in("image_offer", "string"), in("image_sku", "string"), in("boot_diagnostics_enabled", "bool")}
-	entries, notes, err := Adoptable(registrytest.TarGz(t, files), inputs)
+	entries, notes, err := Adoptable(registrytest.TarGz(t, files), inputs, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ resource "a_x" "each" {
 resource "a_x" "many" {
   count = 2
 }
-resource "a_x" "ok" { name = var.n }`}), []templates.Input{{Name: "n", Type: "string"}})
+resource "a_x" "ok" { name = var.n }`}), []templates.Input{{Name: "n", Type: "string"}}, nil)
 	if err != nil || len(notes) != 2 || !strings.Contains(notes[0], "a_x.each: for_each") || !strings.Contains(notes[1], "a_x.many: its count") {
 		t.Fatalf("%q %v", notes, err)
 	}
