@@ -40,7 +40,6 @@ See also [`catalog/storage-account.json`](https://github.com/Opsolete/Opsolete/b
 | `description` | string | optional | One sentence, shown on the catalog card. |
 | `module` | object | required | `source`: a `git::` URL or a [registry]({{< relref "/docs/features/module-registry" >}}) module address; `ref`: the approved Git ref or registry version. Both required. |
 | `inputs` | array | optional | The form's fields, in order. |
-| `adopt` | array | optional | Resources of the module that can take over existing ones; see [adopting existing resources](#adopting-existing-resources). |
 
 **Input:**
 
@@ -156,6 +155,21 @@ A template's module is deployed by people who never write Terraform, so it has t
 - **Defaults wherever possible**, and a `select` input for variables that have no default, so users pick from approved values instead of typing them.
 - **Pin an approved version** in the template's `ref`. Moving the template to a newer one offers existing workspaces a module update, which admins can [roll out]({{< relref "/docs/features/workspaces#update-to-a-new-module-version" >}}) to all of them, in batches and per project. Give inputs that are new and required a `default`, or each workspace needs its update form.
 
+### Writing modules that can import
+
+To [import existing resources]({{< relref "/docs/features/workspaces#import-existing-resources" >}}) the module
+must be able to describe them as they are, or the import plans changes, or replaces them:
+
+- Make every setting people choose differently, and that forces replacement when changed (names of sub-resources,
+  image, disk type, security settings), an optional input whose default is the module's usual behavior. New
+  deployments then stay the same.
+- Pass inputs straight through (`attr = var.x` or `coalesce(var.x, …)`), so the import can read which input sets
+  which attribute.
+- Put values the cloud never returns (`admin_password`, `custom_data`) in `lifecycle { ignore_changes }`.
+- Use `count = var.x == "value" ? 1 : 0` for resources that depend on a choice (Windows or Linux VM).
+
+The [example VM module](https://github.com/Opsolete/terraform-modules-examples/tree/main/virtualmachine) does this.
+
 ## Conditional inputs
 
 Add `"show_if": {"input": "<name>", "equals": ["<value>", ...]}` to an input to show it only while an earlier `select` input has one of the values, or an earlier `bool` input is `true` or `false`. The values are typed like the input they refer to: strings for a `select` (its option values), JSON booleans for a `bool` (e.g. `{"input": "backups", "equals": [true]}`). At least one value is required. In the [template builder]({{< relref "/docs/features/template-builder" >}}) this is a field's **Show when … is …** row. Conditions can be chained (a hidden dropdown hides the inputs that depend on it). A hidden input isn't validated or sent to Terraform, so the module's own default applies. Switching a workspace away from a condition drops that input's stored value, sensitive ones included.
@@ -173,89 +187,6 @@ Things to know:
 - **Module variables need a default.** Every variable behind a conditional input needs one (e.g. `default = null`). Without it, Terraform fails with a missing variable whenever that input is hidden.
 - **Registry modules drop unknown inputs.** For a template on a [registry]({{< relref "/docs/features/module-registry" >}}) module, the form follows the module's variables, and JSON inputs the module doesn't declare are dropped. If the dropdown or yes / no input a `show_if` refers to (such as `os`) isn't a module variable, every input that depends on it stays hidden. Add it to the module as a variable.
 - **A dropdown without a value counts as its first option**, the one the browser shows selected.
-
-## Adopting existing resources
-
-Resources built by hand (in the Azure portal, by scripts) can be brought under a template without being created again.
-List the module's resources that can do that in `adopt`:
-
-```json
-"adopt": [
-  { "to": "azurerm_windows_virtual_machine.self[0]", "label": "VM resource ID",
-    "pattern": "(?i)/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Compute/virtualMachines/[^/]+",
-    "help": "The VM's Resource ID, from Properties in the Azure portal.",
-    "show_if": { "input": "os_type", "equals": ["windows"] } },
-  { "to": "azurerm_network_interface.self", "label": "Network interface resource ID",
-    "pattern": "(?i)/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/networkInterfaces/[^/]+" }
-]
-```
-
-| Field | Type | | |
-|---|---|---|---|
-| `to` | string | required | The resource's address in the module, e.g. `azurerm_linux_virtual_machine.this` or `azurerm_windows_virtual_machine.self[0]` (with `count`). Unique. |
-| `label` | string | optional | The field's title. Empty: the address. |
-| `help` | string | optional | Shown under the field, and the error when the ID doesn't match `pattern`. |
-| `pattern` | string | optional | A Go (RE2) regular expression the whole ID must match, e.g. to tell a VM ID from a NIC ID. Start it with `(?i)`: Azure isn't consistent about casing. Without one, an `azurerm_` resource's ID must have Azure's shape (`/subscriptions/…/resourceGroups/…[/providers/…]`). |
-| `show_if` | object | optional | As for inputs, e.g. for a resource that exists only for one `os_type`. |
-
-When the template is added (to a new workspace or an existing one), the form has an **Adopt existing resources**
-section with one field per shown entry. With all fields empty the template creates its resources as usual. With any
-ID filled in, every shown field needs one, and the user types the resource's **current** settings into the inputs
-above. The run then imports the resources into `module.<name>`:
-
-- The plan lists them as **import** ("1 to import, 0 to add, 0 to change, 0 to destroy" when the template matches
-  the resource exactly). Changes in the same plan show where the inputs or the module differ from what exists.
-- It always waits for confirmation, even with auto-apply.
-- If it would replace or delete anything, the run ends as errored and nothing is applied: the template doesn't fit
-  the resource. Added to an existing workspace, the template is removed again.
-- After the apply the resources are ordinary template resources. Configuring the template later asks for no IDs.
-
-### Generate from module
-
-For a template on a [registry]({{< relref "module-registry" >}}) module, **Generate from module** in the
-[builder]({{< relref "template-builder" >}}) writes the `adopt` entries below from the module's code, ready to
-review: each managed resource becomes an entry found with its own type; `count = var.x == "v" ? 1 : 0` gives its
-`show_if` (and makes `x` a dropdown); `attr = var.x` and `coalesce(var.x, …)` fill `inputs`, also in nested blocks;
-`dynamic "b"` with `for_each = var.x ? … : []` maps the yes / no input `x`; `[other.res.id]` makes `other` a
-related entry (`id_from`); a sensitive input in `lifecycle { ignore_changes }` becomes a `placeholder`. Other
-expressions, `for_each` resources and nested modules are skipped and named in the result. For the
-[example VM module](https://github.com/Opsolete/terraform-modules-examples/tree/main/virtualmachine) it writes the
-three entries a scan needs (Windows VM, Linux VM, network interface).
-
-### Scanning: found and filled in
-
-A template whose `adopt` entries also say how to find resources lets users skip the pasting: **Deploy → Import
-existing resources** scans the cloud with the workspace's credentials, lists what the template can adopt, and
-**Adopt** opens the form with every value and ID filled in. Add to the entries:
-
-| Field | |
-|---|---|
-| `list` | The provider's list resource type that finds the entry's resources with `terraform query`, e.g. `azurerm_windows_virtual_machine` ([which types support it](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs)). An entry with `list` and without `id_from` finds the candidates; its one-value `show_if` sets that input (e.g. `os_type` = `windows`). |
-| `require` | Only resources whose attribute is set count. azurerm's Linux VM list also returns Windows VMs: use `provision_vm_agent` for Windows, `disable_password_authentication` for Linux. |
-| `id_from` | For a related resource: the candidate's attribute holding its ID, e.g. `network_interface_ids[0]`. With `list` too, its attributes fill inputs. |
-| `inputs` | `{"<input>": "<attribute path>"}`, e.g. `{"size": "size", "os_disk_type": "os_disk[0].storage_account_type"}`. A yes / no input takes whether the attribute is set (e.g. `"boot_diagnostics_enabled": "boot_diagnostics"`). |
-| `placeholder` | Sensitive inputs filled with a random value when adopting, for values the cloud never returns (an admin password the module ignores with `ignore_changes`). The form doesn't require them then. |
-
-A scan is a run (action `scan`) on the workspace: the runner lists the resources (azurerm ≥ 5.7 for VMs; types the
-provider can't list, such as managed disks, are left out of the search and their entries only imported by ID), fills
-in the form values, and plans adopting all of them, each as its own module, into a throwaway state. Nothing is
-written or locked. The run page shows each one as **fits** (imports only), **differs** (and which attributes would
-change), **doesn't fit** (would replace it: no Adopt), **incomplete** (the form lacks values; Adopt and fill them
-in) or **managed** (a workspace's state has its ID already). Adopting an ID a workspace manages is refused, also when
-pasted by hand: a resource can be in one state only. The adoption's plan checks it again against the state as it
-reads it, and ends the run as errored if the resource is there already. States record resource IDs since this feature; an older one
-gets them at its workspace's next run (any run but a speculative plan or drift check, even one without changes). Resource IDs take the case of the input values
-(Azure reports `TEST1` in a VM's ID and `test1` in its NIC's). Found values never include sensitive attributes'
-values: map only plain settings. At most 50 resources per scan are checked; the rest are listed as unchecked.
-
-**Modules that can adopt.** Portal-made resources rarely match a module's fixed choices, and a different value of a
-setting that forces replacement makes the plan replace the resource. Make such settings optional inputs whose default
-is the module's current behavior (names of sub-resources such as the NIC, image, OS disk type, secure boot and vTPM),
-write blocks Azure always reports explicitly (`additional_capabilities {}`), and put values Azure never returns in
-`ignore_changes` (`admin_password`, `custom_data`). Use the casing of the resource ID for names such as
-`resource_group_name`: a different casing forces replacement.
-
-The [template builder]({{< relref "template-builder" >}}) edits `adopt` under **Adopt existing resources**.
 
 ## Where templates live
 
