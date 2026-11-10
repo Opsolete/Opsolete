@@ -127,7 +127,7 @@ variable "boot_diagnostics_enabled" {
 
 variable "data_disks_json" {
   type        = string
-  description = "Data disks: a JSON list, one object per disk, {\"lun\": 0, \"size_gb\": 64} plus optionally \"name\" (default <name>-data-<lun>), \"type\" (Standard_LRS, StandardSSD_LRS, Premium_LRS, …; default Standard_LRS) and \"caching\" (None, ReadOnly, ReadWrite; default ReadWrite). Default: none."
+  description = "Data disks: a JSON list, one object per disk, {\"lun\": 0, \"size_gb\": 64} plus optionally \"name\" (default <name>-data-<lun>), \"type\" (Standard_LRS, StandardSSD_LRS, Premium_LRS, …; default Standard_LRS) and \"caching\" (None, ReadOnly, ReadWrite; default ReadWrite), and \"existing\": true for a disk that exists already, attached to this VM at this LUN: imported instead of created. Default: none."
   default     = "[]"
 
   validation {
@@ -181,4 +181,16 @@ variable "nsg_rules_json" {
     condition     = can([for r in jsondecode(var.nsg_rules_json) : [r.name, r.priority]])
     error_message = "A JSON list of rules, each with a name and a priority."
   }
+}
+
+variable "auto_shutdown_existing" {
+  type        = bool
+  description = "Auto-shutdown exists already: the VM has an auto-shutdown schedule (set in the portal, say); import it instead of creating it."
+  default     = false
+}
+
+variable "nsg_existing" {
+  type        = bool
+  description = "Network security group exists already: the group named nsg_name is on the VM's network interface; import both instead of creating them."
+  default     = false
 }

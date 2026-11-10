@@ -31,3 +31,9 @@ variable "caching" {
   type    = string
   default = "ReadWrite"
 }
+
+variable "existing" {
+  type        = bool
+  description = "The disk exists already (made in the portal, say), attached to this VM at this LUN: import the disk and its attachment instead of creating them."
+  default     = false
+}

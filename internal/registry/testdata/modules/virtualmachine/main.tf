@@ -61,7 +61,7 @@ module "linux" {
 
 module "data_disk" {
   source              = "opsolete.localhost:8080/terraform-modules-examples/data-disk/azurerm"
-  version             = "~> 1.0"
+  version             = "~> 1.1" # existing
   for_each            = local.data_disks
   name                = coalesce(try(each.value.name, null), "${var.name}-data-${each.key}")
   resource_group_name = var.resource_group_name
@@ -71,11 +71,12 @@ module "data_disk" {
   size_gb             = each.value.size_gb
   type                = try(each.value.type, "Standard_LRS")
   caching             = try(each.value.caching, "ReadWrite")
+  existing            = try(each.value.existing, false)
 }
 
 module "shutdown_schedule" {
   source               = "opsolete.localhost:8080/terraform-modules-examples/shutdown-schedule/azurerm"
-  version              = "~> 1.0"
+  version              = "~> 1.1" # existing
   count                = var.auto_shutdown_time != null ? 1 : 0
   virtual_machine_id   = local.vm_id
   location             = var.location
@@ -83,15 +84,17 @@ module "shutdown_schedule" {
   timezone             = var.auto_shutdown_timezone
   notification_email   = var.auto_shutdown_notification_email
   notification_minutes = var.auto_shutdown_notification_minutes
+  existing             = var.auto_shutdown_existing
 }
 
 module "nsg" {
   source               = "opsolete.localhost:8080/terraform-modules-examples/network-security-group/azurerm"
-  version              = "~> 1.0"
+  version              = "~> 1.1" # existing
   count                = var.nsg_name != null ? 1 : 0
   name                 = var.nsg_name
   resource_group_name  = var.resource_group_name
   location             = var.location
   network_interface_id = module.nic.id
   rules                = jsondecode(var.nsg_rules_json)
+  existing             = var.nsg_existing
 }

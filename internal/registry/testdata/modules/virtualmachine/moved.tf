@@ -1,6 +1,6 @@
 # Resources of the module before its building blocks (3.2.0 and older), so existing deployments move instead of
 # being replaced. Data disks (3.2.0) are keyed by LUN: move each with
-#   terraform state mv 'azurerm_managed_disk.data["0"]' 'module.data_disk["0"].azurerm_managed_disk.this'
+#   terraform state mv 'azurerm_managed_disk.data["0"]' 'module.data_disk["0"].azurerm_managed_disk.main'
 # (and the same for azurerm_virtual_machine_data_disk_attachment.data).
 
 moved {

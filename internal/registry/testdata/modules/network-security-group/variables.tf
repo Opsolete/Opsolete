@@ -29,3 +29,9 @@ variable "rules" {
   }))
   default = []
 }
+
+variable "existing" {
+  type        = bool
+  description = "The network security group exists already, on this network interface: import it and its association instead of creating them."
+  default     = false
+}

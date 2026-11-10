@@ -167,8 +167,22 @@ must be able to describe them as they are, or the import plans changes, or repla
   which attribute.
 - Put values the cloud never returns (`admin_password`, `custom_data`) in `lifecycle { ignore_changes }`.
 - Use `count = var.x == "value" ? 1 : 0` for resources that depend on a choice (Windows or Linux VM).
+- For parts the scan can't find (Terraform can't list them: data disks, an auto-shutdown schedule, a security
+  group's link to a NIC), let the module import them itself: an input `existing` and an `import` block in the
+  module (Terraform ≥ 1.16) whose ID it builds from its own inputs. People fill in those parts on the import form,
+  with `existing` on; once in state, Terraform skips the block, so it stays in the module:
 
-The [example VM module](https://github.com/Opsolete/terraform-modules-examples/tree/main/virtualmachine) does this.
+  ```hcl
+  import {
+    for_each = var.existing ? toset(["main"]) : toset([])
+    to       = azurerm_virtual_machine_data_disk_attachment.main
+    id       = "${var.virtual_machine_id}/dataDisks/${var.name}" # azurerm's ID for the attachment
+  }
+  ```
+
+The [example VM module](https://github.com/Opsolete/terraform-modules-examples/tree/main/virtualmachine) does this:
+its data disks (`"existing": true` per disk in `data_disks_json`), schedule (`auto_shutdown_existing`) and
+security group (`nsg_existing`).
 
 ## Conditional inputs
 

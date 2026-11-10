@@ -127,28 +127,10 @@ func (r *Runner) scan(ctx context.Context, tf *tfProc, dir string, job runnerapi
 	var cands []runnerapi.Candidate
 	var vals []map[string]any
 	srcs := map[string]string{} // template id → its module's source
-	match := func(rel relations) {
-		cands, vals = nil, nil
-		for i, st := range job.Scan.Templates {
-			c, v := candidates(tpls[i], st.Entries, byType, rel, func() string { return "Ops-" + rand.Text() + "-1a" })
-			cands, vals = append(cands, c...), append(vals, v...)
-			srcs[tpls[i].ID] = sources[st.Module]
-		}
-	}
-	match(nil)
-	// then again with the extras of what was found (data disks, schedules, security groups)
-	owners := map[string][]string{}
 	for i, st := range job.Scan.Templates {
-		for _, c := range cands {
-			for _, e := range st.Entries {
-				if j := slices.IndexFunc(c.Imports, func(im runnerapi.Import) bool { return im.To == e.Of }); c.Template == tpls[i].ID && e.Of != "" && j >= 0 {
-					owners[c.Imports[j].ID] = append(owners[c.Imports[j].ID], e.List)
-				}
-			}
-		}
-	}
-	if len(owners) > 0 {
-		match(r.relations(ctx, tf, dir, owners, byType, inventory, w))
+		c, v := candidates(tpls[i], st.Entries, byType, func() string { return "Ops-" + rand.Text() + "-1a" })
+		cands, vals = append(cands, c...), append(vals, v...)
+		srcs[tpls[i].ID] = sources[st.Module]
 	}
 	uses(cands, inventory)
 	fmt.Fprintf(w, "\n==> %d resources, %d a template can import\n", len(inventory), len(cands))
@@ -357,8 +339,7 @@ var unsupportedList = regexp.MustCompile(`does not support list resource "([a-z0
 // candidates maps what the query found to template t's entries: one candidate per resource of a primary entry
 // (that has Require set), its inputs and related resources (IDFrom) filled in, checked like the form checks them.
 // vals are the candidates' Terraform values (placeholders included), by index, for the fit check.
-func candidates(t templates.Template, entries []runnerapi.ScanEntry, byType map[string][]found, rel relations,
-	placeholder func() string) ([]runnerapi.Candidate, []map[string]any) {
+func candidates(t templates.Template, entries []runnerapi.ScanEntry, byType map[string][]found, placeholder func() string) ([]runnerapi.Candidate, []map[string]any) {
 	var out []runnerapi.Candidate
 	var vals []map[string]any
 	seen := map[string]bool{}
@@ -406,7 +387,6 @@ func candidates(t templates.Template, entries []runnerapi.ScanEntry, byType map[
 					}
 				}
 			}
-			extras := fillExtras(entries, ids, rel, raw, types, &used)
 			c := runnerapi.Candidate{Template: t.ID, Name: f.name, Inputs: map[string]string{}, Uses: used}
 			for j, a := range entries {
 				if ids[j] == "" {
@@ -419,9 +399,6 @@ func candidates(t templates.Template, entries []runnerapi.ScanEntry, byType map[
 					}
 				}
 				c.Imports = append(c.Imports, runnerapi.Import{To: a.To, ID: sameCase(ids[j], raw)})
-			}
-			for _, im := range extras {
-				c.Imports = append(c.Imports, runnerapi.Import{To: im.To, ID: sameCase(im.ID, raw)})
 			}
 			c.ID = sameCase(id, raw)
 			v, errs := t.Validate(raw)
@@ -447,85 +424,6 @@ func candidates(t templates.Template, entries []runnerapi.ScanEntry, byType map[
 	return out, vals
 }
 
-// fillExtras adds the extras (ScanEntry.Of) of the resources found (ids, by entry) to the form values: inputs not
-// set yet, a repeat's elements (Repeat) and blocks (Lists) as JSON list inputs. It returns their imports.
-func fillExtras(entries []runnerapi.ScanEntry, ids []string, rel relations, raw, types map[string]string, used *[]string) []runnerapi.Import {
-	var imports []runnerapi.Import
-	elems := map[string]map[string]map[string]any{} // repeat input → key → element
-	for _, a := range entries {
-		k := slices.IndexFunc(entries, func(e runnerapi.ScanEntry) bool { return e.To == a.Of })
-		if a.Of == "" || k < 0 || ids[k] == "" {
-			continue
-		}
-		for _, x := range rel[strings.ToLower(ids[k])][a.List] {
-			id, _ := x.obj["id"].(string)
-			to := a.To
-			if a.Repeat != nil {
-				if !keyRe.MatchString(x.key) { // goes into an address
-					continue
-				}
-				to = strings.ReplaceAll(to, "{key}", x.key)
-				if elems[a.Repeat.Input] == nil {
-					elems[a.Repeat.Input] = map[string]map[string]any{}
-				}
-				el := elems[a.Repeat.Input][x.key]
-				if el == nil {
-					el = map[string]any{a.Repeat.Key: x.key}
-					elems[a.Repeat.Input][x.key] = el
-				}
-				for f, p := range a.Repeat.Fields {
-					if v := path(x.obj, p); v != nil {
-						el[f] = v
-					}
-				}
-			}
-			for in, bl := range a.Lists {
-				blocks, _ := path(x.obj, bl.Block).([]any)
-				list := []map[string]any{}
-				for _, b := range blocks {
-					el := map[string]any{}
-					for f, attr := range bl.Fields {
-						el[f] = path(b, attr)
-					}
-					list = append(list, el)
-				}
-				if j, err := json.Marshal(list); err == nil {
-					raw[in] = string(j)
-				}
-			}
-			for _, in := range slices.Sorted(maps.Keys(a.Inputs)) {
-				if _, ok := raw[in]; ok {
-					continue // the resource it belongs to says it first
-				}
-				v := path(x.obj, a.Inputs[in])
-				if types[in] == "bool" {
-					raw[in] = strconv.FormatBool(isSet(v))
-				} else if s, ok := rawValue(v); ok {
-					raw[in] = s
-				}
-			}
-			refs(x.obj, used)
-			if id != "" {
-				imports = append(imports, runnerapi.Import{To: to, ID: id})
-			}
-		}
-	}
-	for in, byKey := range elems {
-		var list []map[string]any
-		for _, k := range slices.SortedFunc(maps.Keys(byKey), func(a, b string) int {
-			x, _ := strconv.Atoi(a)
-			y, _ := strconv.Atoi(b)
-			return cmp.Or(cmp.Compare(x, y), strings.Compare(a, b))
-		}) {
-			list = append(list, byKey[k])
-		}
-		if j, err := json.Marshal(list); err == nil {
-			raw[in] = string(j)
-		}
-	}
-	return imports
-}
-
 // path reads the attribute at p (an attribute path such as os_disk[0].storage_account_type) from v, a
 // resource's JSON attributes; nil when absent.
 func path(v any, p string) any {
@@ -549,7 +447,6 @@ func path(v any, p string) any {
 var (
 	pathSteps = regexp.MustCompile(`^[^.\[]+|\.[^.\[]+|\[\d+\]`)
 	listRe    = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
-	keyRe     = regexp.MustCompile(`^[\w.-]{1,64}$`)   // a repeat key, safe in an address
 	rgRe      = regexp.MustCompile(`^[-\w.()]{1,90}$`) // Azure's resource group names; also what's safe in HCL
 )
 

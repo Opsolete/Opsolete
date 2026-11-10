@@ -102,29 +102,10 @@ type ScanEntry struct {
 	Inputs  map[string]string `json:"inputs,omitempty"`  // input name → the attribute path that fills it
 	// Placeholder: sensitive inputs it ignores (lifecycle ignore_changes), filled with a random value on import.
 	Placeholder []string `json:"placeholder,omitempty"`
-	// Of: an extra (optional or repeated) belonging to the resource at this address, found from it, not listed.
-	Of string `json:"of,omitempty"`
-	// Repeat: one instance per element of a JSON list input; To holds {key}.
-	Repeat *Repeat `json:"repeat,omitempty"`
-	// Lists: JSON list input name → the repeated block its elements fill.
-	Lists map[string]BlockList `json:"lists,omitempty"`
 }
 
-// Repeat is a module instance per element of the JSON list input Input, keyed by the element's field Key.
-type Repeat struct {
-	Input  string            `json:"input"`
-	Key    string            `json:"key"`
-	Fields map[string]string `json:"fields"` // element field → the attribute path that fills it
-}
-
-// BlockList is a repeated nested block (a dynamic block): one JSON list element per block.
-type BlockList struct {
-	Block  string            `json:"block"`  // its path, e.g. security_rule
-	Fields map[string]string `json:"fields"` // element field → the block's attribute
-}
-
-// Primary reports whether resources found for the entry are candidates (not related to another's, nor an extra).
-func (e ScanEntry) Primary() bool { return e.IDFrom == "" && e.Of == "" }
+// Primary reports whether resources found for the entry are candidates (not related to another's).
+func (e ScanEntry) Primary() bool { return e.IDFrom == "" }
 
 // Module is a template added to the workspace: the runner adds it as module.<Name> next to the
 // root configuration, and exposes each of its outputs as the root output <Name>__<output>.

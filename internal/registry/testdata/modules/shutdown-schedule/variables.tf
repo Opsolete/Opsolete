@@ -25,3 +25,9 @@ variable "notification_minutes" {
   type    = number
   default = 30
 }
+
+variable "existing" {
+  type        = bool
+  description = "The VM's auto-shutdown schedule exists already (set in the portal, say): import it instead of creating it."
+  default     = false
+}

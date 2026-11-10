@@ -1,5 +1,5 @@
 # A network interface with one private IP from the subnet, optionally with a public IP.
-resource "azurerm_network_interface" "this" {
+resource "azurerm_network_interface" "main" {
   name                = var.name
   resource_group_name = var.resource_group_name
   location            = var.location

@@ -20,18 +20,15 @@ import (
 // through call arguments, locals and outputs. Every managed resource is an entry, found with its own type as list
 // resource; the code says the rest:
 //   - count = var.x == "v" ? 1 : 0 (or var.x ? 1 : 0), on the resource or its module call: it exists for x = v
-//   - count = var.x != null ? 1 : 0: optional, on when x is set (an extra, see below)
-//   - for_each = { for d in jsondecode(var.x) : tostring(d.k) => d } on a module call: one instance per element
-//     of the JSON list input x, keyed by its field k (an extra; each.value.f fills field f)
 //   - attribute = var.x, coalesce(var.x, …) or try(var.x, …), nested blocks too: input x = the attribute's path
 //   - dynamic "b" { for_each = var.x ? … : [] }: the yes / no input x = whether b is set
-//   - dynamic "b" { for_each = <jsondecode(var.x)> }, content f = b.value.f: input x = the list of b's blocks
 //   - attribute = [other.id] or other.id (also through outputs): other is related, found from this attribute
 //   - a sensitive input in an attribute in lifecycle ignore_changes: a placeholder
 //
-// Extras (optional or keyed resources) belong to the resource they refer to (ScanEntry.Of): the runner finds them
-// from it. shortcut: other expressions, for_each on resources and other sources are skipped (listed in the notes);
-// the form asks them when importing. Read more forms when modules need it.
+// Optional and repeated parts (count = var.x != null ? 1 : 0, or for_each, on a module call) are skipped: Terraform
+// can't list most of them (data disks, schedules), so the form asks them, and their module imports existing ones
+// (an import block in the module, e.g. on an input existing = true). shortcut: other expressions, for_each on
+// resources and other sources are skipped too (listed in the notes); the form asks them when importing.
 
 // requireByType is for list resources that also return resources of another kind: the attribute only theirs has.
 var requireByType = map[string]string{
@@ -63,8 +60,6 @@ type inst struct {
 	args   map[string]hclsyntax.Expression // the call's arguments, in parent's scope
 	parent *inst
 	showIf *templates.ShowIf // from the call's count
-	extra  bool              // optional (count on a set input) or keyed (for_each): belongs to what it refers to
-	repeat *runnerapi.Repeat // for_each over a JSON list input
 }
 
 // Adoptable reads what a scan can find for a module (a registry archive) used with a template's inputs, and notes
@@ -78,9 +73,6 @@ func Adoptable(archive []byte, inputs []templates.Input, fetch Fetch) ([]runnera
 	}
 	r.walk(&inst{mod: root}, 0)
 	r.classify()
-	if !slices.ContainsFunc(r.entries, runnerapi.ScanEntry.Primary) && len(r.entries) > 0 {
-		r.notes = append(r.notes, "every resource belongs to another one: none to find first")
-	}
 	return r.entries, r.notes, nil
 }
 
@@ -89,8 +81,6 @@ type reader struct {
 	fetch   Fetch
 	dirs    []string // extracted archives, removed by cleanup
 	entries []runnerapi.ScanEntry
-	extra   []bool        // by entry: optional or keyed
-	group   []string      // by entry: its module instance's prefix
 	refs    [][]reference // by entry: the resources its attributes refer to
 	notes   []string
 }
@@ -192,24 +182,25 @@ func (r *reader) walk(in *inst, depth int) {
 			r.notes = append(r.notes, name+": "+err.Error()+", skipped")
 			continue
 		}
-		c := &inst{mod: mod, parent: in, args: map[string]hclsyntax.Expression{}, showIf: in.showIf, extra: in.extra, repeat: in.repeat}
+		c := &inst{mod: mod, parent: in, args: map[string]hclsyntax.Expression{}, showIf: in.showIf}
 		for k, a := range call.Body.Attributes {
 			c.args[k] = a.Expr
 		}
 		switch {
+		case c.args["for_each"] != nil:
+			r.notes = append(r.notes, name+": repeated (for_each), filled in on the form")
+			continue
 		case c.args["count"] != nil:
-			if !r.count(in, c.args["count"], &c.showIf, &c.extra) {
-				r.notes = append(r.notes, name+": its count isn't var.x == \"value\" ? 1 : 0 or var.x != null ? 1 : 0, skipped")
+			ok, optional := r.count(in, c.args["count"], &c.showIf)
+			if optional {
+				r.notes = append(r.notes, name+": optional, filled in on the form")
+				continue
+			}
+			if !ok {
+				r.notes = append(r.notes, name+": its count isn't var.x == \"value\" ? 1 : 0, skipped")
 				continue
 			}
 			c.prefix = name + "[0]."
-		case c.args["for_each"] != nil:
-			rep := r.repeatOf(in, c.args["for_each"])
-			if rep == nil {
-				r.notes = append(r.notes, name+": its for_each isn't { for d in jsondecode(var.x) : tostring(d.key) => d }, skipped")
-				continue
-			}
-			c.prefix, c.extra, c.repeat = name+`["{key}"].`, true, rep
 		default:
 			c.prefix = name + "."
 		}
@@ -217,72 +208,45 @@ func (r *reader) walk(in *inst, depth int) {
 	}
 }
 
-// count reads count = var.x == "v" ? 1 : 0 (either side of ==) or var.x ? 1 : 0 as show_if, and
-// var.x != null ? 1 : 0 as optional. false: neither.
-func (r *reader) count(in *inst, e hclsyntax.Expression, showIf **templates.ShowIf, extra *bool) bool {
-	c, ok := e.(*hclsyntax.ConditionalExpr)
-	if !ok || !isNumber(c.TrueResult, 1) || !isNumber(c.FalseResult, 0) {
-		return false
+// count reads count = var.x == "v" ? 1 : 0 (either side of ==) or var.x ? 1 : 0 as show_if (ok), and
+// var.x != null ? 1 : 0 as optional.
+func (r *reader) count(in *inst, e hclsyntax.Expression, showIf **templates.ShowIf) (ok, optional bool) {
+	c, isCond := e.(*hclsyntax.ConditionalExpr)
+	if !isCond || !isNumber(c.TrueResult, 1) || !isNumber(c.FalseResult, 0) {
+		return false, false
 	}
 	if v := r.resolve(in, c.Condition); v.input != "" {
 		if in := r.input(v.input); in != nil && in.Type == "bool" {
 			*showIf = &templates.ShowIf{Input: in.Name, Equals: []string{"true"}}
-			return true
+			return true, false
 		}
 	}
-	op, ok := c.Condition.(*hclsyntax.BinaryOpExpr)
-	if !ok {
-		return false
+	op, isOp := c.Condition.(*hclsyntax.BinaryOpExpr)
+	if !isOp {
+		return false, false
 	}
 	v, lit := r.resolve(in, op.LHS), op.RHS
 	if v.input == "" {
 		v, lit = r.resolve(in, op.RHS), op.LHS
 	}
 	if v.input == "" || r.input(v.input) == nil {
-		return false
+		return false, false
 	}
 	switch {
 	case op.Op == hclsyntax.OpNotEqual && isNull(lit):
-		*extra = true
-		return true
+		return false, true
 	case op.Op == hclsyntax.OpEqual && literal(lit) != "":
 		*showIf = &templates.ShowIf{Input: v.input, Equals: []string{literal(lit)}}
-		return true
+		return true, false
 	}
-	return false
+	return false, false
 }
 
-// repeatOf reads for_each = { for d in jsondecode(var.x) : tostring(d.key) => d } (through locals) as a repeat
-// over the JSON list input x, keyed by field key.
-func (r *reader) repeatOf(in *inst, e hclsyntax.Expression) *runnerapi.Repeat {
-	if t, diags := hcl.AbsTraversalForExpr(e); !diags.HasErrors() && t.RootName() == "local" && len(t) == 2 {
-		if a, ok := t[1].(hcl.TraverseAttr); ok && in.mod.locals[a.Name] != nil {
-			return r.repeatOf(in, in.mod.locals[a.Name])
-		}
-	}
-	f, ok := e.(*hclsyntax.ForExpr)
-	if !ok || f.KeyExpr == nil || f.CondExpr != nil {
-		return nil
-	}
-	list := r.resolve(in, f.CollExpr).list
-	key := f.KeyExpr
-	if fc, ok := key.(*hclsyntax.FunctionCallExpr); ok && fc.Name == "tostring" && len(fc.Args) == 1 {
-		key = fc.Args[0]
-	}
-	t, diags := hcl.AbsTraversalForExpr(key)
-	if list == "" || diags.HasErrors() || len(t) != 2 || t.RootName() != f.ValVar {
-		return nil
-	}
-	field, _ := t[1].(hcl.TraverseAttr)
-	return &runnerapi.Repeat{Input: list, Key: field.Name, Fields: map[string]string{}}
-}
-
-// val is what an expression comes from: a root input, a field of the repeated element, a JSON list input, or
-// the IDs of resources (as a one-element list: tuple).
+// val is what an expression comes from: a root input, or the IDs of resources (as a one-element list: tuple).
 type val struct {
-	input, field, list string
-	refs               []string
-	tuple              bool
+	input string
+	refs  []string
+	tuple bool
 }
 
 // resolve follows an expression in in's scope to what it comes from.
@@ -298,8 +262,6 @@ func (r *reader) resolve(in *inst, e hclsyntax.Expression) val {
 			return v
 		case (x.Name == "one" || x.Name == "tostring") && len(x.Args) == 1:
 			return r.resolve(in, x.Args[0])
-		case x.Name == "jsondecode" && len(x.Args) == 1:
-			return val{list: r.resolve(in, x.Args[0]).input}
 		}
 	case *hclsyntax.TupleConsExpr:
 		if len(x.Exprs) == 1 {
@@ -343,10 +305,6 @@ func (r *reader) resolve(in *inst, e hclsyntax.Expression) val {
 		if l := in.mod.locals[attr(1)]; l != nil {
 			return r.resolve(in, l)
 		}
-	case "each":
-		if attr(1) == "value" && attr(2) != "" {
-			return val{field: attr(2)}
-		}
 	case "module":
 		out := attr(2)
 		if _, ok := t[2].(hcl.TraverseIndex); ok { // module.m[0].out
@@ -384,7 +342,7 @@ func (r *reader) output(in *inst, name, out string) val {
 		c.prefix = in.prefix + "module." + name + "[0]."
 	}
 	v := r.resolve(c, mod.outputs[out])
-	v.input, v.field, v.list = "", "", "" // an output's value is only followed for resource IDs
+	v.input = "" // an output's value is only followed for resource IDs
 	return v
 }
 
@@ -404,16 +362,17 @@ func (r *reader) resource(in *inst, b *hclsyntax.Block) {
 		return
 	}
 	e := runnerapi.ScanEntry{To: addr, List: b.Labels[0], Require: requireByType[b.Labels[0]], ShowIf: in.showIf, Inputs: map[string]string{}}
-	extra := in.extra
 	if c := attrExpr(b.Body, "count"); c != nil {
-		if !r.count(in, c, &e.ShowIf, &extra) {
-			r.notes = append(r.notes, addr+": its count isn't var.x == \"value\" ? 1 : 0 or var.x != null ? 1 : 0, skipped")
+		ok, optional := r.count(in, c, &e.ShowIf)
+		if optional {
+			r.notes = append(r.notes, addr+": optional, filled in on the form")
+			return
+		}
+		if !ok {
+			r.notes = append(r.notes, addr+": its count isn't var.x == \"value\" ? 1 : 0, skipped")
 			return
 		}
 		e.To += "[0]"
-	}
-	if in.repeat != nil {
-		e.Repeat = &runnerapi.Repeat{Input: in.repeat.Input, Key: in.repeat.Key, Fields: map[string]string{}}
 	}
 	ignored := map[string]bool{}
 	for _, blk := range b.Body.Blocks {
@@ -429,7 +388,7 @@ func (r *reader) resource(in *inst, b *hclsyntax.Block) {
 		}
 	}
 	n := len(r.entries)
-	r.entries, r.extra, r.group = append(r.entries, e), append(r.extra, extra), append(r.group, in.prefix)
+	r.entries = append(r.entries, e)
 	r.body(in, b.Body, "", n, ignored)
 	if e := &r.entries[n]; len(e.Inputs) == 0 {
 		e.Inputs = nil
@@ -458,10 +417,6 @@ func (r *reader) body(in *inst, b *hclsyntax.Body, prefix string, n int, ignored
 			}
 		}
 		switch {
-		case v.field != "" && e.Repeat != nil:
-			if _, ok := e.Repeat.Fields[v.field]; !ok {
-				e.Repeat.Fields[v.field] = p
-			}
 		case v.input != "":
 			ti := r.input(v.input)
 			if ti == nil {
@@ -489,45 +444,15 @@ func (r *reader) body(in *inst, b *hclsyntax.Body, prefix string, n int, ignored
 	}
 }
 
-// dynamic maps a dynamic block: for_each = var.x ? … : [] (a yes / no input: whether the block is set), or a JSON
-// list input (one block per element, content f = <label>.value.f).
+// dynamic maps a dynamic block with for_each = var.x ? … : []: the yes / no input x says whether it's set.
 func (r *reader) dynamic(in *inst, blk *hclsyntax.Block, prefix string, n int) {
-	e, label := &r.entries[n], blk.Labels[0]
-	fe := attrExpr(blk.Body, "for_each")
-	if c, ok := fe.(*hclsyntax.ConditionalExpr); ok {
+	if c, ok := attrExpr(blk.Body, "for_each").(*hclsyntax.ConditionalExpr); ok {
 		if v := r.resolve(in, c.Condition); v.input != "" {
 			if ti := r.input(v.input); ti != nil && ti.Type == "bool" {
-				e.Inputs[v.input] = prefix + label
-			}
-		}
-		return
-	}
-	list := r.resolve(in, fe).list
-	var content *hclsyntax.Block
-	for _, c := range blk.Body.Blocks {
-		if c.Type == "content" {
-			content = c
-		}
-	}
-	if list == "" || content == nil || r.input(list) == nil {
-		return
-	}
-	bl := runnerapi.BlockList{Block: prefix + label, Fields: map[string]string{}}
-	for name, a := range content.Body.Attributes {
-		t, diags := hcl.AbsTraversalForExpr(a.Expr)
-		if diags.HasErrors() || len(t) != 3 || t.RootName() != label {
-			continue
-		}
-		if v, ok := t[1].(hcl.TraverseAttr); ok && v.Name == "value" {
-			if f, ok := t[2].(hcl.TraverseAttr); ok {
-				bl.Fields[f.Name] = name
+				r.entries[n].Inputs[v.input] = prefix + blk.Labels[0]
 			}
 		}
 	}
-	if e.Lists == nil {
-		e.Lists = map[string]runnerapi.BlockList{}
-	}
-	e.Lists[list] = bl
 }
 
 func (r *reader) refer(n int, to, path string) {
@@ -539,53 +464,18 @@ func (r *reader) refer(n int, to, path string) {
 	}
 }
 
-// classify relates the entries: a resource that isn't an extra and that another non-extra refers to is related
-// (IDFrom: the referring attribute); an extra belongs to each non-extra it refers to (an entry per one: Of), or
-// else to the ones another extra of its module instance refers to (a network security group with its association
-// to the NIC). A VM module's data disk refers to its Windows and its Linux VM: the runner takes the one it found.
+// classify relates the entries: a resource another one refers to is related (IDFrom: the referring attribute).
 func (r *reader) classify() {
-	for len(r.refs) < len(r.entries) {
-		r.refs = append(r.refs, nil)
-	}
-	index := func(addr string) int {
-		return slices.IndexFunc(r.entries, func(e runnerapi.ScanEntry) bool {
-			return e.To == addr || strings.TrimSuffix(e.To, "[0]") == addr
-		})
-	}
-	of := make([][]string, len(r.entries))
 	for n, refs := range r.refs {
 		for _, ref := range refs {
-			i := index(ref.to)
-			switch {
-			case i < 0:
-			case !r.extra[n] && !r.extra[i] && r.entries[i].IDFrom == "":
+			i := slices.IndexFunc(r.entries, func(e runnerapi.ScanEntry) bool {
+				return e.To == ref.to || strings.TrimSuffix(e.To, "[0]") == ref.to
+			})
+			if i >= 0 && i != n && r.entries[i].IDFrom == "" {
 				r.entries[i].IDFrom = ref.path
-			case r.extra[n] && !r.extra[i] && !slices.Contains(of[n], r.entries[i].To):
-				of[n] = append(of[n], r.entries[i].To)
 			}
 		}
 	}
-	for n := range r.entries {
-		for m := range r.entries {
-			if len(of[n]) == 0 && r.extra[n] && r.extra[m] && r.group[m] == r.group[n] {
-				of[n] = of[m]
-			}
-		}
-	}
-	var out []runnerapi.ScanEntry
-	for n, e := range r.entries {
-		switch {
-		case !r.extra[n]:
-			out = append(out, e)
-		case len(of[n]) == 0:
-			r.notes = append(r.notes, e.To+": belongs to no resource it could be found from, skipped")
-		}
-		for _, o := range of[n] {
-			e.Of = o
-			out = append(out, e)
-		}
-	}
-	r.entries = out
 }
 
 func literal(e hclsyntax.Expression) string {

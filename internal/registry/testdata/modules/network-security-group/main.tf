@@ -1,5 +1,5 @@
 # A network security group with its rules, on a network interface.
-resource "azurerm_network_security_group" "this" {
+resource "azurerm_network_security_group" "main" {
   name                = var.name
   resource_group_name = var.resource_group_name
   location            = var.location
@@ -21,7 +21,7 @@ resource "azurerm_network_security_group" "this" {
   }
 }
 
-resource "azurerm_network_interface_security_group_association" "this" {
+resource "azurerm_network_interface_security_group_association" "main" {
   network_interface_id      = var.network_interface_id
-  network_security_group_id = azurerm_network_security_group.this.id
+  network_security_group_id = azurerm_network_security_group.main.id
 }

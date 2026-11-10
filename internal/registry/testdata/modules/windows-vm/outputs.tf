@@ -1,3 +1,3 @@
 output "id" {
-  value = azurerm_windows_virtual_machine.this.id
+  value = azurerm_windows_virtual_machine.main.id
 }
