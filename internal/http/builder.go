@@ -21,6 +21,8 @@ type builderPage struct {
 	Page
 	T           templates.Template
 	Rows        []templates.Input // existing inputs plus blank rows to fill in
+	AdoptRows   []templates.Adopt // existing adopt entries plus a blank row to fill in
+	Resources   []string          // the registry module's resources (type.name), suggested as adopt addresses
 	Editing     bool
 	F           *formState // a refused save
 	Warning     string
@@ -28,6 +30,21 @@ type builderPage struct {
 	Selected    string           // ns/name/system/version picked from the registry
 	Registry    bool             // registry enabled: offer "start from a registry module"
 	PullRequest string           // the pull request the save opened (Git catalog in pr mode)
+}
+
+// AdoptShowOptions lists the fields an adopt row's "show when" can pick: every select and bool field, plus
+// its current choice c (nil: always), like ShowOptions.
+func (p builderPage) AdoptShowOptions(c *templates.ShowIf) []string {
+	var names []string
+	for _, in := range p.Rows {
+		if (in.Type == "select" || in.Type == "bool") && in.Name != "" {
+			names = append(names, in.Name)
+		}
+	}
+	if c != nil && !slices.Contains(names, c.Input) {
+		names = append(names, c.Input)
+	}
+	return names
 }
 
 // ShowOptions lists the fields row i's "show when" can pick: the select and bool rows above it, plus its
@@ -56,6 +73,8 @@ func (s *Server) renderBuilder(w http.ResponseWriter, r *http.Request, status in
 		p.Modules = mods
 	}
 	p.Rows = append(slices.Clone(p.T.Inputs), templates.Input{}) // a blank card to fill in (and for "+ Add field" to clone)
+	p.AdoptRows = append(slices.Clone(p.T.Adopt), templates.Adopt{})
+	p.Resources = s.App.ModuleResources(r.Context(), p.T.Module)
 	// and a blank option row per card; Clip so the template's own slice is never written
 	for i := range p.Rows {
 		p.Rows[i].Options = append(slices.Clip(p.Rows[i].Options), templates.Option{})
@@ -223,6 +242,22 @@ func templateFromForm(f url.Values) templates.Template {
 			}
 		}
 		t.Inputs = append(t.Inputs, in)
+	}
+	// adopt rows: parallel ad_* lists, rows without an address dropped
+	for i, to := range f["ad_to"] {
+		if to = strings.TrimSpace(to); to == "" {
+			continue
+		}
+		a := templates.Adopt{To: to, Label: at("ad_label", i), Help: at("ad_help", i), Pattern: at("ad_pattern", i)}
+		if src := at("ad_show_input", i); src != "" {
+			a.ShowIf = &templates.ShowIf{Input: src}
+			for _, v := range strings.Split(at("ad_show_equals", i), ",") {
+				if v = strings.TrimSpace(v); v != "" {
+					a.ShowIf.Equals = append(a.ShowIf.Equals, v)
+				}
+			}
+		}
+		t.Adopt = append(t.Adopt, a)
 	}
 	return t
 }

@@ -153,7 +153,8 @@ data "terraform_remote_state" "net" {
 	page = rec.Body.String()
 	if !strings.Contains(page, `value="ops.example.com/`+ns+`/storage/azurerm"`) || !strings.Contains(page, `value="Account name"`) ||
 		!strings.Contains(page, `name="in_help" value="3-24 lowercase letters"`) || // the description's "Title: help", split at import
-		!strings.Contains(page, "tags (map(string))") {
+		!strings.Contains(page, "tags (map(string))") ||
+		!strings.Contains(page, `<datalist id="module-resources"><option value="terraform_data.this"></datalist>`) { // adopt suggestions: managed resources only
 		t.Fatalf("builder prefill: %d %s", rec.Code, page)
 	}
 	form := url.Values{"name": {"Storage"}, "module_source": {"ops.example.com/" + ns + "/storage/azurerm"}, "module_ref": {"9.9.9"},

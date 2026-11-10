@@ -180,6 +180,7 @@ for (const d of document.querySelectorAll('dialog[data-open]')) {
   const list = document.getElementById('fields'), add = document.getElementById('add-field');
   if (!list || !add) return;
   const cards = () => [...list.querySelectorAll('.fcard')];
+  const adopts = document.getElementById('adopt-rows'), addAdopt = document.getElementById('add-adopt');
   const split = s => s.split(',').map(v => v.trim()).filter(Boolean);
   const optionValues = card => card.querySelector('.ftype').value === 'bool' ? ['true', 'false'] :
     [...card.querySelectorAll(".opt-row [aria-label='Option value']")].map(el => el.value.trim()).filter(Boolean);
@@ -227,6 +228,13 @@ for (const d of document.querySelectorAll('dialog[data-open]')) {
       const name = card.querySelector('[name=in_name]').value.trim();
       if (name && (type === 'select' || type === 'bool')) above.set(name, card);
     });
+    // an adopt row's "Show" offers every dropdown and Yes / no field, as they are now
+    const conds = [...above.keys()];
+    for (const sel of adopts.querySelectorAll('[name=ad_show_input]')) {
+      const cur = sel.value, names = !cur || conds.includes(cur) ? conds : [...conds, cur];
+      if (sel.options.length !== names.length + 1 || names.some((n, j) => sel.options[j + 1].value !== n))
+        sel.replaceChildren(new Option('always', ''), ...names.map(n => new Option('when ' + n + ' is', n, n === cur, n === cur)));
+    }
   };
   list.addEventListener('click', e => {
     const chip = e.target.closest('.chip'), act = e.target.closest('[data-act]');
@@ -272,10 +280,19 @@ for (const d of document.querySelectorAll('dialog[data-open]')) {
     for (const n of ['name', 'description'])
       (pick.elements[n] ?? pick.appendChild(Object.assign(document.createElement('input'), {type: 'hidden', name: n}))).value = builder.elements[n].value;
   });
+  addAdopt.onclick = () => {
+    const row = adopts.lastElementChild.cloneNode(true);
+    for (const el of row.querySelectorAll('input')) el.value = '';
+    for (const el of row.querySelectorAll('select')) el.selectedIndex = 0;
+    adopts.append(row);
+    refresh();
+    row.querySelector('input').focus();
+  };
   list.addEventListener('input', refresh);
   list.addEventListener('change', refresh);
-  for (const el of [add, ...document.querySelectorAll('.fcard-tools, [data-act^=opt]')]) el.hidden = false;
-  // "+ Add field" replaces the blank card the page ends with for use without JS
+  for (const el of [add, addAdopt, ...document.querySelectorAll('.fcard-tools, [data-act^=opt]')]) el.hidden = false;
+  // "+ Add field" / "+ Add resource" replace the blank card / row the page ends with for use without JS
   if (cards().length > 1 && !nameOf(list.lastElementChild)) list.lastElementChild.remove();
+  if (adopts.children.length > 1 && !adopts.lastElementChild.querySelector('[name=ad_to]').value.trim()) adopts.lastElementChild.remove();
   refresh();
 })();

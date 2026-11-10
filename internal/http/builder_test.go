@@ -52,6 +52,10 @@ func TestTemplateBuilder(t *testing.T) {
 		"in_show_input":   {"", "", "region", ""},
 		"in_show_equals":  {"", "", "northeurope", ""},
 		"key":             {"zone"},
+		"ad_to":           {"azurerm_virtual_network.this", ""}, // an adopt row and the blank one
+		"ad_label":        {"VNet resource ID", ""},
+		"ad_show_input":   {"region", ""},
+		"ad_show_equals":  {"northeurope", ""},
 	}
 	// a preview renders the deploy form from the unsaved template, and saves nothing
 	preview := url.Values{}
@@ -77,7 +81,8 @@ func TestTemplateBuilder(t *testing.T) {
 	saved, _ := os.ReadFile(filepath.Join(dir, id+".json"))
 	if s := string(saved); !strings.Contains(s, `"show_if": {`) || strings.Contains(s, "stale") || !strings.Contains(s, `"required": true`) ||
 		!strings.Contains(s, `"label": "North, Europe"`) || strings.Count(s, `"key": true`) != 1 ||
-		!strings.Contains(s, `"help": "A private range: 10.0.0.0/16"`) || !strings.Contains(s, `"default": 7`) || !strings.Contains(s, `"default": true`) {
+		!strings.Contains(s, `"help": "A private range: 10.0.0.0/16"`) || !strings.Contains(s, `"default": 7`) || !strings.Contains(s, `"default": true`) ||
+		!strings.Contains(s, `"to": "azurerm_virtual_network.this"`) {
 		t.Fatalf("saved template wrong:\n%s", s)
 	}
 	// the deploy form shows the help, described by it
@@ -89,7 +94,9 @@ func TestTemplateBuilder(t *testing.T) {
 	if body := get(h, loc+"/edit").Body.String(); !strings.Contains(body, `<option value="region" selected>when region is</option>`) ||
 		!strings.Contains(body, `name="in_help" value="A private range: 10.0.0.0/16"`) ||
 		!strings.Contains(body, `value="7" type="number"`) || !strings.Contains(body, `<option value="true" selected>yes (true)</option>`) ||
-		!strings.Contains(body, `name="in_opt_label_1" value="North, Europe"`) || !strings.Contains(body, `<option value="zone" selected>zone</option>`) {
+		!strings.Contains(body, `name="in_opt_label_1" value="North, Europe"`) || !strings.Contains(body, `<option value="zone" selected>zone</option>`) ||
+		!strings.Contains(body, `name="ad_to" value="azurerm_virtual_network.this"`) || !strings.Contains(body, `name="ad_show_equals" class="mono" value="northeurope"`) ||
+		strings.Count(body, `name="ad_to"`) != 2 { // the row and a blank one
 		t.Fatalf("builder lost the condition or options: %s", body)
 	}
 	// a condition on a dropdown below the field is refused with a readable error
@@ -142,13 +149,26 @@ func TestBuilderRoundTrip(t *testing.T) {
 		"in_opt_label_3":     {"Small", "l"},
 		"in_show_input":      {"", "", "", "", "backup"},
 		"in_show_equals":     {"", "", "", "", "false"},
+		// adopt rows, the blank one last, like the page submits
+		"ad_to":          {"azurerm_windows_virtual_machine.self[0]", " azurerm_network_interface.self ", ""},
+		"ad_label":       {"VM resource ID", "", ""},
+		"ad_help":        {"From the portal", "", ""},
+		"ad_pattern":     {`(?i)/subscriptions/.+/virtualMachines/[^/]+`, "", ""},
+		"ad_show_input":  {"backup", "", ""},
+		"ad_show_equals": {"true", "", ""},
 	})
+	want := []templates.Adopt{{To: "azurerm_windows_virtual_machine.self[0]", Label: "VM resource ID", Help: "From the portal",
+		Pattern: `(?i)/subscriptions/.+/virtualMachines/[^/]+`, ShowIf: &templates.ShowIf{Input: "backup", Equals: []string{"true"}}},
+		{To: "azurerm_network_interface.self"}}
+	if !reflect.DeepEqual(tpl.Adopt, want) {
+		t.Errorf("adopt rows: %+v", tpl.Adopt)
+	}
 	tpl.ID = "vm"
 	b, err := templates.Encode(tpl)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"default": 2`, `"default": true`, `"help": "Free text"`, `"per_environment": true`} {
+	for _, want := range []string{`"default": 2`, `"default": true`, `"help": "Free text"`, `"per_environment": true`, `"to": "azurerm_network_interface.self"`} {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("encoded lacks %s:\n%s", want, b)
 		}
