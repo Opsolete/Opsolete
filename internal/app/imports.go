@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/google/uuid"
 
@@ -152,22 +153,43 @@ type ScanResult struct {
 	Total         int  // resources it saw
 	Importable    []ScanCandidate
 	Rework        []ScanCandidate
-	NoTemplate    []ScanRow
+	NoTemplate    []TypeGroup // by type
 	Managed       []ScanRow
+}
+
+// NoTemplateCount is how many resources no template can import.
+func (r ScanResult) NoTemplateCount() int {
+	n := 0
+	for _, g := range r.NoTemplate {
+		n += len(g.Rows)
+	}
+	return n
 }
 
 type ScanCandidate struct {
 	runnerapi.Candidate
-	N            int      // its index in the scan, for Import
-	TemplateName string   // its template's name; its id if it left the catalog
-	Related      []string // the other resources it imports, e.g. "network interface testvm807"
-	Uses         []string // resources it refers to without importing them, e.g. "disks testvm_OsDisk_1"
+	N             int    // its index in the scan, for Import
+	TemplateName  string // its template's name; its id if it left the catalog
+	Kind          string // its type in words, e.g. Windows virtual machine
+	ResourceGroup string
+	Related       []Ref    // the other resources it imports, e.g. its network interface
+	Uses          []Ref    // resources it refers to without importing them, e.g. its OS disk
+	Changing      []string // differs / replaces: what the plan would do, e.g. "update size, zone"
 }
+
+// Ref is a resource named in a line: its type in words and its name (Short: cut for the line).
+type Ref struct{ Kind, Name, Short string }
 
 // ScanRow is a resource listed on its own: no template can import it, or a workspace manages it.
 type ScanRow struct {
 	Name, Type, ResourceGroup, ID string
 	ManagedBy                     string // the workspace; "" none
+}
+
+// TypeGroup is the resources of one cloud type (Type, Kind: in words).
+type TypeGroup struct {
+	Type, Kind string
+	Rows       []ScanRow
 }
 
 // ScanResult loads scan run runID's result (RunDetail checked the actor's access).
@@ -197,20 +219,29 @@ func (a *App) ScanResult(ctx context.Context, runID uuid.UUID) (ScanResult, erro
 		return res, err
 	}
 	for n, c := range sc.Candidates {
-		cand := ScanCandidate{Candidate: c, N: n, TemplateName: c.Template}
+		cand := ScanCandidate{Candidate: c, N: n, TemplateName: c.Template, ResourceGroup: cmp.Or(byID[strings.ToLower(c.ID)].ResourceGroup, rgOf(c.ID))}
 		if t, ok := a.Templates.Get(c.Template); ok {
 			cand.TemplateName = t.Name
 		}
 		var by string
 		for _, im := range c.Imports {
 			by = cmp.Or(by, managed[strings.ToLower(im.ID)])
-			if !strings.EqualFold(im.ID, c.ID) {
-				cand.Related = append(cand.Related, kind(im.To)+" "+lastSegment(im.ID))
+			if strings.EqualFold(im.ID, c.ID) {
+				cand.Kind = capital(kind(im.To))
+			} else {
+				cand.Related = append(cand.Related, ref(kind(im.To), lastSegment(im.ID)))
 			}
 		}
 		for _, u := range c.Uses {
 			f := byID[strings.ToLower(u)]
-			cand.Uses = append(cand.Uses, lastSegment(f.Type)+" "+cmp.Or(f.Name, lastSegment(u)))
+			cand.Uses = append(cand.Uses, ref(words(lastSegment(f.Type)), cmp.Or(f.Name, lastSegment(u))))
+		}
+		for _, ch := range c.Changes {
+			what := ch.Action + " " + kind(ch.Address)
+			if len(ch.Attributes) > 0 {
+				what = ch.Action + " " + strings.Join(ch.Attributes, ", ")
+			}
+			cand.Changing = append(cand.Changing, what)
 		}
 		switch {
 		case by != "":
@@ -223,6 +254,7 @@ func (a *App) ScanResult(ctx context.Context, runID uuid.UUID) (ScanResult, erro
 			res.Importable = append(res.Importable, cand)
 		}
 	}
+	groups := map[string]*TypeGroup{}
 	for _, f := range sc.Inventory {
 		if covered[strings.ToLower(f.ID)] {
 			continue
@@ -230,19 +262,69 @@ func (a *App) ScanResult(ctx context.Context, runID uuid.UUID) (ScanResult, erro
 		row := ScanRow{Name: f.Name, Type: f.Type, ResourceGroup: f.ResourceGroup, ID: f.ID, ManagedBy: managed[strings.ToLower(f.ID)]}
 		if row.ManagedBy != "" {
 			res.Managed = append(res.Managed, row)
-		} else {
-			res.NoTemplate = append(res.NoTemplate, row)
+			continue
 		}
+		g := groups[f.Type]
+		if g == nil {
+			g = &TypeGroup{Type: f.Type, Kind: capital(words(lastSegment(f.Type)))}
+			groups[f.Type] = g
+		}
+		g.Rows = append(g.Rows, row)
 	}
-	for _, rows := range [][]ScanRow{res.NoTemplate, res.Managed} {
-		slices.SortFunc(rows, func(a, b ScanRow) int {
-			return cmp.Or(strings.Compare(a.Type, b.Type), strings.Compare(a.ResourceGroup, b.ResourceGroup), strings.Compare(a.Name, b.Name))
-		})
+	for _, t := range slices.Sorted(maps.Keys(groups)) {
+		res.NoTemplate = append(res.NoTemplate, *groups[t])
 	}
+	slices.SortFunc(res.Managed, func(a, b ScanRow) int {
+		return cmp.Or(strings.Compare(a.ManagedBy, b.ManagedBy), strings.Compare(a.Type, b.Type), strings.Compare(a.Name, b.Name))
+	})
 	return res, nil
 }
 
 func lastSegment(s string) string { return s[strings.LastIndex(s, "/")+1:] }
+
+// rgOf is the resource group in an Azure resource ID; "" if none.
+func rgOf(id string) string {
+	parts := strings.Split(id, "/")
+	for i := 0; i+1 < len(parts); i++ {
+		if strings.EqualFold(parts[i], "resourceGroups") {
+			return parts[i+1]
+		}
+	}
+	return ""
+}
+
+// words spells a cloud type name: networkSecurityGroups → network security groups, publicIPAddresses → public IP addresses.
+func words(s string) string {
+	var b strings.Builder
+	r := []rune(s)
+	for i, c := range r {
+		upper := unicode.IsUpper(c)
+		if i > 0 && upper && (!unicode.IsUpper(r[i-1]) || i+1 < len(r) && unicode.IsLower(r[i+1])) {
+			b.WriteByte(' ')
+		}
+		if upper && (i+1 >= len(r) || unicode.IsLower(r[i+1])) {
+			c = unicode.ToLower(c) // a word, not an acronym
+		}
+		b.WriteRune(c)
+	}
+	return b.String()
+}
+
+func capital(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// ref names a resource for a line; long generated names (Azure's disk names) are cut.
+func ref(kind, name string) Ref {
+	short := name
+	if r := []rune(name); len(r) > 24 {
+		short = string(r[:20]) + "…"
+	}
+	return Ref{Kind: kind, Name: name, Short: short}
+}
 
 // kind names the resource type of an address in words: azurerm_network_interface.self → network interface.
 func kind(addr string) string {

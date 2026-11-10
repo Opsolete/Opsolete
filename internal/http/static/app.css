@@ -493,7 +493,14 @@ select.flex-9 { flex: 0 0 9rem; }
 .pre-wrap { white-space: pre-wrap; }
 .text-brand { color: var(--brand); }
 hr.rule { border: 0; border-top: 1px solid var(--border); margin: 2rem 0 0; max-width: 60rem; }
+/* a scan's results (run.html): rows like the run list, one line of details each */
 .scan { margin: 1.5rem 0; }
-.candidates { width: 100%; }
-.candidates td { vertical-align: top; }
-.candidates code { word-break: break-all; font-size: .8em; }
+.scan h3 { margin: 1.5rem 0 .25rem; }
+.scan .chips strong { margin-left: .3rem; }
+.scanrow { display: flex; gap: 1rem; align-items: center; padding: .75rem 1rem; border-bottom: 1px solid var(--border); }
+.scanrow:last-child { border-bottom: 0; }
+.scanrow > span:first-child { flex: 1; min-width: 0; }
+.scanrow small { display: block; margin-top: .15rem; overflow: hidden; text-overflow: ellipsis; }
+.scanrow .end { display: flex; gap: .75rem; align-items: center; flex: none; }
+.text-warn { color: var(--warn); }
+.text-danger { color: var(--danger); }

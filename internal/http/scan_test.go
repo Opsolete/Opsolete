@@ -86,10 +86,11 @@ func TestImportFlow(t *testing.T) {
 	}
 	page = get(h, "/workspaces/"+ws+"/runs/"+scan).Body.String()
 	link := "/workspaces/" + ws + "/templates/new?template=" + tpl + "&scan=" + scan + "&n=0"
-	for _, want := range []string{"Scan for existing resources", "5 resources in resource group <code>test1</code>", "Can be imported <span class=\"muted\">(1)",
-		"+ network interface testvm807", "uses disks testvm_OsDisk_1", "<td>VM</td>", `<span class="status applied">fits</span>`,
-		`href="` + strings.ReplaceAll(link, "&", "&amp;") + `">Import</a>`, "Template needs work <span class=\"muted\">(1)",
-		`<code>azurerm_windows_virtual_machine.self[0]</code>: zone`, "No template <span class=\"muted\">(1)", "<td><code>Microsoft.Network/virtualNetworks</code></td>", "Scan again"} {
+	for _, want := range []string{"Scan for existing resources", "5 resources in resource group <code>test1</code>", "Can be imported <strong>1</strong>",
+		`<strong title="` + vmID + `">testvm</strong> <span class="tag" title="template">VM</span>`, "Windows virtual machine · test1 · with network interface",
+		`<span title="disks: testvm_OsDisk_1">testvm_OsDisk_1</span> (not imported)`, `<span class="status applied" title="Imports only: nothing changes">fits</span>`,
+		`href="` + strings.ReplaceAll(link, "&", "&amp;") + `">Import</a>`, "Template needs work <strong>1</strong>", "Would replace zone",
+		"No template <strong>1</strong>", `<strong title="Microsoft.Network/virtualNetworks">Virtual networks</strong>`, "Scan again"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("scan page lacks %q:\n%s", want, page)
 		}
@@ -132,8 +133,8 @@ func TestImportFlow(t *testing.T) {
 	r.saveState(t, stateV(1))
 	r.finish(t, `{"status":"succeeded","resources":[{"address":"module.testvm_x.azurerm_windows_virtual_machine.self[0]","type":"azurerm_windows_virtual_machine",
 		"name":"self","provider":"p","module":"module.testvm_x","id":"`+strings.ToUpper(vmID)+`"}]}`)
-	if page := get(h, "/workspaces/"+ws+"/runs/"+scan).Body.String(); !strings.Contains(page, "Already managed <span class=\"muted\">(1)") ||
-		!strings.Contains(page, `<a href="/workspaces/`+ws+`">`+ws+`</a>`) || strings.Contains(page, "&amp;n=0\"") || !strings.Contains(page, "Can be imported <span class=\"muted\">(0)") {
+	if page := get(h, "/workspaces/"+ws+"/runs/"+scan).Body.String(); !strings.Contains(page, "Already managed <strong>1</strong>") ||
+		!strings.Contains(page, `<a href="/workspaces/`+ws+`">`+ws+`</a>`) || strings.Contains(page, "&amp;n=0\"") || !strings.Contains(page, "Can be imported <strong>0</strong>") {
 		t.Fatalf("an imported resource isn't shown as managed:\n%s", page)
 	}
 	if rec := post(h, link, values); rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "managed already, in workspace "+ws) {

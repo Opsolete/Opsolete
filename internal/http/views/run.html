@@ -44,63 +44,88 @@
 </dl>
 
 {{with .Scan}}
-<section class="card scan" aria-labelledby="scan-head">
+<section class="scan" aria-labelledby="scan-head">
   <h2 id="scan-head">{{if .Stocked}}{{.Total}} resources{{else}}Resources{{end}}{{with .ResourceGroup}} in resource group <code>{{.}}</code>{{end}}</h2>
   {{if $r.Active}}<p class="muted">Scanning with this workspace's credentials…</p>
   {{else if ne $r.Status "planned"}}<p class="muted">The scan didn't finish: see its log below.</p>
   {{else}}
   {{if not .Stocked}}<p class="alert warn" role="status">It couldn't list every resource (see the log): only what templates can import is shown.</p>{{end}}
+  <nav class="chips" aria-label="Groups">
+    <a href="#can-import">Can be imported <strong>{{len .Importable}}</strong></a>
+    {{with .Rework}}<a href="#needs-work">Template needs work <strong>{{len .}}</strong></a>{{end}}
+    <a href="#no-template">No template <strong>{{.NoTemplateCount}}</strong></a>
+    <a href="#managed">Already managed <strong>{{len .Managed}}</strong></a>
+  </nav>
 
-  <h3>Can be imported <span class="muted">({{len .Importable}})</span></h3>
+  <h3 id="can-import">Can be imported</h3>
   {{with .Importable}}
-  <p class="muted">Each was planned as if imported, into a throwaway state: <strong>fits</strong> imports it as it is, <strong>differs</strong> would also change what's listed, <strong>incomplete</strong> lacks values its template's form needs (fill them in when importing).</p>
-  <table class="candidates">
-  <tr><th>Resource</th><th>Template</th><th>Status</th><th>Details</th><th>Import</th></tr>
+  <p class="hint">Checked with a plan that imports into a throwaway state: nothing in the cloud changed.</p>
+  <div class="runlist">
   {{range .}}
-  <tr>
-    <td>{{template "scanres" .}}</td>
-    <td>{{.TemplateName}}</td>
-    <td class="nowrap">{{if eq .Fit "fits"}}<span class="status applied">fits</span>{{else if eq .Fit "differs"}}<span class="status needs_confirmation">differs</span>{{else if eq .Fit "invalid"}}<span class="status errored">incomplete</span>{{else}}<span class="status">unchecked</span>{{end}}</td>
-    <td>{{if eq .Fit "fits"}}Imports only: nothing changes.{{end}}{{with .Message}}<p class="muted">{{.}}</p>{{end}}
-      {{range .Changes}}<div><span class="change {{.Action}}">{{.Action}}</span> <code>{{.Address}}</code>{{with .Attributes}}: {{join . ", "}}{{end}}</div>{{end}}</td>
-    <td>{{if $.CanOperate}}<a class="btn secondary" href="/workspaces/{{$w.Name}}/templates/new?template={{.Template}}&amp;scan={{$r.ID}}&amp;n={{.N}}">Import</a>{{end}}</td>
-  </tr>
+    <div class="scanrow">
+      <span>
+        <strong title="{{.ID}}">{{.Name}}</strong> <span class="tag" title="template">{{.TemplateName}}</span>
+        <small>{{.Kind}}{{with .ResourceGroup}} · {{.}}{{end}}{{range .Related}} · with {{.Kind}} <span title="{{.Name}}">{{.Short}}</span>{{end}}</small>
+        {{with .Uses}}<small>Uses {{range $i, $u := .}}{{if $i}}, {{end}}<span title="{{$u.Kind}}: {{$u.Name}}">{{$u.Short}}</span>{{end}} (not imported)</small>{{end}}
+        {{with .Changing}}<small class="text-warn">Would also {{join . "; "}}</small>{{end}}
+        {{if eq .Fit "invalid"}}<small class="text-warn">{{.Message}}: fill in when importing</small>{{else if eq .Fit "unchecked"}}<small>{{.Message}}</small>{{end}}
+      </span>
+      <span class="end">
+        {{if eq .Fit "fits"}}<span class="status applied" title="Imports only: nothing changes">fits</span>{{else if eq .Fit "differs"}}<span class="status needs_confirmation">differs</span>{{else if eq .Fit "invalid"}}<span class="status errored">incomplete</span>{{else}}<span class="status">unchecked</span>{{end}}
+        {{if $.CanOperate}}<a class="btn" href="/workspaces/{{$w.Name}}/templates/new?template={{.Template}}&amp;scan={{$r.ID}}&amp;n={{.N}}">Import</a>{{end}}
+      </span>
+    </div>
   {{end}}
-  </table>
+  </div>
   {{else}}<p class="muted">Nothing a template can import as it is.</p>{{end}}
 
   {{with .Rework}}
-  <h3>Template needs work <span class="muted">({{len .}})</span></h3>
-  <p class="muted">A template matches, but importing with it would replace these resources: its module has to describe them as they are first (make these settings inputs, see <em>Writing modules that can import</em> in the docs).</p>
-  <table class="candidates">
-  <tr><th>Resource</th><th>Template</th><th>Would replace because of</th></tr>
+  <h3 id="needs-work">Template needs work</h3>
+  <p class="hint">A template matches, but importing with it would replace these: its module must make these settings inputs first.</p>
+  <div class="runlist">
   {{range .}}
-  <tr><td>{{template "scanres" .}}</td><td>{{.TemplateName}}</td>
-    <td>{{range .Changes}}<div><span class="change {{.Action}}">{{.Action}}</span> <code>{{.Address}}</code>{{with .Attributes}}: {{join . ", "}}{{end}}</div>{{end}}</td></tr>
+    <div class="scanrow">
+      <span>
+        <strong title="{{.ID}}">{{.Name}}</strong> <span class="tag" title="template">{{.TemplateName}}</span>
+        <small>{{.Kind}}{{with .ResourceGroup}} · {{.}}{{end}}</small>
+        <small class="text-danger">Would {{join .Changing "; "}}</small>
+      </span>
+      <span class="end"><span class="status errored">would replace</span></span>
+    </div>
   {{end}}
-  </table>
+  </div>
   {{end}}
 
+  <h3 id="no-template">No template</h3>
   {{with .NoTemplate}}
-  <h3>No template <span class="muted">({{len .}})</span></h3>
-  <p class="muted">No catalog template can import these yet: a template on a registry module that creates their type would.</p>
-  <table class="candidates">
-  <tr><th>Resource</th><th>Type</th><th>Resource group</th></tr>
-  {{range .}}<tr><td><strong>{{.Name}}</strong><br><code class="muted">{{.ID}}</code></td><td><code>{{.Type}}</code></td><td>{{.ResourceGroup}}</td></tr>{{end}}
-  </table>
+  <p class="hint">No catalog template creates these types yet.</p>
+  <div class="runlist">
+  {{range .}}
+    <div class="scanrow">
+      <span>
+        <strong title="{{.Type}}">{{.Kind}}</strong>
+        <small>{{range $i, $row := .Rows}}{{if $i}}, {{end}}<span title="{{$row.ID}}">{{$row.Name}}</span> <span class="muted">({{$row.ResourceGroup}})</span>{{end}}</small>
+      </span>
+      <span class="end"><span class="tag">{{len .Rows}}</span></span>
+    </div>
   {{end}}
+  </div>
+  {{else}}<p class="muted">None: templates cover every resource found.</p>{{end}}
 
+  <h3 id="managed">Already managed</h3>
   {{with .Managed}}
-  <h3>Already managed <span class="muted">({{len .}})</span></h3>
-  <table class="candidates">
-  <tr><th>Resource</th><th>Type</th><th>Workspace</th></tr>
-  {{range .}}<tr><td><strong>{{.Name}}</strong><br><code class="muted">{{.ID}}</code></td><td><code>{{.Type}}</code></td><td><a href="/workspaces/{{.ManagedBy}}">{{.ManagedBy}}</a></td></tr>{{end}}
-  </table>
+  <div class="runlist">
+  {{range .}}
+    <div class="scanrow">
+      <span><strong title="{{.ID}}">{{.Name}}</strong><small>{{.Type}}{{with .ResourceGroup}} · {{.}}{{end}}</small></span>
+      <span class="end"><a href="/workspaces/{{.ManagedBy}}">{{.ManagedBy}}</a></span>
+    </div>
   {{end}}
+  </div>
+  {{else}}<p class="muted">None of these is managed by a workspace yet.</p>{{end}}
   {{end}}
 </section>
 {{end}}
-{{define "scanres"}}<strong>{{.Name}}</strong>{{range .Related}}<br><span class="muted">+ {{.}}</span>{{end}}{{range .Uses}}<br><span class="muted">uses {{.}}</span>{{end}}<br><code class="muted">{{.ID}}</code>{{end}}
 
 <details class="section">
   <summary><strong>Run details</strong> <span class="muted">{{$r.CreatedAt.Format "2006-01-02 15:04:05"}}</span>
