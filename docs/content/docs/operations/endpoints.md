@@ -82,7 +82,8 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 | Endpoint | Access | Purpose |
 |---|---|---|
 | `POST /workspaces/{name}/runs` | operate | Starts a run: `action=apply\|plan\|destroy\|refresh\|assess`, `replace=<address>` (apply only, repeatable); `409` while another run is active |
-| `GET /workspaces/{name}/runs/{run}` | read | Plan, confirm / discard / cancel, live log, history |
+| `POST /workspaces/{name}/scans` | operate | Starts a scan for existing resources `template=<id>` can adopt (a run, action `scan`); `422` if the template can't scan, `409` while another run is active |
+| `GET /workspaces/{name}/runs/{run}` | read | Plan, confirm / discard / cancel, live log, history; a scan's results |
 | `POST /workspaces/{name}/runs/{run}/confirm` | operate | Queues the apply of a plan waiting for confirmation |
 | `POST /workspaces/{name}/runs/{run}/discard` | operate | Ends it without applying |
 | `POST /workspaces/{name}/runs/{run}/cancel` | operate | Cancels; `force=1` cuts off a runner that doesn't react |

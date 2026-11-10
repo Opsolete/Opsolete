@@ -130,6 +130,8 @@ type Run struct {
 	RemoveTemplates []string
 	Promotion       []byte
 	Imports         []byte
+	ScanTemplate    *string
+	Candidates      []byte
 }
 
 type RunList struct {
@@ -202,6 +204,7 @@ type StateVersionResource struct {
 	Name           string
 	Provider       string
 	Module         string
+	ResourceID     *string
 }
 
 type TemplateCatalog struct {

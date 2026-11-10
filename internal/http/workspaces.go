@@ -42,6 +42,7 @@ func (s *Server) workspaceRoutes(mux routes) {
 	mux.HandleFunc("POST /workspaces/{name}/delete", s.deleteWorkspace)
 	mux.HandleFunc("GET /workspaces/{name}/templates/new", s.workspaceTemplateForm)
 	mux.HandleFunc("POST /workspaces/{name}/templates/new", s.saveWorkspaceTemplate)
+	mux.HandleFunc("POST /workspaces/{name}/scans", s.newScan)
 	mux.HandleFunc("GET /workspaces/{name}/templates/{module}", s.workspaceTemplateForm)
 	mux.HandleFunc("POST /workspaces/{name}/templates/{module}", s.saveWorkspaceTemplate)
 	mux.HandleFunc("POST /workspaces/{name}/templates/{module}/remove", s.removeWorkspaceTemplate)

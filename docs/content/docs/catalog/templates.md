@@ -208,6 +208,30 @@ above. The run then imports the resources into `module.<name>`:
   the resource. Added to an existing workspace, the template is removed again.
 - After the apply the resources are ordinary template resources. Configuring the template later asks for no IDs.
 
+### Scanning: found and filled in
+
+A template whose `adopt` entries also say how to find resources lets users skip the pasting: **Deploy → Import
+existing resources** scans the cloud with the workspace's credentials, lists what the template can adopt, and
+**Adopt** opens the form with every value and ID filled in. Add to the entries:
+
+| Field | |
+|---|---|
+| `list` | The provider's list resource type that finds the entry's resources with `terraform query`, e.g. `azurerm_windows_virtual_machine` ([which types support it](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs)). An entry with `list` and without `id_from` finds the candidates; its one-value `show_if` sets that input (e.g. `os_type` = `windows`). |
+| `require` | Only resources whose attribute is set count. azurerm's Linux VM list also returns Windows VMs: use `provision_vm_agent` for Windows, `disable_password_authentication` for Linux. |
+| `id_from` | For a related resource: the candidate's attribute holding its ID, e.g. `network_interface_ids[0]`. With `list` too, its attributes fill inputs. |
+| `inputs` | `{"<input>": "<attribute path>"}`, e.g. `{"size": "size", "os_disk_type": "os_disk[0].storage_account_type"}`. A yes / no input takes whether the attribute is set (e.g. `"boot_diagnostics_enabled": "boot_diagnostics"`). |
+| `placeholder` | Sensitive inputs filled with a random value when adopting, for values the cloud never returns (an admin password the module ignores with `ignore_changes`). The form doesn't require them then. |
+
+A scan is a run (action `scan`) on the workspace: the runner lists the resources (azurerm ≥ 5.7 for VMs), fills
+in the form values, and plans adopting all of them, each as its own module, into a throwaway state. Nothing is
+written or locked. The run page shows each one as **fits** (imports only), **differs** (and which attributes would
+change), **doesn't fit** (would replace it: no Adopt), **incomplete** (the form lacks values; Adopt and fill them
+in) or **managed** (a workspace's state has its ID already). Adopting an ID a workspace manages is refused, also when
+pasted by hand: a resource can be in one state only. States record resource IDs since this feature; an older one
+gets them at its workspace's next run (any run but a speculative plan or drift check, even one without changes). Resource IDs take the case of the input values
+(Azure reports `TEST1` in a VM's ID and `test1` in its NIC's). Found values never include sensitive attributes'
+values: map only plain settings. At most 50 resources per scan are checked; the rest are listed as unchecked.
+
 **Modules that can adopt.** Portal-made resources rarely match a module's fixed choices, and a different value of a
 setting that forces replacement makes the plan replace the resource. Make such settings optional inputs whose default
 is the module's current behavior (names of sub-resources such as the NIC, image, OS disk type, secure boot and vTPM),

@@ -81,7 +81,7 @@ func (a *App) CreateWorkspace(ctx context.Context, actor Actor, in NewWorkspace)
 		}
 		locked = env.Locked(t)
 	}
-	raw := lockInputs(in.Inputs, locked)
+	raw := withPlaceholders(t, lockInputs(in.Inputs, locked), in.Adopt)
 	vals, errs := t.Validate(raw) // errs is never nil
 	if !ValidName(in.Name) {
 		errs[FieldName] = NameRule
@@ -93,6 +93,9 @@ func (a *App) CreateWorkspace(ctx context.Context, actor Actor, in NewWorkspace)
 	}
 	keepOwn(vals, errs, locked, nil)
 	imports := adoptions(t, raw, in.Adopt, module, errs)
+	if err := a.refuseManaged(ctx, t, module, imports, errs); err != nil {
+		return storage.Workspace{}, storage.Run{}, err
+	}
 	if len(errs) > 0 {
 		return storage.Workspace{}, storage.Run{}, &ValidationError{Fields: errs}
 	}

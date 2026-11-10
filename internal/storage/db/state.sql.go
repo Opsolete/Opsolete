@@ -90,8 +90,8 @@ func (q *Queries) CloudLocked(ctx context.Context, arg CloudLockedParams) (bool,
 
 const copyStateIndex = `-- name: CopyStateIndex :exec
 WITH cur AS (SELECT v.id FROM state_versions v WHERE v.workspace_id = $2::uuid ORDER BY v.id DESC LIMIT 1),
-ins AS (INSERT INTO state_version_resources (state_version_id, address, type, name, provider, module)
-    SELECT cur.id, r.address, r.type, r.name, r.provider, r.module FROM cur, state_version_resources r
+ins AS (INSERT INTO state_version_resources (state_version_id, address, type, name, provider, module, resource_id)
+    SELECT cur.id, r.address, r.type, r.name, r.provider, r.module, r.resource_id FROM cur, state_version_resources r
     WHERE r.state_version_id = $1::bigint ON CONFLICT DO NOTHING)
 UPDATE state_versions SET indexed = (SELECT f.indexed FROM state_versions f WHERE f.id = $1::bigint), rollback_of = $1::bigint
 WHERE state_versions.id = (SELECT cur.id FROM cur)
@@ -180,9 +180,9 @@ func (q *Queries) GetStateLock(ctx context.Context, id uuid.UUID) ([]byte, error
 }
 
 const insertStateIndex = `-- name: InsertStateIndex :exec
-INSERT INTO state_version_resources (state_version_id, address, type, name, provider, module)
-SELECT $1::bigint, r.address, r.type, r.name, r.provider, r.module FROM jsonb_to_recordset($2::jsonb)
-    AS r(address text, type text, name text, provider text, module text)
+INSERT INTO state_version_resources (state_version_id, address, type, name, provider, module, resource_id)
+SELECT $1::bigint, r.address, r.type, r.name, r.provider, r.module, NULLIF(r.id, '') FROM jsonb_to_recordset($2::jsonb)
+    AS r(address text, type text, name text, provider text, module text, id text)
 ON CONFLICT DO NOTHING
 `
 
@@ -233,6 +233,40 @@ func (q *Queries) LockState(ctx context.Context, arg LockStateParams) (LockState
 	var i LockStateRow
 	err := row.Scan(&i.Taken, &i.Held)
 	return i, err
+}
+
+const managedResourceIDs = `-- name: ManagedResourceIDs :many
+SELECT lower(r.resource_id)::text AS id, w.name AS workspace
+FROM workspaces w
+JOIN LATERAL (SELECT v.id FROM state_versions v WHERE v.workspace_id = w.id ORDER BY v.id DESC LIMIT 1) cur ON true
+JOIN state_version_resources r ON r.state_version_id = cur.id
+WHERE lower(r.resource_id) = ANY($1::text[])
+`
+
+type ManagedResourceIDsRow struct {
+	ID        string
+	Workspace string
+}
+
+// Which of ids (lowercase) the current state of a workspace manages, and which workspace.
+func (q *Queries) ManagedResourceIDs(ctx context.Context, ids []string) ([]ManagedResourceIDsRow, error) {
+	rows, err := q.db.Query(ctx, managedResourceIDs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ManagedResourceIDsRow
+	for rows.Next() {
+		var i ManagedResourceIDsRow
+		if err := rows.Scan(&i.ID, &i.Workspace); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const markIndexed = `-- name: MarkIndexed :exec

@@ -45,7 +45,7 @@ func (q *Queries) AnyActiveRun(ctx context.Context) (bool, error) {
 const claimableRun = `-- name: ClaimableRun :one
 
 SELECT r.id, r.status FROM runs r WHERE r.status IN ('plan_queued', 'apply_queued')
-    AND (r.action IN ('plan', 'assess') OR NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.id = r.workspace_id AND w.state_lock IS NOT NULL))
+    AND (r.action IN ('plan', 'assess', 'scan') OR NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.id = r.workspace_id AND w.state_lock IS NOT NULL))
 ORDER BY r.updated_at FOR UPDATE OF r SKIP LOCKED LIMIT 1
 `
 
@@ -186,7 +186,8 @@ const leaseRun = `-- name: LeaseRun :one
 UPDATE runs SET runner = $1::text, lease_id = $2::text,
     lease_until = now() + make_interval(secs => $3::float8)
 WHERE id = $4::uuid
-RETURNING workspace_id, action, replace, COALESCE(vcs_commit, '')::text AS vcs_commit, remove_templates, imports
+RETURNING workspace_id, action, replace, COALESCE(vcs_commit, '')::text AS vcs_commit, remove_templates, imports,
+    COALESCE(scan_template, '')::text AS scan_template
 `
 
 type LeaseRunParams struct {
@@ -203,6 +204,7 @@ type LeaseRunRow struct {
 	VcsCommit       string
 	RemoveTemplates []string
 	Imports         []byte
+	ScanTemplate    string
 }
 
 func (q *Queries) LeaseRun(ctx context.Context, arg LeaseRunParams) (LeaseRunRow, error) {
@@ -220,6 +222,7 @@ func (q *Queries) LeaseRun(ctx context.Context, arg LeaseRunParams) (LeaseRunRow
 		&i.VcsCommit,
 		&i.RemoveTemplates,
 		&i.Imports,
+		&i.ScanTemplate,
 	)
 	return i, err
 }

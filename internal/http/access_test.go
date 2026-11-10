@@ -465,6 +465,7 @@ func accessRows() []accessRow {
 		{"POST " + w + "/project", ws + "/project", "project={proj}", onUI, []int{401, 403, 403, 403, 303}, false},
 		{"POST " + w + "/state-versions/{version}/rollback", "/workspaces/{cws}/state-versions/{sv}/rollback", "", onUI, []int{401, 404, 403, 409, 409}, true},
 		{"POST " + w + "/runs", ws + "/runs", "action=plan", onUI, []int{401, 404, 403, 409, 409}, true},
+		{"POST " + w + "/scans", ws + "/scans", "template=nope", onUI, []int{401, 404, 403, 404, 404}, true},
 		{"GET " + w + "/runs/{run}", ws + "/runs/{run}", "", onUI, []int{302, 404, 200, 200, 200}, false},
 		{"GET " + w + "/runs/{run}/logs", ws + "/runs/{run}/logs", "", onUI, []int{302, 404, 200, 200, 200}, false},
 		{"GET " + w + "/runs/{run}/logs/stream", ws + "/runs/{run}/logs/stream", "", onUI, []int{302, 404, 200, 200, 200}, false},

@@ -1,6 +1,7 @@
 # Design: adopting existing cloud resources (resource import)
 
-Status: phase 1 in progress (branch `feat/resource-import`). Not published (outside `docs/content`).
+Status: phases 1 and 2/3 (scan, pre-fill, fit check) built on branch `feat/resource-import` (PR #34, draft).
+Not published (outside `docs/content`).
 
 ## Problem
 
@@ -97,6 +98,16 @@ example VM module 3.1.0 from the registry: `2 to import, 0 to add, 0 to change, 
 plan had no changes.
 
 ## Later phases
+
+**Built (scan):** template `adopt` entries got `list`, `require`, `id_from`, `inputs`, `placeholder` (builder
+fields too); `POST /workspaces/{name}/scans` queues a run with action `scan` (`runs.scan_template`,
+`runs.candidates`, migration 005); the runner's `scan.go` runs `terraform query -json` with `include_resource`
+(the attributes come as JSON, no generated HCL to parse), builds the candidates, and checks their fit with one plan
+adopting all of them (module `c<i>` each, local throwaway state). The resource index stores resource IDs
+(`state_version_resources.resource_id`) to mark candidates managed already, and adopting a managed ID is refused;
+runs that take the state lock index it at their plan phase too, so older states get IDs without an apply. Live check against the test
+subscription: both VMs found, every input filled as typed by hand before, IDs' casing normalized, both "fits",
+25 s.
 
 Decisions for phases 2 and 3 (November 2026): a scan starts from a workspace (its credentials); adopted Windows VMs
 get a generated placeholder for the admin password (the module ignores password changes); the fit check runs

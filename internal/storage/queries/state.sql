@@ -40,8 +40,8 @@ SELECT blob_key FROM state_versions WHERE workspace_id = sqlc.arg(workspace_id):
 -- name: CopyStateIndex :exec
 -- the current version gets version from's index and becomes its copy: a rollback
 WITH cur AS (SELECT v.id FROM state_versions v WHERE v.workspace_id = sqlc.arg(workspace_id)::uuid ORDER BY v.id DESC LIMIT 1),
-ins AS (INSERT INTO state_version_resources (state_version_id, address, type, name, provider, module)
-    SELECT cur.id, r.address, r.type, r.name, r.provider, r.module FROM cur, state_version_resources r
+ins AS (INSERT INTO state_version_resources (state_version_id, address, type, name, provider, module, resource_id)
+    SELECT cur.id, r.address, r.type, r.name, r.provider, r.module, r.resource_id FROM cur, state_version_resources r
     WHERE r.state_version_id = sqlc.arg(from_id)::bigint ON CONFLICT DO NOTHING)
 UPDATE state_versions SET indexed = (SELECT f.indexed FROM state_versions f WHERE f.id = sqlc.arg(from_id)::bigint), rollback_of = sqlc.arg(from_id)::bigint
 WHERE state_versions.id = (SELECT cur.id FROM cur);
@@ -108,9 +108,9 @@ DELETE FROM state_version_resources WHERE state_version_id = sqlc.arg(id)::bigin
 
 -- name: InsertStateIndex :exec
 -- ON CONFLICT: a duplicate address must not lose the whole index.
-INSERT INTO state_version_resources (state_version_id, address, type, name, provider, module)
-SELECT sqlc.arg(id)::bigint, r.address, r.type, r.name, r.provider, r.module FROM jsonb_to_recordset(sqlc.arg(resources)::jsonb)
-    AS r(address text, type text, name text, provider text, module text)
+INSERT INTO state_version_resources (state_version_id, address, type, name, provider, module, resource_id)
+SELECT sqlc.arg(id)::bigint, r.address, r.type, r.name, r.provider, r.module, NULLIF(r.id, '') FROM jsonb_to_recordset(sqlc.arg(resources)::jsonb)
+    AS r(address text, type text, name text, provider text, module text, id text)
 ON CONFLICT DO NOTHING;
 
 -- name: MarkIndexed :exec
@@ -140,3 +140,11 @@ WITH cur AS (SELECT v.id, v.workspace_id, v.serial FROM state_versions v
 SELECT r.address, r.type, r.name, r.provider, r.module, w.name AS workspace, cur.serial
 FROM cur JOIN state_version_resources r ON r.state_version_id = cur.id JOIN workspaces w ON w.id = cur.workspace_id
 ORDER BY r.type, r.address LIMIT 2000;
+
+-- name: ManagedResourceIDs :many
+-- Which of ids (lowercase) the current state of a workspace manages, and which workspace.
+SELECT lower(r.resource_id)::text AS id, w.name AS workspace
+FROM workspaces w
+JOIN LATERAL (SELECT v.id FROM state_versions v WHERE v.workspace_id = w.id ORDER BY v.id DESC LIMIT 1) cur ON true
+JOIN state_version_resources r ON r.state_version_id = cur.id
+WHERE lower(r.resource_id) = ANY(sqlc.arg(ids)::text[]);

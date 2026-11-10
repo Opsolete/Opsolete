@@ -56,6 +56,8 @@ func TestTemplateBuilder(t *testing.T) {
 		"ad_label":        {"VNet resource ID", ""},
 		"ad_show_input":   {"region", ""},
 		"ad_show_equals":  {"northeurope", ""},
+		"ad_list":         {"azurerm_virtual_network", ""},
+		"ad_inputs":       {"cidr = address_space[0]", ""},
 	}
 	// a preview renders the deploy form from the unsaved template, and saves nothing
 	preview := url.Values{}
@@ -96,7 +98,8 @@ func TestTemplateBuilder(t *testing.T) {
 		!strings.Contains(body, `value="7" type="number"`) || !strings.Contains(body, `<option value="true" selected>yes (true)</option>`) ||
 		!strings.Contains(body, `name="in_opt_label_1" value="North, Europe"`) || !strings.Contains(body, `<option value="zone" selected>zone</option>`) ||
 		!strings.Contains(body, `name="ad_to" value="azurerm_virtual_network.this"`) || !strings.Contains(body, `name="ad_show_equals" class="mono" value="northeurope"`) ||
-		strings.Count(body, `name="ad_to"`) != 2 { // the row and a blank one
+		strings.Count(body, `name="ad_to"`) != 2 || // the row and a blank one
+		!strings.Contains(body, `name="ad_list" value="azurerm_virtual_network"`) || !strings.Contains(body, ">cidr = address_space[0]\n</textarea>") {
 		t.Fatalf("builder lost the condition or options: %s", body)
 	}
 	// a condition on a dropdown below the field is refused with a readable error
@@ -156,10 +159,16 @@ func TestBuilderRoundTrip(t *testing.T) {
 		"ad_pattern":     {`(?i)/subscriptions/.+/virtualMachines/[^/]+`, "", ""},
 		"ad_show_input":  {"backup", "", ""},
 		"ad_show_equals": {"true", "", ""},
+		"ad_list":        {"azurerm_windows_virtual_machine", "azurerm_network_interface", ""},
+		"ad_require":     {"provision_vm_agent", "", ""},
+		"ad_id_from":     {"", "network_interface_ids[0]", ""},
+		"ad_inputs":      {"vm_name = name\n\n size = size \n", "", ""},
+		"ad_placeholder": {"", "", ""},
 	})
 	want := []templates.Adopt{{To: "azurerm_windows_virtual_machine.self[0]", Label: "VM resource ID", Help: "From the portal",
-		Pattern: `(?i)/subscriptions/.+/virtualMachines/[^/]+`, ShowIf: &templates.ShowIf{Input: "backup", Equals: []string{"true"}}},
-		{To: "azurerm_network_interface.self"}}
+		Pattern: `(?i)/subscriptions/.+/virtualMachines/[^/]+`, ShowIf: &templates.ShowIf{Input: "backup", Equals: []string{"true"}},
+		List: "azurerm_windows_virtual_machine", Require: "provision_vm_agent", Inputs: map[string]string{"vm_name": "name", "size": "size"}},
+		{To: "azurerm_network_interface.self", List: "azurerm_network_interface", IDFrom: "network_interface_ids[0]"}}
 	if !reflect.DeepEqual(tpl.Adopt, want) {
 		t.Errorf("adopt rows: %+v", tpl.Adopt)
 	}

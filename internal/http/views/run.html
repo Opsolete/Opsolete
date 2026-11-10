@@ -1,4 +1,4 @@
-{{define "runtitle"}}{{if eq . "destroy"}}Destroy{{else if eq . "refresh"}}Refresh state{{else if eq . "assess"}}Drift check{{else if eq . "plan"}}Speculative plan{{else}}Plan and apply{{end}}{{end}}
+{{define "runtitle"}}{{if eq . "destroy"}}Destroy{{else if eq . "scan"}}Scan for existing resources{{else if eq . "refresh"}}Refresh state{{else if eq . "assess"}}Drift check{{else if eq . "plan"}}Speculative plan{{else}}Plan and apply{{end}}{{end}}
 {{define "pclass"}}{{if eq . "finished"}}succeeded{{else if eq . "running"}}running{{else if eq . "pending"}}needs_confirmation{{else}}{{.}}{{end}}{{end}}
 {{template "top" .Page}}
 {{$w := .W}}{{$r := .R}}{{$logInApply := or (not .Apply.Start.IsZero) (eq .Apply.State "queued")}}
@@ -19,7 +19,10 @@
     <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/cancel"><button type="submit" class="secondary">Cancel run</button></form>
     {{end}}
   </div>
-  {{else if and $.CanOperate (not $r.Active) $w.HasConfig (ne $r.Action "plan")}}
+  {{else if and $.CanOperate (not $r.Active) $.Scan}}
+  <form method="post" action="/workspaces/{{$w.Name}}/scans"><input type="hidden" name="template" value="{{$.Scan.Template.ID}}">
+    <button type="submit" class="secondary">Scan again</button></form>
+  {{else if and $.CanOperate (not $r.Active) $w.HasConfig (ne $r.Action "plan") (ne $r.Action "scan")}}
   <form method="post" action="/workspaces/{{$w.Name}}/runs"{{if eq $r.Action "destroy"}}
     data-confirm="Start a new destroy run for {{$w.Name}}?"{{end}}>
     <input type="hidden" name="action" value="{{$r.Action}}">{{range $r.Replace}}<input type="hidden" name="replace" value="{{.}}">{{end}}
@@ -39,6 +42,30 @@
   <div><dt>Apply duration</dt><dd>{{or .Apply.Duration "—"}}</dd></div>
   <div><dt>Triggered by</dt><dd>{{if $r.CreatedBy}}{{$r.CreatedBy}}{{else if $r.VCSPullRequest}}pull request #{{$r.VCSPullRequest}}{{else if and $r.VCSCommit (eq $r.Action "apply")}}new commit{{else}}—{{end}}</dd></div>
 </dl>
+
+{{with .Scan}}
+<section class="card scan" aria-labelledby="scan-head">
+  <h2 id="scan-head">{{.Template.Name}}: {{len .Candidates}} found</h2>
+  {{if not .Candidates}}<p class="muted">{{if $r.Active}}Scanning with this workspace's credentials…{{else if eq $r.Status "planned"}}Nothing found that this template can adopt.{{else}}The scan didn't finish: see its log below.{{end}}</p>
+  {{else}}
+  <p class="muted">Each resource was planned as if adopted, into a throwaway state (nothing changed): <strong>fits</strong> imports it unchanged,
+    <strong>differs</strong> would also change what's listed, <strong>doesn't fit</strong> would replace it, <strong>incomplete</strong> lacks values the form needs.</p>
+  <table class="candidates">
+  <tr><th>Resource</th><th>Fit</th><th>Details</th><th>Adopt</th></tr>
+  {{range $i, $c := .Candidates}}
+  <tr>
+    <td><strong>{{.Name}}</strong><br><code class="muted">{{.ID}}</code></td>
+    <td class="nowrap">{{if .ManagedBy}}<span class="status no_changes">managed</span>{{else if eq .Fit "fits"}}<span class="status applied">fits</span>{{else if eq .Fit "differs"}}<span class="status needs_confirmation">differs</span>{{else if eq .Fit "replaces"}}<span class="status errored">doesn't fit</span>{{else if eq .Fit "invalid"}}<span class="status errored">incomplete</span>{{else}}<span class="status">unchecked</span>{{end}}</td>
+    <td>{{if .ManagedBy}}Already managed in workspace <a href="/workspaces/{{.ManagedBy}}">{{.ManagedBy}}</a>.{{else if eq .Fit "fits"}}Imports only: nothing changes.{{end}}
+      {{with .Message}}<p class="muted">{{.}}</p>{{end}}
+      {{range .Changes}}<div><span class="change {{.Action}}">{{.Action}}</span> <code>{{.Address}}</code>{{with .Attributes}}: {{join . ", "}}{{end}}</div>{{end}}</td>
+    <td>{{if and $.CanOperate (not .ManagedBy) (ne .Fit "replaces") (not $r.Active)}}<a class="btn secondary" href="/workspaces/{{$w.Name}}/templates/new?template={{$.Scan.Template.ID}}&amp;scan={{$r.ID}}&amp;n={{$i}}">Adopt</a>{{end}}</td>
+  </tr>
+  {{end}}
+  </table>
+  {{end}}
+</section>
+{{end}}
 
 <details class="section">
   <summary><strong>Run details</strong> <span class="muted">{{$r.CreatedAt.Format "2006-01-02 15:04:05"}}</span>

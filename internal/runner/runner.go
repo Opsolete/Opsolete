@@ -195,6 +195,9 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	}
 
 	fmt.Fprintf(w, "==> runner %s: %s phase of %s run %s\n", r.Name, job.Phase, job.Action, job.RunID)
+	if job.Action == "scan" {
+		return r.scan(ctx, tf, dir, job, w, fail)
+	}
 	if src != "" {
 		fmt.Fprintln(w, "==> terraform init (fetch module)")
 		if _, err := run("init", "-input=false", "-from-module="+src, "-backend=false"); err != nil {
@@ -244,7 +247,13 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 		}
 	}
 	if job.Phase == "plan" {
-		return r.plan(ctx, tf, run, dir, job, w, fail)
+		res := r.plan(ctx, tf, run, dir, job, w, fail)
+		if res.Status == "succeeded" && job.Action != "plan" && job.Action != "assess" {
+			// Index the state as it is (the run holds its lock): states indexed before resource IDs were
+			// kept get them at the next run, without waiting for an apply.
+			res.Resources = inventory(ctx, tf)
+		}
+		return res
 	}
 
 	// The apply writes state: report what's in it however it ends, since a failed apply can

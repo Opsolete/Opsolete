@@ -18,11 +18,11 @@ SELECT * FROM workspace_list WHERE name = sqlc.arg(name)::text;
 SELECT * FROM workspace_list WHERE id = sqlc.arg(id)::uuid;
 
 -- name: ListWorkspaces :many
--- latest_*: the most recent run that isn't a drift check or speculative plan; NULL without one.
+-- latest_*: the most recent run that isn't a drift check, speculative plan or scan; NULL without one.
 SELECT sqlc.embed(w), l.status AS latest_status, l.action AS latest_action, l.updated_at AS latest_updated_at
 FROM workspace_list w
 LEFT JOIN runs l ON l.id = (SELECT r.id FROM runs r
-    WHERE r.workspace_id = w.id AND r.action NOT IN ('assess', 'plan') ORDER BY r.created_at DESC LIMIT 1)
+    WHERE r.workspace_id = w.id AND r.action NOT IN ('assess', 'plan', 'scan') ORDER BY r.created_at DESC LIMIT 1)
 WHERE (sqlc.arg(admin)::boolean OR access_level(w.id, sqlc.narg(viewer)::uuid) IS NOT NULL)
     AND (sqlc.arg(project)::text = '' OR w.project_name = sqlc.arg(project)::text)
 ORDER BY COALESCE(l.updated_at, w.created_at) DESC LIMIT 200;

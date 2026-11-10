@@ -186,6 +186,18 @@
   {{end}}
 </div>
 {{else}}<p class="muted">No templates in the catalog yet.</p>{{end}}
+{{$scannable := false}}{{range .Catalog}}{{if .Scannable}}{{$scannable = true}}{{end}}{{end}}
+{{if and $deploy $scannable}}
+<h2 class="mt-125">Import existing resources</h2>
+<p class="muted">Find resources that already exist in the cloud (with this workspace's credentials) that a template can take over without
+  recreating them. Each one found is checked with a plan that changes nothing, and can be adopted with the template's form filled in.</p>
+<form method="post" action="/workspaces/{{$w.Name}}/scans" class="inline">
+  <select name="template" aria-label="Template to scan for">
+    {{range .Catalog}}{{if .Scannable}}<option value="{{.ID}}">{{.Name}}</option>{{end}}{{end}}
+  </select>
+  <button type="submit">Scan</button>
+</form>
+{{end}}
 {{end}}
 
 {{if eq $tab "runs"}}

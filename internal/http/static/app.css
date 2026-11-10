@@ -494,3 +494,7 @@ select.flex-9 { flex: 0 0 9rem; }
 .text-brand { color: var(--brand); }
 hr.rule { border: 0; border-top: 1px solid var(--border); margin: 2rem 0 0; max-width: 60rem; }
 .adopt-row + .adopt-row { margin-top: 1.25rem; padding-top: 1.25rem; border-top: 1px solid var(--border); }
+.scan { margin: 1.5rem 0; }
+.candidates { width: 100%; }
+.candidates td { vertical-align: top; }
+.candidates code { word-break: break-all; font-size: .8em; }

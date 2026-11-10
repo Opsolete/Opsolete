@@ -269,7 +269,7 @@ func (q *Queries) PruneRunLogs(ctx context.Context, arg PruneRunLogsParams) ([]b
 
 const pruneSpeculativeRuns = `-- name: PruneSpeculativeRuns :execrows
 DELETE FROM runs WHERE id IN (
-    SELECT r.id FROM runs r WHERE r.action IN ('assess', 'plan') AND NOT run_active(r.status)
+    SELECT r.id FROM runs r WHERE r.action IN ('assess', 'plan', 'scan') AND NOT run_active(r.status)
         AND r.updated_at < now() - make_interval(secs => $1::float8)
         AND CASE WHEN r.action = 'assess' THEN
                 EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = r.workspace_id AND a.action = 'assess' AND a.created_at > r.created_at)
@@ -286,7 +286,7 @@ type PruneSpeculativeRunsParams struct {
 	Lim       int32
 }
 
-// Drift checks and speculative plans, history and logs with them (cascade), except what readers
+// Drift checks, speculative plans and scans, history and logs with them (cascade), except what readers
 // need: a workspace's latest drift check (LatestAssessment) and latest one that found drift or none
 // (workspace_list.drifted), and a pull request's latest plan (QueueVCSRun's dedupe). Plans run by
 // hand (no pull request) have no exception.
@@ -571,6 +571,22 @@ func (q *Queries) RestoreTemplate(ctx context.Context, arg RestoreTemplateParams
 	return err
 }
 
+const runScan = `-- name: RunScan :one
+SELECT COALESCE(scan_template, '')::text AS template, candidates FROM runs WHERE id = $1::uuid
+`
+
+type RunScanRow struct {
+	Template   string
+	Candidates []byte
+}
+
+func (q *Queries) RunScan(ctx context.Context, id uuid.UUID) (RunScanRow, error) {
+	row := q.db.QueryRow(ctx, runScan, id)
+	var i RunScanRow
+	err := row.Scan(&i.Template, &i.Candidates)
+	return i, err
+}
+
 const setConfigChanges = `-- name: SetConfigChanges :exec
 UPDATE runs SET config_changes = $1::jsonb WHERE id = $2::uuid
 `
@@ -591,6 +607,20 @@ UPDATE runs SET always_confirm = true WHERE id = $1::uuid
 
 func (q *Queries) SetRunAlwaysConfirm(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, setRunAlwaysConfirm, id)
+	return err
+}
+
+const setRunCandidates = `-- name: SetRunCandidates :exec
+UPDATE runs SET candidates = $1::jsonb WHERE id = $2::uuid
+`
+
+type SetRunCandidatesParams struct {
+	Candidates []byte
+	ID         uuid.UUID
+}
+
+func (q *Queries) SetRunCandidates(ctx context.Context, arg SetRunCandidatesParams) error {
+	_, err := q.db.Exec(ctx, setRunCandidates, arg.Candidates, arg.ID)
 	return err
 }
 
@@ -662,6 +692,20 @@ type SetRunRolloutParams struct {
 
 func (q *Queries) SetRunRollout(ctx context.Context, arg SetRunRolloutParams) error {
 	_, err := q.db.Exec(ctx, setRunRollout, arg.RolloutID, arg.ID)
+	return err
+}
+
+const setRunScanTemplate = `-- name: SetRunScanTemplate :exec
+UPDATE runs SET scan_template = $1::text WHERE id = $2::uuid
+`
+
+type SetRunScanTemplateParams struct {
+	Template string
+	ID       uuid.UUID
+}
+
+func (q *Queries) SetRunScanTemplate(ctx context.Context, arg SetRunScanTemplateParams) error {
+	_, err := q.db.Exec(ctx, setRunScanTemplate, arg.Template, arg.ID)
 	return err
 }
 

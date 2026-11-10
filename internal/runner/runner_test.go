@@ -33,7 +33,7 @@ func TestPlanThenApply(t *testing.T) {
 	if res.Status != "succeeded" || res.Plan == nil || res.Plan.Add != want.Add || len(res.Plan.Changes) != 1 || res.Plan.Changes[0] != want.Changes[0] {
 		t.Fatalf("plan: %+v\n%s", res, logs)
 	}
-	if res.Resources != nil || f.states["ws1"] != nil || len(f.artifacts["run1/artifacts/tfplan"]) == 0 {
+	if len(res.Resources) != 0 || f.states["ws1"] != nil || len(f.artifacts["run1/artifacts/tfplan"]) == 0 {
 		t.Fatalf("a plan must not touch state, and must save the plan: %+v %q", res.Resources, f.states["ws1"])
 	}
 	if !strings.Contains(logs, "plan saved: 1 to add, 0 to change, 0 to destroy") || strings.Contains(logs, `"resource_changes"`) {
@@ -49,7 +49,10 @@ func TestPlanThenApply(t *testing.T) {
 		t.Fatalf("apply: %+v\n%s", res, logs)
 	}
 	wantRes := runnerapi.Resource{Address: "terraform_data.this", Type: "terraform_data", Name: "this", Provider: "terraform.io/builtin/terraform"}
-	if len(res.Resources) != 1 || res.Resources[0] != wantRes {
+	if len(res.Resources) != 1 || res.Resources[0].ID == "" {
+		t.Fatalf("resources without the ID: %+v", res.Resources)
+	}
+	if res.Resources[0].ID = ""; res.Resources[0] != wantRes {
 		t.Fatalf("resources: %+v", res.Resources)
 	}
 	for _, leak := range []string{"hunter2", "secret-signature", `"values"`, "state-tok-"} {

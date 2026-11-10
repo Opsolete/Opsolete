@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -288,7 +289,7 @@ func (s *Store) PruneRunLogs(ctx context.Context, olderThan time.Duration) (int6
 	return logs, err
 }
 
-// PruneSpeculativeRuns deletes drift checks and speculative plans that ended more than olderThan
+// PruneSpeculativeRuns deletes drift checks, speculative plans and scans that ended more than olderThan
 // ago, except the latest ones their readers need (see the query). It returns how many it deleted.
 func (s *Store) PruneSpeculativeRuns(ctx context.Context, olderThan time.Duration) (int64, error) {
 	return prune(func(lim int32) (int64, error) {
@@ -306,4 +307,51 @@ func prune(batch func(lim int32) (int64, error), lim int32) (int64, error) {
 			return total, err
 		}
 	}
+}
+
+// CreateScan queues a scan of the workspace for existing resources template can adopt (runner.scan).
+// ErrRunActive, ErrLocalExecution: as for CreateRun.
+func (s *Store) CreateScan(ctx context.Context, workspaceID uuid.UUID, template string, createdBy uuid.UUID) (Run, error) {
+	var r Run
+	err := s.tx(ctx, func(q *db.Queries) error {
+		var err error
+		if r, err = createRun(ctx, q, workspaceID, "scan", createdBy); err != nil {
+			return err
+		}
+		return q.SetRunScanTemplate(ctx, db.SetRunScanTemplateParams{ID: r.ID, Template: template})
+	})
+	return r, err
+}
+
+// Scan is a scan run's template and what it found (nil until it finished).
+type Scan struct {
+	Template   string
+	Candidates []runnerapi.Candidate
+}
+
+func (s *Store) RunScan(ctx context.Context, runID uuid.UUID) (Scan, error) {
+	row, err := s.q.RunScan(ctx, runID)
+	if err != nil {
+		return Scan{}, notFound(err)
+	}
+	sc := Scan{Template: row.Template}
+	if row.Candidates != nil {
+		err = json.Unmarshal(row.Candidates, &sc.Candidates)
+	}
+	return sc, err
+}
+
+// ManagedBy returns, for those of ids (any case) a workspace's current state manages, that workspace's name,
+// by lowercase ID.
+func (s *Store) ManagedBy(ctx context.Context, ids []string) (map[string]string, error) {
+	lower := make([]string, len(ids))
+	for i, id := range ids {
+		lower[i] = strings.ToLower(id)
+	}
+	rows, err := s.q.ManagedResourceIDs(ctx, lower)
+	out := map[string]string{}
+	for _, r := range rows {
+		out[r.ID] = r.Workspace
+	}
+	return out, err
 }

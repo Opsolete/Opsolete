@@ -26,6 +26,7 @@ type Job struct {
 	Replace     []string
 	Target      []string // -target: module.<name> of each template a destroy run removes
 	Imports     []runnerapi.Import
+	Scan        string // action scan: the template it scans for
 	LeaseID     string
 	VCS         bool                // the root configuration comes from the workspace's VCS branch
 	VCSCommit   string              // commit pinned when the run was queued (VCS-triggered runs), or by an earlier phase
@@ -60,7 +61,7 @@ func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration
 		if err != nil {
 			return err
 		}
-		j.WorkspaceID, j.Action, j.VCSCommit = r.WorkspaceID, r.Action, r.VcsCommit
+		j.WorkspaceID, j.Action, j.VCSCommit, j.Scan = r.WorkspaceID, r.Action, r.VcsCommit, r.ScanTemplate
 		if r.Replace != nil {
 			if err := json.Unmarshal(r.Replace, &j.Replace); err != nil {
 				return err
@@ -192,6 +193,7 @@ func (s *Store) CancelRun(ctx context.Context, id uuid.UUID, email string, force
 //   - plan with changes: needs_confirmation, or apply_queued for apply runs of auto-apply workspaces
 //     (destroys, refresh-only runs and template rollouts always wait for a human), or drifted for assess runs and
 //     planned for speculative plans, which are never applied; without changes: no_changes
+//   - scan: planned, its candidates stored
 //   - plan of an adoption (runs.imports) that would replace or delete anything: errored, and the template
 //     change is undone like any run that ends before its apply (adoptions always wait for a human)
 //   - apply: applied
@@ -200,6 +202,16 @@ func (s *Store) CancelRun(ctx context.Context, id uuid.UUID, email string, force
 // resources is the index of the workspace's current state version (apply phase only).
 func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, message string, outputs map[string]any,
 	plan *runnerapi.Plan, resources []runnerapi.Resource) (string, error) {
+	return s.finishJob(ctx, runID, lease, result, message, outputs, plan, resources, nil)
+}
+
+// FinishScan is FinishJob for a scan, with what it found.
+func (s *Store) FinishScan(ctx context.Context, runID uuid.UUID, lease, result, message string, candidates []runnerapi.Candidate) (string, error) {
+	return s.finishJob(ctx, runID, lease, result, message, nil, nil, nil, candidates)
+}
+
+func (s *Store) finishJob(ctx context.Context, runID uuid.UUID, lease, result, message string, outputs map[string]any,
+	plan *runnerapi.Plan, resources []runnerapi.Resource, candidates []runnerapi.Candidate) (string, error) {
 	var final string
 	var entry *AuditEntry
 	err := s.tx(ctx, func(q *db.Queries) error {
@@ -216,6 +228,15 @@ func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 		case final != "":
 		case r.Status == Applying:
 			final = Applied
+		case r.Action == "scan": // never applied
+			final = Planned
+			b, err := json.Marshal(candidates)
+			if err != nil {
+				return err
+			}
+			if err := q.SetRunCandidates(ctx, db.SetRunCandidatesParams{ID: runID, Candidates: b}); err != nil {
+				return err
+			}
 		case r.Adopting && plan != nil && plan.Destroy > 0: // the template doesn't fit what exists
 			final, message = Errored, "adoption refused: the plan would replace or delete existing resources, so the template's "+
 				"inputs or module don't match them; nothing was applied"

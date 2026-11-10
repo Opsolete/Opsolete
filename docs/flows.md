@@ -185,6 +185,10 @@ Test paths are relative to `internal/`, except `cmd/opsolete/…` (from the repo
 **D6. Form rules (validation, help, show_if, defaults)** — `full`
 - Coverage: `http/templates_test.go:TestInvalidSubmitRerendersForm`; `http/render_test.go:TestRenderShowIf`; `templates/templates_test.go:TestShowIf`, `TestShowIfBool`, `TestValidateEdgeCases`, `TestLoadCatalogAndValidate`; `templates/json_test.go:TestSchema`, `TestJSONRoundTrip`.
 
+**D8. Scan for existing resources, adopt one filled in** — `partial`
+- Actor: operate. Steps: Deploy → Import existing resources → template → scan run (runner: `terraform query`, fit plan) → run page lists candidates (fits / differs / doesn't fit / incomplete / managed) → Adopt → add form filled in (values, IDs, placeholder password) → D7.
+- Coverage: `http/scan_test.go:TestScanFlow` (scan job, results page, Adopt form, imports and placeholder in the job, managed after apply); `runner/scan_test.go:TestCandidates`, `TestFit` (real Terraform fit plan), `TestFitPlan`; `templates/templates_test.go:TestPath`. Missing: `terraform query` itself (needs cloud credentials; checked live once, see the design doc), the 50-candidate cap.
+
 **D7. Adopt existing resources when adding a template** — `partial`
 - Actor: operate. Steps: deploy or add form of a template with `adopt` → paste resource IDs (+ current settings) → plan with import blocks into `module.<name>` → confirm (always, also with auto-apply) → imported. Design: `docs/resource-import.md`.
 - Failures: ID missing for a shown entry, wrong format, control characters → 422; plan replaces or deletes → run errored, added template removed again.

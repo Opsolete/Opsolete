@@ -1,6 +1,7 @@
 package templates
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -236,5 +237,26 @@ func TestAdoptIDs(t *testing.T) {
 	}
 	if got, errs = vm.AdoptIDs(map[string]string{"os_type": "linux"}, []string{"", "anything", nicID}); len(errs) != 0 || got["azurerm_linux_virtual_machine.self[0]"] != "anything" {
 		t.Errorf("linux, no pattern: %v %v", got, errs)
+	}
+}
+
+func TestPath(t *testing.T) {
+	var v any
+	json.Unmarshal([]byte(`{"size": "S", "os_disk": [{"storage_account_type": "Premium_LRS"}], "nics": ["a", "b"], "n": 2, "on": true, "x": null}`), &v)
+	for path, want := range map[string]any{"size": "S", "os_disk[0].storage_account_type": "Premium_LRS", "nics[1]": "b", "n": 2.0, "on": true,
+		"x": nil, "nope": nil, "nics[2]": nil, "size[0]": nil, "os_disk.storage_account_type": nil} {
+		if got := Path(v, path); got != want {
+			t.Errorf("Path(%s) = %v, want %v", path, got, want)
+		}
+	}
+	for _, p := range []string{"a", "a.b", "a[0].b_c", "network_interface_ids[0]"} {
+		if !pathRe.MatchString(p) {
+			t.Errorf("valid path %q rejected", p)
+		}
+	}
+	for _, p := range []string{"", "a..b", "[0]", "a[x]", "a.", "${x}"} {
+		if pathRe.MatchString(p) {
+			t.Errorf("invalid path %q accepted", p)
+		}
 	}
 }

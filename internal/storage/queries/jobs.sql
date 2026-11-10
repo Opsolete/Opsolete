@@ -6,14 +6,15 @@
 -- The longest-waiting queued phase. SKIP LOCKED: runners never get the same one. Runs of a locked
 -- workspace wait, except speculative plans and drift checks, which never take the state lock.
 SELECT r.id, r.status FROM runs r WHERE r.status IN ('plan_queued', 'apply_queued')
-    AND (r.action IN ('plan', 'assess') OR NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.id = r.workspace_id AND w.state_lock IS NOT NULL))
+    AND (r.action IN ('plan', 'assess', 'scan') OR NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.id = r.workspace_id AND w.state_lock IS NOT NULL))
 ORDER BY r.updated_at FOR UPDATE OF r SKIP LOCKED LIMIT 1;
 
 -- name: LeaseRun :one
 UPDATE runs SET runner = sqlc.arg(runner)::text, lease_id = sqlc.arg(lease_id)::text,
     lease_until = now() + make_interval(secs => sqlc.arg(lease_secs)::float8)
 WHERE id = sqlc.arg(id)::uuid
-RETURNING workspace_id, action, replace, COALESCE(vcs_commit, '')::text AS vcs_commit, remove_templates, imports;
+RETURNING workspace_id, action, replace, COALESCE(vcs_commit, '')::text AS vcs_commit, remove_templates, imports,
+    COALESCE(scan_template, '')::text AS scan_template;
 
 -- name: WorkspaceHasVCS :one
 SELECT EXISTS (SELECT 1 FROM workspace_vcs WHERE workspace_id = sqlc.arg(workspace_id)::uuid);

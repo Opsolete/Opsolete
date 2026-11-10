@@ -1,7 +1,11 @@
 // Package runnerapi defines the wire format between Opsolete and its runners.
 package runnerapi
 
-import tfjson "github.com/hashicorp/terraform-json"
+import (
+	"encoding/json"
+
+	tfjson "github.com/hashicorp/terraform-json"
+)
 
 const (
 	Prefix      = "/api/runner/v1"
@@ -56,6 +60,9 @@ type Job struct {
 	Secrets []string `json:"secrets,omitempty"`
 	// Currency of the cost estimate (ISO 4217, e.g. EUR); "" is Infracost's default, USD.
 	Currency string `json:"currency,omitempty"`
+	// Scan (action scan, plan phase only): the template (JSON) whose adopt entries say what to find; Modules[0]
+	// is its module, for the fit check. No state: nothing is written, nothing locked.
+	Scan json.RawMessage `json:"scan,omitempty"`
 }
 
 // Module is a template added to the workspace: the runner adds it as module.<Name> next to the
@@ -82,6 +89,27 @@ type FinishRequest struct {
 	// Resources indexes the workspace's state as the apply left it. null (not empty) means the
 	// state couldn't be read, so the current version stays unindexed; [] means nothing is deployed.
 	Resources []Resource `json:"resources"`
+	// Candidates a scan found, by name. Inputs never hold sensitive values.
+	Candidates []Candidate `json:"candidates,omitempty"`
+}
+
+// Candidate is an existing resource a scan found for a template: the form values that adopt it, and how a plan
+// with them went (the fit check).
+type Candidate struct {
+	Name    string            `json:"name"`
+	ID      string            `json:"id"`     // the resource's ID
+	Inputs  map[string]string `json:"inputs"` // form values by input name, as typed; sensitive ones left out
+	Adopt   []string          `json:"adopt"`  // the IDs to paste, by adopt entry
+	Fit     string            `json:"fit"`    // fits | differs | replaces | invalid (the form refuses it) | unchecked
+	Message string            `json:"message,omitempty"`
+	Changes []FitChange       `json:"changes,omitempty"` // differs / replaces: what the plan would do besides importing
+}
+
+// FitChange is one resource a fit check's plan changes: the action and the attributes, never their values.
+type FitChange struct {
+	Address    string   `json:"address"` // in the module, e.g. azurerm_windows_virtual_machine.self[0]
+	Action     string   `json:"action"`  // create | update | delete | replace
+	Attributes []string `json:"attributes,omitempty"`
 }
 
 // Plan is what a plan will do: counts and resource addresses, never values.
@@ -109,23 +137,26 @@ type Change struct {
 	Action  string `json:"action"` // create | update | delete | replace | import (imported without changes)
 }
 
-// Resource is one managed resource in a workspace's state; never its attribute values.
+// Resource is one managed resource in a workspace's state: names and its ID, no other values.
 type Resource struct {
 	Address  string `json:"address"`  // e.g. module.net.azurerm_subnet.this[0]
 	Type     string `json:"type"`     // e.g. azurerm_subnet
 	Name     string `json:"name"`     // e.g. this
 	Provider string `json:"provider"` // e.g. registry.terraform.io/hashicorp/azurerm
 	Module   string `json:"module"`   // e.g. module.net; empty for the root module
+	// ID is the resource's id attribute, the one value kept: a scan tells resources already managed by it.
+	ID string `json:"id,omitempty"`
 }
 
-// Inventory lists the managed resources in a state (terraform show -json): names only, never values.
+// Inventory lists the managed resources in a state (terraform show -json): names and IDs, no other values.
 func Inventory(st *tfjson.State) []Resource {
 	out := []Resource{}
 	var walk func(m *tfjson.StateModule)
 	walk = func(m *tfjson.StateModule) {
 		for _, r := range m.Resources {
 			if r.Mode == tfjson.ManagedResourceMode {
-				out = append(out, Resource{Address: r.Address, Type: r.Type, Name: r.Name, Provider: r.ProviderName, Module: m.Address})
+				id, _ := r.AttributeValues["id"].(string)
+				out = append(out, Resource{Address: r.Address, Type: r.Type, Name: r.Name, Provider: r.ProviderName, Module: m.Address, ID: id})
 			}
 		}
 		for _, c := range m.ChildModules {

@@ -3,6 +3,7 @@ package httpserver
 import (
 	"cmp"
 	"errors"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -45,6 +46,15 @@ func (p builderPage) AdoptShowOptions(c *templates.ShowIf) []string {
 		names = append(names, c.Input)
 	}
 	return names
+}
+
+// InputLines is an adopt row's inputs mapping as the builder's text area shows it: input = path per line.
+func (builderPage) InputLines(m map[string]string) string {
+	var b strings.Builder
+	for _, k := range slices.Sorted(maps.Keys(m)) {
+		b.WriteString(k + " = " + m[k] + "\n")
+	}
+	return b.String()
 }
 
 // ShowOptions lists the fields row i's "show when" can pick: the select and bool rows above it, plus its
@@ -248,7 +258,21 @@ func templateFromForm(f url.Values) templates.Template {
 		if to = strings.TrimSpace(to); to == "" {
 			continue
 		}
-		a := templates.Adopt{To: to, Label: at("ad_label", i), Help: at("ad_help", i), Pattern: at("ad_pattern", i)}
+		a := templates.Adopt{To: to, Label: at("ad_label", i), Help: at("ad_help", i), Pattern: at("ad_pattern", i),
+			List: at("ad_list", i), Require: at("ad_require", i), IDFrom: at("ad_id_from", i)}
+		for _, line := range strings.Split(at("ad_inputs", i), "\n") { // input = attribute path, one per line
+			if in, path, ok := strings.Cut(line, "="); ok && strings.TrimSpace(in) != "" {
+				if a.Inputs == nil {
+					a.Inputs = map[string]string{}
+				}
+				a.Inputs[strings.TrimSpace(in)] = strings.TrimSpace(path)
+			}
+		}
+		for _, v := range strings.Split(at("ad_placeholder", i), ",") {
+			if v = strings.TrimSpace(v); v != "" {
+				a.Placeholder = append(a.Placeholder, v)
+			}
+		}
 		if src := at("ad_show_input", i); src != "" {
 			a.ShowIf = &templates.ShowIf{Input: src}
 			for _, v := range strings.Split(at("ad_show_equals", i), ",") {

@@ -41,11 +41,16 @@ type (
 		PerEnv    bool            `json:"per_environment,omitempty"`
 	}
 	fileAdopt struct {
-		To      string      `json:"to"`
-		Label   string      `json:"label,omitempty"`
-		Help    string      `json:"help,omitempty"`
-		Pattern string      `json:"pattern,omitempty"`
-		ShowIf  *fileShowIf `json:"show_if,omitempty"`
+		To          string            `json:"to"`
+		Label       string            `json:"label,omitempty"`
+		Help        string            `json:"help,omitempty"`
+		Pattern     string            `json:"pattern,omitempty"`
+		ShowIf      *fileShowIf       `json:"show_if,omitempty"`
+		List        string            `json:"list,omitempty"`
+		Require     string            `json:"require,omitempty"`
+		IDFrom      string            `json:"id_from,omitempty"`
+		Inputs      map[string]string `json:"inputs,omitempty"`
+		Placeholder []string          `json:"placeholder,omitempty"`
 	}
 	fileShowIf struct {
 		Input  string            `json:"input"`
@@ -107,7 +112,8 @@ func (t *Template) UnmarshalJSON(b []byte) error {
 		if err := strict(raw, &fa); err != nil {
 			return fmt.Errorf("%s, adopt #%d: %w", where, i+1, err)
 		}
-		a := Adopt{To: fa.To, Label: fa.Label, Help: fa.Help, Pattern: fa.Pattern}
+		a := Adopt{To: fa.To, Label: fa.Label, Help: fa.Help, Pattern: fa.Pattern, List: fa.List, Require: fa.Require, IDFrom: fa.IDFrom,
+			Inputs: fa.Inputs, Placeholder: fa.Placeholder}
 		var err error
 		if a.ShowIf, err = fa.ShowIf.decode(types); err != nil {
 			return fmt.Errorf("%s, adopt %q: %w", where, fa.To, err)

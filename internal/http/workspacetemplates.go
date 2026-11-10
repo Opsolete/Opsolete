@@ -3,6 +3,7 @@ package httpserver
 import (
 	"maps"
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 
@@ -28,6 +29,17 @@ func (s *Server) loadTemplateForm(w http.ResponseWriter, r *http.Request) (formP
 		inputs, page.Cur = f.Current.Inputs, templates.Module{Source: f.Current.ModuleSource, Ref: f.Current.ModuleRef}
 	}
 	page.Values, page.Set = app.FormDefaults(f.Template, inputs)
+	if q := r.URL.Query(); page.Adding && q.Has("scan") { // adopting what a scan found: its values and IDs
+		id, _ := uuid.Parse(q.Get("scan"))
+		n, _ := strconv.Atoi(q.Get("n"))
+		c, err := s.App.ScanCandidate(r.Context(), actor(r), r.PathValue("name"), id, n)
+		if err != nil {
+			s.uiError(w, r, err)
+			return formPage{}, false
+		}
+		maps.Copy(page.Values, c.Inputs)
+		page.Adopt, page.Found = c.Adopt, c.Name
+	}
 	if err := s.lock(r, &page, storage.Project{ID: f.Workspace.ProjectID, Name: f.Workspace.ProjectName}); err != nil {
 		s.internalError(w, "environment values", err)
 		return formPage{}, false

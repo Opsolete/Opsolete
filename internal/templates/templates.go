@@ -35,7 +35,58 @@ type Adopt struct {
 	Help    string  `json:"help,omitempty"`    // shown under the field, and as the error when Pattern doesn't match
 	Pattern string  `json:"pattern,omitempty"` // the ID's format: a Go regexp the whole ID must match
 	ShowIf  *ShowIf `json:"show_if,omitempty"` // as for inputs, e.g. a VM resource that depends on an os_type input
+
+	// Scanning (a workspace's "Import existing resources"): how existing resources are found and fill the form.
+	// List: the provider's list resource type that finds this entry's resources (terraform query), e.g.
+	// azurerm_windows_virtual_machine. An entry with List and without IDFrom is a primary one: each resource it
+	// finds is a candidate (and sets the input of a one-value ShowIf, e.g. os_type windows).
+	List string `json:"list,omitempty"`
+	// Require: only resources whose attribute (a path) is set count, e.g. provision_vm_agent: azurerm's Linux VM
+	// list also returns Windows VMs, read without their Windows settings.
+	Require string `json:"require,omitempty"`
+	// IDFrom: a related entry's ID is the primary resource's attribute at this path, e.g. network_interface_ids[0].
+	IDFrom string `json:"id_from,omitempty"`
+	// Inputs: input name → the attribute path in this entry's resource whose value fills it.
+	Inputs map[string]string `json:"inputs,omitempty"`
+	// Placeholder: sensitive inputs filled with a random value when adopting, for values the cloud never
+	// returns (an admin password the module must ignore_changes).
+	Placeholder []string `json:"placeholder,omitempty"`
 }
+
+// Primary reports whether the entry's resources are scan candidates (List without IDFrom).
+func (a Adopt) Primary() bool { return a.List != "" && a.IDFrom == "" }
+
+// IsPlaceholder reports whether input name gets a random value when adopting and left empty (Adopt.Placeholder).
+func (t Template) IsPlaceholder(name string) bool {
+	return slices.ContainsFunc(t.Adopt, func(a Adopt) bool { return slices.Contains(a.Placeholder, name) })
+}
+
+// Scannable reports whether a scan can find candidates for t.
+func (t Template) Scannable() bool { return slices.ContainsFunc(t.Adopt, Adopt.Primary) }
+
+// pathRe is an attribute path: name, then .name or [index] steps.
+var pathRe = regexp.MustCompile(`^[A-Za-z_][\w-]*(\.[A-Za-z_][\w-]*|\[\d+\])*$`)
+
+// Path reads the attribute at path (pathRe) from v, a resource's JSON attributes; nil when absent.
+func Path(v any, path string) any {
+	for _, step := range pathSteps.FindAllString(path, -1) {
+		switch x := v.(type) {
+		case map[string]any:
+			v = x[strings.TrimPrefix(step, ".")]
+		case []any:
+			i, err := strconv.Atoi(strings.Trim(step, "[]"))
+			if err != nil || i >= len(x) || !strings.HasPrefix(step, "[") {
+				return nil
+			}
+			v = x[i]
+		default:
+			return nil
+		}
+	}
+	return v
+}
+
+var pathSteps = regexp.MustCompile(`^[^.\[]+|\.[^.\[]+|\[\d+\]`)
 
 // Title is what the form calls the field: its label, else its address.
 func (a Adopt) Title() string { return cmp.Or(a.Label, a.To) }
@@ -466,9 +517,38 @@ func (t Template) check() error {
 		if err := a.ShowIf.check(before); err != nil {
 			return fmt.Errorf("adopt %q: %w", a.To, err)
 		}
+		if a.List != "" && !listRe.MatchString(a.List) {
+			return fmt.Errorf("adopt %q: list %q is not a resource type", a.To, a.List)
+		}
+		if a.Require != "" && a.List == "" {
+			return fmt.Errorf("adopt %q: require needs list", a.To)
+		}
+		if a.IDFrom != "" && !t.Scannable() {
+			return fmt.Errorf("adopt %q: id_from needs an entry with list and without id_from, whose resource it reads", a.To)
+		}
+		for _, p := range []string{a.Require, a.IDFrom} {
+			if p != "" && !pathRe.MatchString(p) {
+				return fmt.Errorf("adopt %q: %q is not an attribute path, e.g. network_interface_ids[0] or os_disk[0].storage_account_type", a.To, p)
+			}
+		}
+		for _, name := range slices.Sorted(maps.Keys(a.Inputs)) {
+			if _, ok := before[name]; !ok {
+				return fmt.Errorf("adopt %q: inputs: %q is not an input of the template", a.To, name)
+			}
+			if !pathRe.MatchString(a.Inputs[name]) {
+				return fmt.Errorf("adopt %q: inputs: %q is not an attribute path, e.g. size or os_disk[0].storage_account_type", a.To, a.Inputs[name])
+			}
+		}
+		for _, name := range a.Placeholder {
+			if in, ok := before[name]; !ok || !in.Sensitive {
+				return fmt.Errorf("adopt %q: placeholder %q is not a sensitive input of the template", a.To, name)
+			}
+		}
 	}
 	return nil
 }
+
+var listRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 // addrRe is a managed resource address, optionally in nested modules and with an index; it goes into an
 // import block's "to" as is.

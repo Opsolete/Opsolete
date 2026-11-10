@@ -113,6 +113,14 @@ func TestSchema(t *testing.T) {
 		{"per_environment key", `{"name": "k", "type": "string", "key": true, "per_environment": true}`,
 			"input allOf[5] then key const false", `template "t", input "k": a per-environment input can't be the key`},
 		{"adopt: bad address", `{"name": "s", "type": "string"}], "adopt": [{"to": "data.x.y"}`, "loader only: to is a resource address", `adopt "data.x.y": not a resource address`},
+		{"adopt: input not in the template", `{"name": "s", "type": "string"}], "adopt": [{"to": "a.b", "list": "a", "inputs": {"size": "size"}}`,
+			"loader only: inputs name inputs", `adopt "a.b": inputs: "size" is not an input`},
+		{"adopt: placeholder not sensitive", `{"name": "s", "type": "string"}], "adopt": [{"to": "a.b", "placeholder": ["s"]}`,
+			"loader only: placeholder names sensitive inputs", `placeholder "s" is not a sensitive input`},
+		{"adopt: id_from without a primary", `{"name": "s", "type": "string"}], "adopt": [{"to": "a.b", "id_from": "x"}`,
+			"loader only: id_from needs a primary entry", `id_from needs an entry with list`},
+		{"adopt: bad path", `{"name": "s", "type": "string"}], "adopt": [{"to": "a.b", "list": "a", "inputs": {"s": "a..b"}}`,
+			"loader only: paths", `"a..b" is not an attribute path`},
 		{"adopt: twice", `{"name": "s", "type": "string"}], "adopt": [{"to": "a.b"}, {"to": "a.b"}`, "loader only: to is unique", `adopt "a.b": listed twice`},
 		{"adopt: unknown field", `{"name": "s", "type": "string"}], "adopt": [{"to": "a.b", "type": "x"}`, "adopt additionalProperties", `adopt #1: unknown field "type"`},
 		{"adopt: show_if on a later input", `{"name": "s", "type": "string"}], "adopt": [{"to": "a.b", "show_if": {"input": "s", "equals": ["x"]}}`,
@@ -145,7 +153,8 @@ func TestJSONRoundTrip(t *testing.T) {
 		{"name": "f", "label": "", "type": "number", "required": false, "default": 0.5},
 		{"name": "b", "label": "", "type": "bool", "required": false, "default": true},
 		{"name": "s", "label": "", "type": "string", "required": false, "default": "7", "show_if": {"input": "b", "equals": [false]}}],
-		"adopt": [{"to": "x.y[0]", "label": "L", "pattern": "p", "show_if": {"input": "b", "equals": [true]}}]}`)
+		"adopt": [{"to": "x.y[0]", "label": "L", "pattern": "p", "show_if": {"input": "b", "equals": [true]},
+			"list": "x", "require": "r", "inputs": {"s": "a[0].b"}}, {"to": "z.w", "id_from": "ids[0]"}]}`)
 	ts, _, err := Parse(map[string][]byte{"t.json": file})
 	if err != nil {
 		t.Fatal(err)
@@ -163,7 +172,7 @@ func TestJSONRoundTrip(t *testing.T) {
 	}
 	var compact bytes.Buffer
 	json.Compact(&compact, b)
-	for _, want := range []string{`"default":1e+21`, `"default":0.5`, `"default":true`, `"default":"7"`, `"equals":[false]`, `"per_environment":true`, `"adopt":[{"to":"x.y[0]","label":"L","pattern":"p","show_if":{"input":"b","equals":[true]}}]`, `"$schema":"` + SchemaURL + `"`} {
+	for _, want := range []string{`"default":1e+21`, `"default":0.5`, `"default":true`, `"default":"7"`, `"equals":[false]`, `"per_environment":true`, `"adopt":[{"to":"x.y[0]","label":"L","pattern":"p","list":"x","require":"r","inputs":{"s":"a[0].b"},"show_if":{"input":"b","equals":[true]}},{"to":"z.w","id_from":"ids[0]"}]`, `"$schema":"` + SchemaURL + `"`} {
 		if !strings.Contains(compact.String(), want) {
 			t.Errorf("encoded lacks %s:\n%s", want, b)
 		}
