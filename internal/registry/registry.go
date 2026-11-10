@@ -24,6 +24,7 @@ import (
 
 	"github.com/hashicorp/go-version"
 	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/ext/typeexpr"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
 	tfaddr "github.com/hashicorp/terraform-registry-address"
@@ -349,8 +350,9 @@ func extract(archive []byte, dir string) error {
 	}
 }
 
-// Inputs maps module variables to form inputs. Complex types (list, map, object, ...) can't be a
-// simple form field yet; they are returned in skipped so the builder can warn about them.
+// Inputs maps module variables to form inputs. A list(object({...})) of strings, numbers and bools is a list input,
+// rows of fields; other complex types (map, object, list of lists, ...) can't be a form field yet: they are
+// returned in skipped so the builder can warn about them.
 func Inputs(vars []Variable) (inputs []templates.Input, skipped []string) {
 	for _, v := range vars {
 		in := templates.Input{Name: v.Name, Required: v.Required}
@@ -364,8 +366,12 @@ func Inputs(vars []Variable) (inputs []templates.Input, skipped []string) {
 		case "bool":
 			in.Type = "bool"
 		default:
-			skipped = append(skipped, fmt.Sprintf("%s (%s)", v.Name, v.Type))
-			continue
+			fields, ok := listFields(v.Type)
+			if !ok {
+				skipped = append(skipped, fmt.Sprintf("%s (%s)", v.Name, v.Type))
+				continue
+			}
+			in.Type, in.Fields = "list", fields
 		}
 		if in.Type == "string" {
 			in.Pattern = v.Pattern
@@ -381,9 +387,97 @@ func Inputs(vars []Variable) (inputs []templates.Input, skipped []string) {
 	return inputs, skipped
 }
 
+// listFields reads a list(object({...})) type of string, number and bool attributes as a list input's fields, in
+// the order written: optional(...) ones aren't required, and optional(t, d)'s d is the field's default.
+func listFields(src string) ([]templates.Input, bool) {
+	expr, diags := hclsyntax.ParseExpression([]byte(src), "type", hcl.InitialPos)
+	if diags.HasErrors() {
+		return nil, false
+	}
+	ty, defs, diags := typeexpr.TypeConstraintWithDefaults(expr)
+	if diags.HasErrors() || !ty.IsListType() || !ty.ElementType().IsObjectType() {
+		return nil, false
+	}
+	list, _ := expr.(*hclsyntax.FunctionCallExpr) // list(object({ a = …, b = … })): the order written
+	if list == nil || len(list.Args) != 1 {
+		return nil, false
+	}
+	obj, _ := list.Args[0].(*hclsyntax.FunctionCallExpr)
+	if obj == nil || len(obj.Args) != 1 {
+		return nil, false
+	}
+	attrs, _ := obj.Args[0].(*hclsyntax.ObjectConsExpr)
+	if attrs == nil {
+		return nil, false
+	}
+	el := ty.ElementType()
+	var elDefs *typeexpr.Defaults
+	if defs != nil {
+		elDefs = defs.Children[""]
+	}
+	var fields []templates.Input
+	for _, item := range attrs.Items {
+		name := hcl.ExprAsKeyword(item.KeyExpr)
+		if !el.HasAttribute(name) {
+			return nil, false
+		}
+		f := templates.Input{Name: name, Label: name, Required: !el.AttributeOptional(name)}
+		var d cty.Value
+		if elDefs != nil {
+			d = elDefs.DefaultValues[name]
+		}
+		known := d != cty.NilVal && d.IsKnown() && !d.IsNull()
+		switch el.AttributeType(name) {
+		case cty.String:
+			f.Type = "string"
+			if known {
+				f.Default = d.AsString()
+			}
+		case cty.Number:
+			f.Type = "number"
+			if known {
+				n, _ := d.AsBigFloat().Float64()
+				f.Default = templates.FormatValue(n)
+			}
+		case cty.Bool:
+			f.Type = "bool"
+			if known {
+				f.Default = strconv.FormatBool(d.True())
+			}
+		default:
+			return nil, false
+		}
+		fields = append(fields, f)
+	}
+	return fields, len(fields) > 0
+}
+
+// overrideField applies what a template's JSON adds to a generated input or field: a label, help, a default, a
+// pattern (replacing the module's), select options (over a string).
+func overrideField(in, o templates.Input) templates.Input {
+	if o.Type == "select" && in.Type == "string" {
+		in.Type, in.Options = "select", o.Options
+	}
+	if o.Label != "" {
+		in.Label = o.Label
+	}
+	if o.Help != "" {
+		in.Help = o.Help
+	}
+	if o.Default != "" {
+		in.Default = o.Default
+	}
+	if o.Pattern != "" {
+		in.Pattern = o.Pattern
+	}
+	in.Required = in.Required || o.Required
+	return in
+}
+
 // Resolve makes a template's form match the module version it pins: one input per module variable,
 // with name, type, required-ness and regex validation pattern from variables.tf. The template's JSON
-// inputs only add a label, help, a pattern (replacing the module's), select options or default, and keep their order. JSON inputs the module doesn't declare are
+// inputs only add a label, help, a pattern (replacing the module's), select options or default, and keep their order;
+// a list's fields the same (by name; the module's type says which there are). JSON inputs the module doesn't declare are
 // dropped. Sensitive variables appear only if the JSON lists them; listed, they are sensitive inputs.
 func Resolve(overrides []templates.Input, vars []Variable) []templates.Input {
 	gen, _ := Inputs(vars)
@@ -402,22 +496,13 @@ func Resolve(overrides []templates.Input, vars []Variable) []templates.Input {
 			continue
 		}
 		delete(byName, o.Name)
-		if o.Type == "select" && in.Type == "string" {
-			in.Type, in.Options = "select", o.Options
+		in = overrideField(in, o)
+		in.ShowIf = o.ShowIf
+		for i, f := range in.Fields {
+			if j := slices.IndexFunc(o.Fields, func(of templates.Input) bool { return of.Name == f.Name }); j >= 0 {
+				in.Fields[i] = overrideField(f, o.Fields[j])
+			}
 		}
-		if o.Label != "" {
-			in.Label = o.Label
-		}
-		if o.Help != "" {
-			in.Help = o.Help
-		}
-		if o.Default != "" {
-			in.Default = o.Default
-		}
-		if o.Pattern != "" {
-			in.Pattern = o.Pattern
-		}
-		in.Required, in.ShowIf = in.Required || o.Required, o.ShowIf
 		in.Sensitive = o.Sensitive || sensitive[o.Name] && (in.Type == "string" || in.Type == "number")
 		if in.Sensitive {
 			in.Default = "" // never echoed into the form

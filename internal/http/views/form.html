@@ -59,10 +59,19 @@
     <label>{{.Title}}</label>
     <input type="hidden" id="{{.Name}}" name="{{.Name}}" value="{{$lock}}" disabled data-locked>
     <p><code>{{$.LockedText .}}</code> <span class="hint">Set by project <a href="/projects/{{$.LockedBy}}/environment">{{$.LockedBy}}</a></span></p>
+  {{else if eq .Type "list"}}
+    <p class="field" id="{{.Name}}-label">{{.Title}}</p>
   {{else}}
     <label for="{{.Name}}">{{.Title}}{{if .Required}} <span class="req" aria-hidden="true">*</span>{{end}}</label>
   {{end}}
-  {{if $lock}}{{else if eq .Type "bool"}}
+  {{if $lock}}{{else if eq .Type "list"}}{{$in := .}}
+    <!-- rows of fields, posted as <list>.<row>.<field>; "+ Add row" copies the template below (the fields' defaults) -->
+    <div class="list-input" role="group" aria-labelledby="{{.Name}}-label"{{aria $.F .Name $help}}>
+      <div class="list-rows">{{range $i, $r := rows (index $v .Name)}}{{template "listrow" (dict "In" $in "I" $i "Row" $r)}}{{end}}</div>
+      <template>{{template "listrow" (dict "In" $in "I" "__i__" "Row" nil)}}</template>
+      <button type="button" class="secondary small" data-list-add>+ Add row</button>
+    </div>
+  {{else if eq .Type "bool"}}
     <input type="checkbox" id="{{.Name}}" name="{{.Name}}"{{if eq (index $v .Name) "on" "true"}} checked{{end}}{{aria $.F .Name $help}}>
   {{else if eq .Type "select"}}
     <select id="{{.Name}}" name="{{.Name}}"{{aria $.F .Name $help}}>
@@ -99,3 +108,23 @@
   </div>
 </form>
 {{template "bottom"}}
+
+{{/* a row of a list input: In the input, I the row number, Row its values (nil: a new row, the defaults) */}}
+{{define "listrow"}}{{$in := .In}}{{$i := .I}}{{$row := .Row}}
+<div class="list-row" data-row="{{$i}}" role="group" aria-label="{{$in.Title}}, row">
+  {{range $in.Fields}}{{$id := print $in.Name "." $i "." .Name}}{{$val := .Default}}{{if $row}}{{$val = index $row .Name}}{{end}}
+  <div class="list-field">
+    <label for="{{$id}}">{{.Title}}{{if .Required}} <span class="req" aria-hidden="true">*</span>{{end}}</label>
+    {{if eq .Type "bool"}}
+    <input type="checkbox" id="{{$id}}" name="{{$id}}"{{if eq $val "true" "on"}} checked{{end}}>
+    {{else if eq .Type "select"}}
+    <select id="{{$id}}" name="{{$id}}">{{range .Options}}<option value="{{.Value}}"{{if eq .Value $val}} selected{{end}}>{{.Text}}</option>{{end}}</select>
+    {{else}}
+    <input id="{{$id}}" name="{{$id}}" value="{{$val}}" autocomplete="off" spellcheck="false"{{if eq .Type "number"}} type="number" step="any" inputmode="decimal"{{end}}
+      {{if .Pattern}} pattern="{{.Pattern}}"{{with .Help}} title="{{.}}"{{end}}{{end}}{{if .Required}} required{{end}}>
+    {{end}}
+  </div>
+  {{end}}
+  <button type="button" class="secondary small" data-list-remove>Remove</button>
+</div>
+{{end}}

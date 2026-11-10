@@ -34,7 +34,7 @@ type Input struct {
 	Name     string   `json:"name"`
 	Label    string   `json:"label"`
 	Help     string   `json:"help,omitempty"` // shown under the field, and as the error when Pattern doesn't match
-	Type     string   `json:"type"`           // string | number | bool | select
+	Type     string   `json:"type"`           // string | number | bool | select | list
 	Required bool     `json:"required"`
 	Pattern  string   `json:"pattern,omitempty"`
 	Options  []Option `json:"options,omitempty"`
@@ -49,10 +49,17 @@ type Input struct {
 	Key bool `json:"key,omitempty"`
 	// PerEnvironment: a project ("environment") may set the value for all its workspaces, overriding theirs at every run.
 	PerEnvironment bool `json:"per_environment,omitempty"`
+	// Fields of a list input (a Terraform list(object({...}))): the form has rows of them. Each is a string, number,
+	// bool or select field; optional ones (Required false) left empty are left out, so the type's default applies.
+	// The form's value of a list is JSON: an array of objects.
+	Fields []Input `json:"fields,omitempty"`
 }
 
 // InputTypes are the input types; the JSON Schema's enum must match (TestSchema).
-var InputTypes = []string{"string", "number", "bool", "select"}
+var InputTypes = []string{"string", "number", "bool", "select", "list"}
+
+// FieldTypes are the types a list's fields can have.
+var FieldTypes = []string{"string", "number", "bool", "select"}
 
 // Title is what the form calls the input: its label, else its name.
 func (in Input) Title() string { return cmp.Or(in.Label, in.Name) }
@@ -343,6 +350,9 @@ func (t Template) check() error {
 		if in.Type == "select" && len(in.Options) == 0 {
 			return fmt.Errorf("input %q: select needs options", in.Name)
 		}
+		if err := in.checkList(); err != nil {
+			return err
+		}
 		if in.Sensitive && in.Type != "string" && in.Type != "number" {
 			return fmt.Errorf("input %q: only string and number inputs can be sensitive", in.Name)
 		}
@@ -388,6 +398,38 @@ func (t Template) check() error {
 			}
 		}
 		before[in.Name] = in
+	}
+	return nil
+}
+
+// checkList checks a list input's fields, and that it's none of what a list can't be (yet).
+func (in Input) checkList() error {
+	if in.Type != "list" {
+		if len(in.Fields) > 0 {
+			return fmt.Errorf("input %q: only a list has fields", in.Name)
+		}
+		return nil
+	}
+	if in.Sensitive || in.Key || in.PerEnvironment {
+		return fmt.Errorf("input %q: a list can't be sensitive, the key or per-environment", in.Name)
+	}
+	if len(in.Fields) == 0 {
+		return fmt.Errorf("input %q: a list needs fields", in.Name)
+	}
+	names := map[string]bool{}
+	for _, f := range in.Fields {
+		switch {
+		case !nameRe.MatchString(f.Name) || names[f.Name]:
+			return fmt.Errorf("input %q: invalid or duplicate field name %q", in.Name, f.Name)
+		case !slices.Contains(FieldTypes, f.Type):
+			return fmt.Errorf("input %q, field %q: unknown type %q (%s)", in.Name, f.Name, f.Type, strings.Join(FieldTypes, ", "))
+		case f.Sensitive || f.Key || f.PerEnvironment || f.ShowIf != nil || len(f.Fields) > 0:
+			return fmt.Errorf("input %q, field %q: a field can't be sensitive, the key, per-environment, shown conditionally or a list", in.Name, f.Name)
+		}
+		names[f.Name] = true
+		if err := (Template{ID: "x", Name: "x", Module: Module{"x", "x"}, Inputs: []Input{f}}).check(); err != nil {
+			return fmt.Errorf("input %q, field %s", in.Name, strings.TrimPrefix(err.Error(), "input "))
+		}
 	}
 	return nil
 }
@@ -457,6 +499,19 @@ func (t Template) Describe(stored map[string]any) []StoredValue {
 			sv.Sensitive = true
 		case bool:
 			sv.Text = map[bool]string{true: "Yes", false: "No"}[x]
+		case []any: // a list: a row per line, its fields in the form's words
+			var rows []string
+			for _, r := range x {
+				row, _ := r.(map[string]any)
+				var parts []string
+				for _, f := range in.Fields {
+					if v, ok := row[f.Name]; ok && v != nil {
+						parts = append(parts, f.Title()+": "+FormatValue(v))
+					}
+				}
+				rows = append(rows, strings.Join(parts, ", "))
+			}
+			sv.Text = cmp.Or(strings.Join(rows, "\n"), "(none)")
 		default:
 			sv.Text = FormatValue(v)
 			for _, o := range in.Options {
@@ -483,9 +538,14 @@ func (t Template) Describe(stored map[string]any) []StoredValue {
 }
 
 // FormatValue shows a stored input value or module default as typed: fmt prints the float64 1000000 as 1e+06.
+// A list (or object) is its JSON, the form's value of a list input.
 func FormatValue(v any) string {
-	if f, ok := v.(float64); ok {
-		return strconv.FormatFloat(f, 'f', -1, 64)
+	switch x := v.(type) {
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64)
+	case []any, map[string]any:
+		b, _ := json.Marshal(x)
+		return string(b)
 	}
 	return fmt.Sprint(v)
 }
@@ -506,6 +566,15 @@ func (t Template) Validate(raw map[string]string) (map[string]any, map[string]st
 		}
 		if in.Type == "bool" {
 			vals[in.Name] = v == "on" || v == "true"
+			continue
+		}
+		if in.Type == "list" {
+			list, msg := in.validateList(v)
+			if msg != "" {
+				errs[in.Name] = msg
+				continue
+			}
+			vals[in.Name] = list
 			continue
 		}
 		if v == "" {
@@ -538,4 +607,34 @@ func (t Template) Validate(raw map[string]string) (map[string]any, map[string]st
 		}
 	}
 	return vals, errs
+}
+
+// validateList checks a list input's form value (a JSON array of objects, "" none) row by row, each field as an
+// input of its own, and returns the typed list (optional fields left empty left out), or the first error.
+func (in Input) validateList(v string) ([]any, string) {
+	list := []any{}
+	if v == "" {
+		return list, ""
+	}
+	var rows []map[string]any
+	if json.Unmarshal([]byte(v), &rows) != nil {
+		return nil, "Enter a list of rows."
+	}
+	row := Template{Inputs: in.Fields}
+	for i, r := range rows {
+		raw := map[string]string{}
+		for k, x := range r {
+			if x != nil {
+				raw[k] = FormatValue(x)
+			}
+		}
+		vals, errs := row.Validate(raw)
+		for _, f := range in.Fields {
+			if e := errs[f.Name]; e != "" {
+				return nil, fmt.Sprintf("Row %d, %s: %s", i+1, f.Title(), e)
+			}
+		}
+		list = append(list, vals)
+	}
+	return list, ""
 }

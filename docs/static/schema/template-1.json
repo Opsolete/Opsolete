@@ -42,7 +42,7 @@
         },
         "label": { "description": "The question end users see; empty: the name.", "type": "string" },
         "help": { "description": "Shown under the field, and as the error when the pattern doesn't match.", "type": "string" },
-        "type": { "enum": ["string", "number", "bool", "select"] },
+        "type": { "enum": ["string", "number", "bool", "select", "list"] },
         "required": { "type": "boolean" },
         "pattern": { "description": "A Go regular expression the whole value must match (string inputs).", "type": "string" },
         "options": { "type": "array", "items": { "$ref": "#/$defs/option" } },
@@ -50,7 +50,8 @@
         "sensitive": { "description": "Stored sealed, typed in a password field, never shown (string and number inputs, no default).", "type": "boolean" },
         "show_if": { "$ref": "#/$defs/show_if" },
         "key": { "description": "At most one input: its value names the template's module in a workspace (not bool or sensitive).", "type": "boolean" },
-        "per_environment": { "description": "A project may set the value for all its workspaces, overriding theirs at every run (not sensitive or key).", "type": "boolean" }
+        "per_environment": { "description": "A project may set the value for all its workspaces, overriding theirs at every run (not sensitive or key).", "type": "boolean" },
+        "fields": { "description": "A list's fields (a Terraform list(object({...}))): the form has rows of them. Each is a string, number, bool or select input, without show_if, sensitive, key or per_environment.", "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/input" } }
       },
       "allOf": [
         {
@@ -64,6 +65,10 @@
         {
           "if": { "properties": { "type": { "const": "bool" } } },
           "then": { "properties": { "default": { "type": "boolean" }, "sensitive": { "const": false }, "key": { "const": false } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "list" } } },
+          "then": { "required": ["fields"], "properties": { "default": { "type": "array", "items": { "type": "object" } }, "sensitive": { "const": false }, "key": { "const": false }, "per_environment": { "const": false } } }
         },
         {
           "if": { "properties": { "type": { "const": "select" } } },

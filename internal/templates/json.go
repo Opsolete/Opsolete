@@ -38,6 +38,7 @@ type (
 		ShowIf    *fileShowIf     `json:"show_if,omitempty"`
 		Key       bool            `json:"key,omitempty"`
 		PerEnv    bool            `json:"per_environment,omitempty"`
+		Fields    []fileInput     `json:"fields,omitempty"` // a list's: each typed like an input
 	}
 	fileShowIf struct {
 		Input  string            `json:"input"`
@@ -80,14 +81,10 @@ func (t *Template) UnmarshalJSON(b []byte) error {
 		types[files[i].Name] = files[i].Type
 	}
 	for i, fi := range files {
-		in := Input{Name: fi.Name, Label: fi.Label, Help: fi.Help, Type: fi.Type, Required: fi.Required, Pattern: fi.Pattern,
-			Options: fi.Options, Sensitive: fi.Sensitive, Key: fi.Key, PerEnvironment: fi.PerEnv}
 		where := fmt.Sprintf("%s, input %v", where, inputRef(fi.Name, i))
-		var err error
-		if fi.Default != nil {
-			if in.Default, err = fromJSON(fi.Type, fi.Default); err != nil {
-				return fmt.Errorf("%s: default %w", where, err)
-			}
+		in, err := fi.input(where)
+		if err != nil {
+			return err
 		}
 		if fi.ShowIf != nil {
 			in.ShowIf = &ShowIf{Input: fi.ShowIf.Input}
@@ -105,6 +102,49 @@ func (t *Template) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+// input reads a file input as an Input (but its show_if), its fields too.
+func (fi fileInput) input(where string) (Input, error) {
+	in := Input{Name: fi.Name, Label: fi.Label, Help: fi.Help, Type: fi.Type, Required: fi.Required, Pattern: fi.Pattern,
+		Options: fi.Options, Sensitive: fi.Sensitive, Key: fi.Key, PerEnvironment: fi.PerEnv}
+	var err error
+	if fi.Default != nil {
+		if in.Default, err = fromJSON(fi.Type, fi.Default); err != nil {
+			return in, fmt.Errorf("%s: default %w", where, err)
+		}
+	}
+	for j, ff := range fi.Fields {
+		f, err := ff.input(fmt.Sprintf("%s, field %v", where, inputRef(ff.Name, j)))
+		if err != nil {
+			return in, err
+		}
+		in.Fields = append(in.Fields, f)
+	}
+	return in, nil
+}
+
+// fileInputOf is input's inverse (but show_if): in as written, its default typed, its fields too.
+func fileInputOf(in Input) (fileInput, error) {
+	fi := fileInput{Name: in.Name, Label: in.Label, Help: in.Help, Type: in.Type, Required: in.Required,
+		Pattern: in.Pattern, Options: in.Options, Sensitive: in.Sensitive, Key: in.Key, PerEnv: in.PerEnvironment}
+	if in.Default != "" {
+		v, err := toJSON(in.Type, in.Default)
+		if err != nil {
+			return fi, fmt.Errorf("input %s: default: %w", in.Name, err)
+		}
+		if fi.Default, err = json.Marshal(v); err != nil {
+			return fi, err
+		}
+	}
+	for _, f := range in.Fields {
+		ff, err := fileInputOf(f)
+		if err != nil {
+			return fi, fmt.Errorf("input %s, field %w", in.Name, err)
+		}
+		fi.Fields = append(fi.Fields, ff)
+	}
+	return fi, nil
+}
+
 func (t Template) MarshalJSON() ([]byte, error) {
 	type showIf struct {
 		Input  string `json:"input"`
@@ -112,8 +152,7 @@ func (t Template) MarshalJSON() ([]byte, error) {
 	}
 	type input struct {
 		fileInput
-		Default any     `json:"default,omitempty"`
-		ShowIf  *showIf `json:"show_if,omitempty"`
+		ShowIf *showIf `json:"show_if,omitempty"`
 	}
 	module, err := json.Marshal(t.Module)
 	if err != nil {
@@ -123,12 +162,8 @@ func (t Template) MarshalJSON() ([]byte, error) {
 	inputs := make([]input, len(t.Inputs))
 	for i, in := range t.Inputs {
 		types[in.Name] = in.Type
-		inputs[i].fileInput = fileInput{Name: in.Name, Label: in.Label, Help: in.Help, Type: in.Type, Required: in.Required,
-			Pattern: in.Pattern, Options: in.Options, Sensitive: in.Sensitive, Key: in.Key, PerEnv: in.PerEnvironment}
-		if in.Default != "" {
-			if inputs[i].Default, err = toJSON(in.Type, in.Default); err != nil {
-				return nil, fmt.Errorf("input %s: default: %w", in.Name, err)
-			}
+		if inputs[i].fileInput, err = fileInputOf(in); err != nil {
+			return nil, err
 		}
 	}
 	for i, in := range t.Inputs {
@@ -188,6 +223,12 @@ func fromJSON(typ string, raw json.RawMessage) (string, error) {
 			return "", fmt.Errorf("must be a JSON boolean (%s, not %s)", s, raw)
 		}
 		return "", fmt.Errorf("must be a JSON boolean (true or false), not %s", raw)
+	case "list":
+		var rows []map[string]any
+		if json.Unmarshal(raw, &rows) != nil || rows == nil {
+			return "", fmt.Errorf("must be a JSON array of objects, not %s", raw)
+		}
+		return FormatValue(anyList(rows)), nil
 	}
 	if isString { // string, select, or an unknown type check reports
 		return s, nil
@@ -213,6 +254,19 @@ func toJSON(typ, v string) (any, error) {
 			return nil, fmt.Errorf("%q is not true or false", v)
 		}
 		return b, nil
+	case "list":
+		if !json.Valid([]byte(v)) {
+			return nil, fmt.Errorf("%q is not a JSON list", v)
+		}
+		return json.RawMessage(v), nil
 	}
 	return v, nil
+}
+
+func anyList(rows []map[string]any) []any {
+	out := make([]any, len(rows))
+	for i, r := range rows {
+		out[i] = r
+	}
+	return out
 }

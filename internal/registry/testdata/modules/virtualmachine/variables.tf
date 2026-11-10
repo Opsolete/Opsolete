@@ -125,15 +125,21 @@ variable "boot_diagnostics_enabled" {
 
 # Data disks, auto-shutdown and network security group: all optional, none by default.
 
-variable "data_disks_json" {
-  type        = string
-  description = "Data disks: a JSON list, one object per disk, {\"lun\": 0, \"size_gb\": 64} plus optionally \"name\" (default <name>-data-<lun>), \"type\" (Standard_LRS, StandardSSD_LRS, Premium_LRS, …; default Standard_LRS) and \"caching\" (None, ReadOnly, ReadWrite; default ReadWrite), and \"existing\": true for a disk that exists already, attached to this VM at this LUN: imported instead of created. Default: none."
-  default     = "[]"
+variable "data_disks" {
+  type = list(object({
+    lun      = number
+    size_gb  = number
+    name     = optional(string) # default <name>-data-<lun>
+    type     = optional(string, "Standard_LRS")
+    caching  = optional(string, "ReadWrite")
+    existing = optional(bool, false) # exists already, attached to this VM at this LUN: imported instead of created
+  }))
+  description = "Data disks: one per row, each at its own LUN, e.g. lun 0, size_gb 64. type: Standard_LRS, StandardSSD_LRS, Premium_LRS, …; caching: None, ReadOnly or ReadWrite. Default: none."
+  default     = []
 
   validation {
-    condition = can([for d in jsondecode(var.data_disks_json) : [d.lun, d.size_gb]]) && length(distinct([
-    for d in jsondecode(var.data_disks_json) : d.lun])) == length(jsondecode(var.data_disks_json))
-    error_message = "A JSON list of disks, each with a number lun (unique) and size_gb, e.g. [{\"lun\": 0, \"size_gb\": 64}]."
+    condition     = length(distinct([for d in var.data_disks : d.lun])) == length(var.data_disks)
+    error_message = "Each data disk needs its own LUN."
   }
 }
 
@@ -172,15 +178,21 @@ variable "nsg_name" {
   default     = null
 }
 
-variable "nsg_rules_json" {
-  type        = string
-  description = "Network security group rules: a JSON list, one object per rule, {\"name\": \"RDP\", \"priority\": 300, \"destination_port_range\": \"3389\"} plus optionally direction (Inbound), access (Allow), protocol (Tcp), source_port_range, source_address_prefix, destination_address_prefix (each *) and description. Default: none."
-  default     = "[]"
-
-  validation {
-    condition     = can([for r in jsondecode(var.nsg_rules_json) : [r.name, r.priority]])
-    error_message = "A JSON list of rules, each with a name and a priority."
-  }
+variable "nsg_rules" {
+  type = list(object({
+    name                       = string
+    priority                   = number
+    direction                  = optional(string, "Inbound")
+    access                     = optional(string, "Allow")
+    protocol                   = optional(string, "Tcp")
+    source_port_range          = optional(string, "*")
+    destination_port_range     = optional(string, "*")
+    source_address_prefix      = optional(string, "*")
+    destination_address_prefix = optional(string, "*")
+    description                = optional(string, "")
+  }))
+  description = "Network security group rules: one per row, e.g. name RDP, priority 300, destination_port_range 3389. Default: none."
+  default     = []
 }
 
 variable "auto_shutdown_existing" {

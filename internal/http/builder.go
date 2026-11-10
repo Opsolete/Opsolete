@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"cmp"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -96,7 +97,7 @@ func (s *Server) builder(w http.ResponseWriter, r *http.Request) {
 		}
 		p.Selected = sel
 		if len(skipped) > 0 {
-			p.Warning = "Not generated (complex types need a default in the module or a future JSON field): " + strings.Join(skipped, ", ")
+			p.Warning = "Not generated (a form has text, numbers, yes / no, dropdowns and lists of objects of those; other types need a default in the module): " + strings.Join(skipped, ", ")
 		}
 	}
 	s.renderBuilder(w, r, http.StatusOK, p)
@@ -213,6 +214,13 @@ func templateFromForm(f url.Values) templates.Template {
 				}
 				in.Options = append(in.Options, templates.Option{Label: label, Value: value})
 			}
+		}
+		if typ == "list" { // its fields as the module has them (in_fields, JSON), with the labels given here
+			json.Unmarshal([]byte(at("in_fields", i)), &in.Fields)
+			for j := range in.Fields {
+				in.Fields[j].Label = at("in_field_label_"+idx, j)
+			}
+			in.Required = false
 		}
 		if src := at("in_show_input", i); src != "" {
 			in.ShowIf = &templates.ShowIf{Input: src}

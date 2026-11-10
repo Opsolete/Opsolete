@@ -192,7 +192,7 @@ for (const d of document.querySelectorAll('dialog[data-open]')) {
   const refresh = () => {
     const keys = cards().filter(c => {
       const t = c.querySelector('.ftype').value;
-      return nameOf(c) && t !== 'bool' && !(t !== 'select' && c.querySelector('[name=in_sensitive]').checked) &&
+      return nameOf(c) && t !== 'bool' && t !== 'list' && !(t !== 'select' && c.querySelector('[name=in_sensitive]').checked) &&
         !c.querySelector('[name=in_per_environment]').checked;
     });
     if (!keys.includes(keyCard)) keyCard = undefined;
@@ -200,7 +200,7 @@ for (const d of document.querySelectorAll('dialog[data-open]')) {
     const above = new Map();
     cards().forEach((card, i) => {
       for (const box of card.querySelectorAll('[type=checkbox]')) box.value = i;
-      for (const el of card.querySelectorAll('.opt-row input')) el.name = el.name.replace(/\d*$/, i);
+      for (const el of card.querySelectorAll('.opt-row input, .lfield input')) el.name = el.name.replace(/\d*$/, i);
       const sel = card.querySelector('.show-input'), cur = sel.value, names = [...above.keys()];
       if (cur && !names.includes(cur)) names.push(cur); // keep a stale choice: the save explains it
       if (sel.options.length !== names.length + 1 || names.some((n, j) => sel.options[j + 1].value !== n))
@@ -254,6 +254,8 @@ for (const d of document.querySelectorAll('dialog[data-open]')) {
   });
   const reset = card => {
     for (const row of [...card.querySelectorAll('.opt-row')].slice(1)) row.remove();
+    card.querySelector('.only-list')?.remove(); // a list's fields come from its module, not for a new field
+    card.querySelector('.ftype [value=list]')?.remove();
     for (const el of card.querySelectorAll('input')) el.type === 'checkbox' ? el.checked = false : el.value = '';
     for (const el of card.querySelectorAll('select')) el.selectedIndex = 0;
   };
@@ -279,3 +281,23 @@ for (const d of document.querySelectorAll('dialog[data-open]')) {
   if (cards().length > 1 && !nameOf(list.lastElementChild)) list.lastElementChild.remove();
   refresh();
 })();
+
+// form.html, list inputs: "+ Add row" copies the row template (the fields' defaults) under the next row number,
+// which its fields' names carry (<list>.<row>.<field>; the server reads rows in that order); Remove drops a row.
+document.addEventListener('click', e => {
+  const add = e.target.closest('[data-list-add]'), remove = e.target.closest('[data-list-remove]');
+  if (add) {
+    const box = add.closest('.list-input'), rows = box.querySelector('.list-rows');
+    const n = Math.max(-1, ...[...rows.children].map(r => +r.dataset.row)) + 1;
+    const row = box.querySelector('template').content.firstElementChild.cloneNode(true);
+    row.dataset.row = n;
+    for (const el of row.querySelectorAll('[name], [id], [for]'))
+      for (const a of ['name', 'id', 'for']) if (el.hasAttribute(a)) el.setAttribute(a, el.getAttribute(a).replace('__i__', n));
+    rows.append(row);
+    row.querySelector('input, select')?.focus();
+  } else if (remove) {
+    const box = remove.closest('.list-input');
+    remove.closest('.list-row').remove();
+    box.querySelector('[data-list-add]').focus();
+  }
+});

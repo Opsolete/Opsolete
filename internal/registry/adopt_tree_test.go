@@ -70,6 +70,18 @@ func TestAdoptableTree(t *testing.T) {
 	if n := entries[0].Inputs; n["nic_name"] != "name" || n["subnet_id"] != "ip_configuration[0].subnet_id" {
 		t.Errorf("NIC: %v", n)
 	}
+	// its data disks and rules are lists of objects: rows in the form
+	for name, fields := range map[string]string{"data_disks": "lun size_gb name type caching existing",
+		"nsg_rules": "name priority direction access protocol source_port_range destination_port_range source_address_prefix destination_address_prefix description"} {
+		i := slices.IndexFunc(inputs, func(in templates.Input) bool { return in.Name == name })
+		var got []string
+		for _, f := range inputs[i].Fields {
+			got = append(got, f.Name)
+		}
+		if inputs[i].Type != "list" || strings.Join(got, " ") != fields || inputs[i].Default != "[]" {
+			t.Errorf("%s: %+v", name, inputs[i])
+		}
+	}
 }
 
 // TestNewest: the version terraform init would pick for a module call's constraint.
@@ -79,5 +91,46 @@ func TestNewest(t *testing.T) {
 		if got, ok := Newest(vs, c); got != want || ok != (want != "") {
 			t.Errorf("%q: %q %v", c, got, ok)
 		}
+	}
+}
+
+// TestListInputs: a list(object({...})) variable of strings, numbers and bools is a list input, its fields in the
+// order written, optional ones not required with optional()'s default; other complex types stay skipped. A
+// template's JSON adds a label or options to a field like to an input.
+func TestListInputs(t *testing.T) {
+	archive := registrytest.TarGz(t, map[string]string{"main.tf": `
+variable "data_disks" {
+  type = list(object({
+    lun      = number
+    size_gb  = number
+    type     = optional(string, "Standard_LRS")
+    name     = optional(string)
+    existing = optional(bool, false)
+  }))
+  default = [{ lun = 0, size_gb = 32 }]
+}
+variable "tags" { type = map(string) }
+variable "nested" { type = list(object({ ports = list(number) })) }
+`})
+	ins, err := Inspect(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs, skipped := Inputs(ins.Variables)
+	slices.Sort(skipped)
+	if len(inputs) != 1 || !reflect.DeepEqual(skipped, []string{"nested (list(object({ ports = list(number) })))", "tags (map(string))"}) {
+		t.Fatalf("%+v %q", inputs, skipped)
+	}
+	in := inputs[0]
+	want := []templates.Input{{Name: "lun", Label: "lun", Type: "number", Required: true}, {Name: "size_gb", Label: "size_gb", Type: "number", Required: true},
+		{Name: "type", Label: "type", Type: "string", Default: "Standard_LRS"}, {Name: "name", Label: "name", Type: "string"},
+		{Name: "existing", Label: "existing", Type: "bool", Default: "false"}}
+	if in.Type != "list" || in.Default != `[{"lun":0,"size_gb":32}]` || !reflect.DeepEqual(in.Fields, want) {
+		t.Fatalf("%+v", in)
+	}
+	got := Resolve([]templates.Input{{Name: "data_disks", Label: "Data disks", Fields: []templates.Input{
+		{Name: "type", Type: "select", Label: "Disk type", Options: []templates.Option{{Value: "Standard_LRS"}, {Value: "Premium_LRS"}}}}}}, ins.Variables)
+	if f := got[0].Fields[2]; got[0].Label != "Data disks" || f.Label != "Disk type" || f.Type != "select" || len(f.Options) != 2 || f.Default != "Standard_LRS" {
+		t.Fatalf("resolved: %+v", got[0])
 	}
 }

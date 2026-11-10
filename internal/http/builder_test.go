@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"encoding/json"
 	"maps"
 	"net/http"
 	"net/url"
@@ -156,5 +157,40 @@ func TestBuilderRoundTrip(t *testing.T) {
 	ts, _, err := templates.Parse(map[string][]byte{"vm.json": b})
 	if err != nil || !reflect.DeepEqual(ts["vm"], tpl) {
 		t.Errorf("round trip: %v\n%+v\n%+v", err, ts["vm"], tpl)
+	}
+}
+
+// TestBuilderListInput: a list card renders its fields (name, type, an editable label) and posts them back as
+// they were, with the labels typed; the default (JSON) goes along; the template encodes and parses the same.
+func TestBuilderListInput(t *testing.T) {
+	fields := []templates.Input{{Name: "lun", Label: "lun", Type: "number", Required: true}, {Name: "type", Label: "type", Type: "string", Default: "Standard_LRS"}}
+	f, _ := json.Marshal(fields)
+	tpl := templateFromForm(url.Values{
+		"name": {"VM"}, "module_source": {"git::https://x//vm"}, "module_ref": {"v1"},
+		"in_name": {"size", "data_disks"}, "in_label": {"Size", "Data disks"}, "in_type": {"string", "list"},
+		"in_default": {"", `[{"lun":0}]`}, "in_bool_default": {"", ""}, "in_fields": {"", string(f)}, "in_required": {"1"},
+		"in_field_label_1": {"LUN", ""}, "in_show_input": {"", ""}, "in_show_equals": {"", ""},
+	})
+	tpl.ID = "vm"
+	in := tpl.Inputs[1]
+	if in.Type != "list" || in.Required || in.Default != `[{"lun":0}]` || len(in.Fields) != 2 || in.Fields[0].Label != "LUN" || in.Fields[1].Label != "" ||
+		in.Fields[1].Default != "Standard_LRS" || len(tpl.Inputs[0].Fields) != 0 {
+		t.Fatalf("%+v", tpl.Inputs)
+	}
+	b, err := templates.Encode(tpl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ts, _, err := templates.Parse(map[string][]byte{"vm.json": b}); err != nil || !reflect.DeepEqual(ts["vm"], tpl) {
+		t.Fatalf("round trip: %v\n%s", err, b)
+	}
+	store := testStore(t)
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "vm.json"), b, 0o644)
+	page := get(newServer(t, dir, true, store), "/templates/vm/edit").Body.String()
+	for _, want := range []string{`<option value="list" selected>List of rows</option>`, `name="in_field_label_1" value="LUN" placeholder="lun"`, `<code>type</code> <small class="muted">string</small>`} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("builder lacks %s:\n%s", want, page)
+		}
 	}
 }
