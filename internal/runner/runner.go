@@ -195,6 +195,10 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	}
 
 	fmt.Fprintf(w, "==> runner %s: %s phase of %s run %s\n", r.Name, job.Phase, job.Action, job.RunID)
+	if !slices.Contains([]string{"apply", "destroy", "refresh", "assess", "plan", "scan"}, job.Action) {
+		// a server newer than this runner: runners and servers run the same version
+		return fail("job", fmt.Errorf("this runner doesn't know the action %q: upgrade it to the server's version", job.Action))
+	}
 	if job.Action == "scan" {
 		return r.scan(ctx, tf, dir, job, w, fail)
 	}
@@ -249,8 +253,8 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	if job.Phase == "plan" {
 		res := r.plan(ctx, tf, run, dir, job, w, fail)
 		if res.Status == "succeeded" && job.Action != "plan" && job.Action != "assess" {
-			// Index the state as it is (the run holds its lock): states indexed before resource IDs were
-			// kept get them at the next run, without waiting for an apply.
+			// Index the state as it is (the run holds its lock): the import guard (storage.adoptionConflict)
+			// checks the resources it holds, and scans mark them managed, without waiting for an apply.
 			res.Resources = inventory(ctx, tf)
 		}
 		return res

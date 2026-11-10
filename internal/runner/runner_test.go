@@ -276,3 +276,14 @@ func TestUnreadableClaim(t *testing.T) {
 		t.Fatalf("claims %d, job calls %v: want a second claim and no ack", claims, f.calls)
 	}
 }
+
+// TestUnknownAction: a job of an action this runner doesn't know (a newer server) fails, saying why.
+func TestUnknownAction(t *testing.T) {
+	f := &fakeServer{}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	res, _ := f.do(t, testRunner(t, srv), job("u1", "plan", "teleport", "", nil))
+	if res.Status != "failed" || !strings.Contains(res.Message, `doesn't know the action "teleport"`) {
+		t.Fatalf("%+v", res)
+	}
+}

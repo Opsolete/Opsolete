@@ -72,8 +72,7 @@ checks again against the state it reads; an import whose plan would replace or d
 nothing applied. The IDs to import come from the scan, never from the form.
 
 Limits: at most 50 resources per scan get a fit check (the rest are listed unchecked); types the provider can't
-list (e.g. managed disks) are imported by ID only, their inputs not filled; states indexed before this feature
-learn their resources' IDs at the workspace's next run.
+list (e.g. managed disks) are imported by ID only, their inputs not filled.
 
 ## Promote to another workspace
 
