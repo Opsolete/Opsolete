@@ -73,6 +73,9 @@ func TestImportFlow(t *testing.T) {
 	}
 	body, _ := json.Marshal(runnerapi.FinishRequest{Status: "succeeded", Candidates: cands})
 	r.finish(t, string(body))
+	if rec := get(h, "/workspaces/"+ws+"/import"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `href="/workspaces/`+ws+`/runs/`+scan+`"`) {
+		t.Fatalf("import page with the scan listed: %d %s", rec.Code, rec.Body.String())
+	}
 	page = get(h, "/workspaces/"+ws+"/runs/"+scan).Body.String()
 	link := "/workspaces/" + ws + "/templates/new?template=" + tpl + "&scan=" + scan + "&n=0"
 	for _, want := range []string{"Scan for existing resources", "2 found in resource group <code>test1</code>", "+ network interface testvm807",

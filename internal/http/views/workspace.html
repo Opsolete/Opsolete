@@ -215,7 +215,10 @@
 {{with .Skipped}}<details class="mt-1"><summary class="muted">Templates a scan can't use</summary><ul class="muted">{{range .}}<li>{{.}}</li>{{end}}</ul></details>{{end}}
 {{with .Scans}}
 <h2 class="mt-125">Latest scans</h2>
-<div class="runlist">{{range .}}{{template "runrow" .}}{{end}}</div>
+<table>
+<tr><th>Scan</th><th>Status</th><th>By</th></tr>
+{{range .}}<tr><td><a href="/workspaces/{{$w.Name}}/runs/{{.ID}}">{{.CreatedAt.Format "2006-01-02 15:04"}}</a></td><td><span class="status {{.Status}}">{{status .Status}}</span></td><td>{{or .CreatedBy "—"}}</td></tr>{{end}}
+</table>
 {{end}}
 {{end}}
 
