@@ -1,6 +1,8 @@
 ---
 title: Backing up SECRET_KEY
-weight: 5
+weight: 4
+aliases:
+  - /docs/operations/secret-key/
 ---
 
 The state files in `STATE_STORE` can only be read with that key. Back up the bucket and the database as usual, but neither backup restores state without the key.

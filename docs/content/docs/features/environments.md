@@ -1,29 +1,31 @@
 ---
 title: Environments and promotion
-weight: 7
+weight: 5
+aliases:
+  - /docs/usage/environments/
 ---
 
-Opsolete has no separate "environment" object: **projects are the environments**. Put dev, test, acc and prd each in their own [project]({{< relref "projects" >}}), build in dev, and **promote** a workspace to the next environment instead of filling in its forms again.
+Opsolete has no separate "environment" object: **projects are the environments**. Put dev, test, acc and prd each in their own [project]({{< relref "/docs/features/projects" >}}), build in dev, and **promote** a workspace to the next environment instead of filling in its forms again.
 
 ## Model environments as projects
 
 - **One project per environment**, e.g. `dev`, `test`, `acc`, `prd`, and one workspace per application per environment (`shop-dev`, `shop-test`, …). Workspace names are unique across projects, so give each its environment in the name.
-- **Credentials:** attach a [variable set]({{< relref "variables" >}}) per project (the dev subscription's `ARM_CLIENT_ID` … to `dev`, prd's to `prd`). Every workspace in the project gets it at each run, except repository-linked ones (see [Variable sets]({{< relref "projects#variable-sets" >}})).
+- **Credentials:** attach a [variable set]({{< relref "/docs/features/variables" >}}) per project (the dev subscription's `ARM_CLIENT_ID` … to `dev`, prd's to `prd`). Every workspace in the project gets it at each run, except repository-linked ones (see [Variable sets]({{< relref "/docs/features/projects#variable-sets" >}})).
 - **Values that differ per environment** (a region, a size, a network range): mark those template inputs [per environment](#per-environment-inputs) and set them once per project.
-- **Access:** grant groups `operate` on the projects they deploy to and `read` elsewhere ([Access]({{< relref "projects#access" >}})). Who may promote into an environment follows from that.
+- **Access:** grant groups `operate` on the projects they deploy to and `read` elsewhere ([Access]({{< relref "/docs/features/projects#access" >}})). Who may promote into an environment follows from that.
 
 ## Per-environment inputs
 
-A template author marks an input `"per_environment": true` ([template format]({{< relref "/docs/catalog/templates#template-format" >}}); the builder's **Per environment** switch). Then each project may set one value for that input, for all its workspaces:
+A template author marks an input `"per_environment": true` ([template format]({{< relref "/docs/features/templates#template-format" >}}); the builder's **Per environment** switch). Then each project may set one value for that input, for all its workspaces:
 
 - **Who sets them:** admins, and groups with `operate` on the project (whoever may create workspaces there), on the project's **Environment values** tab. Everyone who sees the project reads them there. Each value shows who set it and when; **Clear** removes it.
 - **The value is checked** by the input's own rules (type, options, pattern) when it's set. It can't be empty: clear it instead.
 - **It applies at every run, like a variable set:** the server puts it in when a runner claims the job, from the workspace's project at that moment, over the workspace's own value. Changing it changes nothing at once; the next plan of each workspace shows the change. A value the template's current rules no longer accept fails the job (rather than deploying the workspace's own value): set it again.
-- **Read-only in forms:** the deploy and configure forms show such an input as its value with *Set by project X*; a value posted for it is ignored, and the workspace keeps its own stored value underneath. On the deploy form, picking another project shows the form again with that project's values, keeping what you typed. [Rollouts]({{< relref "workspaces#update-to-a-new-module-version" >}}) count the project's value too, so such an input doesn't make a workspace *need input*.
+- **Read-only in forms:** the deploy and configure forms show such an input as its value with *Set by project X*; a value posted for it is ignored, and the workspace keeps its own stored value underneath. On the deploy form, picking another project shows the form again with that project's values, keeping what you typed. [Rollouts]({{< relref "/docs/features/workspaces#update-to-a-new-module-version" >}}) count the project's value too, so such an input doesn't make a workspace *need input*.
 - **Without a project value** the input behaves like any other: the workspace's form sets it.
 - **Moving a workspace** to another project switches its values: the next run uses the new project's.
 - **Not for sensitive or key inputs:** project values are stored and shown in plain text, and the key names the module once. A module variable declared `sensitive` stays a per-workspace input even if the template marks it per environment.
-- A hidden input (its [`show_if`]({{< relref "/docs/catalog/templates#conditional-inputs" >}}) doesn't match) gets no project value, as the form wouldn't send it.
+- A hidden input (its [`show_if`]({{< relref "/docs/features/templates#conditional-inputs" >}}) doesn't match) gets no project value, as the form wouldn't send it.
 
 ## Promote a workspace
 
@@ -33,7 +35,7 @@ A template author marks an input `"per_environment": true` ([template format]({{
 
 - **Read** on the source.
 - An **existing target:** `operate` on it. The picker lists the remote-execution workspaces you operate. The source itself and a workspace using local execution can't be targets.
-- A **new target:** a name and a project you may [create workspaces in]({{< relref "projects#access" >}}). The workspace is created by the promotion, in that project, with remote execution.
+- A **new target:** a name and a project you may [create workspaces in]({{< relref "/docs/features/projects#access" >}}). The workspace is created by the promotion, in that project, with remote execution.
 
 ### What is copied
 
@@ -58,7 +60,7 @@ The preview is pinned: if the source's or the target's templates change before y
 **Promote** queues a plan on the target and opens it. **Promotion runs always wait for confirmation**, even on an auto-apply workspace: review the plan, then confirm or discard it.
 
 - **One run** (the usual case): an apply run with every change, removals included.
-- **Two chained runs** when the promotion removes or replaces a template that is deployed (its resources are in the target's state). A template's module [configures its own providers]({{< relref "/docs/catalog/templates#writing-modules-for-templates" >}}), and Terraform can't destroy resources once the module block that configures their provider is gone. So the first run is a **destroy** targeting only the removed and replaced modules; it changes nothing else. Once it is applied, the promotion's **apply run** is queued automatically and waits for confirmation too. The preview says *This promotion runs twice*.
+- **Two chained runs** when the promotion removes or replaces a template that is deployed (its resources are in the target's state). A template's module [configures its own providers]({{< relref "/docs/features/templates#writing-modules-for-templates" >}}), and Terraform can't destroy resources once the module block that configures their provider is gone. So the first run is a **destroy** targeting only the removed and replaced modules; it changes nothing else. Once it is applied, the promotion's **apply run** is queued automatically and waits for confirmation too. The preview says *This promotion runs twice*.
 
 ### Discarding or failing
 
@@ -72,7 +74,7 @@ The preview is pinned: if the source's or the target's templates change before y
 
 ### Audit
 
-Every promotion is in the [audit log]({{< relref "/docs/operations/authentication#audit-log" >}}) as `promote` with the source, target, whether the target is new, the run and whether it is chained. A chained promotion's apply run adds `promote apply queued`, in the promoter's name, when the destroy is applied.
+Every promotion is in the [audit log]({{< relref "/docs/config/authentication#audit-log" >}}) as `promote` with the source, target, whether the target is new, the run and whether it is chained. A chained promotion's apply run adds `promote apply queued`, in the promoter's name, when the destroy is applied.
 
 ## Example: dev → test
 

@@ -1,9 +1,9 @@
 ---
 title: Development
-weight: 5
+weight: 7
 ---
 
-Set up a local environment first: see [Getting started]({{< relref "getting-started" >}}).
+Set up a local environment first: see [Run from source]({{< relref "/docs/install/build" >}}).
 
 ## Tests
 
@@ -13,7 +13,7 @@ just test-linux                              # the non-DB tests on Linux in dock
 TEST_DATABASE_URL=postgres://… go test ./... # each DB test creates and drops its own database there (needs CREATEDB)
 ```
 
-Some tests keep the docs honest: `internal/config` fails when an env var it reads is missing from [Configuration]({{< relref "/docs/operations/configuration" >}}), and `internal/http` when a route is missing from (or extra in) [Endpoints]({{< relref "/docs/operations/endpoints" >}}). `TestAccessMatrix` needs a row for every route.
+Some tests keep the docs honest: `internal/config` fails when an env var it reads is missing from the [option reference]({{< relref "/docs/config/reference" >}}), and `internal/http` when a route is missing from (or extra in) the [endpoint reference]({{< relref "/docs/endpoints" >}}). `TestAccessMatrix` needs a row for every route.
 
 ```sh
 go test -run 'TestDocumented|TestEndpointsDocumented' ./internal/config ./internal/http

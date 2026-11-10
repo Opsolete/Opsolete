@@ -122,7 +122,7 @@ func TestDocumented(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	doc, err := os.ReadFile("../../docs/content/docs/operations/configuration.md")
+	doc, err := os.ReadFile("../../docs/content/docs/config/reference.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestDocumented(t *testing.T) {
 	}
 	for _, m := range vars {
 		if !strings.Contains(string(doc), "`"+string(m[1])+"`") {
-			t.Errorf("%s is read by internal/config but not documented in docs/content/docs/operations/configuration.md", m[1])
+			t.Errorf("%s is read by internal/config but not documented in docs/content/docs/config/reference.md", m[1])
 		}
 	}
 }

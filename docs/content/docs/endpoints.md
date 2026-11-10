@@ -1,6 +1,8 @@
 ---
-title: Endpoints
+title: Endpoint reference
 weight: 6
+aliases:
+  - /docs/operations/endpoints/
 ---
 
 Every route the server registers. A test (`TestEndpointsDocumented`) fails when a route is missing here, and `TestAccessMatrix` checks who may call each one.
@@ -166,7 +168,7 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 
 ## Terraform CLI
 
-`terraform login` and the [`cloud` block]({{< relref "/docs/usage/terraform-cli" >}}). The `/api/v2` routes take a `terraform login` token; `{org}` must be `ORGANIZATION`.
+`terraform login` and the [`cloud` block]({{< relref "/docs/features/terraform-cli" >}}). The `/api/v2` routes take a `terraform login` token; `{org}` must be `ORGANIZATION`.
 
 | Endpoint | Access | Purpose |
 |---|---|---|

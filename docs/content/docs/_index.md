@@ -1,27 +1,29 @@
 ---
-title: Introduction
-weight: 1
+title: Opsolete Docs
 ---
 
-Opsolete takes you from forms to infrastructure. Automatically.
+Opsolete is a self-hosted way to deploy your existing Terraform modules: pick a template, fill in a form, review the plan, apply. See [About Opsolete]({{< relref "/docs/about" >}}) for how it fits together.
 
-Pick a template, name a **workspace** and fill in a form generated from JSON. A **Opsolete runner** plans the pinned Terraform module, you review the plan and confirm it, and a runner applies exactly that plan. You watch the output live in the browser, and the Terraform outputs show up when it's done.
+## Get started
 
-## How it fits together
+Run the app and at least one runner. Both are one binary, shipped as container images, a Helm chart and a NixOS module.
 
-- **Opsolete server:** authentication · JSON forms · module registry · PostgreSQL · job queue · log storage and streaming · Terraform state backend (versions in blob storage, locks in PostgreSQL).
-- **Opsolete runners:** pull jobs and run the approved module with Terraform, with the credentials the job's variables carry.
-- **Terraform + existing modules:** plan · apply · outputs, with state in the Opsolete `http` backend, one state per workspace.
+### Install
 
-Runners never touch the database or the state store directly. The server holds read/write access to the state store, and cloud credentials only as sealed variables it never uses itself.
+What every deployment needs, then a guide for each way to run it: [Install]({{< relref "/docs/install" >}}).
 
-Opsolete is one Go binary (server and runner modes) that needs PostgreSQL and, for state, a blob store (Azure Blob, S3, GCS, or a local folder). Kubernetes is the target platform: the server and the runners run as separate Deployments, from the `app` and `runner` images of that binary; a NixOS module runs both as services.
+- [Docker]({{< relref "/docs/install/docker" >}}): try Opsolete on one machine in a few commands.
+- [Kubernetes (Helm)]({{< relref "/docs/install/kubernetes" >}})
+- [NixOS]({{< relref "/docs/install/nixos" >}})
+- [Run from source]({{< relref "/docs/install/build" >}}), with or without Nix, with examples.
 
-## Where to go next
+---
+
+## Featured documentation
 
 {{< cards >}}
-  {{< card link="getting-started" title="Getting started" subtitle="Run Opsolete locally, with or without Nix." >}}
-  {{< card link="usage" title="Using Opsolete" subtitle="Workspaces, runs, variables and state." >}}
-  {{< card link="catalog" title="Templates and registry" subtitle="Templates, the template builder, the module registry and VCS providers." >}}
-  {{< card link="operations" title="Deployment and operations" subtitle="Configuration, login, runners and deployment." >}}
+  {{< card link="features/templates" title="Templates" subtitle="Turn a pinned Terraform module into a form: inputs, validation, conditional fields and where templates live." >}}
+  {{< card link="features/runs" title="Runs" subtitle="Plan, review, apply: the kinds of runs, drift detection, logs and retention." >}}
+  {{< card link="config/reference" title="Option reference" subtitle="Every setting of the server and the runner, with its default and NixOS option." >}}
+  {{< card link="endpoints" title="Endpoint reference" subtitle="Every route the server registers, and who may call it." >}}
 {{< /cards >}}
