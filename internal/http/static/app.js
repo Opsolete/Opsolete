@@ -192,7 +192,7 @@ for (const d of document.querySelectorAll('dialog[data-open]')) {
   const refresh = () => {
     const keys = cards().filter(c => {
       const t = c.querySelector('.ftype').value;
-      return nameOf(c) && t !== 'bool' && t !== 'list' && !(t !== 'select' && c.querySelector('[name=in_sensitive]').checked) &&
+      return nameOf(c) && ['string', 'number', 'select'].includes(t) && !(t !== 'select' && c.querySelector('[name=in_sensitive]').checked) &&
         !c.querySelector('[name=in_per_environment]').checked;
     });
     if (!keys.includes(keyCard)) keyCard = undefined;
@@ -255,7 +255,7 @@ for (const d of document.querySelectorAll('dialog[data-open]')) {
   const reset = card => {
     for (const row of [...card.querySelectorAll('.opt-row')].slice(1)) row.remove();
     card.querySelector('.only-list')?.remove(); // a list's fields come from its module, not for a new field
-    card.querySelector('.ftype [value=list]')?.remove();
+    for (const o of card.querySelectorAll('.ftype :is([value=list], [value=string_list], [value=map], [value=object])')) o.remove();
     for (const el of card.querySelectorAll('input')) el.type === 'checkbox' ? el.checked = false : el.value = '';
     for (const el of card.querySelectorAll('select')) el.selectedIndex = 0;
   };

@@ -78,3 +78,74 @@ func TestListInput(t *testing.T) {
 		}
 	}
 }
+
+// TestComplexInputs: a string_list, map and object take their stored JSON (defaults, saved values) and their form
+// rows alike, check each value like an input, and give Terraform list(string), map(string) and an object; a map
+// or object can't pass for a sealed value, and only {"sealed": "..."} does.
+func TestComplexInputs(t *testing.T) {
+	var tpl Template
+	if err := json.Unmarshal([]byte(`{"id": "c", "name": "C", "module": {"source": "x", "ref": "1"}, "inputs": [
+  {"name": "dns", "type": "string_list", "pattern": "[0-9.]+", "help": "An IPv4 address", "default": ["10.0.0.4"]},
+  {"name": "tags", "type": "map", "default": {"env": "prod"}},
+  {"name": "network", "type": "object", "default": {"cidr": "10.0.0.0/16"}, "fields": [
+    {"name": "cidr", "label": "CIDR", "type": "string", "required": true}, {"name": "dns", "type": "bool"}, {"name": "size", "type": "number"}]}]}`), &tpl); err != nil {
+		t.Fatal(err)
+	}
+	if err := tpl.check(); err != nil {
+		t.Fatal(err)
+	}
+	if d := tpl.Inputs[1].Default; d != `{"env":"prod"}` {
+		t.Fatalf("map default: %s", d)
+	}
+	ok := func(raw map[string]string, want map[string]any) {
+		t.Helper()
+		vals, errs := tpl.Validate(raw)
+		if len(errs) != 0 || !reflect.DeepEqual(vals, want) {
+			t.Errorf("%v: %#v %v", raw, vals, errs)
+		}
+	}
+	// stored (and default) JSON
+	ok(map[string]string{"dns": `["10.0.0.4","10.0.0.5"]`, "tags": `{"env":"prod","team":"x"}`, "network": `{"cidr":"10.1.0.0/16","dns":true}`},
+		map[string]any{"dns": []any{"10.0.0.4", "10.0.0.5"}, "tags": map[string]any{"env": "prod", "team": "x"}, "network": map[string]any{"cidr": "10.1.0.0/16", "dns": true}})
+	// the form's rows; an empty value row and a key without a value are dropped
+	ok(map[string]string{"dns": `[{"value":"10.0.0.4"},{"value":""}]`, "tags": `[{"key":"env","value":"dev"},{"key":"x","value":""}]`, "network": `{"cidr":"10.2.0.0/16","size":"3"}`},
+		map[string]any{"dns": []any{"10.0.0.4"}, "tags": map[string]any{"env": "dev"}, "network": map[string]any{"cidr": "10.2.0.0/16", "dns": false, "size": 3.0}})
+	for raw, want := range map[string]map[string]string{
+		`dns`:     {"dns": `[{"value":"abc"}]`, "network": `{"cidr":"x"}`},
+		`tags`:    {"tags": `[{"key":"a","value":"1"},{"key":"a","value":"2"}]`, "network": `{"cidr":"x"}`},
+		`network`: {"network": `{"size":"x"}`},
+		`sealed`:  {"tags": `{"sealed":"x"}`, "network": `{"cidr":"x"}`},
+	} {
+		_, errs := tpl.Validate(want)
+		msg := map[string]string{"dns": "Row 1, Value: An IPv4 address", "tags": "Row 2, Key: a is there already.",
+			"network": "CIDR: This field is required.", "sealed": "A map with only the key sealed can't be stored."}[raw]
+		field := map[string]string{"dns": "dns", "tags": "tags", "network": "network", "sealed": "tags"}[raw]
+		if errs[field] != msg {
+			t.Errorf("%s: %q, want %q (%v)", raw, errs[field], msg, errs)
+		}
+	}
+	if !IsSealed(map[string]any{"sealed": "eA=="}) || IsSealed(map[string]any{"sealed": "eA==", "env": "x"}) || IsSealed(map[string]any{"sealed": 1.0}) || IsSealed("x") {
+		t.Error("IsSealed: only {\"sealed\": string}")
+	}
+	got := tpl.Describe(map[string]any{"dns": []any{"10.0.0.4", "10.0.0.5"}, "tags": map[string]any{"team": "x", "env": "prod"},
+		"network": map[string]any{"cidr": "10.0.0.0/16"}})
+	if got[0].Text != "10.0.0.4\n10.0.0.5" || got[1].Text != "env: prod\nteam: x" || got[2].Text != "CIDR: 10.0.0.0/16" || got[1].Sensitive {
+		t.Errorf("described: %+v", got)
+	}
+	b, _ := json.Marshal(tpl)
+	var back Template
+	if json.Unmarshal(b, &back) != nil || !reflect.DeepEqual(back.Inputs, tpl.Inputs) {
+		t.Errorf("round trip:\n%s", b)
+	}
+	for _, bad := range []string{`{"name": "o", "type": "object"}`, `{"name": "m", "type": "map", "fields": [{"name": "a", "type": "string"}]}`,
+		`{"name": "m", "type": "map", "per_environment": true}`, `{"name": "s", "type": "string_list", "default": [1]}`} {
+		var bt Template
+		err := json.Unmarshal([]byte(`{"id": "b", "name": "B", "module": {"source": "x", "ref": "1"}, "inputs": [`+bad+`]}`), &bt)
+		if err == nil {
+			err = bt.check()
+		}
+		if err == nil {
+			t.Errorf("accepted: %s", bad)
+		}
+	}
+}

@@ -350,9 +350,10 @@ func extract(archive []byte, dir string) error {
 	}
 }
 
-// Inputs maps module variables to form inputs. A list(object({...})) of strings, numbers and bools is a list input,
-// rows of fields; other complex types (map, object, list of lists, ...) can't be a form field yet: they are
-// returned in skipped so the builder can warn about them.
+// Inputs maps module variables to form inputs. A list(object({...})) of strings, numbers and bools is a list input
+// (rows of fields), list(string) and set(string) a string_list, map(string) a map, object({...}) of strings, numbers
+// and bools an object; other complex types (lists of lists, maps of objects, ...) can't be a form field yet: they
+// are returned in skipped so the builder can warn about them.
 func Inputs(vars []Variable) (inputs []templates.Input, skipped []string) {
 	for _, v := range vars {
 		in := templates.Input{Name: v.Name, Required: v.Required}
@@ -366,12 +367,12 @@ func Inputs(vars []Variable) (inputs []templates.Input, skipped []string) {
 		case "bool":
 			in.Type = "bool"
 		default:
-			fields, ok := listFields(v.Type)
+			typ, fields, ok := complexType(v.Type)
 			if !ok {
 				skipped = append(skipped, fmt.Sprintf("%s (%s)", v.Name, v.Type))
 				continue
 			}
-			in.Type, in.Fields = "list", fields
+			in.Type, in.Fields = typ, fields
 		}
 		if in.Type == "string" {
 			in.Pattern = v.Pattern
@@ -387,22 +388,44 @@ func Inputs(vars []Variable) (inputs []templates.Input, skipped []string) {
 	return inputs, skipped
 }
 
-// listFields reads a list(object({...})) type of string, number and bool attributes as a list input's fields, in
-// the order written: optional(...) ones aren't required, and optional(t, d)'s d is the field's default.
-func listFields(src string) ([]templates.Input, bool) {
+// complexType reads a variable's complex type as an input type: list(object({...})) a list and object({...}) an
+// object, both of string, number and bool attributes (fields: objectFields), list(string) and set(string) a
+// string_list, map(string) a map.
+func complexType(src string) (typ string, fields []templates.Input, ok bool) {
 	expr, diags := hclsyntax.ParseExpression([]byte(src), "type", hcl.InitialPos)
 	if diags.HasErrors() {
-		return nil, false
+		return "", nil, false
 	}
 	ty, defs, diags := typeexpr.TypeConstraintWithDefaults(expr)
-	if diags.HasErrors() || !ty.IsListType() || !ty.ElementType().IsObjectType() {
-		return nil, false
+	switch {
+	case diags.HasErrors():
+		return "", nil, false
+	case ty.Equals(cty.List(cty.String)) || ty.Equals(cty.Set(cty.String)):
+		return "string_list", nil, true
+	case ty.Equals(cty.Map(cty.String)):
+		return "map", nil, true
+	case ty.IsObjectType():
+		fields, ok := objectFields(expr, ty, defs)
+		return "object", fields, ok
+	case ty.IsListType() && ty.ElementType().IsObjectType():
+		call, _ := expr.(*hclsyntax.FunctionCallExpr) // list(object({ … }))
+		if call == nil || len(call.Args) != 1 {
+			return "", nil, false
+		}
+		var elDefs *typeexpr.Defaults
+		if defs != nil {
+			elDefs = defs.Children[""]
+		}
+		fields, ok := objectFields(call.Args[0], ty.ElementType(), elDefs)
+		return "list", fields, ok
 	}
-	list, _ := expr.(*hclsyntax.FunctionCallExpr) // list(object({ a = …, b = … })): the order written
-	if list == nil || len(list.Args) != 1 {
-		return nil, false
-	}
-	obj, _ := list.Args[0].(*hclsyntax.FunctionCallExpr)
+	return "", nil, false
+}
+
+// objectFields reads an object({...}) type of string, number and bool attributes as fields, in the order written
+// (expr): optional(...) ones aren't required, and optional(t, d)'s d is the field's default.
+func objectFields(expr hclsyntax.Expression, ty cty.Type, defs *typeexpr.Defaults) ([]templates.Input, bool) {
+	obj, _ := expr.(*hclsyntax.FunctionCallExpr)
 	if obj == nil || len(obj.Args) != 1 {
 		return nil, false
 	}
@@ -410,24 +433,19 @@ func listFields(src string) ([]templates.Input, bool) {
 	if attrs == nil {
 		return nil, false
 	}
-	el := ty.ElementType()
-	var elDefs *typeexpr.Defaults
-	if defs != nil {
-		elDefs = defs.Children[""]
-	}
 	var fields []templates.Input
 	for _, item := range attrs.Items {
 		name := hcl.ExprAsKeyword(item.KeyExpr)
-		if !el.HasAttribute(name) {
+		if !ty.HasAttribute(name) {
 			return nil, false
 		}
-		f := templates.Input{Name: name, Label: name, Required: !el.AttributeOptional(name)}
+		f := templates.Input{Name: name, Label: name, Required: !ty.AttributeOptional(name)}
 		var d cty.Value
-		if elDefs != nil {
-			d = elDefs.DefaultValues[name]
+		if defs != nil {
+			d = defs.DefaultValues[name]
 		}
 		known := d != cty.NilVal && d.IsKnown() && !d.IsNull()
-		switch el.AttributeType(name) {
+		switch ty.AttributeType(name) {
 		case cty.String:
 			f.Type = "string"
 			if known {

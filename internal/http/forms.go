@@ -184,4 +184,4 @@ func (f *formState) List() []fieldErr {
 type fieldErr struct{ Name, Label, Msg string }
 
 var formFuncs = template.FuncMap{"formOf": formOf, "value": value, "checked": checked, "fieldError": fieldError, "aria": aria,
-	"rows": listRows}
+	"rows": listRows, "fields": objectFields}

@@ -215,11 +215,13 @@ func templateFromForm(f url.Values) templates.Template {
 				in.Options = append(in.Options, templates.Option{Label: label, Value: value})
 			}
 		}
-		if typ == "list" { // its fields as the module has them (in_fields, JSON), with the labels given here
+		if typ == "list" || typ == "object" { // its fields as the module has them (in_fields, JSON), with the labels given here
 			json.Unmarshal([]byte(at("in_fields", i)), &in.Fields)
 			for j := range in.Fields {
 				in.Fields[j].Label = at("in_field_label_"+idx, j)
 			}
+		}
+		if slices.Contains([]string{"list", "string_list", "map", "object"}, typ) { // never empty: Terraform gets a value
 			in.Required = false
 		}
 		if src := at("in_show_input", i); src != "" {

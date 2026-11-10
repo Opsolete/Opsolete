@@ -223,12 +223,19 @@ func fromJSON(typ string, raw json.RawMessage) (string, error) {
 			return "", fmt.Errorf("must be a JSON boolean (%s, not %s)", s, raw)
 		}
 		return "", fmt.Errorf("must be a JSON boolean (true or false), not %s", raw)
-	case "list":
-		var rows []map[string]any
-		if json.Unmarshal(raw, &rows) != nil || rows == nil {
-			return "", fmt.Errorf("must be a JSON array of objects, not %s", raw)
+	case "list", "string_list", "map", "object": // as Terraform takes it, the form's value
+		kinds := map[string]struct {
+			v    any
+			what string
+		}{"list": {&[]map[string]any{}, "array of objects"}, "string_list": {&[]string{}, "array of strings"},
+			"map": {&map[string]string{}, "object of strings"}, "object": {&map[string]any{}, "object"}}
+		k := kinds[typ]
+		if json.Unmarshal(raw, k.v) != nil || bytes.Equal(raw, []byte("null")) {
+			return "", fmt.Errorf("must be a JSON %s, not %s", k.what, raw)
 		}
-		return FormatValue(anyList(rows)), nil
+		var v any
+		json.Unmarshal(raw, &v)
+		return FormatValue(v), nil
 	}
 	if isString { // string, select, or an unknown type check reports
 		return s, nil
@@ -254,19 +261,11 @@ func toJSON(typ, v string) (any, error) {
 			return nil, fmt.Errorf("%q is not true or false", v)
 		}
 		return b, nil
-	case "list":
+	case "list", "string_list", "map", "object":
 		if !json.Valid([]byte(v)) {
-			return nil, fmt.Errorf("%q is not a JSON list", v)
+			return nil, fmt.Errorf("%q is not JSON", v)
 		}
 		return json.RawMessage(v), nil
 	}
 	return v, nil
-}
-
-func anyList(rows []map[string]any) []any {
-	out := make([]any, len(rows))
-	for i, r := range rows {
-		out[i] = r
-	}
-	return out
 }

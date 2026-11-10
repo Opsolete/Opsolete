@@ -194,3 +194,32 @@ func TestBuilderListInput(t *testing.T) {
 		}
 	}
 }
+
+// TestBuilderComplexTypes: a group of fields (object) keeps its fields like a list; a list of text and a key /
+// value card keep their type; none is required.
+func TestBuilderComplexTypes(t *testing.T) {
+	f, _ := json.Marshal([]templates.Input{{Name: "cidr", Label: "cidr", Type: "string", Required: true}})
+	tpl := templateFromForm(url.Values{
+		"name": {"Net"}, "module_source": {"git::https://x//net"}, "module_ref": {"v1"},
+		"in_name": {"dns", "tags", "network"}, "in_type": {"string_list", "map", "object"}, "in_required": {"0", "1", "2"},
+		"in_fields": {"", "", string(f)}, "in_field_label_2": {"CIDR"}, "in_default": {`["10.0.0.4"]`, "", ""},
+	})
+	tpl.ID = "net"
+	if in := tpl.Inputs; in[0].Type != "string_list" || in[0].Default != `["10.0.0.4"]` || in[1].Type != "map" || in[2].Fields[0].Label != "CIDR" ||
+		in[0].Required || in[1].Required || in[2].Required {
+		t.Fatalf("%+v", in)
+	}
+	b, err := templates.Encode(tpl)
+	if ts, _, perr := templates.Parse(map[string][]byte{"net.json": b}); err != nil || perr != nil || !reflect.DeepEqual(ts["net"], tpl) {
+		t.Fatalf("round trip: %v %v\n%s", err, perr, b)
+	}
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "net.json"), b, 0o644)
+	page := get(newServer(t, dir, true, testStore(t)), "/templates/net/edit").Body.String()
+	for _, want := range []string{`<option value="string_list" selected>List of text</option>`, `<option value="map" selected>Key / value</option>`,
+		`<option value="object" selected>Group of fields</option>`, `name="in_field_label_2" value="CIDR"`} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("builder lacks %s", want)
+		}
+	}
+}

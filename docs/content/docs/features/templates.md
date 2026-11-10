@@ -46,24 +46,31 @@ See also [`catalog/storage-account.json`](https://github.com/Opsolete/Opsolete/b
 | Field | Type | | |
 |---|---|---|---|
 | `name` | string | required | The Terraform variable it sets: `^[a-z_][a-z0-9_]*$`, not `source`, `version`, `providers`, `count`, `for_each`, `lifecycle`, `depends_on` or `locals`. Unique in the template. |
-| `type` | string | required | `string`, `number`, `bool` (a checkbox), `select` (a dropdown) or `list` (rows of fields; see [lists](#lists)). |
+| `type` | string | required | `string`, `number`, `bool` (a checkbox), `select` (a dropdown), or for Terraform's complex types `list` (rows of fields), `string_list` (rows of text), `map` (key / value rows) or `object` (a group of fields); see [lists, maps and objects](#lists-maps-and-objects). |
 | `label` | string | optional | The question the form asks. Empty: the form shows the name. |
 | `help` | string | optional | Shown under the field (and linked to it for screen readers), and the error message when a value doesn't match `pattern`, so say there what fits. Without help, the error shows the pattern. |
 | `required` | boolean | optional | The value can't be empty. Dropdowns and checkboxes always have a value. A hidden input is never required. |
 | `pattern` | string | optional | A Go (RE2) regular expression the whole value must match. The browser checks it too, as a JavaScript one. |
 | `options` | array | `select` only, required there | One entry per choice: a string (shorthand for `{"value": "<string>"}`) or `{"value": "...", "label": "..."}`: the form shows `label`, Terraform gets `value`. `value` is required and not empty. |
-| `default` | typed | optional | Filled in when the form opens. Typed by `type`: `string` and `select` a JSON string (a select's must be one of its option values), `number` a JSON number (`7`, `0.5`), `bool` a JSON boolean (`true`, `false`), `list` a JSON array of objects (the rows). It must pass the input's own checks (`pattern`). |
+| `default` | typed | optional | Filled in when the form opens. Typed by `type`: `string` and `select` a JSON string (a select's must be one of its option values), `number` a JSON number (`7`, `0.5`), `bool` a JSON boolean (`true`, `false`), `list` a JSON array of objects (the rows), `string_list` an array of strings, `map` an object of strings, `object` an object. It must pass the input's own checks (`pattern`). |
 | `sensitive` | boolean | optional | `string` and `number` only, no `default`; see below. |
 | `show_if` | object | optional | `{"input": "<name>", "equals": [...]}`; see [conditional inputs](#conditional-inputs). |
 | `key` | boolean | optional | At most one input, not `bool` or sensitive; see below. |
 | `per_environment` | boolean | optional | Not with `sensitive` or `key`. Each project may set the value for all its workspaces; see below. |
-| `fields` | array | `list` only, required there | The fields of each row: inputs of type `string`, `number`, `bool` or `select`, without `show_if`, `sensitive`, `key` or `per_environment`. |
+| `fields` | array | `list` and `object` only, required there | A list's fields of each row, an object's fields: inputs of type `string`, `number`, `bool` or `select`, without `show_if`, `sensitive`, `key` or `per_environment`. |
 
-### Lists
+### Lists, maps and objects
 
-A module variable of type `list(object({...}))` whose attributes are strings, numbers and bools (data disks,
-firewall rules) is a `list` input: the form shows a row per element, with a field per attribute, **+ Add row** and
-**Remove**. For a template on a registry module the fields come from the variable's type, in the order written:
+Terraform's complex types get a form of their own, so nobody types JSON:
+
+| Module variable | Input `type` | The form |
+|---|---|---|
+| `list(object({...}))` of strings, numbers and bools (data disks, firewall rules) | `list` | a row per element, a field per attribute |
+| `list(string)`, `set(string)` (DNS servers, IP ranges) | `string_list` | a row per value |
+| `map(string)` (tags) | `map` | a row per key, with a value |
+| `object({...})` of strings, numbers and bools | `object` | one group of fields |
+
+Rows have **+ Add row** and **Remove**. For a template on a registry module the fields come from the variable's type, in the order written:
 `optional(...)` attributes aren't required, and `optional(type, default)`'s default fills a new row. A template can
 give a field a label, help, a pattern, a default or dropdown options in `fields`, by name, like an input:
 
@@ -74,8 +81,10 @@ give a field a label, help, a pattern, a default or dropdown options in `fields`
 ```
 
 Optional fields left empty are left out, so Terraform's `optional()` default applies. Rows left wholly empty are
-dropped. A list can't be sensitive, the key or per-environment, nor be what `show_if` refers to. Other complex
-types (maps, objects, lists of lists) aren't form fields yet.
+dropped, and a map key without a value. A `string_list`'s or `map`'s `pattern` checks each value. None of these
+can be sensitive, the key or per-environment, nor be what `show_if` refers to; a map or object whose only key is
+`sealed` is refused (that's how sealed values are stored). Other complex types (lists of lists, maps of objects,
+`map(number)`) aren't form fields yet.
 
 **Strict parsing.** Every object accepts only the fields above: an unknown field (a typo such as `"lable"`) is an error, as is a value of the wrong JSON type. Any invalid file fails the whole catalog: from Git, the last good commit stays loaded and **Settings → Templates** shows the error; from `TEMPLATES_DIR`, the server doesn't start. The error names the file, template, input and field:
 

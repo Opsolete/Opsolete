@@ -226,8 +226,8 @@ label:is(:hover, :focus-within, :has(+ :focus)) > .tip-text { opacity: 1; }
 .fcard:not(:has(.ftype [value="string"]:checked)) .only-string,
 .fcard:has(.ftype :is([value="bool"], [value="select"]):checked) .only-secret,
 .fcard:has(.ftype :is([value="bool"], [value="select"]):checked) .only-typed,
-.fcard:not(:has(.ftype [value="list"]:checked)) .only-list,
-.fcard:has(.ftype [value="list"]:checked) :is(.not-bool, .only-string, .checks) { display: none; }
+.fcard:not(:has(.ftype :is([value="list"], [value="object"]):checked)) .only-list,
+.fcard:has(.ftype :is([value="list"], [value="string_list"], [value="map"], [value="object"]):checked) :is(.not-bool, .only-string, .checks) { display: none; }
 .lfields { display: grid; gap: .3rem; }
 .lfield { display: grid; grid-template-columns: 9rem 7rem 1fr; gap: .5rem; align-items: center; }
 .actions.sticky { position: sticky; bottom: 0; z-index: 2; background: var(--bg); padding: .9rem 0; border-top: 1px solid var(--border); }

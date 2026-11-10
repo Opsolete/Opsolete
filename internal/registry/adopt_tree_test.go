@@ -111,6 +111,15 @@ variable "data_disks" {
 }
 variable "tags" { type = map(string) }
 variable "nested" { type = list(object({ ports = list(number) })) }
+variable "dns" { type = list(string) }
+variable "zones" { type = set(string) }
+variable "network" {
+  type = object({
+    cidr = string
+    dns  = optional(bool, true)
+  })
+}
+variable "counts" { type = map(number) }
 `})
 	ins, err := Inspect(archive)
 	if err != nil {
@@ -118,10 +127,19 @@ variable "nested" { type = list(object({ ports = list(number) })) }
 	}
 	inputs, skipped := Inputs(ins.Variables)
 	slices.Sort(skipped)
-	if len(inputs) != 1 || !reflect.DeepEqual(skipped, []string{"nested (list(object({ ports = list(number) })))", "tags (map(string))"}) {
+	if len(inputs) != 5 || !reflect.DeepEqual(skipped, []string{"counts (map(number))", "nested (list(object({ ports = list(number) })))"}) {
 		t.Fatalf("%+v %q", inputs, skipped)
 	}
-	in := inputs[0]
+	byName := map[string]templates.Input{}
+	for _, in := range inputs {
+		byName[in.Name] = in
+	}
+	if byName["tags"].Type != "map" || byName["dns"].Type != "string_list" || byName["zones"].Type != "string_list" ||
+		!reflect.DeepEqual(byName["network"].Fields, []templates.Input{{Name: "cidr", Label: "cidr", Type: "string", Required: true},
+			{Name: "dns", Label: "dns", Type: "bool", Default: "true"}}) || byName["network"].Type != "object" {
+		t.Fatalf("other types: %+v", byName)
+	}
+	in := byName["data_disks"]
 	want := []templates.Input{{Name: "lun", Label: "lun", Type: "number", Required: true}, {Name: "size_gb", Label: "size_gb", Type: "number", Required: true},
 		{Name: "type", Label: "type", Type: "string", Default: "Standard_LRS"}, {Name: "name", Label: "name", Type: "string"},
 		{Name: "existing", Label: "existing", Type: "bool", Default: "false"}}

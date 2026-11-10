@@ -73,3 +73,56 @@ func TestListInputForm(t *testing.T) {
 		t.Errorf("edit form: the stored rows:\n%s", edit)
 	}
 }
+
+// TestComplexInputForm: a string_list and a map are rows (a value; a key and a value), an object one group of
+// fields; Terraform gets list(string), map(string) and the object, and the edit form shows them back as rows and
+// fields. A map value doesn't pass for a sealed one: the job gets it as is.
+func TestComplexInputForm(t *testing.T) {
+	store := testStore(t)
+	ws := "cplx-" + strings.ToLower(newID()[:8])
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "net.json"), []byte(`{"id": "net", "name": "Net", "module": {"source": "git::https://example.com/m.git", "ref": "v1"},
+  "inputs": [{"name": "dns", "label": "DNS servers", "type": "string_list", "default": ["10.0.0.4"]},
+    {"name": "tags", "type": "map", "default": {"env": "prod"}},
+    {"name": "network", "type": "object", "fields": [{"name": "cidr", "label": "CIDR", "type": "string", "required": true}, {"name": "ddos", "type": "bool"}]}]}`), 0o644)
+	h := newServer(t, dir, false, store)
+	if rec := post(h, "/workspaces/new", url.Values{fieldWorkspace: {ws}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("create: %d", rec.Code)
+	}
+	base := "/workspaces/" + ws + "/templates/"
+	page := get(h, base+"new?template=net").Body.String()
+	for _, want := range []string{`name="dns.0.value" value="10.0.0.4"`, `name="tags.0.key" value="env"`, `name="tags.0.value" value="prod"`,
+		`name="network.cidr" value=""`, `name="dns.__i__.value"`} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("add form lacks %s:\n%s", want, page)
+		}
+	}
+	form := url.Values{"dns.0.value": {"10.0.0.4"}, "dns.1.value": {"10.0.0.5"}, "tags.0.key": {"env"}, "tags.0.value": {"dev"},
+		"tags.1.key": {"sealed"}, "tags.1.value": {"x"}, "network.cidr": {"10.1.0.0/16"}, "network.ddos": {"on"}}
+	if rec := post(h, base+"new?template=net", form); rec.Code != http.StatusSeeOther {
+		t.Fatalf("add: %d %s", rec.Code, rec.Body.String())
+	}
+	req := httptest.NewRequest("POST", runnerapi.Prefix+"/jobs/claim", strings.NewReader(`{"runner":"r1"}`))
+	req.Header.Set("Authorization", "Bearer "+testRunnerToken)
+	var j runnerapi.Job
+	if rec := do(h, req); json.Unmarshal(rec.Body.Bytes(), &j) != nil || len(j.Modules) != 1 {
+		t.Fatalf("claim: %d %s", rec.Code, rec.Body.String())
+	}
+	want := map[string]any{"dns": []any{"10.0.0.4", "10.0.0.5"}, "tags": map[string]any{"env": "dev", "sealed": "x"},
+		"network": map[string]any{"cidr": "10.1.0.0/16", "ddos": true}}
+	if !reflect.DeepEqual(j.Modules[0].Inputs, want) {
+		t.Fatalf("Terraform gets %#v", j.Modules[0].Inputs)
+	}
+	store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL WHERE id = $1`, j.RunID)
+	edit := get(h, base+j.Modules[0].Name).Body.String()
+	for _, want := range []string{`name="dns.1.value" value="10.0.0.5"`, `name="tags.1.key" value="sealed"`, `name="network.cidr" value="10.1.0.0/16"`,
+		`id="network.ddos" name="network.ddos" checked`} {
+		if !strings.Contains(edit, want) {
+			t.Fatalf("edit form lacks %s:\n%s", want, edit)
+		}
+	}
+	if rec := post(h, base+j.Modules[0].Name, url.Values{"network.cidr": {""}}); rec.Code != http.StatusUnprocessableEntity ||
+		!strings.Contains(rec.Body.String(), "CIDR: This field is required.") {
+		t.Fatalf("an object's required field: %d", rec.Code)
+	}
+}
