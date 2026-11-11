@@ -1,6 +1,6 @@
 {{template "top" .Page}}
 {{$w := .W}}{{$tab := .Tab}}{{$p := .Sub}}
-<nav class="back" aria-label="breadcrumb">{{template "wscrumb" $w}} / {{if eq $tab "runs"}}Runs{{else if eq $tab "states"}}{{if .State}}<a href="/workspaces/{{$w.Name}}/states">States</a> / v{{.State.Serial}}{{else}}States{{end}}{{else if eq $tab "variables"}}Variables{{else if eq $tab "deploy"}}Deploy{{else if eq $tab "import"}}Import{{else if eq $tab "settings"}}<a href="/workspaces/{{$w.Name}}/settings">Settings</a> / {{if eq $p "health"}}Health{{else if eq $p "lock"}}Locking{{else if eq $p "access"}}Team access{{else if eq $p "deletion"}}Destruction and deletion{{else}}General{{end}}{{else}}Overview{{end}}</nav>
+<nav class="back" aria-label="breadcrumb">{{template "wscrumb" $w}} / {{if eq $tab "runs"}}Runs{{else if eq $tab "states"}}{{if .State}}<a href="/workspaces/{{$w.Name}}/states">States</a> / v{{.State.Serial}}{{else}}States{{end}}{{else if eq $tab "variables"}}Variables{{else if eq $tab "deploy"}}Deploy{{else if eq $tab "settings"}}<a href="/workspaces/{{$w.Name}}/settings">Settings</a> / {{if eq $p "health"}}Health{{else if eq $p "lock"}}Locking{{else if eq $p "access"}}Team access{{else if eq $p "deletion"}}Destruction and deletion{{else}}General{{end}}{{else}}Overview{{end}}</nav>
 {{template "formerror" .F}}
 {{if ne $tab "settings"}}
 <div class="page-head">
@@ -186,41 +186,6 @@
   {{end}}
 </div>
 {{else}}<p class="muted">No templates in the catalog yet.</p>{{end}}
-{{end}}
-
-{{if eq $tab "import"}}
-<p class="muted">Take over resources that already exist in the cloud, built in the portal or by scripts, without creating them again.
-  A scan lists, with this workspace's credentials, every resource: what a catalog template can import (each one into this workspace,
-  its template's form filled in from what was found), what its template would replace, what no template covers yet, and what a
-  workspace manages already. Importing plans the import and changes nothing else.</p>
-{{template "formerror" (formOf .F "scan")}}
-{{if not .CanOperate}}<div class="alert" role="note">You need operate access to import resources into this workspace.</div>
-{{else if eq $w.ExecutionMode "local"}}<div class="alert" role="note">This workspace uses local execution: switch to remote in <a href="/workspaces/{{$w.Name}}/settings">Settings</a> to import resources.</div>
-{{else}}
-{{with .Active}}<div class="alert warn" role="status">A run is active: <a href="/workspaces/{{$w.Name}}/runs/{{.ID}}">scan once it has finished</a>.</div>{{end}}
-<form method="post" action="/workspaces/{{$w.Name}}/scans" class="card form-rows">
-  <div class="rows">
-    <div class="row{{if fieldError (formOf .F "scan") "resource_group"}} invalid{{end}}">
-      <label for="resource_group">Resource group</label>
-      <input id="resource_group" name="resource_group" value="{{value (formOf .F "scan") "resource_group" ""}}" placeholder="all resource groups" autocomplete="off" spellcheck="false"{{aria (formOf .F "scan") "resource_group" "resource_group-hint"}}>
-      <p class="hint" id="resource_group-hint">Optional: search one resource group only. Empty searches the whole subscription of this workspace's credentials.</p>
-      {{template "fielderror" (dict "F" (formOf .F "scan") "N" "resource_group")}}
-    </div>
-  </div>
-  <div class="form-foot">
-    <p class="hint">Lists every resource, and which of them {{with .Templates}}{{range $i, $t := .}}{{if $i}}, {{end}}<strong>{{$t.Name}}</strong>{{end}} can import{{else}}a template could import: none can yet, importing reads a template's module code, so it needs a module from the <a href="/registry">registry</a>{{end}}. Nothing in the cloud changes.</p>
-    <div class="actions"><button type="submit">Scan</button></div>
-  </div>
-</form>
-{{end}}
-{{with .Skipped}}<details class="mt-1"><summary class="muted">Templates a scan can't use</summary><ul class="muted">{{range .}}<li>{{.}}</li>{{end}}</ul></details>{{end}}
-{{with .Scans}}
-<h2 class="mt-125">Latest scans</h2>
-<table>
-<tr><th>Scan</th><th>Status</th><th>By</th></tr>
-{{range .}}<tr><td><a href="/workspaces/{{$w.Name}}/runs/{{.ID}}">{{.CreatedAt.Format "2006-01-02 15:04"}}</a></td><td><span class="status {{.Status}}">{{status .Status}}</span></td><td>{{or .CreatedBy "—"}}</td></tr>{{end}}
-</table>
-{{end}}
 {{end}}
 
 {{if eq $tab "runs"}}

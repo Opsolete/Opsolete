@@ -442,7 +442,6 @@ func accessRows() []accessRow {
 		{"GET " + w + "/variables", ws + "/variables", "", onUI, []int{302, 404, 200, 200, 200}, false},
 		{"GET " + w + "/settings", ws + "/settings", "", onUI, []int{302, 404, 403, 200, 200}, false},
 		{"GET " + w + "/deploy", ws + "/deploy", "", onUI, []int{302, 404, 200, 200, 200}, false},
-		{"GET " + w + "/import", ws + "/import", "", onUI, []int{302, 404, 200, 200, 200}, false},
 		{"GET " + w + "/settings/{page}", ws + "/settings/access", "", onUI, []int{302, 404, 403, 200, 200}, false},
 		{"GET " + w + "/states/{version}", "/workspaces/{cws}/states/{sv}", "", onUI, []int{302, 404, 403, 200, 200}, false}, // values: operators only
 		{"GET " + w + "/vcs", ws + "/vcs", "", onUI, []int{302, 404, 403, 200, 200}, false},
@@ -466,7 +465,6 @@ func accessRows() []accessRow {
 		{"POST " + w + "/project", ws + "/project", "project={proj}", onUI, []int{401, 403, 403, 403, 303}, false},
 		{"POST " + w + "/state-versions/{version}/rollback", "/workspaces/{cws}/state-versions/{sv}/rollback", "", onUI, []int{401, 404, 403, 409, 409}, true},
 		{"POST " + w + "/runs", ws + "/runs", "action=plan", onUI, []int{401, 404, 403, 409, 409}, true},
-		{"POST " + w + "/scans", ws + "/scans", "resource_group=bad name!", onUI, []int{401, 404, 403, 422, 422}, true},
 		{"GET " + w + "/runs/{run}", ws + "/runs/{run}", "", onUI, []int{302, 404, 200, 200, 200}, false},
 		{"GET " + w + "/runs/{run}/logs", ws + "/runs/{run}/logs", "", onUI, []int{302, 404, 200, 200, 200}, false},
 		{"GET " + w + "/runs/{run}/logs/stream", ws + "/runs/{run}/logs/stream", "", onUI, []int{302, 404, 200, 200, 200}, false},

@@ -45,7 +45,7 @@ func (q *Queries) AnyActiveRun(ctx context.Context) (bool, error) {
 const claimableRun = `-- name: ClaimableRun :one
 
 SELECT r.id, r.status FROM runs r WHERE r.status IN ('plan_queued', 'apply_queued')
-    AND (r.action IN ('plan', 'assess', 'scan') OR NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.id = r.workspace_id AND w.state_lock IS NOT NULL))
+    AND (r.action IN ('plan', 'assess') OR NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.id = r.workspace_id AND w.state_lock IS NOT NULL))
 ORDER BY r.updated_at FOR UPDATE OF r SKIP LOCKED LIMIT 1
 `
 
@@ -186,8 +186,7 @@ const leaseRun = `-- name: LeaseRun :one
 UPDATE runs SET runner = $1::text, lease_id = $2::text,
     lease_until = now() + make_interval(secs => $3::float8)
 WHERE id = $4::uuid
-RETURNING workspace_id, action, replace, COALESCE(vcs_commit, '')::text AS vcs_commit, remove_templates, imports,
-    COALESCE(scan_resource_group, '')::text AS scan_resource_group
+RETURNING workspace_id, action, replace, COALESCE(vcs_commit, '')::text AS vcs_commit, remove_templates
 `
 
 type LeaseRunParams struct {
@@ -198,13 +197,11 @@ type LeaseRunParams struct {
 }
 
 type LeaseRunRow struct {
-	WorkspaceID       uuid.UUID
-	Action            string
-	Replace           []byte
-	VcsCommit         string
-	RemoveTemplates   []string
-	Imports           []byte
-	ScanResourceGroup string
+	WorkspaceID     uuid.UUID
+	Action          string
+	Replace         []byte
+	VcsCommit       string
+	RemoveTemplates []string
 }
 
 func (q *Queries) LeaseRun(ctx context.Context, arg LeaseRunParams) (LeaseRunRow, error) {
@@ -221,15 +218,12 @@ func (q *Queries) LeaseRun(ctx context.Context, arg LeaseRunParams) (LeaseRunRow
 		&i.Replace,
 		&i.VcsCommit,
 		&i.RemoveTemplates,
-		&i.Imports,
-		&i.ScanResourceGroup,
 	)
 	return i, err
 }
 
 const lockLeasedRun = `-- name: LockLeasedRun :one
-SELECT r.status, r.action, r.workspace_id, w.auto_apply, (r.rollout_id IS NOT NULL OR r.always_confirm)::boolean AS needs_confirmation, r.cancel_requested,
-    (r.imports IS NOT NULL)::boolean AS adopting
+SELECT r.status, r.action, r.workspace_id, w.auto_apply, (r.rollout_id IS NOT NULL OR r.always_confirm)::boolean AS needs_confirmation, r.cancel_requested
 FROM runs r JOIN workspaces w ON w.id = r.workspace_id
 WHERE r.id = $1::uuid AND r.lease_id = $2::text AND run_working(r.status) AND r.lease_acked_at IS NOT NULL
 FOR UPDATE OF r
@@ -247,7 +241,6 @@ type LockLeasedRunRow struct {
 	AutoApply         bool
 	NeedsConfirmation bool
 	CancelRequested   bool
-	Adopting          bool
 }
 
 // The run, if lease_id holds it; the lease is checked here, setStatus then checks the transition.
@@ -262,7 +255,6 @@ func (q *Queries) LockLeasedRun(ctx context.Context, arg LockLeasedRunParams) (L
 		&i.AutoApply,
 		&i.NeedsConfirmation,
 		&i.CancelRequested,
-		&i.Adopting,
 	)
 	return i, err
 }
@@ -341,18 +333,25 @@ func (q *Queries) RunsByStatus(ctx context.Context) ([]RunsByStatusRow, error) {
 }
 
 const setRunResult = `-- name: SetRunResult :exec
-UPDATE runs SET plan = COALESCE($1::jsonb, plan), outputs = COALESCE($2::jsonb, outputs)
-WHERE id = $3::uuid
+UPDATE runs SET plan = COALESCE($1::jsonb, plan), outputs = COALESCE($2::jsonb, outputs),
+    found = COALESCE($3::jsonb, found)
+WHERE id = $4::uuid
 `
 
 type SetRunResultParams struct {
 	Plan    []byte
 	Outputs []byte
+	Found   []byte
 	ID      uuid.UUID
 }
 
 func (q *Queries) SetRunResult(ctx context.Context, arg SetRunResultParams) error {
-	_, err := q.db.Exec(ctx, setRunResult, arg.Plan, arg.Outputs, arg.ID)
+	_, err := q.db.Exec(ctx, setRunResult,
+		arg.Plan,
+		arg.Outputs,
+		arg.Found,
+		arg.ID,
+	)
 	return err
 }
 

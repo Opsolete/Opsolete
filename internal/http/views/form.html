@@ -27,7 +27,7 @@
 {{if .Preview}}<div class="alert" role="status">Preview: the form end users get with this template, as it is in the builder. It can't be submitted; close this tab to go back to the builder.</div>{{end}}
 {{end}}
 {{template "formerror" .F}}
-{{with .Found}}<div class="alert" role="status">Importing <strong>{{.Name}}</strong>{{if gt (len .Imports) 1}} ({{len .Imports}} resources){{end}}: the settings below come from the scan. Check them, then start the plan: it imports the resources instead of creating them, and waits for your confirmation.</div>{{end}}
+{{if .Found}}<div class="alert" role="status">Filled in with what <a href="/workspaces/{{.Configure.Name}}/runs/{{.FoundRun}}">the import plan</a> found ({{len .Found}} settings). Check them, then start the plan again: it imports what exists instead of creating it, and waits for your confirmation.</div>{{end}}
 <form method="post" class="card form-rows" id="template-form">
 {{$v := .Values}}
 {{if not .Configure}}
@@ -59,10 +59,10 @@
     <label>{{.Title}}</label>
     <input type="hidden" id="{{.Name}}" name="{{.Name}}" value="{{$lock}}" disabled data-locked>
     <p><code>{{$.LockedText .}}</code> <span class="hint">Set by project <a href="/projects/{{$.LockedBy}}/environment">{{$.LockedBy}}</a></span></p>
-    {{$name := .Name}}{{with $.Found}}{{with index .Inputs $name}}{{if ne . $lock}}
+    {{with $.FoundText .Name}}{{if ne . $lock}}
     <!-- importing: the plan changes it in place (e.g. moves the NIC to the project's subnet), which the replace guard doesn't stop -->
-    <p class="alert warn" role="status">The scan found <code>{{.}}</code>: importing changes it to the project's value. Tick <em>Keep own</em> on the project's value to keep it.</p>
-    {{end}}{{end}}{{end}}
+    <p class="alert warn" role="status">The import plan found <code>{{.}}</code>: importing changes it to the project's value. Tick <em>Keep own</em> on the project's value to keep it.</p>
+    {{end}}{{end}}
   {{else if or .RowFields (eq .Type "object")}}
     <p class="field" id="{{.Name}}-label">{{.Title}}</p>
   {{else}}
@@ -83,15 +83,15 @@
   {{else if eq .Type "select"}}
     <select id="{{.Name}}" name="{{.Name}}"{{aria $.F .Name $help}}>
       {{$cur := index $v .Name}}{{$known := not $cur}}{{range .Options}}{{if eq .Value $cur}}{{$known = true}}{{end}}{{end}}
-      <!-- a value that isn't an option (an import's, or one the template dropped): shown, not swapped for the first; saving asks to choose -->
+      <!-- a value that isn't an option (a found one, or one the template dropped): shown, not swapped for the first; saving asks to choose -->
       {{if not $known}}<option value="{{$cur}}" selected>{{$cur}} (not an option: choose one)</option>{{end}}
       {{range .Options}}<option value="{{.Value}}"{{if eq .Value $cur}} selected{{end}}>{{.Text}}</option>{{end}}
     </select>
-  {{else if .Sensitive}}{{$set := index $.Set .Name}}{{$ph := index $.Placeholder .Name}}
+  {{else if .Sensitive}}{{$set := index $.Set .Name}}
     <!-- never filled in: the stored value is sealed; left empty, it's kept -->
     <input id="{{.Name}}" name="secret.{{.Name}}" type="password" autocomplete="new-password"
-      {{if .Pattern}} pattern="{{.Pattern}}"{{with .Help}} title="{{.}}"{{end}}{{end}}{{if and .Required (not $set) (not $ph)}} required{{end}}{{aria $.F .Name (print .Name "-hint") $help}}>
-    <p class="hint" id="{{.Name}}-hint">Sensitive: stored encrypted and never shown.{{if $set}} A value is set; leave empty to keep it.{{end}}{{if and $ph (not $set)}} Importing: leave empty, a random placeholder is used (the resource keeps its own).{{end}}</p>
+      {{if .Pattern}} pattern="{{.Pattern}}"{{with .Help}} title="{{.}}"{{end}}{{end}}{{if and .Required (not $set)}} required{{end}}{{aria $.F .Name (print .Name "-hint") $help}}>
+    <p class="hint" id="{{.Name}}-hint">Sensitive: stored encrypted and never shown.{{if $set}} A value is set; leave empty to keep it.{{end}}</p>
   {{else}}
     <input id="{{.Name}}" name="{{.Name}}" value="{{index $v .Name}}" autocomplete="off" spellcheck="false"
       {{if eq .Type "number"}}type="number" step="any" inputmode="decimal"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{with .Help}} title="{{.}}"{{end}}{{end}}{{if .Required}} required{{end}}{{aria $.F .Name $help}}>

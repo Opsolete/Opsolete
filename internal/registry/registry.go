@@ -91,26 +91,6 @@ func SortVersions(vs []string) {
 	})
 }
 
-// Newest returns the newest of vs matching a Terraform version constraint ("" any), as terraform init picks;
-// false if none does or the constraint is invalid.
-func Newest(vs []string, constraint string) (string, bool) {
-	c, err := version.NewConstraint(constraint)
-	if strings.TrimSpace(constraint) == "" {
-		c, err = nil, nil
-	}
-	if err != nil {
-		return "", false
-	}
-	vs = slices.Clone(vs)
-	SortVersions(vs)
-	for _, v := range vs {
-		if sv, err := version.NewSemver(v); err == nil && (c == nil && sv.Prerelease() == "" || c != nil && c.Check(sv)) {
-			return v, true
-		}
-	}
-	return "", false
-}
-
 // ArchivePath is the path of a module archive. It ends in .tar.gz so Terraform's getter unpacks it.
 func ArchivePath(ns, name, system, ver string) string {
 	return fmt.Sprintf("/v1/archives/%s/%s/%s/%s.tar.gz", ns, name, system, ver)

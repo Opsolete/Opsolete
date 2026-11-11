@@ -13,7 +13,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
+	"reflect"
+
 	"strings"
 	"time"
 
@@ -71,7 +72,7 @@ func (a *App) ClaimJob(ctx context.Context, runner string) (body []byte, ok bool
 		fctx := context.WithoutCancel(ctx)
 		ferr := a.Store.AckJob(fctx, j.RunID, j.LeaseID, LeaseTTL)
 		if ferr == nil {
-			_, ferr = a.Store.FinishJob(fctx, j.RunID, j.LeaseID, "failed", err.Error(), nil, nil, nil)
+			_, ferr = a.Store.FinishJob(fctx, j.RunID, j.LeaseID, "failed", err.Error(), nil, nil, nil, nil)
 		}
 		if ferr != nil {
 			a.Log.Error("fail job", "run", j.RunID, "err", ferr)
@@ -85,9 +86,7 @@ func (a *App) ClaimJob(ctx context.Context, runner string) (body []byte, ok bool
 func (a *App) assembleJob(ctx context.Context, j storage.Job) ([]byte, error) {
 	env, vars, secrets, err := a.runVariables(ctx, j.WorkspaceID)
 	var src, currency string
-	if j.Action == "scan" { // no root configuration and no added templates: only the scanned template's module
-		j.Modules = nil
-	} else if err == nil {
+	if err == nil {
 		src, err = a.jobSource(ctx, j)
 	}
 	if err == nil {
@@ -110,10 +109,6 @@ func (a *App) assembleJob(ctx context.Context, j storage.Job) ([]byte, error) {
 		mods = append(mods, runnerapi.Module{Name: m.Name, Inputs: in,
 			Source: a.Registry.RunnerSource(templates.Module{Source: m.ModuleSource, Ref: m.ModuleRef}, runnerSrcTTL)})
 	}
-	var scan *runnerapi.Scan
-	if err == nil && j.Action == "scan" { // the templates' modules only, no root configuration
-		scan, mods, err = a.scanJob(ctx, j.ScanResourceGroup)
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -123,9 +118,9 @@ func (a *App) assembleJob(ctx context.Context, j storage.Job) ([]byte, error) {
 		secrets = append(secrets, reg.Token) // masked in the log, like the state password
 	}
 	body, err := json.Marshal(runnerapi.Job{
-		RunID: j.RunID.String(), WorkspaceID: j.WorkspaceID.String(), Phase: j.Phase, Action: j.Action, Replace: j.Replace, Target: j.Target, Imports: j.Imports, LeaseID: j.LeaseID,
+		RunID: j.RunID.String(), WorkspaceID: j.WorkspaceID.String(), Phase: j.Phase, Action: j.Action, Replace: j.Replace, Target: j.Target, LeaseID: j.LeaseID,
 		LeaseSeconds: int(LeaseTTL.Seconds()), StateToken: a.StateToken(j.WorkspaceID, j.RunID), Vars: vars, Env: env, Secrets: secrets,
-		ModuleSource: src, Modules: mods, Currency: currency, Scan: scan, Registry: reg,
+		ModuleSource: src, Modules: mods, Currency: currency, Registry: reg,
 	})
 	if err == nil && len(body) > runnerapi.MaxJobSize {
 		err = fmt.Errorf("the job's variables and inputs are %d bytes, over the runner limit of %d", len(body), runnerapi.MaxJobSize)
@@ -179,26 +174,20 @@ func (a *App) FinishJob(ctx context.Context, runID uuid.UUID, lease string, req 
 	if len(req.Outputs) > 0 { // the runner masks them too; the server is the trust boundary, so again here
 		req.Outputs = a.maskRunOutputs(ctx, runID, req.Outputs)
 	}
-	if len(req.Candidates) > 0 { // form values: a workspace secret among them is dropped, as the runner does
-		in := map[string]any{}
-		for i, c := range req.Candidates {
-			for k, v := range c.Inputs {
-				in[strconv.Itoa(i)+"/"+k] = v
+	for mod, in := range req.Found { // form values: one holding a workspace secret is dropped, as the runner does
+		masked := a.maskRunOutputs(ctx, runID, in)
+		for k, v := range in {
+			if !reflect.DeepEqual(masked[k], v) {
+				delete(in, k)
 			}
 		}
-		for key, v := range a.maskRunOutputs(ctx, runID, in) {
-			if i, k, _ := strings.Cut(key, "/"); v == mask.Sensitive {
-				n, _ := strconv.Atoi(i)
-				delete(req.Candidates[n].Inputs, k)
-			}
+		if len(in) == 0 {
+			delete(req.Found, mod)
 		}
 	}
 	// not canceled with the request: a job's result must survive a server restart
 	finish := func(ctx context.Context) (string, error) {
-		if req.Candidates != nil || req.Inventory != nil {
-			return a.Store.FinishScan(ctx, runID, lease, req.Status, req.Message, req.Candidates, req.Inventory)
-		}
-		return a.Store.FinishJob(ctx, runID, lease, req.Status, req.Message, req.Outputs, req.Plan, req.Resources)
+		return a.Store.FinishJob(ctx, runID, lease, req.Status, req.Message, req.Outputs, req.Plan, req.Resources, req.Found)
 	}
 	status, err := finish(context.WithoutCancel(ctx))
 	if err != nil {

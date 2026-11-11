@@ -194,7 +194,7 @@ func environmentMap(list []storage.EnvironmentValue, err error) (EnvironmentMap,
 }
 
 // Locked returns the values (canonical, by input name) env sets for t's per-environment inputs in a workspace whose
-// own values are own (stored, or found by a scan when importing): the inputs a form shows read-only, a save ignores
+// own values are own (stored, or found by an import plan): the inputs a form shows read-only, a save ignores
 // and runs take from the project. A keep_own value doesn't lock an input whose own value differs: that one is kept.
 func (env EnvironmentMap) Locked(t templates.Template, own map[string]any) map[string]string {
 	out := map[string]string{}

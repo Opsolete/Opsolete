@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"maps"
 	"regexp"
 	"slices"
 	"strings"
@@ -10,7 +11,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/opsolete/opsolete/internal/registry"
-	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
 )
@@ -81,10 +81,10 @@ func (a *App) TemplateForm(ctx context.Context, actor Actor, workspace, module, 
 
 // SaveTemplate adds templateID to the workspace (module "") or saves the added template module's
 // inputs (raw: as typed, by input name) and the template's current module version, and queues the
-// plan that applies it. Adding, from (nil: none) is a scan's result to import (Import): the plan imports
-// its resources instead of creating them. It returns the module name. ValidationError: the inputs
-// (Fields by input name), or the import.
-func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, templateID string, raw map[string]string, from *Found) (string, storage.Run, error) {
+// plan that applies it. found (nil: none) is what an import plan found that the form took (FoundValues): those
+// values count as the workspace's own, so a project's keep-own value doesn't replace them. It returns the module
+// name. ValidationError: the inputs (Fields by input name).
+func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, templateID string, raw map[string]string, found map[string]any) (string, storage.Run, error) {
 	f, err := a.TemplateForm(ctx, actor, workspace, module, templateID)
 	if err != nil {
 		return module, storage.Run{}, err
@@ -99,33 +99,20 @@ func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, 
 	if err != nil {
 		return module, storage.Run{}, err
 	}
-	var c *runnerapi.Candidate
-	own := old
-	if adding && from != nil {
-		if c, err = a.importing(ctx, actor, f.Workspace, t, *from); err != nil {
-			return module, storage.Run{}, err
-		}
-		raw = withPlaceholders(raw, c.Placeholder)
-		own = FoundValues(c)
-	}
+	own := maps.Clone(old)
+	maps.Copy(own, found)
 	locked := env.Locked(t, own)
 	raw = lockInputs(raw, locked)
-	vals, errs := t.Validate(raw)
+	vals, errs := validate(t, raw)
 	if err := a.SealInputs(t, raw, vals, old, errs, f.Workspace.ID, module); err != nil {
 		return module, storage.Run{}, err
 	}
 	keepOwn(vals, errs, locked, old)
-	var imports []runnerapi.Import
-	if c != nil {
-		for _, im := range c.Imports {
-			imports = append(imports, runnerapi.Import{To: "module." + module + "." + im.To, ID: im.ID})
-		}
-	}
 	if len(errs) > 0 {
 		return module, storage.Run{}, &ValidationError{Fields: errs}
 	}
 	run, err := a.Store.SetWorkspaceTemplate(ctx, f.Workspace.ID, storage.WorkspaceTemplate{Name: module, TemplateID: t.ID,
-		ModuleSource: t.Module.Source, ModuleRef: t.Module.Ref, Inputs: vals, Imports: imports}, adding, actor.UserID)
+		ModuleSource: t.Module.Source, ModuleRef: t.Module.Ref, Inputs: vals}, adding, actor.UserID)
 	if errors.Is(err, storage.ErrExists) {
 		return module, run, &ValidationError{Message: "this workspace already has a template named " + module + " (added meanwhile), try again"}
 	}
@@ -133,8 +120,83 @@ func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, 
 		return module, run, err
 	}
 	a.Log.Info("workspace template saved", "workspace", f.Workspace.Name, "module", module, "template", t.ID, "added", adding,
-		"ref", t.Module.Ref, "run", run.ID, "imports", len(imports), "user", actor.Email)
+		"ref", t.Module.Ref, "run", run.ID, "found", found != nil, "user", actor.Email)
 	return module, run, nil
+}
+
+// ImportInput is the input with which a template's module imports what exists instead of creating it (a bool;
+// docs: templates.md, "Writing modules that can import").
+const ImportInput = "existing"
+
+// validate is t.Validate, except while the module imports (ImportInput on): then the plan finds the settings, so
+// only the key input is required, and a required input left empty is null (the module call needs the argument).
+func validate(t templates.Template, raw map[string]string) (map[string]any, map[string]string) {
+	i := slices.IndexFunc(t.Inputs, func(in templates.Input) bool { return in.Name == ImportInput && in.Type == "bool" })
+	if i < 0 || raw[ImportInput] != "on" && raw[ImportInput] != "true" { // posted only when shown
+		return t.Validate(raw)
+	}
+	t.Inputs = slices.Clone(t.Inputs)
+	var optional []templates.Input
+	for i, in := range t.Inputs {
+		if in.Required && !in.Key && !in.Sensitive {
+			t.Inputs[i].Required = false
+			optional = append(optional, t.Inputs[i])
+		}
+	}
+	vals, errs := t.Validate(raw)
+	for _, in := range optional {
+		if _, set := vals[in.Name]; !set && errs[in.Name] == "" && t.Match(in.ShowIf, raw) {
+			vals[in.Name] = nil
+		}
+	}
+	return vals, errs
+}
+
+// FoundValues is what import plan runID of the workspace found for its template module (added from t, now or
+// before the run's restore removed it): the real values of t's inputs that alone set an imported attribute
+// (runnerapi.FinishRequest.Found), typed as stored, sensitive inputs never. Needs operate. ErrNotFound: no such
+// run, or it found nothing for module from t.
+func (a *App) FoundValues(ctx context.Context, actor Actor, workspace string, runID uuid.UUID, module string, t templates.Template) (map[string]any, error) {
+	if _, err := a.Run(ctx, actor, workspace, runID, LevelOperate); err != nil {
+		return nil, err
+	}
+	all, err := a.Store.RunFound(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	f, ok := all[module]
+	found := map[string]any{}
+	for _, in := range t.Inputs {
+		if v, set := f.Inputs[in.Name]; ok && set && !in.Sensitive && f.TemplateID == t.ID {
+			found[in.Name] = v
+		}
+	}
+	if len(found) == 0 {
+		return nil, ErrNotFound
+	}
+	return found, nil
+}
+
+// FoundTemplate is a template module an import plan found values for, and whether it's still in the workspace
+// (a discarded or refused run removes a template it added).
+type FoundTemplate struct {
+	Module, TemplateID string
+	Added              bool
+}
+
+// FoundTemplates lists what run d (RunDetail checked the actor's access) found values for, by module name.
+func (a *App) FoundTemplates(ctx context.Context, d RunDetail) ([]FoundTemplate, error) {
+	all, err := a.Store.RunFound(ctx, d.Run.ID)
+	if err != nil || len(all) == 0 {
+		return nil, err
+	}
+	added, err := a.Store.WorkspaceTemplates(ctx, d.Workspace.ID)
+	var out []FoundTemplate
+	for _, m := range slices.Sorted(maps.Keys(all)) {
+		out = append(out, FoundTemplate{Module: m, TemplateID: all[m].TemplateID,
+			Added: slices.ContainsFunc(added, func(t storage.WorkspaceTemplate) bool { return t.Name == m && t.TemplateID == all[m].TemplateID })})
+	}
+	return out, err
 }
 
 // RemoveTemplate removes an added template and queues the plan that destroys its resources; with

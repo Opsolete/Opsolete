@@ -86,30 +86,37 @@ func TestAddedTemplates(t *testing.T) {
 	}
 }
 
-// TestImports: a run that adopts an existing resource writes import blocks; the plan counts the import (an
-// import with changes is also an update), the apply imports it, and the ID stays a literal string.
+// TestImports: a template's module imports an existing resource itself (an import block switched by an input,
+// Terraform ≥ 1.16); the plan counts and lists the import (an import with changes is also an update), and the
+// apply imports it.
 func TestImports(t *testing.T) {
 	f := &fakeServer{}
 	srv := httptest.NewServer(f)
 	defer srv.Close()
 	r := testRunner(t, srv)
 	j := job("i1", "plan", "apply", "", nil)
-	j.Modules = []runnerapi.Module{{Name: "a", Source: f.module(t, helloModule), Inputs: map[string]any{"greeting": "hi"}}}
-	j.Imports = []runnerapi.Import{{To: "module.a.terraform_data.this", ID: `existing-${file("/etc/passwd")}`}}
+	j.Modules = []runnerapi.Module{{Name: "a", Source: f.module(t, `
+variable "greeting" { type = string }
+variable "existing" { default = false }
+resource "terraform_data" "this" { input = var.greeting }
+import {
+  for_each = var.existing ? toset(["this"]) : toset([])
+  to       = terraform_data.this
+  id       = "existing-${var.greeting}"
+}`), Inputs: map[string]any{"greeting": "hi", "existing": true}}}
 	res, logs := f.do(t, r, j)
 	want := []runnerapi.Change{{Address: "module.a.terraform_data.this", Action: "update"}} // terraform_data imports without its input
-	if res.Status != "succeeded" || res.Plan == nil || res.Plan.Import != 1 || res.Plan.Add != 0 || !reflect.DeepEqual(res.Plan.Changes, want) {
+	imports := []runnerapi.Import{{To: "module.a.terraform_data.this", ID: "existing-hi"}}
+	if res.Status != "succeeded" || res.Plan == nil || res.Plan.Import != 1 || res.Plan.Add != 0 || !reflect.DeepEqual(res.Plan.Changes, want) ||
+		!reflect.DeepEqual(res.Plan.Imports, imports) {
 		t.Fatalf("plan: %+v\n%s", res.Plan, logs)
 	}
 	if !strings.Contains(logs, "plan saved: 1 to import, 0 to add, 1 to change, 0 to destroy") {
 		t.Fatalf("plan log:\n%s", logs)
 	}
 	j.Phase = "apply"
-	if res, logs = f.do(t, r, j); res.Status != "succeeded" || len(res.Resources) != 1 {
+	if res, logs = f.do(t, r, j); res.Status != "succeeded" || len(res.Resources) != 1 || res.Resources[0].ID != "existing-hi" {
 		t.Fatalf("apply: %+v\n%s", res, logs)
-	}
-	if !strings.Contains(string(f.states["ws1"]), `"id": "existing-${file(\"/etc/passwd\")}"`) {
-		t.Fatalf("imported ID not kept literally:\n%s", f.states["ws1"])
 	}
 }
 
@@ -123,7 +130,8 @@ func TestSummarizeImport(t *testing.T) {
 		return &tfjson.ResourceChange{Address: addr, Change: c}
 	}
 	got := summarize([]*tfjson.ResourceChange{rc("a", true, tfjson.ActionNoop), rc("b", false, tfjson.ActionNoop), rc("c", true, tfjson.ActionUpdate)})
-	want := runnerapi.Plan{Change: 1, Import: 2, Changes: []runnerapi.Change{{Address: "a", Action: "import"}, {Address: "c", Action: "update"}}}
+	want := runnerapi.Plan{Change: 1, Import: 2, Imports: []runnerapi.Import{{To: "a", ID: "x"}, {To: "c", ID: "x"}},
+		Changes: []runnerapi.Change{{Address: "a", Action: "import"}, {Address: "c", Action: "update"}}}
 	if !reflect.DeepEqual(got, want) || counts(got) != "2 to import, 0 to add, 1 to change, 0 to destroy" {
 		t.Fatalf("got %+v, %q", got, counts(got))
 	}

@@ -593,6 +593,8 @@ func (in Input) describeFields(row map[string]any) string {
 // A list (or object) is its JSON, the form's value of a list input.
 func FormatValue(v any) string {
 	switch x := v.(type) {
+	case nil: // an input left empty while importing (stored null)
+		return ""
 	case float64:
 		return strconv.FormatFloat(x, 'f', -1, 64)
 	case []any, map[string]any:

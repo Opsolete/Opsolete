@@ -2,11 +2,7 @@
 package runnerapi
 
 import (
-	"encoding/json"
-
 	tfjson "github.com/hashicorp/terraform-json"
-
-	"github.com/opsolete/opsolete/internal/templates"
 )
 
 const (
@@ -47,7 +43,6 @@ type Job struct {
 	Action       string         `json:"action"`
 	Replace      []string       `json:"replace,omitempty"` // resource addresses the plan replaces (-replace)
 	Target       []string       `json:"target,omitempty"`  // addresses the plan is limited to (-target)
-	Imports      []Import       `json:"imports,omitempty"` // existing resources the run adopts (import blocks)
 	LeaseID      string         `json:"lease_id"`
 	LeaseSeconds int            `json:"lease_seconds"`
 	ModuleSource string         `json:"module_source"` // root configuration (a VCS commit archive): go-getter address; a leading "/" is relative to the server URL; "" = none
@@ -65,8 +60,6 @@ type Job struct {
 	// Registry lets the run's Terraform fetch modules from the server's registry (a template's module calling
 	// other registry modules): read-only, valid while a runner works on the run. nil: the registry is off.
 	Registry *RegistryAccess `json:"registry,omitempty"`
-	// Scan (action scan, plan phase only): what to look for. No state: nothing is written, nothing locked.
-	Scan *Scan `json:"scan,omitempty"`
 }
 
 // RegistryAccess is a registry host and the token for it, as a Terraform CLI credentials block.
@@ -74,81 +67,6 @@ type RegistryAccess struct {
 	Host  string `json:"host"` // e.g. opsolete.example.com, or with a port
 	Token string `json:"token"`
 }
-
-// Scan finds existing resources the catalog's templates can take over (runner.scan).
-type Scan struct {
-	ResourceGroup string         `json:"resource_group,omitempty"` // narrows the search; "" the whole subscription
-	Templates     []ScanTemplate `json:"templates"`
-	Notes         []string       `json:"notes,omitempty"` // templates a scan can't use, and why, for the log
-}
-
-// ScanTemplate is a template a scan matches resources to. Entries, derived from its module's code
-// (registry.Adoptable), say what to find and how it fills the form; Module names its module in Job.Modules,
-// for the fit check.
-type ScanTemplate struct {
-	Template json.RawMessage `json:"template"` // templates.Template: its inputs, for show_if and the form's checks
-	Module   string          `json:"module"`
-	Entries  []ScanEntry     `json:"entries"`
-	Probes   []Probe         `json:"probes,omitempty"`
-	Notes    []string        `json:"notes,omitempty"` // what reading the module skipped, for the log
-}
-
-// Probe finds an optional or repeated part of a template's module (a module call with count = var.x != null ?
-// 1 : 0, or for_each over a list input's rows) whose module imports what exists already (import blocks on an
-// input, e.g. existing = true): per candidate, the runner calls the part's module directly with that switched on,
-// once per inventory resource of Type (none: once); a try whose every import succeeds belongs to the candidate,
-// and its resources' attributes ("before") fill the form, with the switch on.
-type Probe struct {
-	Call    string              `json:"call"`           // the call in the template's module, e.g. module.data_disk
-	Source  string              `json:"source"`         // the part's module: a registry address
-	Version string              `json:"version"`        // its version constraint
-	List    string              `json:"list,omitempty"` // repeated: the list input whose rows it fills
-	Key     string              `json:"key,omitempty"`  // repeated: the row field its instances are keyed by
-	Type    string              `json:"type,omitempty"` // the cloud's type the import IDs name, e.g. Microsoft.Compute/disks
-	Imports int                 `json:"imports"`        // the module's import blocks: all import for a try to belong
-	Args    map[string]ProbeArg `json:"args"`
-	Fills   []ProbeFill         `json:"fills"`
-}
-
-// ProbeArg is where a probed module's argument comes from: an input, a row field (repeated), or the ID of a scan
-// entry's resource (Refs: either's, e.g. the Windows or Linux VM); Switch: the import switch, true; Name: the
-// tried resource's name.
-type ProbeArg struct {
-	Input  string   `json:"input,omitempty"`
-	Field  string   `json:"field,omitempty"`
-	Refs   []string `json:"refs,omitempty"`
-	Switch bool     `json:"switch,omitempty"`
-	Name   bool     `json:"name,omitempty"`
-}
-
-// ProbeFill maps a resource of a probed module (To, its address there) back to the form: input (repeated: row
-// field) → its attribute path; Lists: list input → the nested blocks whose each is a row.
-type ProbeFill struct {
-	To     string               `json:"to"`
-	Values map[string]string    `json:"values,omitempty"`
-	Lists  map[string]BlockList `json:"lists,omitempty"`
-}
-
-// BlockList is a repeated nested block (a dynamic block over a list input): a row per block.
-type BlockList struct {
-	Block  string            `json:"block"`  // its path, e.g. security_rule
-	Fields map[string]string `json:"fields"` // row field → the block's attribute
-}
-
-// ScanEntry is a resource of a template's module that can take over an existing one.
-type ScanEntry struct {
-	To      string            `json:"to"`                // its address in the module, e.g. azurerm_windows_virtual_machine.self[0]
-	List    string            `json:"list"`              // the list resource type that finds it (terraform query)
-	Require string            `json:"require,omitempty"` // only resources with this attribute set count
-	IDFrom  string            `json:"id_from,omitempty"` // a related resource: its ID is the primary's attribute at this path
-	ShowIf  *templates.ShowIf `json:"show_if,omitempty"` // it exists only for these values of an input, e.g. os_type windows
-	Inputs  map[string]string `json:"inputs,omitempty"`  // input name → the attribute path that fills it
-	// Placeholder: sensitive inputs it ignores (lifecycle ignore_changes), filled with a random value on import.
-	Placeholder []string `json:"placeholder,omitempty"`
-}
-
-// Primary reports whether resources found for the entry are candidates (not related to another's).
-func (e ScanEntry) Primary() bool { return e.IDFrom == "" }
 
 // Module is a template added to the workspace: the runner adds it as module.<Name> next to the
 // root configuration, and exposes each of its outputs as the root output <Name>__<output>.
@@ -158,9 +76,9 @@ type Module struct {
 	Inputs map[string]any `json:"inputs"`
 }
 
-// Import adopts an existing resource: Terraform imports ID into the address To (an import block).
+// Import is an existing resource a plan imports (an import block, in a template's module): ID into the address To.
 type Import struct {
-	To string `json:"to"` // e.g. module.vm_c8ad.azurerm_linux_virtual_machine.this
+	To string `json:"to"` // e.g. module.vm_c8ad.module.windows[0].azurerm_windows_virtual_machine.main
 	ID string `json:"id"`
 }
 
@@ -174,54 +92,19 @@ type FinishRequest struct {
 	// Resources indexes the workspace's state as the apply left it. null (not empty) means the
 	// state couldn't be read, so the current version stays unindexed; [] means nothing is deployed.
 	Resources []Resource `json:"resources"`
-	// Candidates a scan found, by name. Inputs never hold sensitive values.
-	Candidates []Candidate `json:"candidates,omitempty"`
-	// Inventory: every resource the scan saw, templates or not (nil: it couldn't take stock).
-	Inventory []Found `json:"inventory,omitempty"`
+	// Found: a plan that imports, per template module (Module.Name), the inputs that alone set an imported
+	// attribute, with that attribute's real value (list inputs: whole, their rows' fields filled in). Never
+	// sensitive values. The form's "Use found values".
+	Found map[string]map[string]any `json:"found,omitempty"`
 }
 
-// Found is a resource a scan saw in the cloud: names only, no settings.
-type Found struct {
-	ID            string `json:"id"`
-	Name          string `json:"name"`
-	Type          string `json:"type"` // the cloud's, e.g. Microsoft.Network/virtualNetworks
-	ResourceGroup string `json:"resource_group"`
-	Location      string `json:"location,omitempty"`
-}
-
-// Candidate is an existing resource a scan found for a template, with its related ones: the form values and
-// imports that take them over, and how a plan with them went (the fit check).
-type Candidate struct {
-	Template string            `json:"template"` // its id
-	Name     string            `json:"name"`
-	ID       string            `json:"id"`      // the resource's ID
-	Inputs   map[string]string `json:"inputs"`  // form values by input name, as typed; sensitive ones left out
-	Imports  []Import          `json:"imports"` // To: the address in the template's module
-	// Placeholder: sensitive inputs to fill with a random value on import (ScanEntry.Placeholder).
-	Placeholder []string `json:"placeholder,omitempty"`
-	// Found: what its template's module imports itself (a probe found it: a data disk, a schedule), To relative to
-	// the template's module. Checked against the states like Imports, never written as import blocks.
-	Found []Import `json:"found,omitempty"`
-	// Uses: other resources of the inventory its resources refer to (an OS disk, a public IP), not imported with it.
-	Uses    []string    `json:"uses,omitempty"`
-	Fit     string      `json:"fit"` // fits | differs | replaces | invalid (the form refuses its values) | unchecked
-	Message string      `json:"message,omitempty"`
-	Changes []FitChange `json:"changes,omitempty"` // differs / replaces: what the plan would do besides importing
-}
-
-// FitChange is one resource a fit check's plan changes: the action and the attributes, never their values.
-type FitChange struct {
-	Address    string   `json:"address"` // in the module, e.g. azurerm_windows_virtual_machine.self[0]
-	Action     string   `json:"action"`  // create | update | delete | replace
-	Attributes []string `json:"attributes,omitempty"`
-}
-
-// Plan is what a plan will do: counts and resource addresses, never values.
+// Plan is what a plan will do: counts, resource addresses and the IDs it imports, never other values.
 type Plan struct {
 	Add     int      `json:"add"`
 	Change  int      `json:"change"`
 	Destroy int      `json:"destroy"`
-	Import  int      `json:"import,omitempty"` // existing resources imported, with or without changes
+	Import  int      `json:"import,omitempty"`  // existing resources imported, with or without changes
+	Imports []Import `json:"imports,omitempty"` // which: a state may hold each resource once (the import guard)
 	Changes []Change `json:"changes"`
 	Cost    *Cost    `json:"cost,omitempty"` // nil: cost estimation is off or failed
 }
@@ -248,7 +131,7 @@ type Resource struct {
 	Name     string `json:"name"`     // e.g. this
 	Provider string `json:"provider"` // e.g. registry.terraform.io/hashicorp/azurerm
 	Module   string `json:"module"`   // e.g. module.net; empty for the root module
-	// ID is the resource's id attribute, the one value kept: a scan tells resources already managed by it.
+	// ID is the resource's id attribute, the one value kept: an import of a resource a state manages is refused.
 	ID string `json:"id,omitempty"`
 }
 

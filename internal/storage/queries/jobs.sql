@@ -6,15 +6,14 @@
 -- The longest-waiting queued phase. SKIP LOCKED: runners never get the same one. Runs of a locked
 -- workspace wait, except speculative plans and drift checks, which never take the state lock.
 SELECT r.id, r.status FROM runs r WHERE r.status IN ('plan_queued', 'apply_queued')
-    AND (r.action IN ('plan', 'assess', 'scan') OR NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.id = r.workspace_id AND w.state_lock IS NOT NULL))
+    AND (r.action IN ('plan', 'assess') OR NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.id = r.workspace_id AND w.state_lock IS NOT NULL))
 ORDER BY r.updated_at FOR UPDATE OF r SKIP LOCKED LIMIT 1;
 
 -- name: LeaseRun :one
 UPDATE runs SET runner = sqlc.arg(runner)::text, lease_id = sqlc.arg(lease_id)::text,
     lease_until = now() + make_interval(secs => sqlc.arg(lease_secs)::float8)
 WHERE id = sqlc.arg(id)::uuid
-RETURNING workspace_id, action, replace, COALESCE(vcs_commit, '')::text AS vcs_commit, remove_templates, imports,
-    COALESCE(scan_resource_group, '')::text AS scan_resource_group;
+RETURNING workspace_id, action, replace, COALESCE(vcs_commit, '')::text AS vcs_commit, remove_templates;
 
 -- name: WorkspaceHasVCS :one
 SELECT EXISTS (SELECT 1 FROM workspace_vcs WHERE workspace_id = sqlc.arg(workspace_id)::uuid);
@@ -47,14 +46,14 @@ UPDATE runs SET cancel_requested = true WHERE id = sqlc.arg(id)::uuid;
 -- name: LockLeasedRun :one
 -- The run, if lease_id holds it; the lease is checked here, setStatus then checks the transition.
 -- needs_confirmation: a template rollout's run (see template_rollouts) or a promotion's always waits for a human.
-SELECT r.status, r.action, r.workspace_id, w.auto_apply, (r.rollout_id IS NOT NULL OR r.always_confirm)::boolean AS needs_confirmation, r.cancel_requested,
-    (r.imports IS NOT NULL)::boolean AS adopting
+SELECT r.status, r.action, r.workspace_id, w.auto_apply, (r.rollout_id IS NOT NULL OR r.always_confirm)::boolean AS needs_confirmation, r.cancel_requested
 FROM runs r JOIN workspaces w ON w.id = r.workspace_id
 WHERE r.id = sqlc.arg(id)::uuid AND r.lease_id = sqlc.arg(lease_id)::text AND run_working(r.status) AND r.lease_acked_at IS NOT NULL
 FOR UPDATE OF r;
 
 -- name: SetRunResult :exec
-UPDATE runs SET plan = COALESCE(sqlc.narg(plan)::jsonb, plan), outputs = COALESCE(sqlc.narg(outputs)::jsonb, outputs)
+UPDATE runs SET plan = COALESCE(sqlc.narg(plan)::jsonb, plan), outputs = COALESCE(sqlc.narg(outputs)::jsonb, outputs),
+    found = COALESCE(sqlc.narg(found)::jsonb, found)
 WHERE id = sqlc.arg(id)::uuid;
 
 -- name: ExpiredLeases :many

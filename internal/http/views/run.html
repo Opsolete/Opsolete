@@ -1,4 +1,4 @@
-{{define "runtitle"}}{{if eq . "destroy"}}Destroy{{else if eq . "scan"}}Scan for existing resources{{else if eq . "refresh"}}Refresh state{{else if eq . "assess"}}Drift check{{else if eq . "plan"}}Speculative plan{{else}}Plan and apply{{end}}{{end}}
+{{define "runtitle"}}{{if eq . "destroy"}}Destroy{{else if eq . "refresh"}}Refresh state{{else if eq . "assess"}}Drift check{{else if eq . "plan"}}Speculative plan{{else}}Plan and apply{{end}}{{end}}
 {{define "pclass"}}{{if eq . "finished"}}succeeded{{else if eq . "running"}}running{{else if eq . "pending"}}needs_confirmation{{else}}{{.}}{{end}}{{end}}
 {{template "top" .Page}}
 {{$w := .W}}{{$r := .R}}{{$logInApply := or (not .Apply.Start.IsZero) (eq .Apply.State "queued")}}
@@ -19,10 +19,7 @@
     <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/cancel"><button type="submit" class="secondary">Cancel run</button></form>
     {{end}}
   </div>
-  {{else if and $.CanOperate (not $r.Active) $.Scan}}
-  <form method="post" action="/workspaces/{{$w.Name}}/scans"><input type="hidden" name="resource_group" value="{{$.Scan.ResourceGroup}}">
-    <button type="submit" class="secondary">Scan again</button></form>
-  {{else if and $.CanOperate (not $r.Active) $w.HasConfig (ne $r.Action "plan") (ne $r.Action "scan")}}
+  {{else if and $.CanOperate (not $r.Active) $w.HasConfig (ne $r.Action "plan")}}
   <form method="post" action="/workspaces/{{$w.Name}}/runs"{{if eq $r.Action "destroy"}}
     data-confirm="Start a new destroy run for {{$w.Name}}?"{{end}}>
     <input type="hidden" name="action" value="{{$r.Action}}">{{range $r.Replace}}<input type="hidden" name="replace" value="{{.}}">{{end}}
@@ -43,87 +40,13 @@
   <div><dt>Triggered by</dt><dd>{{if $r.CreatedBy}}{{$r.CreatedBy}}{{else if $r.VCSPullRequest}}pull request #{{$r.VCSPullRequest}}{{else if and $r.VCSCommit (eq $r.Action "apply")}}new commit{{else}}—{{end}}</dd></div>
 </dl>
 
-{{with .Scan}}
-<section class="scan" aria-labelledby="scan-head">
-  <h2 id="scan-head">{{if .Stocked}}{{.Total}} resources{{else}}Resources{{end}}{{with .ResourceGroup}} in resource group <code>{{.}}</code>{{end}}</h2>
-  {{if $r.Active}}<p class="muted">Scanning with this workspace's credentials…</p>
-  {{else if ne $r.Status "planned"}}<p class="muted">The scan didn't finish: see its log below.</p>
-  {{else}}
-  {{if not .Stocked}}<p class="alert warn" role="status">It couldn't list every resource (see the log): only what templates can import is shown.</p>{{end}}
-  <nav class="chips" aria-label="Groups">
-    <a href="#can-import">Can be imported <strong>{{len .Importable}}</strong></a>
-    {{with .Rework}}<a href="#needs-work">Template needs work <strong>{{len .}}</strong></a>{{end}}
-    <a href="#no-template">No template <strong>{{.NoTemplateCount}}</strong></a>
-    <a href="#managed">Already managed <strong>{{len .Managed}}</strong></a>
-  </nav>
-
-  <h3 id="can-import">Can be imported</h3>
-  {{with .Importable}}
-  <p class="hint">Checked with a plan that imports into a throwaway state: nothing in the cloud changed.</p>
-  <div class="runlist">
-  {{range .}}
-    <div class="scanrow">
-      <span>
-        <strong title="{{.ID}}">{{.Name}}</strong> <span class="tag" title="template">{{.TemplateName}}</span>
-        <small>{{.Kind}}{{with .ResourceGroup}} · {{.}}{{end}}{{range .Related}} · with {{.Kind}} <span title="{{.Name}}">{{.Short}}</span>{{end}}</small>
-        {{with .Uses}}<small>Uses {{range $i, $u := .}}{{if $i}}, {{end}}<span title="{{$u.Kind}}: {{$u.Name}}">{{$u.Short}}</span>{{end}} (not imported)</small>{{end}}
-        {{with .Changing}}<small class="text-warn">Would also {{join . "; "}}</small>{{end}}
-        {{if eq .Fit "invalid"}}<small class="text-warn">{{.Message}}: fill in when importing</small>{{else if eq .Fit "unchecked"}}<small>{{.Message}}</small>{{end}}
-      </span>
-      <span class="end">
-        {{if eq .Fit "fits"}}<span class="status applied" title="Imports only: nothing changes">fits</span>{{else if eq .Fit "differs"}}<span class="status needs_confirmation">differs</span>{{else if eq .Fit "invalid"}}<span class="status errored">incomplete</span>{{else}}<span class="status">unchecked</span>{{end}}
-        {{if $.CanOperate}}<a class="btn" href="/workspaces/{{$w.Name}}/templates/new?template={{.Template}}&amp;scan={{$r.ID}}&amp;n={{.N}}">Import</a>{{end}}
-      </span>
-    </div>
-  {{end}}
-  </div>
-  {{else}}<p class="muted">Nothing a template can import as it is.</p>{{end}}
-
-  {{with .Rework}}
-  <h3 id="needs-work">Template needs work</h3>
-  <p class="hint">A template matches, but importing with it would replace these: its module must make these settings inputs first.</p>
-  <div class="runlist">
-  {{range .}}
-    <div class="scanrow">
-      <span>
-        <strong title="{{.ID}}">{{.Name}}</strong> <span class="tag" title="template">{{.TemplateName}}</span>
-        <small>{{.Kind}}{{with .ResourceGroup}} · {{.}}{{end}}</small>
-        <small class="text-danger">Would {{join .Changing "; "}}</small>
-      </span>
-      <span class="end"><span class="status errored">would replace</span></span>
-    </div>
-  {{end}}
-  </div>
-  {{end}}
-
-  <h3 id="no-template">No template</h3>
-  {{with .NoTemplate}}
-  <p class="hint">No catalog template creates these types yet.</p>
-  <div class="runlist">
-  {{range .}}
-    <div class="scanrow">
-      <span>
-        <strong title="{{.Type}}">{{.Kind}}</strong>
-        <small>{{range $i, $row := .Rows}}{{if $i}}, {{end}}<span title="{{$row.ID}}">{{$row.Name}}</span> <span class="muted">({{$row.ResourceGroup}})</span>{{end}}</small>
-      </span>
-      <span class="end"><span class="tag">{{len .Rows}}</span></span>
-    </div>
-  {{end}}
-  </div>
-  {{else}}<p class="muted">None: templates cover every resource found.</p>{{end}}
-
-  <h3 id="managed">Already managed</h3>
-  {{with .Managed}}
-  <div class="runlist">
-  {{range .}}
-    <div class="scanrow">
-      <span><strong title="{{.ID}}">{{.Name}}</strong><small>{{.Type}}{{with .ResourceGroup}} · {{.}}{{end}}</small></span>
-      <span class="end"><a href="/workspaces/{{.ManagedBy}}">{{.ManagedBy}}</a></span>
-    </div>
-  {{end}}
-  </div>
-  {{else}}<p class="muted">None of these is managed by a workspace yet.</p>{{end}}
-  {{end}}
+{{with .Found}}
+<section class="alert" role="status" aria-labelledby="found-head">
+  <h2 id="found-head">Found while importing</h2>
+  <p>This plan read the existing resources: their settings can fill in the form, so the next plan changes less. What the plan
+    still changes after that, set by hand.</p>
+  {{if $r.Active}}<p>Discard this plan first to use them.</p>
+  {{else}}<p>{{range $i, $f := .}}{{if $i}} {{end}}{{if $f.Added}}<a class="btn" href="/workspaces/{{$w.Name}}/templates/{{$f.Module}}?found={{$r.ID}}">Use found values for {{$f.Module}}</a>{{else}}<a class="btn" href="/workspaces/{{$w.Name}}/templates/new?template={{$f.TemplateID}}&amp;found={{$r.ID}}&amp;from={{$f.Module}}">Add {{$f.Module}} again with found values</a>{{end}}{{end}}</p>{{end}}
 </section>
 {{end}}
 

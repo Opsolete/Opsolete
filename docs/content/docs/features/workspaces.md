@@ -42,49 +42,27 @@ Add any number of templates (**Deploy…** in a workspace's menu, operate access
 
 ## Import existing resources
 
-Resources built outside Opsolete (in the Azure portal, by scripts) can be taken over without being created again:
-**Import…** in a workspace's menu (operate access).
+Resources built outside Opsolete (in the Azure portal, by scripts) can be taken over without being created again,
+with any template whose module can import (an `existing` input; see
+[Writing modules that can import]({{< relref "/docs/features/templates#writing-modules-that-can-import" >}})):
 
-1. **Scan**, optionally in one resource group. A scan is a run (action `scan`) with the workspace's credentials that
-   lists every resource in the subscription (or the resource group), and changes nothing: no state, no lock, no apply.
-2. The scan's page sorts them into four groups. Resources one imports or uses (a VM's network interface, its OS
-   disk) are listed with it.
-   - **Can be imported**: a catalog template can manage it. Each was planned as if imported, into a throwaway state:
-     **fits** (imported as it is, nothing changes), **differs** (the plan would also change the attributes listed:
-     the template's defaults differ from the resource), **incomplete** (values the form requires weren't found; fill
-     them in when importing).
-   - **Template needs work**: a template matches, but importing with it would replace the resource; the attributes
-     that force it say what its module must make an input.
-   - **No template**: no catalog template can import its type yet.
-   - **Already managed**: a workspace's state has it, with a link to that workspace.
-3. **Import** opens the template's form filled in from what was found. Check it and start the plan: it imports the
-   resources (`N to import, 0 to add, 0 to change, 0 to destroy` when it fits) and always waits for confirmation,
-   also with auto-apply. From then on it's an ordinary template in the workspace.
+1. **Add the template with `existing` on** (operate access): the usual add form, or the deploy form for a new
+   workspace. While it's on, only the template's key input is required: fill in what identifies the resource
+   (its name, its resource group); the module finds the rest.
+2. **The plan imports.** It shows `N to import` and every setting where the form differs from the resource. A plan
+   that imports always waits for confirmation, also with auto-apply.
+3. **Use found values.** The plan read the existing resources: discard it, and its page offers **Use found values**
+   (or **Add … again with found values**, when discarding removed the template it added). The form opens filled
+   in with each setting one input sets directly; check it and plan again.
+4. **Fix the rest by hand.** What the module builds from several inputs (a NIC named `<name>-nic` by default) the
+   plan still shows as a change: set it in the form. Repeat until `N to import, 0 to add, 0 to change, 0 to
+   destroy`, then confirm. From then on it's an ordinary template in the workspace; once in state, Terraform skips
+   the import blocks.
 
-What a template can find, and how that fills its form, is read from its module's code: templates need nothing for
-it, but their module must be in the [registry]({{< relref "/docs/features/module-registry" >}}). Each managed
-resource of the module is searched by its type (`terraform query`, azurerm ≥ 5.7 for VMs); `count = var.x == "v" ?
-1 : 0` makes it exist for that value of `x`; `attr = var.x` and `coalesce(var.x, …)`, also in nested blocks, fill
-input `x`; a `dynamic` block with `for_each = var.x ? … : []` fills the yes / no input `x`; `[other.res.id]` makes
-`other` a related resource; a sensitive input in `lifecycle { ignore_changes }` gets a random placeholder. Module
-calls are followed: local ones (`./x`) and ones from the registry (its newest version the constraint allows), with
-values through arguments, `locals` and outputs. Optional and repeated parts (a module call with
-`count = var.x != null ? 1 : 0` or `for_each` over a list's rows: a VM's data disks, its auto-shutdown schedule, its
-security group) can't be listed by Terraform. When their module imports existing ones itself (an `existing` input,
-see the link below), the scan tries them: it calls the part's module with `existing` on, once per resource of the
-type its import names in the candidate's resource group (once without a name). What imports belongs to the
-candidate, and fills its rows or fields, with `existing` on, so the import takes it over too (the fit check
-included). Otherwise fill them in on the form. Other
-expressions are left for the form; the scan's log names what was skipped. See
-[Writing modules that can import]({{< relref "/docs/features/templates#writing-modules-that-can-import" >}}).
-
-Safety: a resource can be in one state only. Importing one a workspace manages already is refused, and the plan
-checks again against the state it reads; an import whose plan would replace or delete anything ends as errored,
-nothing applied. The IDs to import come from the scan, never from the form.
-
-Limits: listing every resource is Azure's (`azurerm_resources`, per resource group); without it the page shows only
-what templates can import. At most 50 resources per scan get a fit check (the rest are listed unchecked); types the
-provider can't list (e.g. managed disks) are imported by ID only, their inputs not filled.
+Safety: a resource can be in one state only. A plan that imports a resource a workspace manages already (this
+one's state as the plan read it, or another's) ends as errored, and so does an import into a template that would
+replace or delete anything; nothing is applied and an added template is removed again. Sensitive values are never filled in: type
+one (if the module ignores it, as for a VM's admin password, any value works; if not, the plan shows it changes).
 
 ## Promote to another workspace
 

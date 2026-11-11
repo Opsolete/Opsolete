@@ -30,7 +30,6 @@ type workspacePage struct {
 	F          *formState   // a refused form on the page
 	*overviewTab
 	*deployTab
-	*app.ImportPage // the import tab
 	*runsTab
 	*statesTab
 	*variablesTab
@@ -198,14 +197,6 @@ func (s *Server) renderWorkspace(w http.ResponseWriter, r *http.Request, tab, su
 
 	case "deploy":
 		p.deployTab = &deployTab{Catalog: s.App.Templates.List()}
-
-	case "import":
-		ip, err := s.App.ImportPage(ctx, actor(r), ws.Name)
-		if err != nil {
-			s.internalError(w, "import page", err)
-			return
-		}
-		p.ImportPage = &ip
 
 	case "runs":
 		t := &runsTab{Filter: r.URL.Query().Get("filter"), Counts: map[string]int{"all": len(runs)}, RunList: []runItem{}}

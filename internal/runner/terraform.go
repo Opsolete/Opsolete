@@ -110,6 +110,7 @@ func summarize(rcs []*tfjson.ResourceChange) runnerapi.Plan {
 		imported := rc.Change.Importing != nil
 		if imported {
 			sum.Import++
+			sum.Imports = append(sum.Imports, runnerapi.Import{To: rc.Address, ID: rc.Change.Importing.ID})
 		}
 		var action string
 		switch {

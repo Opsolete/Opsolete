@@ -18,7 +18,7 @@ type runPage struct {
 	R           storage.Run
 	History     []storage.StatusEntry // oldest first
 	Plan, Apply phase
-	Scan        *app.ScanResult // a scan run's result
+	Found       []app.FoundTemplate // what a plan that imports found: operators may take it into the form
 }
 
 func (s *Server) run(w http.ResponseWriter, r *http.Request) {
@@ -29,29 +29,14 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 	plan, apply := runPhases(d.Run, d.History)
 	page := &runPage{Page: workspaceNav(r.PathValue("name"), "runs", "", d.Level == app.LevelOperate),
 		W: d.Workspace, R: d.Run, History: d.History, Plan: plan, Apply: apply}
-	if d.Run.Action == "scan" {
-		sc, err := s.App.ScanResult(r.Context(), d.Run.ID)
-		if err != nil {
-			s.internalError(w, "scan result", err)
+	if d.Level == app.LevelOperate {
+		var err error
+		if page.Found, err = s.App.FoundTemplates(r.Context(), d); err != nil {
+			s.internalError(w, "found values", err)
 			return
 		}
-		page.Scan = &sc
 	}
 	s.render(w, r, http.StatusOK, "run.html", page)
-}
-
-// newScan queues a scan for existing resources the catalog's templates can take over, in the posted
-// resource_group ("" the whole subscription) (app.StartScan).
-func (s *Server) newScan(w http.ResponseWriter, r *http.Request) {
-	f, ok := readForm(w, r)
-	if !ok {
-		return
-	}
-	ws, run, err := s.App.StartScan(r.Context(), actor(r), r.PathValue("name"), f.Get(app.FieldResourceGroup))
-	if s.failed(w, r, err, "scan", f, s.onWorkspacePage(w, r, "import", "")) {
-		return
-	}
-	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID.String(), http.StatusSeeOther)
 }
 
 // runItem is a row of the runs page; Current: the workspace's latest run.

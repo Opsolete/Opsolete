@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -17,7 +18,7 @@ func TestRunConfigRestore(t *testing.T) {
 	ctx := context.Background()
 	w, run := newWorkspace(t, s, false) // template main: job-test git::x v1, n=1
 	j := claim(t, s, "plan")
-	if _, err := s.FinishJob(ctx, run.ID, j.LeaseID, "succeeded", "", nil, nil, nil); err != nil {
+	if _, err := s.FinishJob(ctx, run.ID, j.LeaseID, "succeeded", "", nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	root := func() string {
@@ -44,7 +45,7 @@ func TestRunConfigRestore(t *testing.T) {
 			p = &runnerapi.Plan{Change: 1}
 		}
 		j := claim(t, s, "plan")
-		if _, err := s.FinishJob(ctx, r.ID, j.LeaseID, "succeeded", "", nil, p, nil); err != nil {
+		if _, err := s.FinishJob(ctx, r.ID, j.LeaseID, "succeeded", "", nil, p, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -74,7 +75,7 @@ func TestRunConfigRestore(t *testing.T) {
 	// errored while planning
 	r = configure("v2")
 	j = claim(t, s, "plan")
-	if _, err := s.FinishJob(ctx, r.ID, j.LeaseID, "failed", "boom", nil, nil, nil); err != nil {
+	if _, err := s.FinishJob(ctx, r.ID, j.LeaseID, "failed", "boom", nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := root(); got != "v1" {
@@ -102,7 +103,7 @@ func TestRunConfigRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 	j = claim(t, s, "apply")
-	if _, err := s.FinishJob(ctx, r.ID, j.LeaseID, "failed", "boom", nil, nil, nil); err != nil {
+	if _, err := s.FinishJob(ctx, r.ID, j.LeaseID, "failed", "boom", nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := root(); got != "v3" {
@@ -138,78 +139,84 @@ func TestRunConfigRestore(t *testing.T) {
 	}
 }
 
-// An adoption (a template added with imports) hands its imports to the runner in both phases, always waits for a
-// human, also with auto-apply, and ends errored, the template removed again, when its plan replaces or deletes.
-func TestAdoption(t *testing.T) {
+// A plan that imports (its module's import blocks) always waits for a human, also with auto-apply; it ends
+// errored, the template removed again, when it replaces or deletes, or imports a resource a state manages; what
+// it found is kept for the form.
+func TestImportPlan(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	w, run := newWorkspace(t, s, true)
-	if j := claim(t, s, "plan"); j.Imports != nil {
-		t.Fatalf("a run without imports: %+v", j.Imports)
-	} else if _, err := s.FinishJob(ctx, run.ID, j.LeaseID, "succeeded", "", nil, nil, nil); err != nil {
-		t.Fatal(err)
+	if j := claim(t, s, "plan"); true {
+		if _, err := s.FinishJob(ctx, run.ID, j.LeaseID, "succeeded", "", nil, nil, nil, nil); err != nil {
+			t.Fatal(err)
+		}
 	}
 	imports := []runnerapi.Import{{To: "module.vm.a.b", ID: "/x/1"}, {To: "module.vm.c.d", ID: "/x/2"}}
-	adopt := func(plan runnerapi.Plan) (Run, string) {
+	found := map[string]map[string]any{"vm": {"size": "Standard_DS1_v2"}}
+	add := func() Run {
 		t.Helper()
 		r, err := s.SetWorkspaceTemplate(ctx, w.ID, WorkspaceTemplate{Name: "vm", TemplateID: "job-test", ModuleSource: "git::x", ModuleRef: "v1",
-			Inputs: map[string]any{}, Imports: imports}, true, uuid.Nil)
+			Inputs: map[string]any{"existing": true}}, true, uuid.Nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		j := claim(t, s, "plan")
-		if len(j.Imports) != 2 || j.Imports[1] != imports[1] {
-			t.Fatalf("plan phase imports: %+v", j.Imports)
-		}
-		status, err := s.FinishJob(ctx, r.ID, j.LeaseID, "succeeded", "", nil, &plan, nil)
+		return r
+	}
+	finish := func(r Run, plan runnerapi.Plan, have []runnerapi.Resource) string {
+		t.Helper()
+		status, err := s.FinishJob(ctx, r.ID, claim(t, s, "plan").LeaseID, "succeeded", "", nil, &plan, have, found)
 		if err != nil {
 			t.Fatal(err)
 		}
-		return r, status
+		return status
 	}
 	added := func() bool {
 		var n int
 		s.Pool.QueryRow(ctx, `SELECT count(*) FROM workspace_templates WHERE workspace_id = $1 AND name = 'vm'`, w.ID).Scan(&n)
 		return n == 1
 	}
-
-	if _, status := adopt(runnerapi.Plan{Import: 2, Add: 1, Destroy: 1}); status != Errored || added() {
-		t.Fatalf("a replacing adoption: %s, template kept %v", status, added())
-	}
-	// an import of a resource the state has already (as its plan phase read it): refused, whatever the plan
-	r0, err := s.SetWorkspaceTemplate(ctx, w.ID, WorkspaceTemplate{Name: "vm", TemplateID: "job-test", ModuleSource: "git::x", ModuleRef: "v1",
-		Inputs: map[string]any{}, Imports: imports}, true, uuid.Nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	j0 := claim(t, s, "plan")
-	have := []runnerapi.Resource{{Address: "module.old.a.b", Type: "a", Name: "b", ID: "/X/1"}} // imports[0] in other case
-	if status, err := s.FinishJob(ctx, r0.ID, j0.LeaseID, "succeeded", "", nil, &runnerapi.Plan{Import: 2}, have); err != nil || status != Errored || added() {
-		t.Fatalf("adopting a managed resource: %s %v, template kept %v", status, err, added())
-	}
-	var msg string
-	s.Pool.QueryRow(ctx, `SELECT message FROM run_status_history WHERE run_id = $1 ORDER BY created_at DESC LIMIT 1`, r0.ID).Scan(&msg)
-	if !strings.Contains(msg, "managed already, by module.old.a.b") {
-		t.Fatalf("message: %q", msg)
-	}
-	r, status := adopt(runnerapi.Plan{Import: 2, Change: 1})
-	if status != NeedsConfirmation { // not apply_queued: the workspace auto-applies
-		t.Fatalf("an adoption with auto-apply: %s", status)
-	}
-	if err := s.ConfirmRun(ctx, r.ID, uuid.Nil, "x"); err != nil {
-		t.Fatal(err)
-	}
-	if j := claim(t, s, "apply"); len(j.Imports) != 2 {
-		t.Fatalf("apply phase imports: %+v", j.Imports)
+	message := func(r Run) string {
+		var msg string
+		s.Pool.QueryRow(ctx, `SELECT message FROM run_status_history WHERE run_id = $1 ORDER BY created_at DESC LIMIT 1`, r.ID).Scan(&msg)
+		return msg
 	}
 
-	// a workspace created for an adoption
-	tpl := testTemplate(nil)
-	tpl.Imports = imports[:1]
-	if _, _, err := s.CreateWorkspace(ctx, uuid.Nil, w.Name+"-new", "", tpl, false, uuid.Nil); err != nil {
+	r := add()
+	if status := finish(r, runnerapi.Plan{Import: 2, Imports: imports, Add: 1, Destroy: 1}, nil); status != Errored || added() {
+		t.Fatalf("a replacing import: %s, template kept %v", status, added())
+	}
+	// a resource the state has already (as its plan read it), in other case: refused, whatever the plan
+	r = add()
+	have := []runnerapi.Resource{{Address: "module.old.a.b", Type: "a", Name: "b", ID: "/X/1"}}
+	if status := finish(r, runnerapi.Plan{Import: 2, Imports: imports}, have); status != Errored || added() ||
+		!strings.Contains(message(r), "managed already, by module.old.a.b") {
+		t.Fatalf("importing a managed resource: %s, template kept %v, %q", status, added(), message(r))
+	}
+	// imports outside the templates (a VCS configuration's own): no template rules, the one-state rule still
+	main := []runnerapi.Import{{To: "aws_s3_bucket.b", ID: "/x/3"}}
+	r = add()
+	if status := finish(r, runnerapi.Plan{Import: 1, Imports: main, Add: 1, Destroy: 1}, nil); status != ApplyQueued {
+		t.Fatalf("a configuration's own import with auto-apply: %s", status)
+	}
+	s.Pool.Exec(ctx, `UPDATE runs SET status = 'applied' WHERE id = $1`, r.ID)
+	if _, err := s.Pool.Exec(ctx, `DELETE FROM workspace_templates WHERE workspace_id = $1 AND name = 'vm'`, w.ID); err != nil {
 		t.Fatal(err)
 	}
-	if j := claim(t, s, "plan"); len(j.Imports) != 1 || j.Imports[0] != imports[0] {
-		t.Fatalf("new workspace's imports: %+v", j.Imports)
+	r = add()
+	if status := finish(r, runnerapi.Plan{Import: 1, Imports: main}, []runnerapi.Resource{{Address: "aws_s3_bucket.old", ID: "/x/3"}}); status != Errored {
+		t.Fatalf("a configuration's own import of a managed resource: %s", status)
+	}
+	r = add()
+	if status := finish(r, runnerapi.Plan{Import: 2, Imports: imports, Change: 1}, nil); status != NeedsConfirmation { // the workspace auto-applies
+		t.Fatalf("an import with auto-apply: %s", status)
+	}
+	if got, err := s.RunFound(ctx, r.ID); err != nil || got["vm"].TemplateID != "job-test" || got["vm"].Inputs["size"] != "Standard_DS1_v2" {
+		t.Fatalf("found: %v %v", got, err)
+	}
+	if got, err := s.RunFound(ctx, run.ID); err != nil || got != nil {
+		t.Fatalf("found of a plan without imports: %v %v", got, err)
+	}
+	if _, err := s.RunFound(ctx, uuid.New()); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("found of no run: %v", err)
 	}
 }
