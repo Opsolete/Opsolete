@@ -351,7 +351,7 @@ func fillTry(t templates.Template, tr try, got map[string]*tfjson.ResourceChange
 		})
 		b, _ := json.Marshal(rows)
 		raw[p.List] = string(b)
-		key = `["` + row[p.Key] + `"]`
+		key = "[" + strconv.Quote(row[p.Key]) + "]" // from the cloud: quoted, as an address has it
 	} else {
 		key = "[0]"
 	}

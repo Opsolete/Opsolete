@@ -72,6 +72,12 @@ func TestProbe(t *testing.T) {
 	if fillTry(tpl, try{probe: nsg}, got, raw, &c) {
 		t.Fatal("a single part fills once")
 	}
+	odd := runnerapi.Candidate{} // a key from the cloud with a quote stays one address key
+	fillTry(tpl, try{probe: disk}, map[string]*tfjson.ResourceChange{"azurerm_virtual_machine_data_disk_attachment.main": imp("/x", map[string]any{"lun": `a"b`})},
+		map[string]string{}, &odd)
+	if len(odd.Found) != 1 || odd.Found[0].To != `module.data_disk["a\"b"].azurerm_virtual_machine_data_disk_attachment.main` {
+		t.Fatalf("quoted key: %+v", odd.Found)
+	}
 	wantFound := []runnerapi.Import{{To: `module.data_disk["5"].azurerm_managed_disk.main`, ID: "/disks/b"},
 		{To: `module.data_disk["5"].azurerm_virtual_machine_data_disk_attachment.main`, ID: "/vm/dataDisks/b"},
 		{To: `module.data_disk["0"].azurerm_managed_disk.main`, ID: "/disks/a"},
