@@ -29,7 +29,8 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 	plan, apply := runPhases(d.Run, d.History)
 	page := &runPage{Page: workspaceNav(r.PathValue("name"), "runs", "", d.Level == app.LevelOperate),
 		W: d.Workspace, R: d.Run, History: d.History, Plan: plan, Apply: apply}
-	if d.Level == app.LevelOperate {
+	// what the import found, while it can help: not once its plan only imports (nothing left to set)
+	if p := d.Run.Plan; d.Level == app.LevelOperate && (p == nil || p.Add+p.Change+p.Destroy > 0) {
 		var err error
 		if page.Found, err = s.App.FoundTemplates(r.Context(), d); err != nil {
 			s.internalError(w, "found values", err)

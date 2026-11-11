@@ -88,7 +88,16 @@ func TestImportFlow(t *testing.T) {
 		t.Fatalf("another run's found values: %d", rec.Code)
 	}
 	run2 := runID(t, post(h, form, url.Values{"name": {"vm1"}, "existing": {"on"}, "subnet": {"/subnets/a"}, "size": {"large"}}))
-	if j := r.claim(t, run2, "plan"); j.Modules[0].Inputs["subnet"] != "/subnets/a" || j.Modules[0].Inputs["size"] != "large" {
+	j = r.claim(t, run2, "plan")
+	if j.Modules[0].Inputs["subnet"] != "/subnets/a" || j.Modules[0].Inputs["size"] != "large" {
 		t.Fatalf("job with found values: %+v", j.Modules[0].Inputs)
+	}
+	// it fits: the plan only imports, so the page doesn't offer the found values (nor to discard it for them)
+	mod = j.Modules[0].Name
+	r.finish(t, `{"status": "succeeded", "resources": [], "plan": {"add": 0, "change": 0, "destroy": 0, "import": 1,
+		"imports": [{"to": "module.`+mod+`.x.y", "id": "/vms/vm1"}], "changes": []},
+		"found": {"`+mod+`": {"subnet": "/subnets/a"}}}`)
+	if page := get(h, "/workspaces/"+ws+"/runs/"+run2).Body.String(); strings.Contains(page, "Found while importing") {
+		t.Fatalf("a plan that only imports offers its found values:\n%s", page)
 	}
 }
