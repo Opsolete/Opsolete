@@ -52,6 +52,23 @@ func TestImportFlow(t *testing.T) {
 	if rec := post(h, add+"&import=1", url.Values{"name": {"vm1"}}); rec.Code != http.StatusUnprocessableEntity { // unticked: not importing
 		t.Fatalf("the import form posted with existing unticked, subnet empty: %d", rec.Code)
 	}
+	// a plan that fails (the module's error, no plan): Change settings still goes back to the form, with what was entered
+	failed := runID(t, post(h, add, url.Values{"name": {"vm1"}, "existing": {"on"}, "nic": {"typo"}}))
+	r.claim(t, failed, "plan")
+	r.finish(t, `{"status": "failed", "message": "plan: exit status 1"}`)
+	failedURL := "/workspaces/" + ws + "/runs/" + failed
+	if page := get(h, failedURL).Body.String(); !strings.Contains(page, `action="`+failedURL+`/change"`) || !strings.Contains(page, "Not applied") {
+		t.Fatalf("a failed plan: no Change settings:\n%s", page)
+	}
+	rec := post(h, failedURL+"/change", nil)
+	loc := rec.Header().Get("Location")
+	if rec.Code != http.StatusSeeOther || !strings.Contains(loc, "/templates/new?") || !strings.Contains(loc, "found="+failed) {
+		t.Fatalf("change after a failed plan: %d %q", rec.Code, loc)
+	}
+	if page := get(h, loc).Body.String(); !strings.Contains(page, `value="typo"`) || !strings.Contains(page, `name="existing" checked`) {
+		t.Fatalf("the form after a failed plan:\n%s", page)
+	}
+
 	run := runID(t, post(h, add, url.Values{"name": {"vm1"}, "existing": {"on"}, "nic": {"test-vm235"}})) // set by hand: never found
 
 	j := r.claim(t, run, "plan")
@@ -70,7 +87,7 @@ func TestImportFlow(t *testing.T) {
 		t.Fatalf("an import plan waiting: no Change settings beside Confirm:\n%s", page)
 	}
 	// Change settings: the plan is discarded (which removes the template it added), back to the add form
-	rec := post(h, runURL+"/change", nil)
+	rec = post(h, runURL+"/change", nil)
 	form := "/workspaces/" + ws + "/templates/new?" + url.Values{"template": {"vm"}, "found": {run}, "from": {mod}}.Encode()
 	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != form || runStatus(t, store, run).Status != storage.Discarded {
 		t.Fatalf("change: %d %q, run %s", rec.Code, rec.Header().Get("Location"), runStatus(t, store, run).Status)

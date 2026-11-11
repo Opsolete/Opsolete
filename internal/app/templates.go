@@ -178,7 +178,7 @@ func (a *App) FoundValues(ctx context.Context, actor Actor, workspace string, ru
 		return nil, err
 	}
 	f, ok := all[module]
-	if !ok || len(f.Inputs) == 0 || f.TemplateID != t.ID {
+	if !ok || f.TemplateID != t.ID || len(f.Inputs)+len(f.Saved) == 0 {
 		return nil, ErrNotFound
 	}
 	found := map[string]any{}
@@ -194,11 +194,11 @@ func (a *App) FoundValues(ctx context.Context, actor Actor, workspace string, ru
 	return found, nil
 }
 
-// ChangeImport goes back from import plan id to its template's form: a plan still waiting for confirmation is
-// discarded (which removes a template the run added), and what it found is listed (FoundTemplates) to open the form
-// with, the inputs it ran with and what it found. Needs operate. ErrNotFound: the plan found nothing; a conflict
-// while it's still planning.
-func (a *App) ChangeImport(ctx context.Context, actor Actor, workspace string, id uuid.UUID) ([]FoundTemplate, error) {
+// ChangeSettings goes back from run id to its template's form: a plan still waiting for confirmation is discarded
+// (which removes a template the run added), and the run's templates are listed (FoundTemplates) to open the form
+// with what the run had and what its plan found importing. Needs operate. ErrNotFound: the run didn't change a
+// template (or applied it), and found nothing; a conflict while it's still planning.
+func (a *App) ChangeSettings(ctx context.Context, actor Actor, workspace string, id uuid.UUID) ([]FoundTemplate, error) {
 	d, err := a.Run(ctx, actor, workspace, id, LevelOperate)
 	if err != nil {
 		return nil, err
@@ -214,14 +214,16 @@ func (a *App) ChangeImport(ctx context.Context, actor Actor, workspace string, i
 	return a.FoundTemplates(ctx, d)
 }
 
-// FoundTemplate is a template module an import plan found values for, and whether it's still in the workspace
-// (a discarded or refused run removes a template it added).
+// FoundTemplate is a template module a run can go back to the form of (Change settings), whether it's still in
+// the workspace (a run that ends before its apply removes a template it added) and whether its plan read what it
+// imports.
 type FoundTemplate struct {
 	Module, TemplateID string
-	Added              bool
+	Added, Read        bool
 }
 
-// FoundTemplates lists what run d (RunDetail checked the actor's access) found values for, by module name.
+// FoundTemplates lists the template modules run d (RunDetail checked the actor's access) can go back to the form of
+// (storage.Found), by name.
 func (a *App) FoundTemplates(ctx context.Context, d RunDetail) ([]FoundTemplate, error) {
 	all, err := a.Store.RunFound(ctx, d.Run.ID)
 	if err != nil || len(all) == 0 {
@@ -230,7 +232,7 @@ func (a *App) FoundTemplates(ctx context.Context, d RunDetail) ([]FoundTemplate,
 	added, err := a.Store.WorkspaceTemplates(ctx, d.Workspace.ID)
 	var out []FoundTemplate
 	for _, m := range slices.Sorted(maps.Keys(all)) {
-		out = append(out, FoundTemplate{Module: m, TemplateID: all[m].TemplateID,
+		out = append(out, FoundTemplate{Module: m, TemplateID: all[m].TemplateID, Read: len(all[m].Inputs) > 0,
 			Added: slices.ContainsFunc(added, func(t storage.WorkspaceTemplate) bool { return t.Name == m && t.TemplateID == all[m].TemplateID })})
 	}
 	return out, err

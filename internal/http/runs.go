@@ -30,7 +30,7 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 	plan, apply := runPhases(d.Run, d.History)
 	page := &runPage{Page: workspaceNav(r.PathValue("name"), "runs", "", d.Level == app.LevelOperate),
 		W: d.Workspace, R: d.Run, History: d.History, Plan: plan, Apply: apply}
-	if d.Level == app.LevelOperate { // an import plan's: Change settings
+	if d.Level == app.LevelOperate { // Change settings
 		var err error
 		if page.Found, err = s.App.FoundTemplates(r.Context(), d); err != nil {
 			s.internalError(w, "found values", err)
@@ -94,12 +94,12 @@ func (s *Server) confirmRun(w http.ResponseWriter, r *http.Request) {
 	s.decided(w, r, id, s.App.ConfirmRun(r.Context(), actor(r), r.PathValue("name"), id))
 }
 
-// changeImport goes back from an import plan to its template's form (app.ChangeImport), with what was entered for
-// it and what it found: the configure form, or the add form when the discard removed the template it added; with
+// changeImport goes back from a run to its template's form (app.ChangeSettings), with what was entered for it and
+// what its plan found importing: the configure form, or the add form when the discard removed the template it added; with
 // several templates, the run page.
 func (s *Server) changeImport(w http.ResponseWriter, r *http.Request) {
 	id, _ := pathID(r, "run") // not an id: not found
-	found, err := s.App.ChangeImport(r.Context(), actor(r), r.PathValue("name"), id)
+	found, err := s.App.ChangeSettings(r.Context(), actor(r), r.PathValue("name"), id)
 	if err != nil {
 		s.uiError(w, r, err)
 		return

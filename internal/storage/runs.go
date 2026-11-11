@@ -13,6 +13,7 @@ import (
 
 	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage/db"
+	"github.com/opsolete/opsolete/internal/templates"
 )
 
 // Run statuses. A workspace has at most one active run (enforced by runs_one_active_idx).
@@ -102,7 +103,8 @@ type StatusEntry struct {
 //   - leaving planning or applying: the lease ends, and with it the state lock the run's Terraform
 //     may have left behind (never a rollback's or CLI's)
 //   - ending: config_changes is dropped; ended before its apply started (discarded, canceled,
-//     errored), the configuration the run changed goes back (see restoreConfig); a destroy run
+//     errored), the configuration the run changed goes back (see restoreConfig), what it was set to kept for
+//     Change settings (keepEntered); a destroy run
 //     removing templates that succeeded (applied, or no changes: nothing was left) removes them
 //   - a promotion's first run (a destroy carrying the pending promotion) that succeeded queues the
 //     promotion's apply run, after removing its templates (continuePromotion); one that ended any
@@ -148,6 +150,9 @@ func transition(ctx context.Context, q *db.Queries, runID uuid.UUID, to, message
 		}
 	}
 	if (to == Discarded || to == Canceled || to == Errored) && from != Applying && run.ConfigChanges != nil {
+		if err := keepEntered(ctx, q, runID, run.ConfigChanges); err != nil {
+			return from, nil, err
+		}
 		if err := restoreConfig(ctx, q, run.WorkspaceID, run.ConfigChanges); err != nil {
 			return from, nil, err
 		}
@@ -308,11 +313,62 @@ func prune(batch func(lim int32) (int64, error), lim int32) (int64, error) {
 	}
 }
 
-// Found is what a plan that imports found for one of its template modules (runnerapi.FinishRequest.Found).
+// Found is, for one template module of a run that changed it and ended without applying (or whose plan imports),
+// what it was set to and what its plan found importing (runnerapi.FinishRequest.Found): Change settings starts the
+// form from it.
 type Found struct {
 	TemplateID string         `json:"template_id"`
-	Inputs     map[string]any `json:"inputs"`
-	Saved      map[string]any `json:"saved,omitempty"` // the module's inputs the plan ran with (sealed ones as stored)
+	Inputs     map[string]any `json:"inputs,omitempty"` // found by the plan
+	Saved      map[string]any `json:"saved,omitempty"`  // the module's inputs the run had, sensitive (sealed) ones left out
+}
+
+// unsealed is inputs without the sealed values: kept past their run, they'd escape rotate-key's re-sealing (it
+// re-seals stored inputs and refuses while a run is active), and the form never shows them anyway.
+func unsealed(inputs map[string]any) map[string]any {
+	out := map[string]any{}
+	for k, v := range inputs {
+		if !templates.IsSealed(v) {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// keepEntered records on run runID, ending without its apply, what it set its templates to (raw config_changes'
+// afters), beside what its plan found: config_changes goes, and a restore may remove a template it added.
+func keepEntered(ctx context.Context, q *db.Queries, runID uuid.UUID, raw []byte) error {
+	var changes []configChange
+	if err := json.Unmarshal(raw, &changes); err != nil {
+		return err
+	}
+	found := map[string]Found{}
+	if cur, err := q.RunFound(ctx, runID); err != nil {
+		return err
+	} else if cur != nil {
+		if err := json.Unmarshal(cur, &found); err != nil {
+			return err
+		}
+	}
+	for _, c := range changes {
+		var after struct {
+			TemplateID string         `json:"template_id"`
+			Inputs     map[string]any `json:"inputs"`
+		}
+		if c.After == nil || string(c.After) == "null" {
+			continue // a removal
+		}
+		if err := json.Unmarshal(c.After, &after); err != nil {
+			return err
+		}
+		f := found[c.Module]
+		f.TemplateID, f.Saved = after.TemplateID, unsealed(after.Inputs)
+		found[c.Module] = f
+	}
+	b, err := json.Marshal(found)
+	if err != nil {
+		return err
+	}
+	return q.SetRunFound(ctx, db.SetRunFoundParams{ID: runID, Found: b})
 }
 
 // RunFound is what run runID's plan found importing, by template module; nil none. ErrNotFound: no such run.

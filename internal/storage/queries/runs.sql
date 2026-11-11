@@ -91,6 +91,9 @@ UPDATE workspace_templates SET inputs = jsonb_set(inputs, ARRAY[sqlc.arg(input):
 WHERE workspace_id = sqlc.arg(workspace_id)::uuid AND name = ANY(sqlc.arg(names)::text[])
     AND inputs -> sqlc.arg(input)::text = 'true'::jsonb;
 
+-- name: SetRunFound :exec
+UPDATE runs SET found = sqlc.arg(found)::jsonb WHERE id = sqlc.arg(id)::uuid;
+
 -- name: RunFound :one
 SELECT found FROM runs WHERE id = sqlc.arg(id)::uuid;
 

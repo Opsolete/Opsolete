@@ -40,11 +40,11 @@
   <div><dt>Triggered by</dt><dd>{{if $r.CreatedBy}}{{$r.CreatedBy}}{{else if $r.VCSPullRequest}}pull request #{{$r.VCSPullRequest}}{{else if and $r.VCSCommit (eq $r.Action "apply")}}new commit{{else}}—{{end}}</dd></div>
 </dl>
 
-{{if and .Found (not $r.Active)}}
+{{if and .Found (not $r.Active)}}{{$read := false}}{{range .Found}}{{if .Read}}{{$read = true}}{{end}}{{end}}
 <section class="alert" role="status" aria-labelledby="found-head">
-  <h2 id="found-head">Importing</h2>
-  <p>This plan read the existing resources. <strong>Change settings</strong> opens the template's form with what you
-    entered for it and what it found; set what it still changed, and plan again.</p>
+  <h2 id="found-head">{{if $read}}Importing{{else}}Not applied{{end}}</h2>
+  <p>{{if $read}}This plan read the existing resources. {{end}}<strong>Change settings</strong> opens the template's form with
+    what you entered for this run{{if $read}} and what its plan found{{end}}; fix what {{if eq $r.Status "errored"}}stopped it{{else}}it would still change{{end}}, and plan again.</p>
   <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/change"><button type="submit">Change settings</button></form>
 </section>
 {{end}}

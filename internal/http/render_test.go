@@ -79,7 +79,7 @@ func TestPageModels(t *testing.T) {
 			tab("settings", "deletion", func(p *workspacePage) { p.settingsTab = &settingsTab{} }),
 		},
 		"run.html": {&runPage{}, &runPage{Page: workspaceNav("ws", "runs", "", true), W: ws, R: run, History: hist, Plan: plan, Apply: apply,
-			Found: []app.FoundTemplate{{Module: "vm_1", TemplateID: "vm", Added: true}, {Module: "vm_2", TemplateID: "vm"}}}},
+			Found: []app.FoundTemplate{{Module: "vm_1", TemplateID: "vm", Added: true, Read: true}, {Module: "vm_2", TemplateID: "vm"}}}},
 		"account.html": {&accountPage{}, &accountPage{Page: Page{Sub: "profile"}, Groups: []string{"g"}}, &accountPage{Page: Page{Sub: "tokens"}, Tokens: []storage.UserToken{{Name: "t"}}},
 			&accountPage{Page: Page{Sub: "sessions"}, Sessions: []storage.UserSession{{UserAgent: "ua"}}}},
 		"audit.html":     {&auditPage{}, &auditPage{Entries: []auditRow{{Summary: "x", StatusText: "ok"}}, Broken: 3, Access: true}},

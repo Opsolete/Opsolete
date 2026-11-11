@@ -333,25 +333,18 @@ func (q *Queries) RunsByStatus(ctx context.Context) ([]RunsByStatusRow, error) {
 }
 
 const setRunResult = `-- name: SetRunResult :exec
-UPDATE runs SET plan = COALESCE($1::jsonb, plan), outputs = COALESCE($2::jsonb, outputs),
-    found = COALESCE($3::jsonb, found)
-WHERE id = $4::uuid
+UPDATE runs SET plan = COALESCE($1::jsonb, plan), outputs = COALESCE($2::jsonb, outputs)
+WHERE id = $3::uuid
 `
 
 type SetRunResultParams struct {
 	Plan    []byte
 	Outputs []byte
-	Found   []byte
 	ID      uuid.UUID
 }
 
 func (q *Queries) SetRunResult(ctx context.Context, arg SetRunResultParams) error {
-	_, err := q.db.Exec(ctx, setRunResult,
-		arg.Plan,
-		arg.Outputs,
-		arg.Found,
-		arg.ID,
-	)
+	_, err := q.db.Exec(ctx, setRunResult, arg.Plan, arg.Outputs, arg.ID)
 	return err
 }
 

@@ -52,8 +52,7 @@ WHERE r.id = sqlc.arg(id)::uuid AND r.lease_id = sqlc.arg(lease_id)::text AND ru
 FOR UPDATE OF r;
 
 -- name: SetRunResult :exec
-UPDATE runs SET plan = COALESCE(sqlc.narg(plan)::jsonb, plan), outputs = COALESCE(sqlc.narg(outputs)::jsonb, outputs),
-    found = COALESCE(sqlc.narg(found)::jsonb, found)
+UPDATE runs SET plan = COALESCE(sqlc.narg(plan)::jsonb, plan), outputs = COALESCE(sqlc.narg(outputs)::jsonb, outputs)
 WHERE id = sqlc.arg(id)::uuid;
 
 -- name: ExpiredLeases :many

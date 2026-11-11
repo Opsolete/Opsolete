@@ -635,6 +635,20 @@ func (q *Queries) SetRunAlwaysConfirm(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const setRunFound = `-- name: SetRunFound :exec
+UPDATE runs SET found = $1::jsonb WHERE id = $2::uuid
+`
+
+type SetRunFoundParams struct {
+	Found []byte
+	ID    uuid.UUID
+}
+
+func (q *Queries) SetRunFound(ctx context.Context, arg SetRunFoundParams) error {
+	_, err := q.db.Exec(ctx, setRunFound, arg.Found, arg.ID)
+	return err
+}
+
 const setRunPromotion = `-- name: SetRunPromotion :exec
 UPDATE runs SET promotion = $1::jsonb WHERE id = $2::uuid
 `

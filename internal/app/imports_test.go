@@ -96,7 +96,7 @@ func TestImport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ft, err := a.FoundTemplates(ctx, d); err != nil || len(ft) != 1 || ft[0] != (FoundTemplate{mod, "vm", true}) {
+	if ft, err := a.FoundTemplates(ctx, d); err != nil || len(ft) != 1 || ft[0] != (FoundTemplate{Module: mod, TemplateID: "vm", Added: true, Read: true}) {
 		t.Fatalf("found templates: %+v %v", ft, err)
 	}
 
@@ -136,7 +136,7 @@ func TestImport(t *testing.T) {
 		t.Fatal(err)
 	}
 	d, _ = a.Run(ctx, admin, ws.Name, run.ID, LevelOperate)
-	if ft, err := a.FoundTemplates(ctx, d); err != nil || len(ft) != 1 || ft[0] != (FoundTemplate{two, "vm", false}) {
+	if ft, err := a.FoundTemplates(ctx, d); err != nil || len(ft) != 1 || ft[0] != (FoundTemplate{Module: two, TemplateID: "vm", Read: true}) {
 		t.Fatalf("found templates after discarding an added one: %+v %v", ft, err)
 	}
 	if found, err := a.FoundValues(ctx, admin, ws.Name, run.ID, two, tpl); err != nil || found["subnet"] != "/subnets/b" || found["name"] != "vm2" {

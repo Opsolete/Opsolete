@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -236,5 +237,33 @@ func TestImportPlan(t *testing.T) {
 	}
 	if _, err := s.RunFound(ctx, uuid.New()); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("found of no run: %v", err)
+	}
+}
+
+// A run that ends without its apply keeps what it set its templates to (sealed inputs left out), beside what its
+// plan found: config_changes goes, and the restore may remove a template it added.
+func TestKeepEntered(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	w, run := newWorkspace(t, s, false)
+	if _, err := s.FinishJob(ctx, run.ID, claim(t, s, "plan").LeaseID, "succeeded", "", nil, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	r, err := s.SetWorkspaceTemplate(ctx, w.ID, WorkspaceTemplate{Name: "vm", TemplateID: "job-test", ModuleSource: "git::x", ModuleRef: "v1",
+		Inputs: map[string]any{"name": "vm1", "pw": map[string]any{"sealed": "opsolete:1:k:x"}}}, true, uuid.Nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, err := s.FinishJob(ctx, r.ID, claim(t, s, "plan").LeaseID, "failed", "plan: exit status 1", nil, nil, nil, nil); err != nil || status != Errored {
+		t.Fatalf("failed plan: %s %v", status, err)
+	}
+	got, err := s.RunFound(ctx, r.ID)
+	if want := (Found{TemplateID: "job-test", Saved: map[string]any{"name": "vm1"}}); err != nil || len(got) != 1 || !reflect.DeepEqual(got["vm"], want) {
+		t.Fatalf("kept: %+v %v", got, err)
+	}
+	var n int
+	s.Pool.QueryRow(ctx, `SELECT count(*) FROM workspace_templates WHERE workspace_id = $1 AND name = 'vm'`, w.ID).Scan(&n)
+	if n != 0 {
+		t.Fatal("the added template stayed")
 	}
 }

@@ -274,7 +274,7 @@ func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 			byModule := map[string]Found{}
 			for _, m := range mods {
 				if in := found[m.Name]; len(in) > 0 {
-					byModule[m.Name] = Found{TemplateID: m.TemplateID, Inputs: in, Saved: m.Inputs}
+					byModule[m.Name] = Found{TemplateID: m.TemplateID, Inputs: in, Saved: unsealed(m.Inputs)}
 				}
 			}
 			if foundJSON, err = json.Marshal(byModule); err != nil {
@@ -283,6 +283,11 @@ func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 		}
 		if final == ApplyQueued && message == "" {
 			message = "auto-apply: waiting for a runner"
+		}
+		if foundJSON != nil { // before the transition: one that undoes the run's template change adds what it was set to
+			if err := q.SetRunFound(ctx, db.SetRunFoundParams{ID: runID, Found: foundJSON}); err != nil {
+				return err
+			}
 		}
 		_, step, err := transition(ctx, q, runID, final, message)
 		if err != nil {
@@ -296,7 +301,7 @@ func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 			}
 			entry = &e
 		}
-		if err := q.SetRunResult(ctx, db.SetRunResultParams{ID: runID, Plan: planJSON, Outputs: outJSON, Found: foundJSON}); err != nil {
+		if err := q.SetRunResult(ctx, db.SetRunResultParams{ID: runID, Plan: planJSON, Outputs: outJSON}); err != nil {
 			return err
 		}
 		if resources != nil {

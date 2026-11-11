@@ -53,9 +53,9 @@ with any template whose module can import (an `existing` input; see
 2. **The plan imports.** It shows `N to import` and every setting where the form differs from the resource. A plan
    that imports always waits for confirmation, also with auto-apply.
 3. **Confirm, or Change settings.** The plan read the existing resources. When it only imports, confirm it. Else
-   **Change settings** (beside *Confirm*, and on the page of an import plan that ended) discards it and opens the
-   template's form with what you entered for it and, over that, each setting one input sets directly; check it and
-   plan again.
+   **Change settings** (beside *Confirm*, and on the page of a run that ended without applying, a failed one too)
+   discards it and opens the template's form with what you entered for it and, over that, each setting one input
+   sets directly; check it and plan again.
 4. **Fix the rest by hand.** What the module builds from several inputs (a NIC named `<name>-nic` by default) the
    plan still shows as a change: set it in the form. Repeat until `N to import, 0 to add, 0 to change, 0 to
    destroy`, then confirm. Once the import is applied, Opsolete switches `existing` off again: from then on it's
