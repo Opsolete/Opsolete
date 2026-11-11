@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -68,7 +69,7 @@ func TestEnvironmentValueAccess(t *testing.T) {
 		{"empty", admin, "region", " ", isValidation},
 		{"not per environment", admin, "name", "x", func(err error) bool { return errors.Is(err, ErrNotFound) }},
 	} {
-		if err := a.SetEnvironmentValue(ctx, c.who, prd, "env", c.input, c.value); !c.ok(err) {
+		if err := a.SetEnvironmentValue(ctx, c.who, prd, "env", c.input, c.value, false); !c.ok(err) {
 			t.Errorf("%s: %v", c.name, err)
 		}
 	}
@@ -105,7 +106,7 @@ func TestEnvironmentValuesInJobs(t *testing.T) {
 	}
 	set := func(p, input, v string) {
 		t.Helper()
-		if err := a.SetEnvironmentValue(ctx, admin, p, "env", input, v); err != nil {
+		if err := a.SetEnvironmentValue(ctx, admin, p, "env", input, v, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -147,6 +148,13 @@ func TestEnvironmentValuesInJobs(t *testing.T) {
 		t.Fatal(err)
 	}
 	inputs("cleared: the workspace's own again", map[string]any{"size": "s", "region": "prd"})
+	if err := a.SetEnvironmentValue(ctx, admin, prd, "env", "size", "m", true); err != nil {
+		t.Fatal(err)
+	}
+	inputs("keep own: the workspace's own value", map[string]any{"size": "s", "region": "prd"})
+	if err := a.ClearEnvironmentValue(ctx, admin, prd, "env", "size"); err != nil {
+		t.Fatal(err)
+	}
 
 	// configure: a posted value for an input the project sets is ignored, the workspace's own kept
 	if _, err := a.Store.Pool.Exec(ctx, `UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL WHERE workspace_id = $1`, ws.ID); err != nil {
@@ -188,10 +196,29 @@ func TestEnvironmentValuesInJobs(t *testing.T) {
 	}
 }
 
+// Locked: a keep_own value locks an input unless the workspace's own value (stored, or found when importing)
+// differs; a plain project value locks it always.
+func TestLockedKeepOwn(t *testing.T) {
+	tpl := templates.Template{ID: "vm", Inputs: []templates.Input{{Name: "subnet", PerEnvironment: true}, {Name: "size", PerEnvironment: true}, {Name: "name"}}}
+	env := EnvironmentMap{"vm": {"subnet": {Value: "prd", KeepOwn: true}, "size": {Value: "m"}, "name": {Value: "x"}}}
+	for _, c := range []struct {
+		own  map[string]any
+		want map[string]string
+	}{
+		{nil, map[string]string{"subnet": "prd", "size": "m"}},
+		{map[string]any{"subnet": "prd", "size": "s"}, map[string]string{"subnet": "prd", "size": "m"}},
+		{map[string]any{"subnet": "imported", "size": "s"}, map[string]string{"size": "m"}},
+	} {
+		if got := env.Locked(tpl, c.own); !maps.Equal(got, c.want) {
+			t.Errorf("own %v: %v, want %v", c.own, got, c.want)
+		}
+	}
+}
+
 // A project value isn't applied to an input the form hides (show_if), as the form wouldn't send it.
 func TestEnvironmentValueShowIf(t *testing.T) {
 	a, ctx := envApp(t), context.Background()
-	env := EnvironmentMap{"env": {"ip": "10.0.0.1"}}
+	env := EnvironmentMap{"env": {"ip": {Value: "10.0.0.1"}}}
 	for public, want := range map[bool]any{false: nil, true: "10.0.0.1"} {
 		got, err := a.withEnvironmentValues(ctx, "env", map[string]any{"public": public}, env)
 		if _, set := got["ip"]; err != nil || got["ip"] != want || set != public {

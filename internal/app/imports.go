@@ -423,3 +423,13 @@ func withPlaceholders(raw map[string]string, names []string) map[string]string {
 	}
 	return raw
 }
+
+// FoundValues is what a scan found for c's inputs, as a workspace's own values: a project's keep_own value doesn't
+// replace one that differs (EnvironmentMap.Locked), so an imported VM keeps its subnet.
+func FoundValues(c *runnerapi.Candidate) map[string]any {
+	own := map[string]any{}
+	for k, v := range c.Inputs {
+		own[k] = v
+	}
+	return own
+}

@@ -13,6 +13,7 @@ import (
 // canonical form string. UpdatedAt and UpdatedBy (an email, "" if unknown) only from EnvironmentValues.
 type EnvironmentValue struct {
 	TemplateID, Input, Value string
+	KeepOwn                  bool // a workspace with its own value keeps it
 	UpdatedAt                time.Time
 	UpdatedBy                string
 }
@@ -22,7 +23,7 @@ func (s *Store) EnvironmentValues(ctx context.Context, projectID uuid.UUID) ([]E
 	rows, err := s.q.EnvironmentValues(ctx, projectID)
 	out := make([]EnvironmentValue, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, EnvironmentValue{TemplateID: r.TemplateID, Input: r.InputName, Value: r.Value, UpdatedAt: r.UpdatedAt, UpdatedBy: r.UpdatedBy})
+		out = append(out, EnvironmentValue{TemplateID: r.TemplateID, Input: r.InputName, Value: r.Value, KeepOwn: r.KeepOwn, UpdatedAt: r.UpdatedAt, UpdatedBy: r.UpdatedBy})
 	}
 	return out, err
 }
@@ -32,15 +33,15 @@ func (s *Store) WorkspaceEnvironmentValues(ctx context.Context, workspaceID uuid
 	rows, err := s.q.WorkspaceEnvironmentValues(ctx, workspaceID)
 	out := make([]EnvironmentValue, 0, len(rows))
 	for _, r := range rows {
-		out = append(out, EnvironmentValue{TemplateID: r.TemplateID, Input: r.InputName, Value: r.Value})
+		out = append(out, EnvironmentValue{TemplateID: r.TemplateID, Input: r.InputName, Value: r.Value, KeepOwn: r.KeepOwn})
 	}
 	return out, err
 }
 
-// SetEnvironmentValue sets (or replaces) a project's value for a template's input.
-func (s *Store) SetEnvironmentValue(ctx context.Context, projectID uuid.UUID, templateID, input, value string, by uuid.UUID) error {
+// SetEnvironmentValue sets (or replaces) a project's value for a template's input; keepOwn: see EnvironmentValue.
+func (s *Store) SetEnvironmentValue(ctx context.Context, projectID uuid.UUID, templateID, input, value string, keepOwn bool, by uuid.UUID) error {
 	return s.q.SetEnvironmentValue(ctx, db.SetEnvironmentValueParams{ProjectID: projectID, TemplateID: templateID, InputName: input,
-		Value: value, UpdatedBy: optID(by)})
+		Value: value, KeepOwn: keepOwn, UpdatedBy: optID(by)})
 }
 
 // ClearEnvironmentValue removes a project's value for a template's input; none is not an error.

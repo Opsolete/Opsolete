@@ -99,15 +99,17 @@ func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, 
 	if err != nil {
 		return module, storage.Run{}, err
 	}
-	locked := env.Locked(t)
-	raw = lockInputs(raw, locked)
 	var c *runnerapi.Candidate
+	own := old
 	if adding && from != nil {
 		if c, err = a.importing(ctx, actor, f.Workspace, t, *from); err != nil {
 			return module, storage.Run{}, err
 		}
 		raw = withPlaceholders(raw, c.Placeholder)
+		own = FoundValues(c)
 	}
+	locked := env.Locked(t, own)
+	raw = lockInputs(raw, locked)
 	vals, errs := t.Validate(raw)
 	if err := a.SealInputs(t, raw, vals, old, errs, f.Workspace.ID, module); err != nil {
 		return module, storage.Run{}, err

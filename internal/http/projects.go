@@ -151,7 +151,7 @@ func (s *Server) setEnvironmentValue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	project := r.PathValue("project")
-	err := s.App.SetEnvironmentValue(r.Context(), actor(r), project, f.Get("template"), f.Get("input"), f.Get("value"))
+	err := s.App.SetEnvironmentValue(r.Context(), actor(r), project, f.Get("template"), f.Get("input"), f.Get("value"), f.Get("keep_own") != "")
 	if s.failed(w, r, err, "env:"+f.Get("template")+"/"+f.Get("input"), f, func(status int, fs *formState) {
 		s.renderProject(w, r, "environment", "", status, fs)
 	}) {

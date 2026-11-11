@@ -102,7 +102,7 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 | `GET /projects/{project}` | read, or any user for the default project | Overview |
 | `GET /projects/{project}/workspaces` | same | Its workspaces |
 | `GET /projects/{project}/environment` | same | Environment values: the project's values for per-environment template inputs |
-| `POST /projects/{project}/environment` | admin, or operate on the project | Sets one (`template`, `input`, `value`) |
+| `POST /projects/{project}/environment` | admin, or operate on the project | Sets one (`template`, `input`, `value`, `keep_own` checked: workspaces with their own value keep it) |
 | `POST /projects/{project}/environment/clear` | admin, or operate on the project | Clears one (`template`, `input`) |
 | `GET /projects/{project}/settings` | admin | Settings › General |
 | `GET /projects/{project}/settings/{page}` | admin | `access` (team access), `variable-sets` |

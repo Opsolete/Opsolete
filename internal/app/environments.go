@@ -2,7 +2,7 @@ package app
 
 // Per-environment inputs: a template input marked per_environment takes, at every run, the value the
 // workspace's project sets for it ("Environment values" on the project), over the workspace's own
-// (withEnvironmentValues). Projects are the environments. Admins and the groups that may create
+// (withEnvironmentValues); with keep_own, only in workspaces without an own value (Locked). Projects are the environments. Admins and the groups that may create
 // workspaces in a project (operate on it) set its values; whoever sees the project reads them.
 
 import (
@@ -25,6 +25,7 @@ type EnvironmentInput struct {
 	templates.Input
 	Set       bool   // the project has a value
 	Value     string // its canonical form ("7", "true")
+	KeepOwn   bool   // workspaces with their own value keep it
 	Text      string // as the form says it (an option's label, Yes / No)
 	UpdatedAt time.Time
 	UpdatedBy string // an email, "" if unknown
@@ -73,7 +74,7 @@ func (a *App) EnvironmentValues(ctx context.Context, actor Actor, project string
 			}
 			ei := EnvironmentInput{Input: in}
 			if v, ok := stored[[2]string{t.ID, in.Name}]; ok {
-				ei.Set, ei.Value, ei.Text, ei.UpdatedAt, ei.UpdatedBy = true, v.Value, ValueText(in, v.Value), v.UpdatedAt, v.UpdatedBy
+				ei.Set, ei.Value, ei.Text, ei.KeepOwn, ei.UpdatedAt, ei.UpdatedBy = true, v.Value, ValueText(in, v.Value), v.KeepOwn, v.UpdatedAt, v.UpdatedBy
 			}
 			et.Inputs = append(et.Inputs, ei)
 		}
@@ -114,9 +115,10 @@ func (a *App) environmentInput(ctx context.Context, actor Actor, project, templa
 }
 
 // SetEnvironmentValue sets the project's value for a template's per-environment input, checked by
-// the input's own rules (type, options, pattern; required doesn't apply: clear it instead).
+// the input's own rules (type, options, pattern; required doesn't apply: clear it instead). keepOwn: workspaces with
+// their own value keep it (an imported VM's subnet); the others take this one.
 // ValidationError (field "value"); see environmentInput for the others.
-func (a *App) SetEnvironmentValue(ctx context.Context, actor Actor, project, templateID, input, value string) error {
+func (a *App) SetEnvironmentValue(ctx context.Context, actor Actor, project, templateID, input, value string, keepOwn bool) error {
 	p, in, err := a.environmentInput(ctx, actor, project, templateID, input)
 	if err != nil {
 		return err
@@ -128,10 +130,10 @@ func (a *App) SetEnvironmentValue(ctx context.Context, actor Actor, project, tem
 	if v == "" {
 		return invalid("value", "Enter a value, or clear it.")
 	}
-	if err := a.Store.SetEnvironmentValue(ctx, p.ID, templateID, in.Name, v, actor.UserID); err != nil {
+	if err := a.Store.SetEnvironmentValue(ctx, p.ID, templateID, in.Name, v, keepOwn, actor.UserID); err != nil {
 		return err
 	}
-	a.Log.Info("environment value set", "project", p.Name, "template", templateID, "input", in.Name, "user", actor.Email)
+	a.Log.Info("environment value set", "project", p.Name, "template", templateID, "input", in.Name, "keep_own", keepOwn, "user", actor.Email)
 	return nil
 }
 
@@ -178,27 +180,33 @@ func ValueText(in templates.Input, v string) string {
 }
 
 // EnvironmentMap is a project's values by template id, then input name.
-type EnvironmentMap map[string]map[string]string
+type EnvironmentMap map[string]map[string]storage.EnvironmentValue
 
 func environmentMap(list []storage.EnvironmentValue, err error) (EnvironmentMap, error) {
 	m := EnvironmentMap{}
 	for _, v := range list {
 		if m[v.TemplateID] == nil {
-			m[v.TemplateID] = map[string]string{}
+			m[v.TemplateID] = map[string]storage.EnvironmentValue{}
 		}
-		m[v.TemplateID][v.Input] = v.Value
+		m[v.TemplateID][v.Input] = v
 	}
 	return m, err
 }
 
-// Locked returns the values (canonical, by input name) env sets for t's per-environment inputs:
-// the inputs a form shows read-only and a save ignores.
-func (env EnvironmentMap) Locked(t templates.Template) map[string]string {
+// Locked returns the values (canonical, by input name) env sets for t's per-environment inputs in a workspace whose
+// own values are own (stored, or found by a scan when importing): the inputs a form shows read-only, a save ignores
+// and runs take from the project. A keep_own value doesn't lock an input whose own value differs: that one is kept.
+func (env EnvironmentMap) Locked(t templates.Template, own map[string]any) map[string]string {
 	out := map[string]string{}
 	for _, in := range t.Inputs {
-		if v, ok := env[t.ID][in.Name]; ok && in.PerEnvironment {
-			out[in.Name] = v
+		v, ok := env[t.ID][in.Name]
+		if !ok || !in.PerEnvironment {
+			continue
 		}
+		if o, has := own[in.Name]; v.KeepOwn && has && templates.FormatValue(o) != v.Value {
+			continue
+		}
+		out[in.Name] = v.Value
 	}
 	return out
 }
@@ -206,7 +214,7 @@ func (env EnvironmentMap) Locked(t templates.Template) map[string]string {
 // Describe is t.Describe(stored) with the values env (project's) sets for t's per-environment
 // inputs in their place: what the workspace runs.
 func (env EnvironmentMap) Describe(t templates.Template, stored map[string]any, project string) []templates.StoredValue {
-	locked := env.Locked(t)
+	locked := env.Locked(t, stored)
 	stored = maps.Clone(stored)
 	for name := range locked {
 		stored[name] = "" // listed in the form's order, also without a value of its own
@@ -269,7 +277,7 @@ func (a *App) withEnvironmentValues(ctx context.Context, templateID string, in m
 	if err != nil {
 		return in, err
 	}
-	locked := env.Locked(t)
+	locked := env.Locked(t, in)
 	if len(locked) == 0 {
 		return in, nil
 	}

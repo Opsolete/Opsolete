@@ -37,6 +37,7 @@ type EnvironmentValue struct {
 	Value      string
 	UpdatedAt  time.Time
 	UpdatedBy  uuid.NullUUID
+	KeepOwn    bool
 }
 
 type Module struct {

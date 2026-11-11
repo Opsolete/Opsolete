@@ -190,7 +190,7 @@ func TestRolloutPlanEnvironment(t *testing.T) {
 	if err != nil || rows[0].State != RolloutNeedsInput || len(rows[0].Missing) != 1 || rows[0].Missing[0] != "region" {
 		t.Fatalf("no project value: %+v %v", rows, err)
 	}
-	rows, ups, err := a.rolloutPlan(tpl, []storage.TemplateUse{use}, map[uuid.UUID]EnvironmentMap{w: {"sa": {"region": "west"}}})
+	rows, ups, err := a.rolloutPlan(tpl, []storage.TemplateUse{use}, map[uuid.UUID]EnvironmentMap{w: {"sa": {"region": {Value: "west"}}}})
 	if err != nil || rows[0].State != RolloutReady || len(ups[w]) != 1 {
 		t.Fatalf("project value: %+v %v", rows, err)
 	}

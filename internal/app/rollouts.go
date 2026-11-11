@@ -72,7 +72,7 @@ func (a *App) rolloutPlan(t templates.Template, uses []storage.TemplateUse, env 
 			continue
 		}
 		raw, _ := FormDefaults(t, u.Inputs)
-		locked := env[u.WorkspaceID].Locked(t) // as a configure form saves it
+		locked := env[u.WorkspaceID].Locked(t, u.Inputs) // as a configure form saves it
 		raw = lockInputs(raw, locked)
 		vals, errs := t.Validate(raw)
 		if err := a.SealInputs(t, raw, vals, u.Inputs, errs, u.WorkspaceID, u.Module); err != nil {

@@ -78,7 +78,7 @@ func (a *App) CreateWorkspace(ctx context.Context, actor Actor, in NewWorkspace)
 		if err != nil {
 			return storage.Workspace{}, storage.Run{}, err
 		}
-		locked = env.Locked(t)
+		locked = env.Locked(t, nil)
 	}
 	raw := lockInputs(in.Inputs, locked)
 	vals, errs := t.Validate(raw) // errs is never nil

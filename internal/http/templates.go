@@ -61,11 +61,11 @@ type formPage struct {
 // LockedText is how the form says the project's value of the locked input in.
 func (p formPage) LockedText(in templates.Input) string { return app.ValueText(in, p.Locked[in.Name]) }
 
-// lock shows the inputs project sets read-only (app.EnvironmentMap.Locked): their values are the
-// project's, also for show_if, and the server ignores what is posted for them.
-func (s *Server) lock(r *http.Request, page *formPage, project storage.Project) error {
+// lock shows the inputs project sets read-only (app.EnvironmentMap.Locked, the workspace's own values own): their
+// values are the project's, also for show_if, and the server ignores what is posted for them.
+func (s *Server) lock(r *http.Request, page *formPage, project storage.Project, own map[string]any) error {
 	env, err := s.App.ProjectEnvironment(r.Context(), project.ID)
-	page.Locked, page.LockedBy = env.Locked(page.T), project.Name
+	page.Locked, page.LockedBy = env.Locked(page.T, own), project.Name
 	page.Values = maps.Clone(page.Values)
 	maps.Copy(page.Values, page.Locked)
 	return err
@@ -78,7 +78,7 @@ func (s *Server) lockDeploy(r *http.Request, page *formPage) error {
 	if i < 0 {
 		return nil
 	}
-	return s.lock(r, page, page.Projects[i])
+	return s.lock(r, page, page.Projects[i], nil)
 }
 
 var nonNameChars = regexp.MustCompile(`[^a-z0-9]+`)
