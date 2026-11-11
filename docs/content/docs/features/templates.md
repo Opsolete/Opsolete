@@ -232,9 +232,9 @@ finds and imports them itself, and must be able to describe them as they are:
 - Optional parts (data disks, an auto-shutdown schedule, a security group) get a switch of their own (an
   `existing` field per data disk row, `auto_shutdown_existing`), so the user says which exist.
 
-The [example VM module](https://github.com/Opsolete/terraform-modules-examples/tree/main/virtualmachine) does this
-for its data disks (**existing** per disk in `data_disks`), schedule (`auto_shutdown_existing`) and security group
-(`nsg_existing`).
+The [example Windows VM module](https://github.com/Opsolete/terraform-modules-examples/tree/main/windows-vm) does this:
+`existing` imports the VM and its network interface, and its data disks (**existing** per disk in `data_disks`),
+schedule (`auto_shutdown_existing`) and security group (`nsg_existing`) have switches of their own.
 
 ## Conditional inputs
 

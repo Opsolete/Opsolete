@@ -78,7 +78,7 @@ type Module struct {
 
 // Import is an existing resource a plan imports (an import block, in a template's module): ID into the address To.
 type Import struct {
-	To string `json:"to"` // e.g. module.vm_c8ad.module.windows[0].azurerm_windows_virtual_machine.main
+	To string `json:"to"` // e.g. module.vm_c8ad.azurerm_windows_virtual_machine.main
 	ID string `json:"id"`
 }
 

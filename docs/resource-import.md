@@ -52,8 +52,8 @@ data "azurerm_resources" "vm" {
 }
 
 import {
-  for_each = var.existing && var.os_type == "windows" ? toset(["vm"]) : toset([])
-  to       = module.windows[0].azurerm_windows_virtual_machine.main
+  for_each = var.existing ? toset(["vm"]) : toset([])
+  to       = azurerm_windows_virtual_machine.main
   id       = data.azurerm_resources.vm[0].resources[0].id
 }
 
@@ -82,7 +82,8 @@ import {
 ```
 
 The VM is found through `azurerm_resources` (any type, by name), not the feature-frozen `azurerm_virtual_machine`
-family; it's imported into `azurerm_windows_virtual_machine` or `azurerm_linux_virtual_machine`. Checked live
+family. The example is `windows-vm` 2.0.0 (terraform-modules-examples), one template per OS: the earlier
+`virtualmachine` with its Windows/Linux switch is gone, and `linux-vm` gets the same import later. Checked live
 again with this lookup: `7 to import, 0 to add, 0 to change, 0 to destroy`; an unknown name fails on the
 postcondition.
 
