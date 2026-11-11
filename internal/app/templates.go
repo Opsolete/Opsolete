@@ -165,8 +165,9 @@ func validate(t templates.Template, raw map[string]string) (map[string]any, map[
 
 // FoundValues is what import plan runID of the workspace found for its template module (added from t, now or
 // before the run's restore removed it): the real values of t's inputs that alone set an imported attribute
-// (runnerapi.FinishRequest.Found), typed as stored, sensitive inputs never. Needs operate. ErrNotFound: no such
-// run, or it found nothing for module from t.
+// (runnerapi.FinishRequest.Found), over the inputs the plan ran with (what the user set by hand, such as a name the
+// module builds from several inputs, so adding the template again keeps it); typed as stored, sensitive inputs
+// never. Needs operate. ErrNotFound: no such run, or it found nothing for module from t.
 func (a *App) FoundValues(ctx context.Context, actor Actor, workspace string, runID uuid.UUID, module string, t templates.Template) (map[string]any, error) {
 	if _, err := a.Run(ctx, actor, workspace, runID, LevelOperate); err != nil {
 		return nil, err
@@ -176,14 +177,18 @@ func (a *App) FoundValues(ctx context.Context, actor Actor, workspace string, ru
 		return nil, err
 	}
 	f, ok := all[module]
+	if !ok || len(f.Inputs) == 0 || f.TemplateID != t.ID {
+		return nil, ErrNotFound
+	}
 	found := map[string]any{}
 	for _, in := range t.Inputs {
-		if v, set := f.Inputs[in.Name]; ok && set && !in.Sensitive && f.TemplateID == t.ID {
+		v, set := f.Inputs[in.Name]
+		if !set {
+			v, set = f.Saved[in.Name]
+		}
+		if set && !in.Sensitive && !IsSealed(v) {
 			found[in.Name] = v
 		}
-	}
-	if len(found) == 0 {
-		return nil, ErrNotFound
 	}
 	return found, nil
 }

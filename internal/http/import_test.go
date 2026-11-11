@@ -22,6 +22,7 @@ func TestImportFlow(t *testing.T) {
 		"inputs": [{"name": "name", "type": "string", "required": true, "key": true},
 		{"name": "subnet", "type": "string", "required": true},
 		{"name": "size", "type": "string"},
+		{"name": "nic", "type": "string"},
 		{"name": "password", "type": "string", "sensitive": true},
 		{"name": "existing", "type": "bool"}]}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -49,7 +50,7 @@ func TestImportFlow(t *testing.T) {
 	if rec := post(h, add+"&import=1", url.Values{"name": {"vm1"}}); rec.Code != http.StatusUnprocessableEntity { // unticked: not importing
 		t.Fatalf("the import form posted with existing unticked, subnet empty: %d", rec.Code)
 	}
-	run := runID(t, post(h, add, url.Values{"name": {"vm1"}, "existing": {"on"}}))
+	run := runID(t, post(h, add, url.Values{"name": {"vm1"}, "existing": {"on"}, "nic": {"test-vm235"}})) // set by hand: never found
 
 	j := r.claim(t, run, "plan")
 	if len(j.Modules) != 1 || j.Modules[0].Inputs["existing"] != true {
@@ -75,7 +76,7 @@ func TestImportFlow(t *testing.T) {
 
 	form := strings.ReplaceAll(again, "&amp;", "&")
 	page = get(h, form).Body.String()
-	for _, want := range []string{`value="/subnets/a"`, `value="large"`, `name="existing" checked`, "Filled in with what"} {
+	for _, want := range []string{`value="/subnets/a"`, `value="large"`, `value="test-vm235"`, `name="existing" checked`, "Filled in with what"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("form: no %s\n%s", want, page)
 		}

@@ -113,8 +113,12 @@ the example modules 1.1.0 already have them.
    Stored per module with its template (`runs.found`, migration 008).
 4. **"Use found values".** The run page lists them for operators once the run has ended (discard it first): the
    configure form (`?found=<run>`), or the add form again when the run's restore removed the template it added
-   (`?template=…&found=<run>&from=<module>`). The form opens with the values and `existing` on; saving plans
-   again, the found values counting as the workspace's own against a project's keep-own value.
+   (`?template=…&found=<run>&from=<module>`). The form opens with the found values over the inputs that plan ran
+   with (stored with them, `Found.Saved`: what the user set by hand, such as a NIC name the module builds from two
+   inputs, isn't lost when the discard removes the template) and `existing` on; saving plans again, these values
+   counting as the workspace's own against a project's keep-own value. Live (`test-vm`): round 1 found 15
+   settings; round 2 left the NIC name and boot diagnostics; with the NIC name set, round 3 left boot diagnostics
+   only (`2 to import, 0 to add, 1 to change, 0 to destroy`).
 5. **Fix the rest by hand.** What the module builds from several inputs (`coalesce(var.nic_name,
    "${var.name}-nic")`) or a dynamic block isn't copied: the plan shows it, the user sets it. Repeat until
    `N to import, 0 to add, 0 to change, 0 to destroy`, then confirm.

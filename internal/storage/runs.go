@@ -312,6 +312,7 @@ func prune(batch func(lim int32) (int64, error), lim int32) (int64, error) {
 type Found struct {
 	TemplateID string         `json:"template_id"`
 	Inputs     map[string]any `json:"inputs"`
+	Saved      map[string]any `json:"saved,omitempty"` // the module's inputs the plan ran with (sealed ones as stored)
 }
 
 // RunFound is what run runID's plan found importing, by template module; nil none. ErrNotFound: no such run.

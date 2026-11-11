@@ -274,7 +274,7 @@ func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 			byModule := map[string]Found{}
 			for _, m := range mods {
 				if in := found[m.Name]; len(in) > 0 {
-					byModule[m.Name] = Found{TemplateID: m.TemplateID, Inputs: in}
+					byModule[m.Name] = Found{TemplateID: m.TemplateID, Inputs: in, Saved: m.Inputs}
 				}
 			}
 			if foundJSON, err = json.Marshal(byModule); err != nil {

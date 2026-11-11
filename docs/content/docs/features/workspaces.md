@@ -53,8 +53,8 @@ with any template whose module can import (an `existing` input; see
 2. **The plan imports.** It shows `N to import` and every setting where the form differs from the resource. A plan
    that imports always waits for confirmation, also with auto-apply.
 3. **Use found values.** The plan read the existing resources: discard it, and its page offers **Use found values**
-   (or **Add … again with found values**, when discarding removed the template it added). The form opens filled
-   in with each setting one input sets directly; check it and plan again.
+   (or **Add … again with found values**, when discarding removed the template it added). The form opens with
+   what you entered for that plan, and over it each setting one input sets directly; check it and plan again.
 4. **Fix the rest by hand.** What the module builds from several inputs (a NIC named `<name>-nic` by default) the
    plan still shows as a change: set it in the form. Repeat until `N to import, 0 to add, 0 to change, 0 to
    destroy`, then confirm. Once the import is applied, Opsolete switches `existing` off again: from then on it's

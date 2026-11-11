@@ -81,8 +81,9 @@ func TestImport(t *testing.T) {
 	}
 	tpl, _ := a.Template(ctx, "vm")
 	found, err := a.FoundValues(ctx, admin, ws.Name, run.ID, mod, tpl)
-	if err != nil || len(found) != 2 || found["subnet"] != "/subnets/a" || found["size"] != "large" {
-		t.Fatalf("found: %v %v", found, err)
+	if err != nil || found["subnet"] != "/subnets/a" || found["size"] != "large" || found["name"] != "vm1" || found["existing"] != true ||
+		found["password"] != nil {
+		t.Fatalf("found (over the inputs the plan ran with, sensitive never): %v %v", found, err)
 	}
 	if _, err := a.FoundValues(ctx, user(t, a), ws.Name, run.ID, mod, tpl); !errors.Is(err, ErrNotFound) {
 		t.Errorf("found, for a stranger: %v", err)
@@ -138,7 +139,7 @@ func TestImport(t *testing.T) {
 	if ft, err := a.FoundTemplates(ctx, d); err != nil || len(ft) != 1 || ft[0] != (FoundTemplate{two, "vm", false}) {
 		t.Fatalf("found templates after discarding an added one: %+v %v", ft, err)
 	}
-	if found, err := a.FoundValues(ctx, admin, ws.Name, run.ID, two, tpl); err != nil || found["subnet"] != "/subnets/b" {
-		t.Fatalf("found of a removed template: %v %v", found, err)
+	if found, err := a.FoundValues(ctx, admin, ws.Name, run.ID, two, tpl); err != nil || found["subnet"] != "/subnets/b" || found["name"] != "vm2" {
+		t.Fatalf("found of a removed template, with what was entered for it: %v %v", found, err)
 	}
 }

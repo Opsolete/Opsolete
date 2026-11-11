@@ -34,7 +34,7 @@
 </nav>
 {{if and $.Importing (not $.Found)}}<div class="alert" role="status">Importing: fill in {{with $.T.KeyInput}}<strong>{{.Title}}</strong>{{end}} and what tells the module where it is (a resource group, say); the other settings may stay empty. The plan finds what exists and imports it instead of creating it, shows where these settings differ, and waits for your confirmation. Discard it, and its page offers <em>Use found values</em> for the next plan.</div>{{end}}
 {{end}}
-{{if .Found}}<div class="alert" role="status">Filled in with what <a href="/workspaces/{{.Configure.Name}}/runs/{{.FoundRun}}">the import plan</a> found ({{len .Found}} settings). Check them, then start the plan again: it imports what exists instead of creating it, and waits for your confirmation.</div>{{end}}
+{{if .Found}}<div class="alert" role="status">Filled in with what <a href="/workspaces/{{.Configure.Name}}/runs/{{.FoundRun}}">the import plan</a> found, over what you entered for it. Set what that plan still changes, then start the plan again: it imports what exists instead of creating it, and waits for your confirmation.</div>{{end}}
 <form method="post" class="card form-rows" id="template-form">
 {{$v := .Values}}
 {{if not .Configure}}
