@@ -93,7 +93,9 @@ the example modules 1.1.0 already have them.
 ### Flow
 
 1. **Add the template with `existing` on.** The usual add (or deploy) form: `existing` is a module variable, so
-   it's an input like any other (`app.ImportInput`). While it's on, only the key input is required (`app.validate`):
+   it's an input like any other (`app.ImportInput`); for templates that have it (`app.CanImport`) the form offers
+   *Create new* / *Import existing* at the top (`?import=1` ticks it, and the form marks only the key input
+   required, `app.ForImport`). While it's on, only the key input is required (`app.validate`):
    the user fills what identifies the resource (name, resource group); a required input left empty is stored as
    `null`, so the module call still has the argument.
 2. **Plan.** An ordinary apply run. Terraform finds and imports; the plan lists every attribute that differs, real

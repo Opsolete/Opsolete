@@ -46,9 +46,10 @@ Resources built outside Opsolete (in the Azure portal, by scripts) can be taken 
 with any template whose module can import (an `existing` input; see
 [Writing modules that can import]({{< relref "/docs/features/templates#writing-modules-that-can-import" >}})):
 
-1. **Add the template with `existing` on** (operate access): the usual add form, or the deploy form for a new
-   workspace. While it's on, only the template's key input is required: fill in what identifies the resource
-   (its name, its resource group); the module finds the rest.
+1. **Import existing** (operate access): at the top of the template's add form (*Deploy…*), or of its deploy form
+   for a new workspace, offered for templates whose module can import. It switches the module's `existing` input
+   on; then only the template's key input is required: fill in what identifies the resource (its name, its
+   resource group); the module finds the rest.
 2. **The plan imports.** It shows `N to import` and every setting where the form differs from the resource. A plan
    that imports always waits for confirmation, also with auto-apply.
 3. **Use found values.** The plan read the existing resources: discard it, and its page offers **Use found values**

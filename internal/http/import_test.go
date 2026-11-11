@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -32,8 +33,21 @@ func TestImportFlow(t *testing.T) {
 		t.Fatalf("create: %d", rec.Code)
 	}
 	add := "/workspaces/" + ws + "/templates/new?template=vm"
+	page := get(h, add).Body.String()
+	if !strings.Contains(page, `>Import existing</a>`) || !regexp.MustCompile(`id="subnet"[^>]*required`).MatchString(page) ||
+		strings.Contains(page, `name="existing" checked`) {
+		t.Fatalf("add form: no import choice, or importing already:\n%s", page)
+	}
+	page = get(h, add+"&import=1").Body.String()
+	if !strings.Contains(page, `name="existing" checked`) || regexp.MustCompile(`id="subnet"[^>]*required`).MatchString(page) ||
+		!regexp.MustCompile(`id="name"[^>]*required`).MatchString(page) || !strings.Contains(page, "Importing: fill in") {
+		t.Fatalf("add form importing:\n%s", page)
+	}
 	if rec := post(h, add, url.Values{"name": {"vm1"}}); rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("not importing, subnet empty: %d", rec.Code)
+	}
+	if rec := post(h, add+"&import=1", url.Values{"name": {"vm1"}}); rec.Code != http.StatusUnprocessableEntity { // unticked: not importing
+		t.Fatalf("the import form posted with existing unticked, subnet empty: %d", rec.Code)
 	}
 	run := runID(t, post(h, add, url.Values{"name": {"vm1"}, "existing": {"on"}}))
 
@@ -60,7 +74,7 @@ func TestImportFlow(t *testing.T) {
 	}
 
 	form := strings.ReplaceAll(again, "&amp;", "&")
-	page := get(h, form).Body.String()
+	page = get(h, form).Body.String()
 	for _, want := range []string{`value="/subnets/a"`, `value="large"`, `name="existing" checked`, "Filled in with what"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("form: no %s\n%s", want, page)

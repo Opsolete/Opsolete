@@ -27,6 +27,13 @@
 {{if .Preview}}<div class="alert" role="status">Preview: the form end users get with this template, as it is in the builder. It can't be submitted; close this tab to go back to the builder.</div>{{end}}
 {{end}}
 {{template "formerror" .F}}
+{{with .ImportURL}}
+<nav class="chips" aria-label="Create or import">
+  <a href="{{$.CreateURL}}"{{if not $.Importing}} aria-current="true"{{end}}>Create new</a>
+  <a href="{{.}}"{{if $.Importing}} aria-current="true"{{end}}>Import existing</a>
+</nav>
+{{if and $.Importing (not $.Found)}}<div class="alert" role="status">Importing: fill in {{with $.T.KeyInput}}<strong>{{.Title}}</strong>{{end}} and what tells the module where it is (a resource group, say); the other settings may stay empty. The plan finds what exists and imports it instead of creating it, shows where these settings differ, and waits for your confirmation. Discard it, and its page offers <em>Use found values</em> for the next plan.</div>{{end}}
+{{end}}
 {{if .Found}}<div class="alert" role="status">Filled in with what <a href="/workspaces/{{.Configure.Name}}/runs/{{.FoundRun}}">the import plan</a> found ({{len .Found}} settings). Check them, then start the plan again: it imports what exists instead of creating it, and waits for your confirmation.</div>{{end}}
 <form method="post" class="card form-rows" id="template-form">
 {{$v := .Values}}

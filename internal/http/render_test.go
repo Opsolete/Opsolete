@@ -134,6 +134,7 @@ func TestPageModels(t *testing.T) {
 			&formPage{Page: workspaceNav("ws", "templates", "", true), T: tpl, Configure: &ws, Module: "vm_1", Set: map[string]bool{"pw": true}},
 			&formPage{T: tpl, Values: map[string]string{"size": "s"}, Projects: []storage.Project{{Name: "p"}, {Name: "q"}}, EnvReload: true,
 				Locked: map[string]string{"size": "s"}, LockedBy: "p"},
+			&formPage{T: tpl, Values: map[string]string{"size": "s"}, Projects: []storage.Project{{Name: "p"}}, ImportURL: "/x?import=1", CreateURL: "/x", Importing: true},
 			&formPage{Page: workspaceNav("ws", "templates", "", true), T: tpl, Configure: &ws, Adding: true, Found: map[string]any{"size": "m"},
 				Locked: map[string]string{"size": "s"}, LockedBy: "p"}},
 	}

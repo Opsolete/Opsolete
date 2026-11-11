@@ -128,24 +128,35 @@ func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, 
 // an applied import switches it off again (storage.FinishJob).
 const ImportInput = storage.ImportInput
 
-// validate is t.Validate, except while the module imports (ImportInput on): then the plan finds the settings, so
-// only the key input is required, and a required input left empty is null (the module call needs the argument).
+// CanImport reports whether t's module imports what exists when asked (ImportInput, a bool input).
+func CanImport(t templates.Template) bool {
+	return slices.ContainsFunc(t.Inputs, func(in templates.Input) bool { return in.Name == ImportInput && in.Type == "bool" })
+}
+
+// ForImport is t while its module imports: the plan finds the settings, so only the key input (and sensitive ones,
+// which the plan never fills) stays required.
+func ForImport(t templates.Template) templates.Template {
+	t.Inputs = slices.Clone(t.Inputs)
+	for i, in := range t.Inputs {
+		t.Inputs[i].Required = in.Required && (in.Key || in.Sensitive)
+	}
+	return t
+}
+
+// Importing reports whether raw (form values) has t's module import (ImportInput on; posted only when shown).
+func Importing(t templates.Template, raw map[string]string) bool {
+	return CanImport(t) && (raw[ImportInput] == "on" || raw[ImportInput] == "true")
+}
+
+// validate is t.Validate, except while the module imports (ForImport); a required input left empty is null then
+// (the module call needs the argument).
 func validate(t templates.Template, raw map[string]string) (map[string]any, map[string]string) {
-	i := slices.IndexFunc(t.Inputs, func(in templates.Input) bool { return in.Name == ImportInput && in.Type == "bool" })
-	if i < 0 || raw[ImportInput] != "on" && raw[ImportInput] != "true" { // posted only when shown
+	if !Importing(t, raw) {
 		return t.Validate(raw)
 	}
-	t.Inputs = slices.Clone(t.Inputs)
-	var optional []templates.Input
-	for i, in := range t.Inputs {
-		if in.Required && !in.Key && !in.Sensitive {
-			t.Inputs[i].Required = false
-			optional = append(optional, t.Inputs[i])
-		}
-	}
-	vals, errs := t.Validate(raw)
-	for _, in := range optional {
-		if _, set := vals[in.Name]; !set && errs[in.Name] == "" && t.Match(in.ShowIf, raw) {
+	vals, errs := ForImport(t).Validate(raw)
+	for _, in := range t.Inputs {
+		if _, set := vals[in.Name]; in.Required && !set && errs[in.Name] == "" && t.Match(in.ShowIf, raw) {
 			vals[in.Name] = nil
 		}
 	}

@@ -43,6 +43,9 @@ type formPage struct {
 	Values    map[string]string
 	Found     map[string]any // "Use found values": what import plan FoundRun found (app.FoundValues), filled in
 	FoundRun  uuid.UUID
+	ImportURL string     // creating or adding a template whose module can import: the form importing instead; "" can't
+	CreateURL string     // and creating
+	Importing bool       // the module imports what exists (app.Importing): only the key input required
 	F         *formState // a refused submit
 	Workspace string
 	AutoApply bool
@@ -64,6 +67,27 @@ func (p formPage) FoundText(name string) string {
 		return templates.FormatValue(v)
 	}
 	return ""
+}
+
+// importChoice offers creating or importing, when the form adds or deploys a template whose module can import, and
+// shows it importing when ?import=1 asks or its values say so (T then marks only the key input required, as the
+// server checks it).
+func (p *formPage) importChoice(r *http.Request) {
+	if !app.CanImport(p.T) || p.Configure != nil && !p.Adding {
+		return
+	}
+	q := r.URL.Query()
+	q.Del("import")
+	p.CreateURL = r.URL.Path + "?" + q.Encode()
+	q.Set("import", "1")
+	p.ImportURL = r.URL.Path + "?" + q.Encode()
+	if r.Method == http.MethodGet && r.URL.Query().Get("import") == "1" { // opening it; a post says itself
+		p.Values = maps.Clone(p.Values)
+		p.Values[app.ImportInput] = "true"
+	}
+	if p.Importing = app.Importing(p.T, p.Values); p.Importing {
+		p.T = app.ForImport(p.T)
+	}
 }
 
 // LockedText is how the form says the project's value of the locked input in.
@@ -112,6 +136,7 @@ func (s *Server) form(w http.ResponseWriter, r *http.Request) {
 	}
 	page := formPage{Page: Page{Section: "templates"}, T: t, Editor: s.canEditTemplates(r), Values: vals,
 		Project: r.URL.Query().Get("project"), Projects: projects}
+	page.importChoice(r)
 	if err := s.lockDeploy(r, &page); err != nil {
 		s.internalError(w, "environment values", err)
 		return
