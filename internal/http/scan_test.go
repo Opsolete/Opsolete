@@ -79,7 +79,8 @@ func TestImportFlow(t *testing.T) {
 			Changes: []runnerapi.FitChange{{Address: "azurerm_windows_virtual_machine.self[0]", Action: "replace", Attributes: []string{"zone"}}}},
 		// what its module would import itself is managed already (once testvm is): refused like an import
 		{Template: tpl, Name: "shared", ID: sharedID, Fit: "fits", Imports: []runnerapi.Import{{To: "azurerm_windows_virtual_machine.self[0]", ID: sharedID}},
-			Found: []runnerapi.Import{{To: `module.data_disk["0"].azurerm_managed_disk.main`, ID: vmID}}},
+			Inputs: map[string]string{"os_type": "bsd"}, // not an option of the select
+			Found:  []runnerapi.Import{{To: `module.data_disk["0"].azurerm_managed_disk.main`, ID: vmID}}},
 	}
 	inventory := []runnerapi.Found{{ID: vmID, Name: "testvm", Type: "Microsoft.Compute/virtualMachines", ResourceGroup: "test1"},
 		{ID: nicID, Name: "testvm807", Type: "Microsoft.Network/networkInterfaces", ResourceGroup: "test1"},
@@ -155,6 +156,10 @@ func TestImportFlow(t *testing.T) {
 		t.Fatalf("importing a managed resource again: %d %s", rec.Code, rec.Body.String())
 	}
 	shared := "/workspaces/" + ws + "/templates/new?template=" + tpl + "&scan=" + scan + "&n=2"
+	if form := get(h, shared).Body.String(); !strings.Contains(form, `<option value="bsd" selected>bsd (not an option: choose one)</option>`) ||
+		strings.Contains(form, `<option value="windows" selected>`) {
+		t.Fatalf("a found value that isn't an option is swapped for the first:\n%s", form)
+	}
 	if rec := post(h, shared, url.Values{"name": {"shared"}, "os_type": {"windows"}, "resource_group_name": {"test1"}, "subnet_id": {"/s"}}); rec.Code != http.StatusUnprocessableEntity ||
 		!strings.Contains(rec.Body.String(), "managed already, in workspace "+ws) {
 		t.Fatalf("what the module would import itself is managed: %d %s", rec.Code, rec.Body.String())

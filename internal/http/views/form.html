@@ -78,7 +78,9 @@
     <input type="checkbox" id="{{.Name}}" name="{{.Name}}"{{if eq (index $v .Name) "on" "true"}} checked{{end}}{{aria $.F .Name $help}}>
   {{else if eq .Type "select"}}
     <select id="{{.Name}}" name="{{.Name}}"{{aria $.F .Name $help}}>
-      {{$cur := index $v .Name}}
+      {{$cur := index $v .Name}}{{$known := not $cur}}{{range .Options}}{{if eq .Value $cur}}{{$known = true}}{{end}}{{end}}
+      <!-- a value that isn't an option (an import's, or one the template dropped): shown, not swapped for the first; saving asks to choose -->
+      {{if not $known}}<option value="{{$cur}}" selected>{{$cur}} (not an option: choose one)</option>{{end}}
       {{range .Options}}<option value="{{.Value}}"{{if eq .Value $cur}} selected{{end}}>{{.Text}}</option>{{end}}
     </select>
   {{else if .Sensitive}}{{$set := index $.Set .Name}}{{$ph := index $.Placeholder .Name}}
