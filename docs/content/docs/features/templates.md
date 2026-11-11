@@ -190,8 +190,9 @@ finds and imports them itself, and must be able to describe them as they are:
 
 - **An `existing` input** (a `bool`, default `false`) that switches on `import` blocks in the module (Terraform ≥
   1.16). Their IDs come from the inputs that identify the resource (name, resource group) and from data sources
-  for what the user doesn't know (a VM's network interface). Once in state, Terraform skips the blocks, so they
-  stay in the module. Opsolete writes no import blocks and knows nothing about the cloud: the module does.
+  for what the user doesn't know (a VM's network interface). Once the import is applied, Opsolete switches
+  `existing` off again, so the data sources aren't read anymore. Opsolete writes no import blocks and knows nothing
+  about the cloud: the module does.
 
   ```hcl
   variable "existing" {

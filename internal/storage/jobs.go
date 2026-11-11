@@ -192,7 +192,7 @@ func (s *Store) CancelRun(ctx context.Context, id uuid.UUID, email string, force
 //   - plan of an apply run that imports a resource a state manages already (resources: this workspace's state as
 //     the plan read it; the index for the others), or that imports into a template and would replace or delete
 //     anything: errored, and the template change is undone like any run that ends before its apply
-//   - apply: applied
+//   - apply: applied; the templates it imported into stop importing (ImportInput false)
 //   - failed / canceled: errored / canceled
 //
 // resources is the index of the workspace's current state version; found what a plan that imports found
@@ -219,14 +219,21 @@ func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 			if conflict, err = importConflict(ctx, q, plan.Imports, resources); err != nil {
 				return err
 			}
-			if importing, err = intoTemplate(ctx, q, r.WorkspaceID, plan.Imports); err != nil {
+			names, err := importedTemplates(ctx, q, r.WorkspaceID, plan.Imports)
+			if err != nil {
 				return err
 			}
+			importing = len(names) > 0
 		}
 		switch {
 		case final != "":
 		case r.Status == Applying:
 			final = Applied
+			if r.Action == "apply" {
+				if err := endImport(ctx, q, runID, r.WorkspaceID); err != nil {
+					return err
+				}
+			}
 		case conflict != "":
 			final, message = Errored, conflict
 		case importing && plan.Destroy > 0: // the template doesn't fit what exists
@@ -306,15 +313,39 @@ func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 	return final, nil
 }
 
-// intoTemplate reports whether any of imports goes into an added template's module.
-func intoTemplate(ctx context.Context, q *db.Queries, workspaceID uuid.UUID, imports []runnerapi.Import) (bool, error) {
+// ImportInput is the input with which a template's module imports what exists instead of creating it (a bool;
+// docs: templates.md, "Writing modules that can import").
+const ImportInput = "existing"
+
+// importedTemplates are the added templates whose modules imports go into.
+func importedTemplates(ctx context.Context, q *db.Queries, workspaceID uuid.UUID, imports []runnerapi.Import) ([]string, error) {
 	mods, err := workspaceTemplates(ctx, q, workspaceID)
-	for _, im := range imports {
-		if slices.ContainsFunc(mods, func(m WorkspaceTemplate) bool { return strings.HasPrefix(im.To, "module."+m.Name+".") }) {
-			return true, err
+	var names []string
+	for _, m := range mods {
+		if slices.ContainsFunc(imports, func(im runnerapi.Import) bool { return strings.HasPrefix(im.To, "module."+m.Name+".") }) {
+			names = append(names, m.Name)
 		}
 	}
-	return false, err
+	return names, err
+}
+
+// endImport switches ImportInput off in the templates applied run runID imported into: what they imported is in
+// the state, so their modules stop looking for it (a resource deleted outside Terraform later is created again,
+// not looked for), and a promotion doesn't copy the switch.
+func endImport(ctx context.Context, q *db.Queries, runID, workspaceID uuid.UUID) error {
+	raw, err := q.RunPlan(ctx, runID)
+	if err != nil || raw == nil {
+		return err
+	}
+	var plan runnerapi.Plan
+	if err := json.Unmarshal(raw, &plan); err != nil || len(plan.Imports) == 0 {
+		return err
+	}
+	names, err := importedTemplates(ctx, q, workspaceID, plan.Imports)
+	if err != nil || len(names) == 0 {
+		return err
+	}
+	return q.EndImport(ctx, db.EndImportParams{WorkspaceID: workspaceID, Names: names, Input: ImportInput})
 }
 
 // importConflict says which of a plan's imports a state manages already ("" none): this workspace's as its plan

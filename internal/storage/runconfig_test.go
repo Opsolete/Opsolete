@@ -213,6 +213,24 @@ func TestImportPlan(t *testing.T) {
 	if got, err := s.RunFound(ctx, r.ID); err != nil || got["vm"].TemplateID != "job-test" || got["vm"].Inputs["size"] != "Standard_DS1_v2" {
 		t.Fatalf("found: %v %v", got, err)
 	}
+	// applied: the template stops importing; another one that also has the switch on, but imported nothing, keeps it
+	if _, err := s.Pool.Exec(ctx, `UPDATE workspace_templates SET inputs = '{"existing": true}' WHERE workspace_id = $1 AND name = 'main'`, w.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ConfirmRun(ctx, r.ID, uuid.Nil, "x"); err != nil {
+		t.Fatal(err)
+	}
+	if status, err := s.FinishJob(ctx, r.ID, claim(t, s, "apply").LeaseID, "succeeded", "", nil, nil, []runnerapi.Resource{}, nil); err != nil || status != Applied {
+		t.Fatalf("apply: %s %v", status, err)
+	}
+	existing := func(name string) any {
+		var in map[string]any
+		s.Pool.QueryRow(ctx, `SELECT inputs FROM workspace_templates WHERE workspace_id = $1 AND name = $2`, w.ID, name).Scan(&in)
+		return in[ImportInput]
+	}
+	if existing("vm") != false || existing("main") != true {
+		t.Fatalf("existing after the apply: vm %v, main %v", existing("vm"), existing("main"))
+	}
 	if got, err := s.RunFound(ctx, run.ID); err != nil || got != nil {
 		t.Fatalf("found of a plan without imports: %v %v", got, err)
 	}

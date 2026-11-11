@@ -81,6 +81,16 @@ UPDATE runs SET rollout_id = sqlc.arg(rollout_id)::uuid WHERE id = sqlc.arg(id):
 -- name: SetRunAlwaysConfirm :exec
 UPDATE runs SET always_confirm = true WHERE id = sqlc.arg(id)::uuid;
 
+-- name: RunPlan :one
+SELECT plan FROM runs WHERE id = sqlc.arg(id)::uuid;
+
+-- name: EndImport :exec
+-- An applied import: the templates' modules stop importing (their import input false). The resources are in the
+-- state now, so their import blocks did nothing anymore: the next plan doesn't change.
+UPDATE workspace_templates SET inputs = jsonb_set(inputs, ARRAY[sqlc.arg(input)::text], 'false'::jsonb)
+WHERE workspace_id = sqlc.arg(workspace_id)::uuid AND name = ANY(sqlc.arg(names)::text[])
+    AND inputs -> sqlc.arg(input)::text = 'true'::jsonb;
+
 -- name: RunFound :one
 SELECT found FROM runs WHERE id = sqlc.arg(id)::uuid;
 

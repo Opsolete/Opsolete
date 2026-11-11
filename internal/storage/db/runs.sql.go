@@ -88,6 +88,25 @@ func (q *Queries) DeleteWorkspaceTemplate(ctx context.Context, arg DeleteWorkspa
 	return err
 }
 
+const endImport = `-- name: EndImport :exec
+UPDATE workspace_templates SET inputs = jsonb_set(inputs, ARRAY[$1::text], 'false'::jsonb)
+WHERE workspace_id = $2::uuid AND name = ANY($3::text[])
+    AND inputs -> $1::text = 'true'::jsonb
+`
+
+type EndImportParams struct {
+	Input       string
+	WorkspaceID uuid.UUID
+	Names       []string
+}
+
+// An applied import: the templates' modules stop importing (their import input false). The resources are in the
+// state now, so their import blocks did nothing anymore: the next plan doesn't change.
+func (q *Queries) EndImport(ctx context.Context, arg EndImportParams) error {
+	_, err := q.db.Exec(ctx, endImport, arg.Input, arg.WorkspaceID, arg.Names)
+	return err
+}
+
 const insertWorkspaceTemplate = `-- name: InsertWorkspaceTemplate :execrows
 INSERT INTO workspace_templates (workspace_id, name, template_id, module_source, module_ref, inputs)
 VALUES ($1::uuid, $2::text, $3::text, $4::text,
@@ -580,6 +599,17 @@ func (q *Queries) RunFound(ctx context.Context, id uuid.UUID) ([]byte, error) {
 	var found []byte
 	err := row.Scan(&found)
 	return found, err
+}
+
+const runPlan = `-- name: RunPlan :one
+SELECT plan FROM runs WHERE id = $1::uuid
+`
+
+func (q *Queries) RunPlan(ctx context.Context, id uuid.UUID) ([]byte, error) {
+	row := q.db.QueryRow(ctx, runPlan, id)
+	var plan []byte
+	err := row.Scan(&plan)
+	return plan, err
 }
 
 const setConfigChanges = `-- name: SetConfigChanges :exec

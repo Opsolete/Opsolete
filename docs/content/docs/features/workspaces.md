@@ -56,8 +56,9 @@ with any template whose module can import (an `existing` input; see
    in with each setting one input sets directly; check it and plan again.
 4. **Fix the rest by hand.** What the module builds from several inputs (a NIC named `<name>-nic` by default) the
    plan still shows as a change: set it in the form. Repeat until `N to import, 0 to add, 0 to change, 0 to
-   destroy`, then confirm. From then on it's an ordinary template in the workspace; once in state, Terraform skips
-   the import blocks.
+   destroy`, then confirm. Once the import is applied, Opsolete switches `existing` off again: from then on it's
+   an ordinary template in the workspace (a resource deleted outside Terraform later is created again, not looked
+   for), and a promotion doesn't copy the switch.
 
 Safety: a resource can be in one state only. A plan that imports a resource a workspace manages already (this
 one's state as the plan read it, or another's) ends as errored, and so does an import into a template that would

@@ -124,9 +124,9 @@ func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, 
 	return module, run, nil
 }
 
-// ImportInput is the input with which a template's module imports what exists instead of creating it (a bool;
-// docs: templates.md, "Writing modules that can import").
-const ImportInput = "existing"
+// ImportInput is the input with which a template's module imports what exists instead of creating it (a bool);
+// an applied import switches it off again (storage.FinishJob).
+const ImportInput = storage.ImportInput
 
 // validate is t.Validate, except while the module imports (ImportInput on): then the plan finds the settings, so
 // only the key input is required, and a required input left empty is null (the module call needs the argument).

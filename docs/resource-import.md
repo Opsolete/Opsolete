@@ -102,6 +102,10 @@ the example modules 1.1.0 already have them.
 5. **Fix the rest by hand.** What the module builds from several inputs (`coalesce(var.nic_name,
    "${var.name}-nic")`) or a dynamic block isn't copied: the plan shows it, the user sets it. Repeat until
    `N to import, 0 to add, 0 to change, 0 to destroy`, then confirm.
+6. **Applied: the switch goes off.** The apply's finishing transaction sets `existing` false in the templates the
+   plan imported into (`storage.endImport`). That changes no plan (the resources are in the state, so the import
+   blocks did nothing anymore, and the data sources stop being read); a resource deleted outside Terraform later
+   is then created again instead of failing its lookup, and a promotion doesn't copy the switch.
 
 Decision (November 2026): the scan (inventory, matching, Import page) is removed, not kept as a picker. A picker
 can come back on `terraform query` if wanted.
