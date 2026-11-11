@@ -486,13 +486,16 @@ func isSet(v any) bool {
 // sameCase gives the path segments of id that equal an input value but for case that value's case: the cloud
 // may report a name in other case in different IDs (Azure: TEST1 in a VM's ID, test1 in its NIC's), and the
 // imported state keeps the ID's case, so a differently cased input would plan a replacement.
+// A segment that equals some value exactly is kept (a VM named Windows next to os_type windows).
 func sameCase(id string, raw map[string]string) string {
+	vals := slices.Sorted(maps.Values(raw)) // the same pick every time
 	segs := strings.Split(id, "/")
 	for i, s := range segs {
-		for _, v := range raw {
-			if s != v && strings.EqualFold(s, v) {
-				segs[i] = v
-			}
+		if slices.Contains(vals, s) {
+			continue
+		}
+		if j := slices.IndexFunc(vals, func(v string) bool { return strings.EqualFold(s, v) }); j >= 0 {
+			segs[i] = vals[j]
 		}
 	}
 	return strings.Join(segs, "/")

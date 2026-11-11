@@ -41,7 +41,11 @@ func (s *Server) loadTemplateForm(w http.ResponseWriter, r *http.Request) (formP
 			page.Placeholder[in] = true
 		}
 	}
-	if err := s.lock(r, &page, storage.Project{ID: f.Workspace.ProjectID, Name: f.Workspace.ProjectName}); err != nil {
+	own := inputs
+	if page.Found != nil {
+		own = app.FoundValues(page.Found)
+	}
+	if err := s.lock(r, &page, storage.Project{ID: f.Workspace.ProjectID, Name: f.Workspace.ProjectName}, own); err != nil {
 		s.internalError(w, "environment values", err)
 		return formPage{}, false
 	}

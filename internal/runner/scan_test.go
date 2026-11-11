@@ -83,6 +83,18 @@ func TestCandidates(t *testing.T) {
 	}
 }
 
+// TestSameCase: an ID's segments take the case of the input values they equal but for case; one that equals a
+// value exactly stays, whatever else matches it but for case.
+func TestSameCase(t *testing.T) {
+	raw := map[string]string{"resource_group_name": "test1", "name": "Windows", "os_type": "windows"}
+	for range 20 { // map order varies
+		if got := sameCase("/subscriptions/s/resourceGroups/TEST1/providers/Microsoft.Compute/virtualMachines/Windows", raw); got !=
+			"/subscriptions/s/resourceGroups/test1/providers/Microsoft.Compute/virtualMachines/Windows" {
+			t.Fatal(got)
+		}
+	}
+}
+
 // TestFit: one plan adopts every candidate into a throwaway state; each gets the fit of its own module.
 func TestFit(t *testing.T) {
 	f := &fakeServer{}

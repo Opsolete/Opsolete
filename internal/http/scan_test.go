@@ -36,9 +36,9 @@ func TestImportFlow(t *testing.T) {
 		t.Fatalf("upload: %d %s", rec.Code, rec.Body.String())
 	}
 	tplForm := url.Values{"name": {"VM"}, "module_source": {"ops.example.com/" + ns + "/vm/azurerm"}, "module_ref": {"3.1.0"}, "key": {"name"},
-		"in_name": {"name", "os_type", "resource_group_name", "nic_name", "admin_password"}, "in_type": {"string", "select", "string", "string", "string"},
-		"in_opt_value_1": {"windows", "linux"}, "in_required": {"0", "2"}, "in_sensitive": {"4"}, "in_show_input": {"", "", "", "", "os_type"},
-		"in_show_equals": {"", "", "", "", "windows"}}
+		"in_name": {"name", "os_type", "resource_group_name", "nic_name", "admin_password", "subnet_id"}, "in_type": {"string", "select", "string", "string", "string", "string"},
+		"in_opt_value_1": {"windows", "linux"}, "in_required": {"0", "2"}, "in_sensitive": {"4"}, "in_show_input": {"", "", "", "", "os_type", ""},
+		"in_show_equals": {"", "", "", "", "windows", ""}, "in_per_environment": {"5"}}
 	rec := post(h, "/templates/new", tplForm)
 	tpl := strings.TrimPrefix(rec.Header().Get("Location"), "/templates/")
 	if rec.Code != http.StatusSeeOther {
@@ -73,13 +73,14 @@ func TestImportFlow(t *testing.T) {
 	cands := []runnerapi.Candidate{
 		{Template: tpl, Name: "testvm", ID: vmID, Fit: "fits", Imports: imports, Placeholder: []string{"admin_password"}, Uses: []string{diskID},
 			Found:  []runnerapi.Import{{To: `module.data_disk["0"].azurerm_managed_disk.main`, ID: dataID}}, // its module imports it itself
-			Inputs: map[string]string{"name": "testvm", "os_type": "windows", "resource_group_name": "test1", "nic_name": "testvm807"}},
+			Inputs: map[string]string{"name": "testvm", "os_type": "windows", "resource_group_name": "test1", "nic_name": "testvm807", "subnet_id": "/found"}},
 		{Template: tpl, Name: "odd", ID: sub + "Microsoft.Compute/virtualMachines/odd", Fit: "replaces",
 			Imports: []runnerapi.Import{{To: "azurerm_windows_virtual_machine.self[0]", ID: sub + "Microsoft.Compute/virtualMachines/odd"}},
 			Changes: []runnerapi.FitChange{{Address: "azurerm_windows_virtual_machine.self[0]", Action: "replace", Attributes: []string{"zone"}}}},
 		// what its module would import itself is managed already (once testvm is): refused like an import
 		{Template: tpl, Name: "shared", ID: sharedID, Fit: "fits", Imports: []runnerapi.Import{{To: "azurerm_windows_virtual_machine.self[0]", ID: sharedID}},
-			Found: []runnerapi.Import{{To: `module.data_disk["0"].azurerm_managed_disk.main`, ID: vmID}}},
+			Inputs: map[string]string{"os_type": "bsd"}, // not an option of the select
+			Found:  []runnerapi.Import{{To: `module.data_disk["0"].azurerm_managed_disk.main`, ID: vmID}}},
 	}
 	inventory := []runnerapi.Found{{ID: vmID, Name: "testvm", Type: "Microsoft.Compute/virtualMachines", ResourceGroup: "test1"},
 		{ID: nicID, Name: "testvm807", Type: "Microsoft.Network/networkInterfaces", ResourceGroup: "test1"},
@@ -108,9 +109,21 @@ func TestImportFlow(t *testing.T) {
 		t.Fatal("a resource that doesn't fit offers Import")
 	}
 
+	// the project sets the subnet: importing would move the VM's NIC there (in place, not a replacement), the form warns
+	if rec := post(h, "/projects/default/environment", url.Values{"template": {tpl}, "input": {"subnet_id"}, "value": {"/project"}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("environment value: %d", rec.Code)
+	}
+	if form := get(h, link).Body.String(); !strings.Contains(form, "The scan found <code>/found</code>: importing changes it") {
+		t.Fatalf("no warning for a project value that changes what was found:\n%s", form)
+	}
+	// keep own: the imported VM keeps its own, in another subnet
+	if rec := post(h, "/projects/default/environment", url.Values{"template": {tpl}, "input": {"subnet_id"}, "value": {"/project"}, "keep_own": {"on"}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("environment value: %d %s", rec.Code, rec.Body.String())
+	}
+
 	// Import: the form filled in, no ID fields, the password left to the placeholder
 	form := get(h, link).Body.String()
-	for _, want := range []string{"Importing <strong>testvm</strong> (2 resources)", `value="testvm807"`, "a random placeholder is used"} {
+	for _, want := range []string{"Importing <strong>testvm</strong> (2 resources)", `value="testvm807"`, "a random placeholder is used", `name="subnet_id" value="/found"`} {
 		if !strings.Contains(form, want) {
 			t.Fatalf("import form lacks %q:\n%s", want, form)
 		}
@@ -118,7 +131,7 @@ func TestImportFlow(t *testing.T) {
 	if strings.Contains(form, nicID) || strings.Contains(form, `autocomplete="new-password" required`) {
 		t.Fatal("the form shows IDs or requires the placeholder password")
 	}
-	values := url.Values{"name": {"testvm"}, "os_type": {"windows"}, "resource_group_name": {"test1"}, "nic_name": {"testvm807"}, "subnet_id": {"/s"}}
+	values := url.Values{"name": {"testvm"}, "os_type": {"windows"}, "resource_group_name": {"test1"}, "nic_name": {"testvm807"}, "subnet_id": {"/found"}}
 	if rec := post(h, "/workspaces/"+ws+"/templates/new?template=x&scan="+scan+"&n=0", values); rec.Code != http.StatusNotFound {
 		t.Fatalf("another template than the one found for: %d", rec.Code)
 	}
@@ -129,7 +142,7 @@ func TestImportFlow(t *testing.T) {
 	added := runID(t, rec)
 	j = r.claim(t, added, "plan")
 	if len(j.Imports) != 2 || !strings.HasPrefix(j.Imports[0].To, "module.testvm_") || j.Imports[1].ID != vmID ||
-		!strings.HasPrefix(j.Modules[0].Inputs["admin_password"].(string), "Ops-") {
+		!strings.HasPrefix(j.Modules[0].Inputs["admin_password"].(string), "Ops-") || j.Modules[0].Inputs["subnet_id"] != "/found" {
 		t.Fatalf("import job: %+v", j)
 	}
 
@@ -150,6 +163,10 @@ func TestImportFlow(t *testing.T) {
 		t.Fatalf("importing a managed resource again: %d %s", rec.Code, rec.Body.String())
 	}
 	shared := "/workspaces/" + ws + "/templates/new?template=" + tpl + "&scan=" + scan + "&n=2"
+	if form := get(h, shared).Body.String(); !strings.Contains(form, `<option value="bsd" selected>bsd (not an option: choose one)</option>`) ||
+		strings.Contains(form, `<option value="windows" selected>`) {
+		t.Fatalf("a found value that isn't an option is swapped for the first:\n%s", form)
+	}
 	if rec := post(h, shared, url.Values{"name": {"shared"}, "os_type": {"windows"}, "resource_group_name": {"test1"}, "subnet_id": {"/s"}}); rec.Code != http.StatusUnprocessableEntity ||
 		!strings.Contains(rec.Body.String(), "managed already, in workspace "+ws) {
 		t.Fatalf("what the module would import itself is managed: %d %s", rec.Code, rec.Body.String())

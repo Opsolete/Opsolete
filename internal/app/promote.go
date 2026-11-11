@@ -271,7 +271,7 @@ func (a *App) promoteModule(ctx context.Context, s storage.WorkspaceTemplate, cu
 	default:
 		m.FromRef, m.FromSrc, own = cur.ModuleRef, cur.ModuleSource, cur.Inputs
 	}
-	locked := env.Locked(t)
+	locked := env.Locked(t, own)
 	raw, asked := map[string]string{}, map[string]bool{}
 	for _, in := range t.Inputs {
 		v, has := s.Inputs[in.Name]

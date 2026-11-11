@@ -6,7 +6,8 @@
 {{if eq $tab "environment"}}{{$edit := .Env.CanEdit}}
 <h1>Environment values</h1>
 <p class="muted">Template inputs marked per environment: a value set here applies to every workspace in {{$p.Name}} at each run, over the workspace's own; the next plan shows a change.
-  Without one, each workspace uses its own.{{if not $edit}} Admins and groups with operate on the project change them.{{end}}</p>
+  With <em>keep own</em>, a workspace that has a value of its own (set before, or an imported resource's, e.g. its subnet) keeps it.
+  Without a value here, each workspace uses its own.{{if not $edit}} Admins and groups with operate on the project change them.{{end}}</p>
 {{range .Env.Templates}}{{$t := .Template}}
 <h2><a href="/templates/{{$t.ID}}">{{$t.Name}}</a></h2>
 <div class="card flush">
@@ -15,7 +16,7 @@
 {{range .Inputs}}{{$f := formOf $.F (print "env:" $t.ID "/" .Name)}}{{$id := print "env-" $t.ID "-" .Name}}
 <tr>
   <td>{{if $edit}}<label for="{{$id}}" title="{{.Name}}">{{.Title}}</label>{{else}}<span title="{{.Name}}">{{.Title}}</span>{{end}}{{with .Help}}<br><small class="muted">{{.}}</small>{{end}}</td>
-  <td>{{if .Set}}<code>{{.Text}}</code><br><small class="muted">{{with .UpdatedBy}}{{.}}, {{end}}<span title="{{.UpdatedAt.Format "2006-01-02 15:04"}}">{{ago .UpdatedAt}}</span></small>{{else}}<span class="muted">not set: each workspace's own</span>{{end}}</td>
+  <td>{{if .Set}}<code>{{.Text}}</code><br><small class="muted">{{with .UpdatedBy}}{{.}}, {{end}}<span title="{{.UpdatedAt.Format "2006-01-02 15:04"}}">{{ago .UpdatedAt}}</span>{{if .KeepOwn}} · workspaces keep their own{{end}}</small>{{else}}<span class="muted">not set: each workspace's own</span>{{end}}</td>
   {{if $edit}}<td>
     <form method="post" action="/projects/{{$p.Name}}/environment" class="inline">
       <input type="hidden" name="template" value="{{$t.ID}}"><input type="hidden" name="input" value="{{.Name}}">
@@ -23,6 +24,7 @@
       {{if eq .Type "bool"}}<select id="{{$id}}" name="value"{{aria $f "value"}}><option value="true"{{if eq $cur "true"}} selected{{end}}>Yes</option><option value="false"{{if ne $cur "true"}} selected{{end}}>No</option></select>
       {{else if eq .Type "select"}}<select id="{{$id}}" name="value"{{aria $f "value"}}>{{range .Options}}<option value="{{.Value}}"{{if eq .Value $cur}} selected{{end}}>{{.Text}}</option>{{end}}</select>
       {{else}}<input id="{{$id}}" name="value" value="{{$cur}}" required autocomplete="off" spellcheck="false"{{if eq .Type "number"}} type="number" step="any"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{with .Help}} title="{{.}}"{{end}}{{end}}{{aria $f "value"}}>{{end}}
+      <label class="check"><input type="checkbox" name="keep_own"{{if .KeepOwn}} checked{{end}}> Keep own</label>
       <button type="submit" class="secondary small">Set</button>
     </form>
     {{if .Set}}<form method="post" action="/projects/{{$p.Name}}/environment/clear" class="inline">

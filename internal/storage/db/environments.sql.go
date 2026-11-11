@@ -30,7 +30,7 @@ func (q *Queries) ClearEnvironmentValue(ctx context.Context, arg ClearEnvironmen
 
 const environmentValues = `-- name: EnvironmentValues :many
 
-SELECT e.template_id, e.input_name, e.value, e.updated_at, COALESCE(u.email, '')::text AS updated_by
+SELECT e.template_id, e.input_name, e.value, e.keep_own, e.updated_at, COALESCE(u.email, '')::text AS updated_by
 FROM environment_values e LEFT JOIN users u ON u.id = e.updated_by
 WHERE e.project_id = $1::uuid
 ORDER BY e.template_id, e.input_name
@@ -40,6 +40,7 @@ type EnvironmentValuesRow struct {
 	TemplateID string
 	InputName  string
 	Value      string
+	KeepOwn    bool
 	UpdatedAt  time.Time
 	UpdatedBy  string
 }
@@ -58,6 +59,7 @@ func (q *Queries) EnvironmentValues(ctx context.Context, projectID uuid.UUID) ([
 			&i.TemplateID,
 			&i.InputName,
 			&i.Value,
+			&i.KeepOwn,
 			&i.UpdatedAt,
 			&i.UpdatedBy,
 		); err != nil {
@@ -72,9 +74,9 @@ func (q *Queries) EnvironmentValues(ctx context.Context, projectID uuid.UUID) ([
 }
 
 const setEnvironmentValue = `-- name: SetEnvironmentValue :exec
-INSERT INTO environment_values (project_id, template_id, input_name, value, updated_by)
-VALUES ($1::uuid, $2::text, $3::text, $4::text, $5::uuid)
-ON CONFLICT (project_id, template_id, input_name) DO UPDATE SET value = EXCLUDED.value, updated_at = now(), updated_by = EXCLUDED.updated_by
+INSERT INTO environment_values (project_id, template_id, input_name, value, keep_own, updated_by)
+VALUES ($1::uuid, $2::text, $3::text, $4::text, $5::boolean, $6::uuid)
+ON CONFLICT (project_id, template_id, input_name) DO UPDATE SET value = EXCLUDED.value, keep_own = EXCLUDED.keep_own, updated_at = now(), updated_by = EXCLUDED.updated_by
 `
 
 type SetEnvironmentValueParams struct {
@@ -82,6 +84,7 @@ type SetEnvironmentValueParams struct {
 	TemplateID string
 	InputName  string
 	Value      string
+	KeepOwn    bool
 	UpdatedBy  uuid.NullUUID
 }
 
@@ -91,13 +94,14 @@ func (q *Queries) SetEnvironmentValue(ctx context.Context, arg SetEnvironmentVal
 		arg.TemplateID,
 		arg.InputName,
 		arg.Value,
+		arg.KeepOwn,
 		arg.UpdatedBy,
 	)
 	return err
 }
 
 const workspaceEnvironmentValues = `-- name: WorkspaceEnvironmentValues :many
-SELECT e.template_id, e.input_name, e.value
+SELECT e.template_id, e.input_name, e.value, e.keep_own
 FROM environment_values e JOIN workspaces w ON w.project_id = e.project_id
 WHERE w.id = $1::uuid
 `
@@ -106,6 +110,7 @@ type WorkspaceEnvironmentValuesRow struct {
 	TemplateID string
 	InputName  string
 	Value      string
+	KeepOwn    bool
 }
 
 // the values of the workspace's current project
@@ -118,7 +123,12 @@ func (q *Queries) WorkspaceEnvironmentValues(ctx context.Context, workspaceID uu
 	var items []WorkspaceEnvironmentValuesRow
 	for rows.Next() {
 		var i WorkspaceEnvironmentValuesRow
-		if err := rows.Scan(&i.TemplateID, &i.InputName, &i.Value); err != nil {
+		if err := rows.Scan(
+			&i.TemplateID,
+			&i.InputName,
+			&i.Value,
+			&i.KeepOwn,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

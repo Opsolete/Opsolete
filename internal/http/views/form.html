@@ -59,6 +59,10 @@
     <label>{{.Title}}</label>
     <input type="hidden" id="{{.Name}}" name="{{.Name}}" value="{{$lock}}" disabled data-locked>
     <p><code>{{$.LockedText .}}</code> <span class="hint">Set by project <a href="/projects/{{$.LockedBy}}/environment">{{$.LockedBy}}</a></span></p>
+    {{$name := .Name}}{{with $.Found}}{{with index .Inputs $name}}{{if ne . $lock}}
+    <!-- importing: the plan changes it in place (e.g. moves the NIC to the project's subnet), which the replace guard doesn't stop -->
+    <p class="alert warn" role="status">The scan found <code>{{.}}</code>: importing changes it to the project's value. Tick <em>Keep own</em> on the project's value to keep it.</p>
+    {{end}}{{end}}{{end}}
   {{else if or .RowFields (eq .Type "object")}}
     <p class="field" id="{{.Name}}-label">{{.Title}}</p>
   {{else}}
@@ -78,7 +82,9 @@
     <input type="checkbox" id="{{.Name}}" name="{{.Name}}"{{if eq (index $v .Name) "on" "true"}} checked{{end}}{{aria $.F .Name $help}}>
   {{else if eq .Type "select"}}
     <select id="{{.Name}}" name="{{.Name}}"{{aria $.F .Name $help}}>
-      {{$cur := index $v .Name}}
+      {{$cur := index $v .Name}}{{$known := not $cur}}{{range .Options}}{{if eq .Value $cur}}{{$known = true}}{{end}}{{end}}
+      <!-- a value that isn't an option (an import's, or one the template dropped): shown, not swapped for the first; saving asks to choose -->
+      {{if not $known}}<option value="{{$cur}}" selected>{{$cur}} (not an option: choose one)</option>{{end}}
       {{range .Options}}<option value="{{.Value}}"{{if eq .Value $cur}} selected{{end}}>{{.Text}}</option>{{end}}
     </select>
   {{else if .Sensitive}}{{$set := index $.Set .Name}}{{$ph := index $.Placeholder .Name}}

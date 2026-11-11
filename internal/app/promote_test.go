@@ -204,7 +204,7 @@ func TestPromote(t *testing.T) {
 		}
 	})
 	step(t, "the project's value applies: not the target's own, not copied", func(t *testing.T) {
-		if err := a.SetEnvironmentValue(ctx, admin, f.prd, "web", "size", "m"); err != nil {
+		if err := a.SetEnvironmentValue(ctx, admin, f.prd, "web", "size", "m", false); err != nil {
 			t.Fatal(err)
 		}
 		p, err := a.PreviewPromotion(ctx, admin, f.source.Name, to, nil)
