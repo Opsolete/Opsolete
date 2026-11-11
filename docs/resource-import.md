@@ -37,16 +37,24 @@ variable "existing" {
   default = false
 }
 
-data "azurerm_virtual_machine" "existing" {
+data "azurerm_resources" "vm" {
   count               = var.existing ? 1 : 0
   name                = var.name
   resource_group_name = var.resource_group_name
+  type                = "Microsoft.Compute/virtualMachines"
+
+  lifecycle {
+    postcondition {
+      condition     = length(self.resources) == 1
+      error_message = "existing: there is no VM named ${var.name} in resource group ${var.resource_group_name} to import."
+    }
+  }
 }
 
 import {
   for_each = var.existing && var.os_type == "windows" ? toset(["vm"]) : toset([])
   to       = module.windows[0].azurerm_windows_virtual_machine.main
-  id       = data.azurerm_virtual_machine.existing[0].id
+  id       = data.azurerm_resources.vm[0].resources[0].id
 }
 
 # The VM doesn't report its NICs; a NIC reports its VM.
@@ -63,7 +71,7 @@ data "azurerm_network_interface" "found" {
 }
 
 locals {
-  found_nic = one([for n in data.azurerm_network_interface.found : n if lower(n.virtual_machine_id) == lower(data.azurerm_virtual_machine.existing[0].id)])
+  found_nic = one([for n in data.azurerm_network_interface.found : n if lower(n.virtual_machine_id) == lower(data.azurerm_resources.vm[0].resources[0].id)])
 }
 
 import {
@@ -72,6 +80,11 @@ import {
   id       = local.found_nic.id
 }
 ```
+
+The VM is found through `azurerm_resources` (any type, by name), not the feature-frozen `azurerm_virtual_machine`
+family; it's imported into `azurerm_windows_virtual_machine` or `azurerm_linux_virtual_machine`. Checked live
+again with this lookup: `7 to import, 0 to add, 0 to change, 0 to destroy`; an unknown name fails on the
+postcondition.
 
 Optional parts keep their own switches (`data_disks[].existing`, `auto_shutdown_existing`, `nsg_existing`), as
 the example modules 1.1.0 already have them.

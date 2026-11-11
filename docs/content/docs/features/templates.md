@@ -190,7 +190,8 @@ finds and imports them itself, and must be able to describe them as they are:
 
 - **An `existing` input** (a `bool`, default `false`) that switches on `import` blocks in the module (Terraform ≥
   1.16). Their IDs come from the inputs that identify the resource (name, resource group) and from data sources
-  for what the user doesn't know (a VM's network interface). Once the import is applied, Opsolete switches
+  for what the user doesn't know (a VM's network interface); `azurerm_resources` finds any type by name without
+  the feature-frozen `azurerm_virtual_machine` family, and its postcondition says clearly when nothing is there. Once the import is applied, Opsolete switches
   `existing` off again, so the data sources aren't read anymore. Opsolete writes no import blocks and knows nothing
   about the cloud: the module does.
 
@@ -200,16 +201,24 @@ finds and imports them itself, and must be able to describe them as they are:
     default = false
   }
 
-  data "azurerm_virtual_machine" "existing" {
+  data "azurerm_resources" "vm" {
     count               = var.existing ? 1 : 0
     name                = var.name
     resource_group_name = var.resource_group_name
+    type                = "Microsoft.Compute/virtualMachines"
+
+    lifecycle {
+      postcondition {
+        condition     = length(self.resources) == 1
+        error_message = "existing: there is no VM named ${var.name} in resource group ${var.resource_group_name} to import."
+      }
+    }
   }
 
   import {
     for_each = var.existing ? toset(["vm"]) : toset([])
     to       = azurerm_windows_virtual_machine.main
-    id       = data.azurerm_virtual_machine.existing[0].id
+    id       = data.azurerm_resources.vm[0].resources[0].id
   }
   ```
 
