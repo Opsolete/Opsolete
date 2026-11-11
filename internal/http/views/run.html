@@ -40,13 +40,12 @@
   <div><dt>Triggered by</dt><dd>{{if $r.CreatedBy}}{{$r.CreatedBy}}{{else if $r.VCSPullRequest}}pull request #{{$r.VCSPullRequest}}{{else if and $r.VCSCommit (eq $r.Action "apply")}}new commit{{else}}—{{end}}</dd></div>
 </dl>
 
-{{with .Found}}
+{{if and .Found (not $r.Active)}}
 <section class="alert" role="status" aria-labelledby="found-head">
-  <h2 id="found-head">Found while importing</h2>
-  <p>This plan read the existing resources: their settings can fill in the form, so the next plan changes less. What the plan
-    still changes after that, set by hand.</p>
-  {{if $r.Active}}<p>Discard this plan first to use them.</p>
-  {{else}}<p>{{range $i, $f := .}}{{if $i}} {{end}}{{if $f.Added}}<a class="btn" href="/workspaces/{{$w.Name}}/templates/{{$f.Module}}?found={{$r.ID}}">Use found values for {{$f.Module}}</a>{{else}}<a class="btn" href="/workspaces/{{$w.Name}}/templates/new?template={{$f.TemplateID}}&amp;found={{$r.ID}}&amp;from={{$f.Module}}">Add {{$f.Module}} again with found values</a>{{end}}{{end}}</p>{{end}}
+  <h2 id="found-head">Importing</h2>
+  <p>This plan read the existing resources. <strong>Change settings</strong> opens the template's form with what you
+    entered for it and what it found; set what it still changed, and plan again.</p>
+  <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/change"><button type="submit">Change settings</button></form>
 </section>
 {{end}}
 
@@ -112,9 +111,12 @@
     <div class="actions mt-0">
       <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/confirm">
         <button type="submit"{{if eq $r.Action "destroy"}} class="danger"{{end}}>Confirm &amp; {{if eq $r.Action "destroy"}}destroy{{else}}apply{{end}}</button></form>
+      {{if $.Found}}<form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/change">
+        <button type="submit" class="secondary">Change settings</button></form>{{end}}
       <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/discard">
         <button type="submit" class="secondary">Discard</button></form>
     </div>
+    {{if $.Found}}<p class="hint">Importing: <em>Change settings</em> discards this plan and opens the template's form with what you entered and what the plan found.</p>{{end}}
     {{else if eq $r.Status "needs_confirmation"}}
     <p class="muted">Waiting for the workspace's owner or an admin to confirm.</p>
     {{else if eq .State "queued"}}<p class="muted">Waiting for a runner…</p>

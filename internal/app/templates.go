@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"maps"
@@ -191,6 +192,26 @@ func (a *App) FoundValues(ctx context.Context, actor Actor, workspace string, ru
 		}
 	}
 	return found, nil
+}
+
+// ChangeImport goes back from import plan id to its template's form: a plan still waiting for confirmation is
+// discarded (which removes a template the run added), and what it found is listed (FoundTemplates) to open the form
+// with, the inputs it ran with and what it found. Needs operate. ErrNotFound: the plan found nothing; a conflict
+// while it's still planning.
+func (a *App) ChangeImport(ctx context.Context, actor Actor, workspace string, id uuid.UUID) ([]FoundTemplate, error) {
+	d, err := a.Run(ctx, actor, workspace, id, LevelOperate)
+	if err != nil {
+		return nil, err
+	}
+	if found, err := a.FoundTemplates(ctx, d); err != nil || len(found) == 0 {
+		return nil, cmp.Or(err, ErrNotFound)
+	}
+	if d.Run.Active() {
+		if err := a.DiscardRun(ctx, actor, workspace, id); err != nil {
+			return nil, err
+		}
+	}
+	return a.FoundTemplates(ctx, d)
 }
 
 // FoundTemplate is a template module an import plan found values for, and whether it's still in the workspace

@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+
+	"github.com/opsolete/opsolete/internal/storage"
 )
 
 // TestImportFlow: a template whose module imports what exists (existing) is added with only its key; the plan
@@ -63,18 +65,23 @@ func TestImportFlow(t *testing.T) {
 		"imports": [{"to": "module.`+mod+`.x.y", "id": "/vms/vm1"}], "changes": []},
 		"found": {"`+mod+`": {"subnet": "/subnets/a", "size": "large", "password": "hunter2"}}}`)
 	runURL := "/workspaces/" + ws + "/runs/" + run
-	if page := get(h, runURL).Body.String(); !strings.Contains(page, "Found while importing") || !strings.Contains(page, "Discard this plan first") {
-		t.Fatalf("run page waiting for confirmation:\n%s", page)
+	change := `action="` + runURL + `/change"`
+	if page := get(h, runURL).Body.String(); !strings.Contains(page, change) || !strings.Contains(page, "/confirm") {
+		t.Fatalf("an import plan waiting: no Change settings beside Confirm:\n%s", page)
 	}
-	if rec := post(h, runURL+"/discard", nil); rec.Code != http.StatusSeeOther {
-		t.Fatalf("discard: %d", rec.Code)
+	// Change settings: the plan is discarded (which removes the template it added), back to the add form
+	rec := post(h, runURL+"/change", nil)
+	form := "/workspaces/" + ws + "/templates/new?" + url.Values{"template": {"vm"}, "found": {run}, "from": {mod}}.Encode()
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != form || runStatus(t, store, run).Status != storage.Discarded {
+		t.Fatalf("change: %d %q, run %s", rec.Code, rec.Header().Get("Location"), runStatus(t, store, run).Status)
 	}
-	again := "/workspaces/" + ws + "/templates/new?template=vm&amp;found=" + run + "&amp;from=" + mod
-	if page := get(h, runURL).Body.String(); !strings.Contains(page, again) {
-		t.Fatalf("run page after discard: no link %s\n%s", again, page)
+	if page := get(h, runURL).Body.String(); !strings.Contains(page, change) {
+		t.Fatalf("an ended import plan: no Change settings:\n%s", page)
+	}
+	if rec := post(h, runURL+"/change", nil); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != form {
+		t.Fatalf("change, the plan ended: %d %q", rec.Code, rec.Header().Get("Location"))
 	}
 
-	form := strings.ReplaceAll(again, "&amp;", "&")
 	page = get(h, form).Body.String()
 	for _, want := range []string{`value="/subnets/a"`, `value="large"`, `value="test-vm235"`, `name="existing" checked`, "Filled in with what"} {
 		if !strings.Contains(page, want) {
@@ -92,12 +99,13 @@ func TestImportFlow(t *testing.T) {
 	if j.Modules[0].Inputs["subnet"] != "/subnets/a" || j.Modules[0].Inputs["size"] != "large" {
 		t.Fatalf("job with found values: %+v", j.Modules[0].Inputs)
 	}
-	// it fits: the plan only imports, so the page doesn't offer the found values (nor to discard it for them)
+	// it fits: Confirm, or still Change settings (back to the template, now configured: it stays while the run waits)
 	mod = j.Modules[0].Name
 	r.finish(t, `{"status": "succeeded", "resources": [], "plan": {"add": 0, "change": 0, "destroy": 0, "import": 1,
 		"imports": [{"to": "module.`+mod+`.x.y", "id": "/vms/vm1"}], "changes": []},
 		"found": {"`+mod+`": {"subnet": "/subnets/a"}}}`)
-	if page := get(h, "/workspaces/"+ws+"/runs/"+run2).Body.String(); strings.Contains(page, "Found while importing") {
-		t.Fatalf("a plan that only imports offers its found values:\n%s", page)
+	run2URL := "/workspaces/" + ws + "/runs/" + run2
+	if page := get(h, run2URL).Body.String(); !strings.Contains(page, `action="`+run2URL+`/change"`) || !strings.Contains(page, "/confirm") {
+		t.Fatalf("a fitting import plan: no Confirm and Change settings:\n%s", page)
 	}
 }

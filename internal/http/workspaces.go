@@ -51,6 +51,7 @@ func (s *Server) workspaceRoutes(mux routes) {
 	mux.HandleFunc("GET /workspaces/{name}/runs/{run}", s.run)
 	mux.HandleFunc("POST /workspaces/{name}/runs/{run}/confirm", s.confirmRun)
 	mux.HandleFunc("POST /workspaces/{name}/runs/{run}/discard", s.discardRun)
+	mux.HandleFunc("POST /workspaces/{name}/runs/{run}/change", s.changeImport)
 	mux.HandleFunc("POST /workspaces/{name}/runs/{run}/cancel", s.cancelRun)
 	mux.HandleFunc("GET /workspaces/{name}/runs/{run}/logs", s.logText)
 	mux.HandleFunc("GET /workspaces/{name}/runs/{run}/logs/stream", s.logStream)

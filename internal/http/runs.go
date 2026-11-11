@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"net/http"
+	"net/url"
 
 	"github.com/google/uuid"
 
@@ -29,8 +30,7 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 	plan, apply := runPhases(d.Run, d.History)
 	page := &runPage{Page: workspaceNav(r.PathValue("name"), "runs", "", d.Level == app.LevelOperate),
 		W: d.Workspace, R: d.Run, History: d.History, Plan: plan, Apply: apply}
-	// what the import found, while it can help: not once its plan only imports (nothing left to set)
-	if p := d.Run.Plan; d.Level == app.LevelOperate && (p == nil || p.Add+p.Change+p.Destroy > 0) {
+	if d.Level == app.LevelOperate { // an import plan's: Change settings
 		var err error
 		if page.Found, err = s.App.FoundTemplates(r.Context(), d); err != nil {
 			s.internalError(w, "found values", err)
@@ -92,6 +92,26 @@ func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request) {
 func (s *Server) confirmRun(w http.ResponseWriter, r *http.Request) {
 	id, _ := pathID(r, "run") // not an id: not found
 	s.decided(w, r, id, s.App.ConfirmRun(r.Context(), actor(r), r.PathValue("name"), id))
+}
+
+// changeImport goes back from an import plan to its template's form (app.ChangeImport), with what was entered for
+// it and what it found: the configure form, or the add form when the discard removed the template it added; with
+// several templates, the run page.
+func (s *Server) changeImport(w http.ResponseWriter, r *http.Request) {
+	id, _ := pathID(r, "run") // not an id: not found
+	found, err := s.App.ChangeImport(r.Context(), actor(r), r.PathValue("name"), id)
+	if err != nil {
+		s.uiError(w, r, err)
+		return
+	}
+	ws, to := r.PathValue("name"), "/workspaces/"+r.PathValue("name")+"/runs/"+id.String()
+	if len(found) == 1 {
+		to = "/workspaces/" + ws + "/templates/" + found[0].Module + "?found=" + id.String()
+		if !found[0].Added {
+			to = "/workspaces/" + ws + "/templates/new?" + url.Values{"template": {found[0].TemplateID}, "found": {id.String()}, "from": {found[0].Module}}.Encode()
+		}
+	}
+	http.Redirect(w, r, to, http.StatusSeeOther)
 }
 
 // discardRun ends a plan that waits for confirmation without applying it.

@@ -40,6 +40,7 @@ var noInvalidInput = map[string]string{
 	"POST /workspaces/{name}/state-versions/{version}/rollback": "a button",
 	"POST /workspaces/{name}/runs/{run}/confirm":                "a button",
 	"POST /workspaces/{name}/runs/{run}/discard":                "a button",
+	"POST /workspaces/{name}/runs/{run}/change":                 "a button",
 	"POST /workspaces/{name}/runs/{run}/cancel":                 "buttons (force is hidden)",
 	"POST /workspaces/{name}/delete":                            "a button (force is hidden)",
 	"POST /variable-sets/{set}":                                 "a description and a checkbox: any value is valid",
