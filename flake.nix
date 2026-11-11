@@ -42,7 +42,7 @@
       # nixpkgs' go, prebuilt on cache.nixos.org: keep flake.lock fresh so it has the stdlib security fixes.
       opsolete = pkgs.buildGoModule {
         pname = "opsolete";
-        version = "0.6.0"; # x-release-please-version
+        version = "0.7.0"; # x-release-please-version
         src = self;
         vendorHash = "sha256-5fMwU+1PPzgY457RPy3yuwh3h6mYnGkQLIg2ENGTwb0="; # update after go.mod changes
         subPackages = ["cmd/opsolete"];

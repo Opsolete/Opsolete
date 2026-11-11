@@ -1,5 +1,56 @@
 # Changelog
 
+## [0.7.0](https://github.com/Opsolete/Opsolete/compare/v0.6.0...v0.7.0) (2026-11-11)
+
+
+### Features
+
+* adopt existing resources when adding a template ([94a2bb4](https://github.com/Opsolete/Opsolete/commit/94a2bb4c2fb7ae1b2860b03a331673eda0ed0564))
+* **builder:** edit adopt entries ([27e66af](https://github.com/Opsolete/Opsolete/commit/27e66afede2dcb03a31ccd8a0ff2874a5622626d))
+* **builder:** generate adopt entries from the module's code ([48d2ffd](https://github.com/Opsolete/Opsolete/commit/48d2ffd92a30d746b717ee754f17fa1300f7b019))
+* environments and promotion ([2bda81d](https://github.com/Opsolete/Opsolete/commit/2bda81d5c4d18e3ba2061a4f5919e9b3c87e16c1))
+* **environments:** per-environment template inputs, set on the project ([7ac40c3](https://github.com/Opsolete/Opsolete/commit/7ac40c38983679101ee461c1f8dd0ea770e26b52))
+* import existing cloud resources into workspaces ([8d8bd34](https://github.com/Opsolete/Opsolete/commit/8d8bd340ccf27bc488abf0a5789db832ee8b1641))
+* **import:** compact scan results, one line per resource ([09f2f79](https://github.com/Opsolete/Opsolete/commit/09f2f7919ef4d62044a71a81ceed8596420b2b87))
+* **import:** follow module calls; find data disks, schedules and NSGs ([5d31041](https://github.com/Opsolete/Opsolete/commit/5d3104108681d84e8717874c0ce2ae54dd0a8bcd))
+* **import:** list every resource, in four groups ([7ac9c6b](https://github.com/Opsolete/Opsolete/commit/7ac9c6bb7feee7f5c4bc2626b1ec95b619f02bff))
+* **import:** the scan fills in optional parts from what their module imports ([61316cd](https://github.com/Opsolete/Opsolete/commit/61316cd25cedf1104c27f833bc5a0ed6136e7e02))
+* **import:** the scan fills in optional parts from what their module imports ([1fb4510](https://github.com/Opsolete/Opsolete/commit/1fb45106802c5411b1cfcb3199ccb28d22a7c1dc))
+* **promote:** promote a workspace's templates to another workspace ([917cd7d](https://github.com/Opsolete/Opsolete/commit/917cd7d79e59245f83cf4999202c34152bd7676f))
+* **registry:** tag prefix per linked module, registry access for runs ([1ab7035](https://github.com/Opsolete/Opsolete/commit/1ab70358023ea5ed0ae331c8dd303c531c16c426))
+* **runner:** fetch registry modules through the runner's server URL ([07483ea](https://github.com/Opsolete/Opsolete/commit/07483ea05b3e1ba8a860c0de263bc54217161e92))
+* scan for existing resources and adopt them filled in ([5fee4b1](https://github.com/Opsolete/Opsolete/commit/5fee4b1e68704e57f71cd8781a702742e867b95c))
+* **templates:** list inputs, rows of fields from list(object({...})) ([c1cbf28](https://github.com/Opsolete/Opsolete/commit/c1cbf28613c223d1d86f3037d33915400a0a8484))
+* **templates:** list, list(string), map(string) and object inputs ([6fbd9a4](https://github.com/Opsolete/Opsolete/commit/6fbd9a401fd0a60f95ce8fed9fb835d97558755b))
+* **templates:** list(string), map(string) and object inputs ([0e58430](https://github.com/Opsolete/Opsolete/commit/0e58430bca50cca1e2ffaa89f95d57e4e67c15a8))
+* **ui:** search in repository lists ([05cc75d](https://github.com/Opsolete/Opsolete/commit/05cc75dd4f310d816604e3c1b2b20ae0345a37bd))
+* **ui:** search in repository lists ([db50897](https://github.com/Opsolete/Opsolete/commit/db50897ec2b8aac2801d733fa472a5e5767609a4))
+
+
+### Bug Fixes
+
+* 0.x database message names the right versions; drop an unreachable notice ([790fb87](https://github.com/Opsolete/Opsolete/commit/790fb872f6005aad932008b9838a05bf4d9eaa0c))
+* **auth:** an admin ending a user's sessions revokes their terraform login tokens too ([5ad24b5](https://github.com/Opsolete/Opsolete/commit/5ad24b5ca0133965face7dbd21a13645086b6cbf))
+* **cloud:** locking a remote-execution workspace from the CLI says why ([4fae5b7](https://github.com/Opsolete/Opsolete/commit/4fae5b7166ed8cc6eadfcb722103931ecf0e1590))
+* **deps:** bump the go group with 2 updates ([1d7f3e9](https://github.com/Opsolete/Opsolete/commit/1d7f3e9d81cf4c211d4d0fd05250c393d34b9065))
+* **deps:** bump the go group with 2 updates ([3775553](https://github.com/Opsolete/Opsolete/commit/377555305b25d91255e1bbb6ca3c60c0378c528e))
+* **flake:** update vendorHash ([183e8af](https://github.com/Opsolete/Opsolete/commit/183e8afd262b0248b0190c55bc6c94a39eddefb8))
+* **import:** the latest scans list rendered with the run row of another type ([a3663da](https://github.com/Opsolete/Opsolete/commit/a3663da7557f3070b82b2a469b1149f8dd6e2251))
+* keep applies' state through server outages; security and upgrade fixes ([30df672](https://github.com/Opsolete/Opsolete/commit/30df6724837b9bba719cbc531e14502a46c1e597))
+* keep state an apply couldn't save; graceful shutdown; clear CLI lock error ([79557dc](https://github.com/Opsolete/Opsolete/commit/79557dc51554c8c408568d514042ba9704425665))
+* refuse an adoption whose resource a state manages already ([a9618ba](https://github.com/Opsolete/Opsolete/commit/a9618baab8f033d89fd92ffde7919f659ef3c796))
+* **runner:** fail jobs of an unknown action instead of planning them ([d80b24e](https://github.com/Opsolete/Opsolete/commit/d80b24ef8751a72c1ac748a52570616ab992e722))
+* **runner:** mask the run's state password in its log ([0850b98](https://github.com/Opsolete/Opsolete/commit/0850b9827f3b341f6d4be03161fc69db59802413))
+* **runner:** quote a probed row's key in its address ([f515f07](https://github.com/Opsolete/Opsolete/commit/f515f0768da7daf2243c15175e92d98790ae411f))
+* **runner:** state an apply couldn't save is pushed again, or kept, not deleted with the workdir ([d66c0bf](https://github.com/Opsolete/Opsolete/commit/d66c0bf0a27c9f41891e49d63044b2d22d443a27))
+* **runs:** a new leader waits 1 minute, not 2, before failing expired leases ([34c04d9](https://github.com/Opsolete/Opsolete/commit/34c04d9a2b0817f4bf22733b94d1400ea218adbe))
+* **runs:** a server or database outage no longer fails the applies under way ([72089a6](https://github.com/Opsolete/Opsolete/commit/72089a69fa15d3120b4766813667fe57613e3b00))
+* **secrets:** key rotation no longer breaks runs under way ([91bb58f](https://github.com/Opsolete/Opsolete/commit/91bb58f68aaefde4376742bcc84063fc7848a100))
+* **secrets:** key rotation no longer breaks runs under way ([06d555e](https://github.com/Opsolete/Opsolete/commit/06d555e4d2a14a3b355ea09925b3b4751cc7cc72))
+* **server:** SIGTERM ends only log streams and runner claims; other requests drain ([c220b4a](https://github.com/Opsolete/Opsolete/commit/c220b4a621994a98f79aa7141208dc3acf75fb1c))
+* **storage:** a newer version's database is no longer called a 0.x one ([2eee3ce](https://github.com/Opsolete/Opsolete/commit/2eee3ce702612bfda21fd9b805beee6aadb0101a))
+* **workspaces:** the execution mode can't change while a run is active ([5b5131c](https://github.com/Opsolete/Opsolete/commit/5b5131c40b9dd1a5a9aadf5e2e458b0a57ba5cd7))
+
 ## [0.6.0](https://github.com/Opsolete/Opsolete/compare/v0.5.1...v0.6.0) (2026-11-09)
 
 
