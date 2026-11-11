@@ -89,7 +89,50 @@ type ScanTemplate struct {
 	Template json.RawMessage `json:"template"` // templates.Template: its inputs, for show_if and the form's checks
 	Module   string          `json:"module"`
 	Entries  []ScanEntry     `json:"entries"`
+	Probes   []Probe         `json:"probes,omitempty"`
 	Notes    []string        `json:"notes,omitempty"` // what reading the module skipped, for the log
+}
+
+// Probe finds an optional or repeated part of a template's module (a module call with count = var.x != null ?
+// 1 : 0, or for_each over a list input's rows) whose module imports what exists already (import blocks on an
+// input, e.g. existing = true): per candidate, the runner calls the part's module directly with that switched on,
+// once per inventory resource of Type (none: once); a try whose every import succeeds belongs to the candidate,
+// and its resources' attributes ("before") fill the form, with the switch on.
+type Probe struct {
+	Call    string              `json:"call"`           // the call in the template's module, e.g. module.data_disk
+	Source  string              `json:"source"`         // the part's module: a registry address
+	Version string              `json:"version"`        // its version constraint
+	List    string              `json:"list,omitempty"` // repeated: the list input whose rows it fills
+	Key     string              `json:"key,omitempty"`  // repeated: the row field its instances are keyed by
+	Type    string              `json:"type,omitempty"` // the cloud's type the import IDs name, e.g. Microsoft.Compute/disks
+	Imports int                 `json:"imports"`        // the module's import blocks: all import for a try to belong
+	Args    map[string]ProbeArg `json:"args"`
+	Fills   []ProbeFill         `json:"fills"`
+}
+
+// ProbeArg is where a probed module's argument comes from: an input, a row field (repeated), or the ID of a scan
+// entry's resource (Refs: either's, e.g. the Windows or Linux VM); Switch: the import switch, true; Name: the
+// tried resource's name.
+type ProbeArg struct {
+	Input  string   `json:"input,omitempty"`
+	Field  string   `json:"field,omitempty"`
+	Refs   []string `json:"refs,omitempty"`
+	Switch bool     `json:"switch,omitempty"`
+	Name   bool     `json:"name,omitempty"`
+}
+
+// ProbeFill maps a resource of a probed module (To, its address there) back to the form: input (repeated: row
+// field) → its attribute path; Lists: list input → the nested blocks whose each is a row.
+type ProbeFill struct {
+	To     string               `json:"to"`
+	Values map[string]string    `json:"values,omitempty"`
+	Lists  map[string]BlockList `json:"lists,omitempty"`
+}
+
+// BlockList is a repeated nested block (a dynamic block over a list input): a row per block.
+type BlockList struct {
+	Block  string            `json:"block"`  // its path, e.g. security_rule
+	Fields map[string]string `json:"fields"` // row field → the block's attribute
 }
 
 // ScanEntry is a resource of a template's module that can take over an existing one.
@@ -156,6 +199,9 @@ type Candidate struct {
 	Imports  []Import          `json:"imports"` // To: the address in the template's module
 	// Placeholder: sensitive inputs to fill with a random value on import (ScanEntry.Placeholder).
 	Placeholder []string `json:"placeholder,omitempty"`
+	// Found: what its template's module imports itself (a probe found it: a data disk, a schedule), To relative to
+	// the template's module. Checked against the states like Imports, never written as import blocks.
+	Found []Import `json:"found,omitempty"`
 	// Uses: other resources of the inventory its resources refer to (an OS disk, a public IP), not imported with it.
 	Uses    []string    `json:"uses,omitempty"`
 	Fit     string      `json:"fit"` // fits | differs | replaces | invalid (the form refuses its values) | unchecked

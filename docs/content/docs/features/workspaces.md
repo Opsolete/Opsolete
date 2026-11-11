@@ -69,9 +69,12 @@ input `x`; a `dynamic` block with `for_each = var.x ? … : []` fills the yes / 
 `other` a related resource; a sensitive input in `lifecycle { ignore_changes }` gets a random placeholder. Module
 calls are followed: local ones (`./x`) and ones from the registry (its newest version the constraint allows), with
 values through arguments, `locals` and outputs. Optional and repeated parts (a module call with
-`count = var.x != null ? 1 : 0` or `for_each`: a VM's data disks, its auto-shutdown schedule, its security group)
-aren't searched, as Terraform can't list most of them: fill them in on the form, and a module that imports them
-itself (an `existing` input, see the link below) takes the existing ones over too; the fit check shows any value that differs. Other
+`count = var.x != null ? 1 : 0` or `for_each` over a list's rows: a VM's data disks, its auto-shutdown schedule, its
+security group) can't be listed by Terraform. When their module imports existing ones itself (an `existing` input,
+see the link below), the scan tries them: it calls the part's module with `existing` on, once per resource of the
+type its import names in the candidate's resource group (once without a name). What imports belongs to the
+candidate, and fills its rows or fields, with `existing` on, so the import takes it over too (the fit check
+included). Otherwise fill them in on the form. Other
 expressions are left for the form; the scan's log names what was skipped. See
 [Writing modules that can import]({{< relref "/docs/features/templates#writing-modules-that-can-import" >}}).
 

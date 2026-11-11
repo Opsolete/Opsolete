@@ -197,8 +197,12 @@ must be able to describe them as they are, or the import plans changes, or repla
 - Use `count = var.x == "value" ? 1 : 0` for resources that depend on a choice (Windows or Linux VM).
 - For parts the scan can't find (Terraform can't list them: data disks, an auto-shutdown schedule, a security
   group's link to a NIC), let the module import them itself: an input `existing` and an `import` block in the
-  module (Terraform ≥ 1.16) whose ID it builds from its own inputs. People fill in those parts on the import form,
-  with `existing` on; once in state, Terraform skips the block, so it stays in the module:
+  module (Terraform ≥ 1.16) whose ID it builds from its own inputs; once in state, Terraform skips the block, so
+  it stays in the module. The scan then fills those parts in: it tries the part's module with `existing` on for
+  each resource of the type the ID names (`…/providers/<namespace>/<type>/${var.name}`; an ID without a name is
+  tried once), and what imports fills the form. For that, the module call's arguments come from inputs, a list's
+  rows (`each.value.<field>`) or found resources, and required text fields get a placeholder matching their
+  `validation`'s `can(regex(...))`, so the provider's own format checks pass:
 
   ```hcl
   import {

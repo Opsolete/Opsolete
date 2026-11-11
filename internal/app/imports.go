@@ -31,6 +31,7 @@ import (
 type importable struct {
 	t       templates.Template // resolved
 	entries []runnerapi.ScanEntry
+	probes  []runnerapi.Probe
 	notes   []string
 }
 
@@ -53,7 +54,7 @@ func (a *App) importables(ctx context.Context) (out []importable, skipped []stri
 		if err != nil {
 			return nil, nil, err
 		}
-		entries, notes, err := registry.Adoptable(archive, t.Inputs, a.moduleFetch(ctx))
+		entries, probes, notes, err := registry.Adoptable(archive, t.Inputs, a.moduleFetch(ctx))
 		if err != nil {
 			skipped = append(skipped, t.Name+": reading its module: "+err.Error())
 			continue
@@ -62,7 +63,7 @@ func (a *App) importables(ctx context.Context) (out []importable, skipped []stri
 			skipped = append(skipped, t.Name+": its module has no resource to find")
 			continue
 		}
-		out = append(out, importable{t, entries, notes})
+		out = append(out, importable{t, entries, probes, notes})
 	}
 	return out, skipped, nil
 }
@@ -159,7 +160,7 @@ func (a *App) scanJob(ctx context.Context, resourceGroup string) (*runnerapi.Sca
 			return nil, nil, err
 		}
 		name := "t" + uuid.NewString()[:8]
-		sc.Templates = append(sc.Templates, runnerapi.ScanTemplate{Template: b, Module: name, Entries: imp.entries, Notes: imp.notes})
+		sc.Templates = append(sc.Templates, runnerapi.ScanTemplate{Template: b, Module: name, Entries: imp.entries, Probes: imp.probes, Notes: imp.notes})
 		mods = append(mods, runnerapi.Module{Name: name, Source: a.Registry.RunnerSource(imp.t.Module, runnerSrcTTL)})
 	}
 	return sc, mods, nil
@@ -228,7 +229,7 @@ func (a *App) ScanResult(ctx context.Context, runID uuid.UUID) (ScanResult, erro
 	}
 	covered := map[string]bool{} // listed with a candidate
 	for _, c := range sc.Candidates {
-		for _, im := range c.Imports {
+		for _, im := range takenOver(c) {
 			ids, covered[strings.ToLower(im.ID)] = append(ids, im.ID), true
 		}
 		for _, u := range c.Uses {
@@ -245,7 +246,7 @@ func (a *App) ScanResult(ctx context.Context, runID uuid.UUID) (ScanResult, erro
 			cand.TemplateName = t.Name
 		}
 		var by string
-		for _, im := range c.Imports {
+		for _, im := range takenOver(c) {
 			by = cmp.Or(by, managed[strings.ToLower(im.ID)])
 			if strings.EqualFold(im.ID, c.ID) {
 				cand.Kind = capital(kind(im.To))
@@ -359,6 +360,11 @@ func kind(addr string) string {
 
 var indexRe = regexp.MustCompile(`\[[^\]]*\]`)
 
+// takenOver is what importing c takes over: its imports, and what its template's module imports itself (Found).
+func takenOver(c runnerapi.Candidate) []runnerapi.Import {
+	return append(slices.Clone(c.Imports), c.Found...)
+}
+
 // Found is one result of a scan run: run's candidate N.
 type Found struct {
 	Run uuid.UUID
@@ -392,9 +398,9 @@ func (a *App) importing(ctx context.Context, actor Actor, ws storage.Workspace, 
 	if c.Template != t.ID {
 		return nil, &ValidationError{Message: "this resource was found for another template"}
 	}
-	ids := make([]string, len(c.Imports))
-	for i, im := range c.Imports {
-		ids[i] = im.ID
+	var ids []string
+	for _, im := range takenOver(c) {
+		ids = append(ids, im.ID)
 	}
 	managed, err := a.Store.ManagedBy(ctx, ids)
 	if err != nil {

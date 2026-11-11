@@ -261,6 +261,18 @@ func regexPatterns(dir string) map[string]string {
 
 // regexCondition matches can(regex("<literal>", var.<name>)) and returns the regex as a form pattern.
 func regexCondition(e hclsyntax.Expression, name string) (string, bool) {
+	if or, ok := e.(*hclsyntax.BinaryOpExpr); ok && or.Op == hclsyntax.OpLogicalOr { // var.x == null || can(regex(…)): optional
+		if eq, ok := or.LHS.(*hclsyntax.BinaryOpExpr); ok && eq.Op == hclsyntax.OpEqual {
+			t, diags := hcl.AbsTraversalForExpr(eq.LHS)
+			v, vdiags := eq.RHS.Value(nil)
+			if !diags.HasErrors() && !vdiags.HasErrors() && v.IsNull() && t.RootName() == "var" && len(t) == 2 {
+				if a, ok := t[1].(hcl.TraverseAttr); ok && a.Name == name {
+					return regexCondition(or.RHS, name)
+				}
+			}
+		}
+		return "", false
+	}
 	can, ok := e.(*hclsyntax.FunctionCallExpr)
 	if !ok || can.Name != "can" || len(can.Args) != 1 {
 		return "", false

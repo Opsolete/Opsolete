@@ -132,6 +132,9 @@ func (r *Runner) scan(ctx context.Context, tf *tfProc, dir string, job runnerapi
 		cands, vals = append(cands, c...), append(vals, v...)
 		srcs[tpls[i].ID] = sources[st.Module]
 	}
+	if slices.ContainsFunc(job.Scan.Templates, func(st runnerapi.ScanTemplate) bool { return len(st.Probes) > 0 }) {
+		r.probe(ctx, tf, dir, tpls, job.Scan.Templates, cands, vals, inventory, lists, w)
+	}
 	uses(cands, inventory)
 	fmt.Fprintf(w, "\n==> %d resources, %d a template can import\n", len(inventory), len(cands))
 	if checkable(cands) > 0 {
@@ -220,7 +223,7 @@ func uses(cands []runnerapi.Candidate, inventory []runnerapi.Found) {
 	}
 	for i := range cands {
 		imported := map[string]bool{}
-		for _, im := range cands[i].Imports {
+		for _, im := range append(slices.Clone(cands[i].Imports), cands[i].Found...) {
 			imported[strings.ToLower(im.ID)] = true
 		}
 		var out []string
