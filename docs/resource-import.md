@@ -50,6 +50,15 @@ Rejected:
   template, all derivable from the module, and it made templates feel like import configuration.
 - *Variable name = attribute name convention*: fragile (shared variables, nested blocks, `coalesce`), and existing
   modules wouldn't fit.
+- *Opsolete writing the parts' import blocks* (instead of the modules' `existing` switches, review November 2026):
+  the IDs need the provider's formats (a data disk attachment's is `<vm id>/dataDisks/<name>`), which the module
+  knows and Opsolete shouldn't. The modules keep them.
+- *Reading friendly inputs back through tables* (`local.images[var.image].sku` → `image`, built and dropped in
+  review): another code shape to match, the list twice (module and template), and Opsolete reading a module's
+  private locals. Raw inputs (publisher, offer, SKU) import as they are; a template makes them dropdowns.
+- *Terraform variables setting fields the form leaves off* (built and dropped in review): a workspace variable
+  bypassed the template's options and patterns. A project's subnet is a per-environment value, with *keep own*
+  for the workspaces (and imports) that have their own.
 
 ## How it works
 
@@ -89,6 +98,12 @@ Rejected:
   upgrades with moves only.
 
 ## Open
+
+- One fill pipeline: a candidate's inputs come from `terraform query` attributes (`ScanEntry.Inputs`), its parts'
+  from the probe plan's "before" (`ProbeFill`), the same mapping twice. Every candidate a try (the VM imported as
+  Windows, else Linux, from the inventory) would drop `terraform query`, its retry for types the provider can't
+  list, `requireByType` and `IDFrom`, at the cost of a plan per scan more. Needs a live check first: import
+  errors per try at scale, and the time it takes.
 
 - Linux VMs, extensions: not tried on real resources.
 - Probes: more than 100 tries per scan are skipped (logged); a part from a local module (`./x`) isn't tried.
