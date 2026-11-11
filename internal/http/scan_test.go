@@ -109,7 +109,14 @@ func TestImportFlow(t *testing.T) {
 		t.Fatal("a resource that doesn't fit offers Import")
 	}
 
-	// the project sets the subnet, keep own: the imported VM keeps its own, in another subnet
+	// the project sets the subnet: importing would move the VM's NIC there (in place, not a replacement), the form warns
+	if rec := post(h, "/projects/default/environment", url.Values{"template": {tpl}, "input": {"subnet_id"}, "value": {"/project"}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("environment value: %d", rec.Code)
+	}
+	if form := get(h, link).Body.String(); !strings.Contains(form, "The scan found <code>/found</code>: importing changes it") {
+		t.Fatalf("no warning for a project value that changes what was found:\n%s", form)
+	}
+	// keep own: the imported VM keeps its own, in another subnet
 	if rec := post(h, "/projects/default/environment", url.Values{"template": {tpl}, "input": {"subnet_id"}, "value": {"/project"}, "keep_own": {"on"}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("environment value: %d %s", rec.Code, rec.Body.String())
 	}

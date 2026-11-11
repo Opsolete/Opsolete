@@ -97,13 +97,25 @@ Rejected:
   `7 to import, 0 to add, 0 to change, 0 to destroy`, applied, next plan without changes; a 4.0.0 deployment
   upgrades with moves only.
 
+## Live check (November 2026, after the review)
+
+- The scan with `virtualmachine` 5.0.0 on the portal-made `test-vm` (subscription-wide, 3 resource groups): 34 s;
+  the VM with its NIC, data disk and attachment, schedule, NSG and its association; fit `7 to import, 0 to add,
+  0 to change, 0 to destroy`. `terraform query` itself: 3 s.
+- A project subnet without *keep own*: the import plan moves the NIC to it **in place** (`1 to change`), which the
+  replace guard doesn't stop: the form now warns when a project value differs from what was found. With *keep own*:
+  `7 to import, 0 to change`.
+- The one-pipeline idea (below), tried by hand: an import plan's "before" equals the query's attributes (58 of 58,
+  but write-only ones), and azurerm refuses a Windows VM imported as Linux by itself (no `requireByType` needed). But
+  it took 9 s against the query's 3, the NIC needs a second round (its ID comes from the VM's attributes), and a
+  primary resource has no import block saying which cloud type to try from the inventory: Opsolete would need a
+  table of azurerm types to Azure types, provider knowledge it now gets from `terraform query`. Not worth it: kept
+  as it is.
+
 ## Open
 
-- One fill pipeline: a candidate's inputs come from `terraform query` attributes (`ScanEntry.Inputs`), its parts'
-  from the probe plan's "before" (`ProbeFill`), the same mapping twice. Every candidate a try (the VM imported as
-  Windows, else Linux, from the inventory) would drop `terraform query`, its retry for types the provider can't
-  list, `requireByType` and `IDFrom`, at the cost of a plan per scan more. Needs a live check first: import
-  errors per try at scale, and the time it takes.
+- One fill pipeline (inputs from `terraform query`, parts from the probe plan's "before"): checked live, not worth
+  it (see above).
 
 - Linux VMs, extensions: not tried on real resources.
 - Probes: more than 100 tries per scan are skipped (logged); a part from a local module (`./x`) isn't tried.
