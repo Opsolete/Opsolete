@@ -15,21 +15,31 @@
 }</pre>
 </div>
 
+{{if .Modules}}
+<div class="inline mb-1">
+  <input type="search" id="module-search" placeholder="Search by name, namespace, system or repository" aria-label="Search modules"
+    aria-describedby="module-search-hint" autocomplete="off" class="mw-24" data-filter="modules" aria-controls="modules">
+  <span id="module-search-hint" class="sr-hint">This table updates as you type. Type vcs or uploaded for how modules are published.</span>
+</div>
+{{end}}
 <div class="card flush">
-<table>
-<tr><th>Module</th><th>Latest version</th><th>Published</th></tr>
+<table id="modules">
+<tr><th>Module</th><th>Latest version</th><th>Published</th>{{if .VCS}}<th><span class="sr-hint">Actions</span></th>{{end}}</tr>
 {{range .Modules}}
-<tr>
+<tr data-filter-item="{{.Name}} {{.Namespace}} {{.System}} {{with .Linked}}vcs {{.Repo}} {{.Dir}}{{else}}uploaded{{end}}">
   <td><a href="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}"><strong>{{.Name}}</strong></a>
     {{with .Linked}}<span class="tag" title="published from {{.Repo}}{{with .Dir}}/{{.}}{{end}}{{with .TagPrefix}}, tags {{.}}*{{end}}">VCS</span>
     {{with .SyncError}}<span class="status errored" title="{{.}}">sync failed</span>{{end}}{{end}}
     <br><small class="muted">{{.Namespace}} · {{.System}}</small></td>
   <td><span class="tag">{{.Version}}</span>{{with .Older}} <small class="muted">+{{.}} older</small>{{end}}</td>
   <td class="nowrap">{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
+  {{if $.VCS}}<td class="nowrap">{{with .Linked}}<form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/sync" class="d-inline">
+    <button type="submit" class="secondary small"{{with .SyncedAt}} title="last sync {{.Format "2006-01-02 15:04"}}"{{end}}>Sync now</button></form>{{end}}</td>{{end}}
 </tr>
 {{else}}
-<tr><td colspan="3" class="empty">No modules published yet.{{if or .VCS .Upload}} <a href="/registry/publish">Publish a module →</a>{{end}}</td></tr>
+<tr><td colspan="{{if .VCS}}4{{else}}3{{end}}" class="empty">No modules published yet.{{if or .VCS .Upload}} <a href="/registry/publish">Publish a module →</a>{{end}}</td></tr>
 {{end}}
+{{if .Modules}}<tr id="modules-empty" hidden><td colspan="{{if .VCS}}4{{else}}3{{end}}" class="empty">No module matches.</td></tr>{{end}}
 </table>
 </div>
 

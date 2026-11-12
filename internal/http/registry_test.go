@@ -169,7 +169,8 @@ data "terraform_remote_state" "net" {
 	tplURL := rec.Header().Get("Location")
 	// the list finds it (name, namespace · system); deleting is on its page
 	if rec := get(h, "/registry"); !strings.Contains(rec.Body.String(), `href="/registry/`+ns+`/storage/azurerm/`) ||
-		!strings.Contains(rec.Body.String(), ns+" · azurerm") || strings.Contains(rec.Body.String(), "/delete") {
+		!strings.Contains(rec.Body.String(), ns+" · azurerm") || strings.Contains(rec.Body.String(), "/delete") ||
+		!strings.Contains(rec.Body.String(), `data-filter-item="storage `+ns+` azurerm uploaded"`) || !strings.Contains(rec.Body.String(), `id="modules-empty" hidden`) {
 		t.Fatalf("registry page: %s", rec.Body.String())
 	}
 	if page := get(h, "/registry/"+ns+"/storage/azurerm/1.2.0").Body.String(); !strings.Contains(page, `action="/registry/`+ns+`/storage/azurerm/delete"`) {
