@@ -78,6 +78,9 @@ func (r *Runner) Run(ctx, hard context.Context) error {
 		if ok && r.ack(hard, job) {
 			r.Execute(hard, job)
 		}
+		if r.Once { // one job, or none within one claim: another runner took it
+			break
+		}
 	}
 	r.Log.Info("runner stopped")
 	return nil

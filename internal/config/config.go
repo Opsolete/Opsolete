@@ -147,6 +147,7 @@ type Runner struct {
 	JobTimeout time.Duration // limit per run phase; then Terraform is interrupted
 	JobGrace   time.Duration // after any interrupt, how long Terraform may take to stop before it's killed
 	Sandbox    string        // auto | namespaces | off: each Terraform command in its own Linux namespaces (runner/sandbox_linux.go)
+	Once       bool          // run one job (or wait one claim for it) and exit: a pod per phase, started by an autoscaler
 	// Cost estimation with Infracost; off without an API key.
 	Infracost       string // infracost binary
 	InfracostAPIKey string
@@ -181,6 +182,9 @@ func LoadRunner() (Runner, error) {
 	// Terraform before they finish can leave real resources missing from state.
 	if c.JobGrace, err = time.ParseDuration(getenv("OPS_JOB_GRACE", "10m")); err != nil || c.JobGrace <= 0 {
 		return c, errors.New("OPS_JOB_GRACE must be a duration like 10m")
+	}
+	if c.Once, err = strconv.ParseBool(getenv("OPS_RUNNER_ONCE", "false")); err != nil {
+		return c, errors.New("OPS_RUNNER_ONCE must be true or false")
 	}
 	if c.Sandbox = getenv("OPS_SANDBOX", "auto"); !slices.Contains([]string{"auto", "namespaces", "off"}, c.Sandbox) {
 		return c, errors.New("OPS_SANDBOX must be auto, namespaces or off")

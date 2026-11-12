@@ -35,9 +35,15 @@ Network is not separated: a job reaches what the runner reaches. Block the cloud
 The sandbox needs unprivileged user namespaces, which not every host and container allows:
 
 - **NixOS:** on (the module sets `OPS_SANDBOX=namespaces` and lets the service create these namespaces), unless the kernel forbids them (`security.unprivilegedUsernsClone = false`, as in the hardened profile).
-- **Docker and Kubernetes:** the default seccomp profile forbids them. Run the runner with `--security-opt seccomp=unconfined` (Docker) or `seccompProfile: {type: Unconfined}` (Kubernetes; the Helm chart's `runner.sandbox: true`), or a custom profile that allows `clone`/`unshare` with `CLONE_NEWUSER`. On Ubuntu 23.10 and later, AppArmor also strips the capabilities of unprivileged user namespaces (`kernel.apparmor_restrict_unprivileged_userns`); the runner's start then says the sandbox doesn't work.
+- **Docker and Kubernetes:** the default seccomp and AppArmor profiles forbid them, and Ubuntu 23.10 and later restrict them for the whole host (`kernel.apparmor_restrict_unprivileged_userns`). Lifting that is a trade, not a free gain: unprivileged user namespaces make more of the kernel reachable to every process (many privilege escalations went through them), to win isolation between jobs. On Kubernetes, run [a pod per run phase](#a-pod-per-run-phase) instead: each job gets a fresh container (own file system, `/tmp`, processes and network namespace) and the node's defaults stay; add a sandboxed runtime (gVisor, Kata: `runtimeClassName`) to keep module code off the node's kernel too. With Docker, `--security-opt seccomp=unconfined` turns the sandbox on where the host allows user namespaces.
 
 `auto` uses the sandbox where it works and logs a warning where it doesn't; `namespaces` makes the runner refuse to start without it; `off` never uses it. The runner logs `job sandbox: namespaces` when it's on. Infracost runs outside the sandbox.
+
+## A pod per run phase
+
+On Kubernetes a runner can be a pod per run phase instead of a long-lived Deployment: with `OPS_RUNNER_ONCE=true` it claims one job, runs it and exits (or exits when one claim, 20 seconds, finds none: another pod took it). An autoscaler starts the pods: [KEDA](https://keda.sh)'s `ScaledJob` with the `metrics-api` scaler polls `GET /api/runner/v1/queue` with the runner's token (`{"queued": n}`, the phases its pool could claim now; not those waiting for a workspace's lock) and starts a Job per queued phase. The Helm chart does this with `runner.mode: scaledJob`.
+
+Every phase then starts clean: plan and apply run in different pods (the plan file goes through the server anyway), and nothing a job leaves, files or processes, outlives it. The costs: a pod start per phase (seconds, with the image cached), and providers downloaded per phase unless the pods share a cache volume (`TF_PLUGIN_CACHE_DIR` on a ReadWriteMany volume) or use a provider mirror. The pods share the runner's token, so they're one runner to the server.
 
 ## Runners and pools
 

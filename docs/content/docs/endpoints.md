@@ -219,6 +219,7 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 
 | Endpoint | Access | Purpose |
 |---|---|---|
+| `GET /api/runner/v1/queue` | runner token | `{"queued": n}`: how many phases the runner's pool could claim now (not those waiting for a workspace's lock); for an autoscaler that starts a one-shot runner per phase |
 | `POST /api/runner/v1/jobs/claim` | runner token | Long-polls for a job (up to 20 s); `204` if none |
 | `POST /api/runner/v1/jobs/{id}/ack` | runner token + lease | Acknowledges a claim (within 30 s) |
 | `POST /api/runner/v1/jobs/{id}/logs` | runner token + lease | Appends log output (at most 256 KB per request, else `413`); doubles as a heartbeat |

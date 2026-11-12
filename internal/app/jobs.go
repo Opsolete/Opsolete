@@ -51,6 +51,11 @@ func (a *App) StateToken(workspaceID, runID uuid.UUID) string {
 	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
 
+// QueuedJobs is how many phases runner could claim now, in its pool (storage.QueuedJobs).
+func (a *App) QueuedJobs(ctx context.Context, runner storage.Runner) (int, error) {
+	return a.Store.QueuedJobs(ctx, runner.Pool)
+}
+
 // ClaimJob hands runner the next queued job, JSON-encoded (at most runnerapi.MaxJobSize), or
 // ok=false if there is none. The runner must acknowledge it (AckJob) within AckWindow, or
 // ReapLeases queues it again: the response may never have reached the runner. A claimed job that can't be assembled (variables that don't open, no

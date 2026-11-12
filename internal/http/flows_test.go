@@ -48,6 +48,9 @@ func (r *fakeRunner) jobCall(method, what, body string) int {
 // claim claims and acknowledges the next job, which must be phase of run runID.
 func (r *fakeRunner) claim(t *testing.T, runID, phase string) runnerapi.Job {
 	t.Helper()
+	if n := r.queued(t); n < 1 {
+		t.Fatalf("claim %s of %s: queue %d", phase, runID, n)
+	}
 	rec := r.call("POST", "/jobs/claim", `{"runner":"r1"}`)
 	var j runnerapi.Job
 	if json.Unmarshal(rec.Body.Bytes(), &j); rec.Code != http.StatusOK || j.RunID != runID || j.Phase != phase {
@@ -63,9 +66,23 @@ func (r *fakeRunner) claim(t *testing.T, runID, phase string) runnerapi.Job {
 // noJob: nothing is claimable.
 func (r *fakeRunner) noJob(t *testing.T, why string) {
 	t.Helper()
+	if n := r.queued(t); n != 0 { // an autoscaler would start a runner for nothing
+		t.Fatalf("%s: queue %d", why, n)
+	}
 	if rec := r.call("POST", "/jobs/claim", `{"runner":"r2"}`); rec.Code != http.StatusNoContent {
 		t.Fatalf("%s: claim got %d %s", why, rec.Code, rec.Body.String())
 	}
+}
+
+// queued is what the runner API's queue says (runnerapi.Queue).
+func (r *fakeRunner) queued(t *testing.T) int {
+	t.Helper()
+	rec := r.call("GET", "/queue", "")
+	var q runnerapi.Queue
+	if err := json.Unmarshal(rec.Body.Bytes(), &q); rec.Code != http.StatusOK || err != nil {
+		t.Fatalf("queue: %d %s", rec.Code, rec.Body.String())
+	}
+	return q.Queued
 }
 
 // finish reports the job's result, which must be accepted.

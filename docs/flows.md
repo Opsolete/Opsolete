@@ -496,6 +496,7 @@ Test paths are relative to `internal/`, except `cmd/opsolete/…` (from the repo
 **Q7. Job isolation and cleanup** — `full` (Linux)
 - Own temp dir, `HOME` and `TMPDIR`; job env on top of runner env, `OPS_*` scrubbed; every leftover process killed after each job; the job sandbox (`OPS_SANDBOX`): each Terraform command in its own user/mount/PID/IPC namespaces, a private `/tmp` with only the job's directories, PID 1 of its namespace.
 - Coverage: `runner/runner_test.go:TestJobHome`, `TestJobEnv`; `runner/isolate_linux_test.go:TestJobProcessesKilled`, `runner/sandbox_linux_test.go:TestSandbox` (Linux only; `just test-linux`, whose last pass runs every runner test in the sandbox, privileged); `nix/test.nix` (the sandbox works under the NixOS unit's hardening). Missing: network separation (the chart's NetworkPolicy blocks the metadata endpoint).
+- A pod per run phase (Kubernetes): `OPS_RUNNER_ONCE` runs one job or one empty claim and exits; `GET /api/runner/v1/queue` counts what the runner's pool could claim, for KEDA. Coverage: `runner/runner_test.go:TestOnce`; the queue against every claim and every "nothing claimable" case of the HTTP flow tests (`http/flows_test.go:fakeRunner.claim`, `noJob`: locked workspace, other pool, local workspace, drift). Missing: KEDA itself (the chart's `scaledJob` mode is render-checked only).
 
 **Q8. Log shipping, masking, caps** — `full`
 - ~1 s batches cut at line ends; sensitive values and signed URLs masked; 10 MB per run; 256 KB per post.

@@ -56,6 +56,20 @@ func (q *Queries) ClaimableRun(ctx context.Context, pool string) (ClaimableRunRo
 	return i, err
 }
 
+const claimableRuns = `-- name: ClaimableRuns :one
+SELECT count(*)::int FROM runs r JOIN workspaces w ON w.id = r.workspace_id JOIN projects p ON p.id = w.project_id
+WHERE r.status IN ('plan_queued', 'apply_queued') AND p.runner_pool = $1::text
+    AND (r.action IN ('plan', 'assess') OR w.state_lock IS NULL)
+`
+
+// How many phases ClaimableRun could hand out to pool now (a per-run pod autoscaler's queue length).
+func (q *Queries) ClaimableRuns(ctx context.Context, pool string) (int32, error) {
+	row := q.db.QueryRow(ctx, claimableRuns, pool)
+	var column_1 int32
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const clearRunner = `-- name: ClearRunner :exec
 UPDATE runs SET runner = NULL WHERE id = $1::uuid
 `

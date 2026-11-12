@@ -299,3 +299,33 @@ func TestUnknownAction(t *testing.T) {
 		t.Fatalf("%+v", res)
 	}
 }
+
+// TestOnce: a one-shot runner (a pod per phase) exits after one job, or after one claim that finds none (another
+// runner took it); a claim that fails is retried.
+func TestOnce(t *testing.T) {
+	f := &fakeServer{}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	r := New(config.Runner{ServerURL: u, Token: "tok", Name: "test", JobTimeout: time.Minute, JobGrace: time.Minute, Once: true},
+		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	claims := 0
+	f.claim = func(w http.ResponseWriter, _ *http.Request) {
+		if claims++; claims == 1 {
+			w.Write([]byte(`{"run_id": "r1", "lease_id": `)) // cut off: not acknowledged, claimed again
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+	if err := r.Run(context.Background(), context.Background()); err != nil || claims != 2 {
+		t.Fatalf("no job: %v, claims %d", err, claims)
+	}
+	claims = 0
+	f.claim = func(w http.ResponseWriter, _ *http.Request) {
+		claims++
+		json.NewEncoder(w).Encode(job("o1", "plan", "teleport", "", nil))
+	}
+	if err := r.Run(context.Background(), context.Background()); err != nil || claims != 1 || f.finish == nil || f.finish.Status != "failed" {
+		t.Fatalf("one job: %v, claims %d, result %+v", err, claims, f.finish)
+	}
+}
