@@ -470,7 +470,7 @@ output "message" { value = module.inner.message }
 	}
 	t.Run("promote: the preview says it runs twice; the first run destroys the third template only, with its provider block", func(t *testing.T) {
 		promote(t, "<code>module."+dev[0].Name+"</code>", `<span class="tag">1.0.0</span> → <span class="tag">1.1.0</span>`,
-			`<span class="change create">added</span>`, `<span class="change delete">removed</span>`, "Destroys the 1 resource it manages.",
+			`<span class="change pill create">added</span>`, `<span class="change pill delete">removed</span>`, "Destroys the 1 resource it manages.",
 			"This promotion runs twice: first a destroy of <code>module.third</code> (1 resource)")
 		await(t, storage.NeedsConfirmation) // auto-apply, but a promotion waits
 		if got := changes(t); len(got) != 1 || got[addr("third")] != "delete" {

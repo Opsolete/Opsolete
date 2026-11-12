@@ -22,6 +22,7 @@ type promotePage struct {
 	Targets app.PromoteTargets // the picker's choices
 	P       *app.Promotion     // the preview; nil: pick a target
 	To      app.PromoteTarget  // as requested
+	Empty   bool               // the source has no templates: nothing to promote
 	F       *formState
 }
 
@@ -47,7 +48,8 @@ func (s *Server) renderPromote(w http.ResponseWriter, r *http.Request, status in
 	if !ok {
 		return
 	}
-	page := &promotePage{Page: workspaceNav(ws.Name, "promote", "", level == app.LevelOperate), Source: ws.Name, To: to, F: f}
+	page := &promotePage{Page: workspaceNav(ws.Name, "promote", "", level == app.LevelOperate), Source: ws.Name, To: to, F: f,
+		Empty: ws.Templates == 0}
 	if to.Name != "" || to.New {
 		p, err := s.App.PreviewPromotion(r.Context(), actor(r), ws.Name, to, values)
 		if err == nil {

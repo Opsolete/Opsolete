@@ -127,7 +127,7 @@ func TestPageModels(t *testing.T) {
 		"vcs.html":     {&vcsPage{}, &vcsPage{Connections: []storage.VCSConnection{conn}, Error: "x"}},
 		"vcsnew.html":  {&newConnection{}, &newConnection{Step: 1}, &newConnection{Step: 2, Form: map[string]string{}}, &newConnection{Step: 3, Conn: conn, Picker: picks, Edit: true}},
 		"catalog.html": {&catalogPage{}, &catalogPage{Catalog: &storage.TemplateCatalog{Repo: "o/r"}, Conns: []storage.VCSConnection{conn}, Repos: []string{"o/r"}, Count: 1, Saved: true}},
-		"promote.html": {&promotePage{},
+		"promote.html": {&promotePage{}, &promotePage{Page: workspaceNav("ws", "promote", "", true), Source: "ws", Empty: true},
 			&promotePage{Page: workspaceNav("ws", "promote", "", false), Source: "ws", Targets: app.PromoteTargets{Workspaces: []storage.Workspace{ws}, Projects: []storage.Project{{Name: "p"}}},
 				F: &formState{Name: "target", Fields: map[string]string{"new": "bad"}}},
 			&promotePage{Page: workspaceNav("ws", "promote", "", true), Source: "ws", P: &app.Promotion{Source: ws, Target: storage.Workspace{Name: "t", ProjectName: "p"}, Changes: 3,
