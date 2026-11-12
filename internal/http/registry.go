@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
@@ -95,22 +96,22 @@ func (s *Server) moduleArchive(w http.ResponseWriter, r *http.Request) {
 	w.Write(b)
 }
 
-// registryPage lists the registry's modules (registry.html).
+// registryPage lists the registry's modules (registry.html): to find one. What to do with it (create a template,
+// sync, unlink, delete) is on its own page (module.html).
 type registryPage struct {
 	Page
-	Modules   []latestModule
-	Templates bool // the template builder is on: offer "Create template"
-	Upload    bool
-	VCS       bool // VCS publishing is on and the user is an admin
-	Admin     bool // may delete modules
-	Linked    []storage.VCSModule
-	Host      string
+	Modules []latestModule
+	Upload  bool
+	VCS     bool // VCS publishing is on and the user is an admin
+	Host    string
 }
 
-// latestModule is a module's newest version and how many older ones it has.
+// latestModule is a module's newest version, how many older ones it has, and its repository (VCS admins only; nil
+// otherwise or when uploaded).
 type latestModule struct {
 	storage.Module
-	Older int
+	Older  int
+	Linked *storage.VCSModule
 }
 
 // latestVersions keeps each module's highest semver version (not the latest upload: a backport
@@ -138,12 +139,20 @@ func (s *Server) registryPage(w http.ResponseWriter, r *http.Request) {
 		s.uiError(w, r, err)
 		return
 	}
-	p := &registryPage{Page: Page{Section: "registry"}, Modules: latestVersions(mods), Templates: s.canEditTemplates(r), Upload: s.canUpload(r), Host: s.App.Registry.PublicURL.Host,
-		VCS: s.Features.VCS && auth.FromContext(r.Context()).Admin(), Admin: auth.FromContext(r.Context()).Admin()}
+	p := &registryPage{Page: Page{Section: "registry"}, Modules: latestVersions(mods), Upload: s.canUpload(r), Host: s.App.Registry.PublicURL.Host,
+		VCS: s.Features.VCS && auth.FromContext(r.Context()).Admin()}
 	if p.VCS {
-		if p.Linked, err = s.App.VCSModules(r.Context(), actor(r)); err != nil {
+		linked, err := s.App.VCSModules(r.Context(), actor(r))
+		if err != nil {
 			s.uiError(w, r, err)
 			return
+		}
+		for i, m := range p.Modules {
+			if j := slices.IndexFunc(linked, func(l storage.VCSModule) bool {
+				return l.Namespace == m.Namespace && l.Name == m.Name && l.System == m.System
+			}); j >= 0 {
+				p.Modules[i].Linked = &linked[j]
+			}
 		}
 	}
 	s.render(w, r, http.StatusOK, "registry.html", p)

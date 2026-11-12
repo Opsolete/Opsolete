@@ -15,47 +15,32 @@
 }</pre>
 </div>
 
+{{if .Modules}}
+<div class="inline mb-1">
+  <input type="search" id="module-search" placeholder="Search by name, namespace, system or repository" aria-label="Search modules"
+    aria-describedby="module-search-hint" autocomplete="off" class="mw-24" data-filter="modules" aria-controls="modules">
+  <span id="module-search-hint" class="sr-hint">This table updates as you type. Type vcs or uploaded for how modules are published.</span>
+</div>
+{{end}}
 <div class="card flush">
-<table>
-<tr><th>Module</th><th>Latest version</th><th>Variables</th><th>Uploaded</th>{{if .Templates}}<th></th>{{end}}{{if .Admin}}<th></th>{{end}}</tr>
-{{$editor := .Templates}}{{$host := .Host}}{{$admin := .Admin}}
+<table id="modules">
+<tr><th>Module</th><th>Latest version</th><th>Published</th>{{if .VCS}}<th><span class="sr-hint">Actions</span></th>{{end}}</tr>
 {{range .Modules}}
-<tr>
-  <td><a href="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}"><code>{{$host}}/{{.Namespace}}/{{.Name}}/{{.System}}</code></a></td>
+<tr data-filter-item="{{.Name}} {{.Namespace}} {{.System}} {{with .Linked}}vcs {{.Repo}} {{.Dir}}{{else}}uploaded{{end}}">
+  <td><a href="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}"><strong>{{.Name}}</strong></a>
+    {{with .Linked}}<span class="tag" title="published from {{.Repo}}{{with .Dir}}/{{.}}{{end}}{{with .TagPrefix}}, tags {{.}}*{{end}}">VCS</span>
+    {{with .SyncError}}<span class="status errored" title="{{.}}">sync failed</span>{{end}}{{end}}
+    <br><small class="muted">{{.Namespace}} · {{.System}}</small></td>
   <td><span class="tag">{{.Version}}</span>{{with .Older}} <small class="muted">+{{.}} older</small>{{end}}</td>
-  <td>{{len .Variables}}</td>
   <td class="nowrap">{{.UploadedAt.Format "2006-01-02 15:04"}}</td>
-  {{if $editor}}<td class="nowrap"><a href="/templates/new?module={{.Namespace}}/{{.Name}}/{{.System}}/{{.Version}}">Create template</a></td>{{end}}
-  {{if $admin}}<td class="nowrap"><form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/delete" class="d-inline"
-      data-confirm="Delete {{.Namespace}}/{{.Name}}/{{.System}} and all its versions? Workspaces using it can no longer download it.">
-      <button type="submit" class="danger small">Delete</button></form></td>{{end}}
+  {{if $.VCS}}<td class="nowrap">{{with .Linked}}<form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/sync" class="d-inline">
+    <button type="submit" class="secondary small"{{with .SyncedAt}} title="last sync {{.Format "2006-01-02 15:04"}}"{{end}}>Sync now</button></form>{{end}}</td>{{end}}
 </tr>
 {{else}}
-<tr><td colspan="{{if and .Templates .Admin}}6{{else if or .Templates .Admin}}5{{else}}4{{end}}" class="empty">No modules published yet.{{if or .VCS .Upload}} <a href="/registry/publish">Publish a module →</a>{{end}}</td></tr>
+<tr><td colspan="{{if .VCS}}4{{else}}3{{end}}" class="empty">No modules published yet.{{if or .VCS .Upload}} <a href="/registry/publish">Publish a module →</a>{{end}}</td></tr>
 {{end}}
+{{if .Modules}}<tr id="modules-empty" hidden><td colspan="{{if .VCS}}4{{else}}3{{end}}" class="empty">No module matches.</td></tr>{{end}}
 </table>
 </div>
-
-{{if .VCS}}{{with .Linked}}
-<h2>Published from VCS</h2>
-<div class="card flush">
-<table>
-<tr><th>Module</th><th>Repository</th><th>Last sync</th><th></th></tr>
-{{range .}}
-<tr>
-  <td><code>{{.Namespace}}/{{.Name}}/{{.System}}</code></td>
-  <td><span class="tag">{{.Connection}}</span> {{.Repo}}{{with .Dir}} <code>/{{.}}</code>{{end}}{{with .TagPrefix}} <span class="muted">tags</span> <code>{{.}}*</code>{{end}}</td>
-  <td>{{with .SyncedAt}}{{.Format "2006-01-02 15:04"}}{{else}}<span class="muted">never</span>{{end}}
-    {{with .SyncError}}<p class="err">{{.}}</p>{{end}}</td>
-  <td class="nowrap"><form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/sync" class="d-inline"><button type="submit" class="secondary small">Sync now</button></form>
-    <form method="post" action="/registry/{{.Namespace}}/{{.Name}}/{{.System}}/unlink" class="d-inline"
-      data-confirm="Unlink this module from its repository? New tags are no longer published; published versions stay.">
-      <button type="submit" class="danger small">Unlink</button></form></td>
-</tr>
-{{end}}
-</table>
-</div>
-<p class="hint">Every semver tag of these repositories becomes a module version, checked every 5 minutes. To change a module's repository or folder, unlink it and publish it again.</p>
-{{end}}{{end}}
 
 {{template "bottom"}}

@@ -167,9 +167,14 @@ data "terraform_remote_state" "net" {
 		t.Fatalf("save registry template: %d %s", rec.Code, rec.Body.String())
 	}
 	tplURL := rec.Header().Get("Location")
-	if rec := get(h, "/registry"); !strings.Contains(rec.Body.String(), "ops.example.com/"+ns+"/storage/azurerm") ||
-		!strings.Contains(rec.Body.String(), `action="/registry/`+ns+`/storage/azurerm/delete"`) {
+	// the list finds it (name, namespace · system); deleting is on its page
+	if rec := get(h, "/registry"); !strings.Contains(rec.Body.String(), `href="/registry/`+ns+`/storage/azurerm/`) ||
+		!strings.Contains(rec.Body.String(), ns+" · azurerm") || strings.Contains(rec.Body.String(), "/delete") ||
+		!strings.Contains(rec.Body.String(), `data-filter-item="storage `+ns+` azurerm uploaded"`) || !strings.Contains(rec.Body.String(), `id="modules-empty" hidden`) {
 		t.Fatalf("registry page: %s", rec.Body.String())
+	}
+	if page := get(h, "/registry/"+ns+"/storage/azurerm/1.2.0").Body.String(); !strings.Contains(page, `action="/registry/`+ns+`/storage/azurerm/delete"`) {
+		t.Fatalf("module page: no delete: %s", page)
 	}
 
 	// Delete: refused while a template deploys the module, then removes every version.

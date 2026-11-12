@@ -228,8 +228,23 @@ label:is(:hover, :focus-within, :has(+ :focus)) > .tip-text { opacity: 1; }
 .fcard:has(.ftype :is([value="bool"], [value="select"]):checked) .only-typed,
 .fcard:not(:has(.ftype :is([value="list"], [value="object"]):checked)) .only-list,
 .fcard:has(.ftype :is([value="list"], [value="string_list"], [value="map"], [value="object"]):checked) :is(.not-bool, .only-string, .checks) { display: none; }
-.lfields { display: grid; gap: .3rem; }
-.lfield { display: grid; grid-template-columns: 9rem 7rem 1fr; gap: .5rem; align-items: center; }
+/* a list's or group's fields (builder): a small table across the card, the label input taking the rest of a row;
+   in a narrow card (its own width, not the window's) the input goes under the name */
+.only-list { grid-column: 1 / -1; }
+.lfields { display: grid; max-width: 48rem; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
+  container-type: inline-size; }
+.lfield { display: grid; grid-template-columns: minmax(6rem, 1fr) minmax(4.5rem, auto) minmax(8rem, 2fr); gap: .25rem .75rem;
+  align-items: center; padding: .35rem .75rem; border-top: 1px solid var(--border); }
+.lfield:first-child { border-top: 0; }
+.lfield code { background: none; padding: 0; overflow-wrap: anywhere; }
+.lfield input { min-width: 0; width: 100%; }
+.ltype { color: var(--muted); font-size: .8rem; }
+.lhead { padding-block: .3rem; background: var(--code); color: var(--muted); font-size: .75rem; font-weight: 600; }
+@container (max-width: 26rem) {
+  .lfield { grid-template-columns: 1fr auto; }
+  .lfield input { grid-column: 1 / -1; }
+  .lhead span:last-child { display: none; }
+}
 .actions.sticky { position: sticky; bottom: 0; z-index: 2; background: var(--bg); padding: .9rem 0; border-top: 1px solid var(--border); }
 @media (max-width: 52rem) {
   .bgrid { grid-template-columns: 1fr; }
