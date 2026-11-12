@@ -4,6 +4,7 @@
 //	opsolete runner                   execute deployments (no database needed)
 //	opsolete token <name>             create a registry API token
 //	opsolete rotate-key               re-seal everything from SECRET_KEY_PREVIOUS to SECRET_KEY
+//	opsolete unseal-state <file>      print a state a runner kept sealed (OPS_RUNNER_TOKEN: that runner's)
 package main
 
 import (
@@ -39,8 +40,8 @@ import (
 
 func main() {
 	out := os.Stdout
-	if len(os.Args) > 1 && os.Args[1] == "token" {
-		out = os.Stderr // stdout must carry only the token: scripts capture it with $(...)
+	if len(os.Args) > 1 && (os.Args[1] == "token" || os.Args[1] == "unseal-state") {
+		out = os.Stderr // stdout must carry only the token or state: scripts capture or pipe it
 	}
 	log := slog.New(slog.NewJSONHandler(out, nil))
 	slog.SetDefault(log) // audit entries are streamed through the default logger
@@ -54,8 +55,10 @@ func main() {
 		err = createToken()
 	case os.Args[1] == "rotate-key" && len(os.Args) == 2:
 		err = rotateKey(log)
+	case os.Args[1] == "unseal-state" && len(os.Args) == 3:
+		err = unsealState(os.Args[2])
 	default:
-		err = errors.New("usage: opsolete [runner | token <name> | rotate-key]")
+		err = errors.New("usage: opsolete [runner | token <name> | rotate-key | unseal-state <file>]")
 	}
 	if err != nil {
 		log.Error("fatal", "err", err)
@@ -145,6 +148,20 @@ func createToken() error {
 	}
 	fmt.Println(token)
 	return nil
+}
+
+// unsealState prints a state an apply couldn't save, kept sealed by a runner, for `terraform state push -`.
+func unsealState(file string) error {
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	plain, err := runner.UnsealState(b, os.Getenv("OPS_RUNNER_TOKEN"))
+	if err != nil {
+		return fmt.Errorf("unseal %s (OPS_RUNNER_TOKEN must be the token of the runner that kept it): %w", file, err)
+	}
+	_, err = os.Stdout.WriteString(plain)
+	return err
 }
 
 // runRunner: the first SIGTERM/SIGINT stops claiming and lets the current job finish
