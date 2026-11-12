@@ -19,6 +19,7 @@ const maxLogChunk = 256 << 10 // per request
 // Runner API: runners pull work over HTTPS with their own token (app.RunnerByToken), so they need no
 // database access and no inbound connectivity. The protocol's rules are app's (jobs.go).
 func (s *Server) runnerRoutes(mux routes) {
+	mux.Handle("GET "+runnerapi.Prefix+"/queue", s.requireRunner(s.queue))
 	mux.Handle("POST "+runnerapi.Prefix+"/jobs/claim", s.requireRunner(s.claimJob))
 	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/ack", s.requireRunner(s.jobAck))
 	mux.Handle("POST "+runnerapi.Prefix+"/jobs/{id}/logs", s.requireRunner(s.jobLogs))
@@ -52,6 +53,16 @@ func (s *Server) requireRunner(next http.HandlerFunc) http.Handler {
 func runnerOf(r *http.Request) storage.Runner {
 	runner, _ := r.Context().Value(runnerKey{}).(storage.Runner)
 	return runner
+}
+
+func (s *Server) queue(w http.ResponseWriter, r *http.Request) {
+	n, err := s.App.QueuedJobs(r.Context(), runnerOf(r))
+	if err != nil {
+		s.runnerError(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(runnerapi.Queue{Queued: n})
 }
 
 func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {

@@ -10,6 +10,12 @@ WHERE r.status IN ('plan_queued', 'apply_queued') AND p.runner_pool = sqlc.arg(p
     AND (r.action IN ('plan', 'assess') OR w.state_lock IS NULL)
 ORDER BY r.updated_at FOR UPDATE OF r SKIP LOCKED LIMIT 1;
 
+-- name: ClaimableRuns :one
+-- How many phases ClaimableRun could hand out to pool now (a per-run pod autoscaler's queue length).
+SELECT count(*)::int FROM runs r JOIN workspaces w ON w.id = r.workspace_id JOIN projects p ON p.id = w.project_id
+WHERE r.status IN ('plan_queued', 'apply_queued') AND p.runner_pool = sqlc.arg(pool)::text
+    AND (r.action IN ('plan', 'assess') OR w.state_lock IS NULL);
+
 -- name: LeaseRun :one
 UPDATE runs SET runner = sqlc.arg(runner)::text, lease_id = sqlc.arg(lease_id)::text,
     lease_until = now() + make_interval(secs => sqlc.arg(lease_secs)::float8)

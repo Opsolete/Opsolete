@@ -33,6 +33,13 @@ type Job struct {
 	Modules     []WorkspaceTemplate // templates added to the workspace
 }
 
+// QueuedJobs is how many phases runners of pool could claim now (ClaimJob's choice: not those waiting for a
+// workspace's state lock).
+func (s *Store) QueuedJobs(ctx context.Context, pool string) (int, error) {
+	n, err := s.q.ClaimableRuns(ctx, pool)
+	return int(n), err
+}
+
 // ClaimJob hands the longest-waiting queued phase (plan or confirmed apply) of a workspace whose project uses
 // runner's pool to runner, or returns ok=false if there is none. SKIP LOCKED lets any number of runners claim without handing out a
 // job twice. Runs of a locked workspace (a lock from the UI, the CLI or a rollback) wait until it

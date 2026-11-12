@@ -322,6 +322,7 @@ func accessRows() []accessRow {
 	tfstate := `{"version":4,"serial":2,"lineage":"acc","resources":[]}`
 	return []accessRow{
 		// Runner API and state backend first: the claimed job is the only one in the queue.
+		{"GET " + runnerapi.Prefix + "/queue", runnerapi.Prefix + "/queue", "", onRunner, []int{401, 401, 200}, false},
 		{"POST " + runnerapi.Prefix + "/jobs/claim", runnerapi.Prefix + "/jobs/claim", `{"runner":"acc"}`, onRunner, []int{401, 401, 204}, false},
 		{"POST " + job + "/ack", run + "/ack", "", onRunner, []int{401, 401, 204}, false}, // before any other call for the job
 		{"POST " + job + "/heartbeat", run + "/heartbeat", "", onRunner, []int{401, 401, 204}, false},

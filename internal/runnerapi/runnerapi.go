@@ -27,6 +27,12 @@ const (
 	MaxJobSize = 16 << 20
 )
 
+// Queue is GET Prefix+"/queue": how many phases the calling runner's pool could claim now; an autoscaler that
+// starts a one-shot runner per phase (KEDA's metrics-api scaler, valueLocation queued) polls it.
+type Queue struct {
+	Queued int `json:"queued"`
+}
+
 // ClaimRequest is the claim's body. The server names the runner by its token, not by Runner (logged on the
 // runner only).
 type ClaimRequest struct {

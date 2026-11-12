@@ -99,7 +99,7 @@ func TestLoadRunner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Token != "secret" || c.JobTimeout.String() != "1h0m0s" || c.JobGrace.String() != "10m0s" || c.Sandbox != "auto" {
+	if c.Token != "secret" || c.JobTimeout.String() != "1h0m0s" || c.JobGrace.String() != "10m0s" || c.Sandbox != "auto" || c.Once {
 		t.Fatalf("runner config: %+v", c)
 	}
 	if _, set := os.LookupEnv("OPS_RUNNER_TOKEN"); set {
@@ -119,6 +119,12 @@ func TestLoadRunner(t *testing.T) {
 	}
 	if _, err := LoadRunner(); err == nil || !strings.Contains(err.Error(), "OPS_SANDBOX") {
 		t.Fatalf("OPS_SANDBOX=on: err = %v", err)
+	}
+	for k, val := range map[string]string{"OPS_SERVER_URL": "http://opsolete:8080", "OPS_RUNNER_TOKEN": "secret", "OPS_SANDBOX": "", "OPS_RUNNER_ONCE": "yes"} {
+		t.Setenv(k, val)
+	}
+	if _, err := LoadRunner(); err == nil || !strings.Contains(err.Error(), "OPS_RUNNER_ONCE") {
+		t.Fatalf("OPS_RUNNER_ONCE=yes: err = %v", err)
 	}
 }
 
