@@ -72,15 +72,13 @@ func (a *App) rolloutPlan(t templates.Template, uses []storage.TemplateUse, env 
 			continue
 		}
 		raw, _ := FormDefaults(t, u.Inputs)
-		locked := env[u.WorkspaceID].Locked(t, u.Inputs) // as a configure form saves it
-		raw = lockInputs(raw, locked)
-		vals, errs := t.Validate(raw)
-		if err := a.SealInputs(t, raw, vals, u.Inputs, errs, u.WorkspaceID, u.Module); err != nil {
+		sv, err := a.save(formSave{T: t, Raw: raw, Old: u.Inputs, Follows: u.Follows, Env: env[u.WorkspaceID],
+			Workspace: u.WorkspaceID, Module: u.Module}) // as a configure form saves it
+		if err != nil {
 			return nil, nil, err
 		}
-		keepOwn(vals, errs, locked, u.Inputs)
 		for _, in := range t.Inputs { // in the form's order
-			if errs[in.Name] != "" {
+			if sv.Errs[in.Name] != "" {
 				row.Missing = append(row.Missing, in.Name)
 			}
 		}
@@ -92,7 +90,7 @@ func (a *App) rolloutPlan(t templates.Template, uses []storage.TemplateUse, env 
 		default:
 			row.State = RolloutReady
 			ups[u.WorkspaceID] = append(ups[u.WorkspaceID], storage.TemplateUpgrade{TemplateID: t.ID, Module: u.Module,
-				ModuleSource: t.Module.Source, ModuleRef: t.Module.Ref, Inputs: vals, From: u})
+				ModuleSource: t.Module.Source, ModuleRef: t.Module.Ref, Inputs: sv.Vals, Follows: sv.Follows, From: u})
 		}
 	}
 	return rows, ups, nil

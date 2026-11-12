@@ -126,8 +126,12 @@ func TestPageModels(t *testing.T) {
 				Modules: []app.PromoteModule{{Module: "a", Change: app.PromoteRemove, Resources: 2, FromRef: "v1"},
 					{Module: "b", Change: app.PromoteUpdate, FromRef: "v1", ToRef: "v2", FromSrc: "s", ToSrc: "s", Inputs: []app.PromoteInput{
 						{Input: tpl.Inputs[0], Env: app.EnvProject, To: "s"}, {Input: tpl.Inputs[1], Kept: true}, {Input: templates.Input{Name: "n"}, From: "1", To: "2"}}},
-					{Module: "c", Change: app.PromoteAdd, ToRef: "v2", Inputs: []app.PromoteInput{{Input: tpl.Inputs[0], Field: "c.size", Value: "s"},
-						{Input: tpl.Inputs[1], Field: "c.pw"}, {Input: templates.Input{Name: "on", Type: "bool"}, Field: "c.on"}}}}},
+					{Module: "c", Change: app.PromoteAdd, ToRef: "v2", Inputs: []app.PromoteInput{
+						{Input: tpl.Inputs[0], Field: "c.size", Value: "s", Form: app.Field{Input: tpl.Inputs[0], ID: "c.size", Label: "c: Size", Value: "s", Visible: true}},
+						{Input: tpl.Inputs[1], Field: "c.pw", Form: app.Field{Input: tpl.Inputs[1], ID: "c.pw", Label: "c: Password", Visible: true, Hint: "Sensitive: t has none."}},
+						{Input: templates.Input{Name: "on", Type: "bool"}, Field: "c.on", Form: app.Field{Input: templates.Input{Name: "on", Type: "bool"}, ID: "c.on", Label: "c: On", Visible: true}},
+						{Input: templates.Input{Name: "disks", Type: "list"}, Field: "c.disks", Form: app.Field{Input: templates.Input{Name: "disks", Type: "list",
+							Fields: []templates.Input{{Name: "size", Type: "number"}}}, ID: "c.disks", Label: "c: Disks", Value: `[{"size":32}]`, Visible: true}}}}}},
 				F: &formState{Name: "promote", Fields: map[string]string{"c.pw": "required"}}},
 			&promotePage{Source: "ws", P: &app.Promotion{New: true, Modules: []app.PromoteModule{{Module: "a", Change: app.PromoteReplace, Invalid: []string{"x"}}}, Changes: 1}}},
 		"rollout.html": {&rolloutPage{}, &rolloutPage{T: tpl, Rollout: &storage.Rollout{Status: "paused"}, Projects: []storage.Project{{Name: "p"}}}},
@@ -136,7 +140,7 @@ func TestPageModels(t *testing.T) {
 			&formPage{Page: workspaceNav("ws", "templates", "", true), T: tpl, Configure: &ws, Module: "vm_1", Set: map[string]bool{"pw": true}},
 			&formPage{T: tpl, Values: map[string]string{"size": "s"}, Projects: []storage.Project{{Name: "p"}, {Name: "q"}}, EnvReload: true,
 				Locked: map[string]string{"size": "s"}, LockedBy: "p"},
-			&formPage{T: tpl, Values: map[string]string{"size": "s"}, Projects: []storage.Project{{Name: "p"}}, ImportURL: "/x?import=1", CreateURL: "/x", Importing: true},
+			&formPage{T: tpl, Values: map[string]string{"size": "s"}, Projects: []storage.Project{{Name: "p"}}, ImportURL: "/x?import=1", CreateURL: "/x"},
 			&formPage{Page: workspaceNav("ws", "templates", "", true), T: tpl, Configure: &ws, Adding: true, Found: map[string]any{"size": "m"},
 				Locked: map[string]string{"size": "s"}, LockedBy: "p"}},
 	}

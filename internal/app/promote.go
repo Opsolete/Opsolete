@@ -56,6 +56,7 @@ type PromoteInput struct {
 	Kept     bool   // sensitive: the target's value is kept
 	Field    string // asked for: the form field (module.input); "" not asked
 	Value    string // asked for: the field's value (posted, else the input's default)
+	Form     Field  // asked for: the field as the form draws it
 }
 
 // PromoteModule is one module of the target and what the promotion does with it.
@@ -70,6 +71,7 @@ type PromoteModule struct {
 	Invalid        []string // problems with copied values that no field fixes: the promotion is refused
 	template       templates.Template
 	vals           map[string]any
+	follows        []string
 	fieldErrs      map[string]string
 }
 
@@ -176,6 +178,17 @@ func (a *App) PreviewPromotion(ctx context.Context, actor Actor, source string, 
 		if m.Change == PromoteReplace {
 			m.Resources = idx.Resources[m.Module]
 		}
+		for i, in := range m.Inputs { // why each asked-for value is asked
+			switch {
+			case in.Field == "":
+			case in.Sensitive:
+				m.Inputs[i].Form.Hint = "Sensitive: " + p.Target.Name + " has no value of its own, and " + p.Source.Name + "'s is never copied."
+			case in.PerEnvironment:
+				m.Inputs[i].Form.Hint = "Per environment: project " + p.Target.ProjectName + " sets no value and " + p.Target.Name + " has none of its own."
+			default:
+				m.Inputs[i].Form.Hint = p.Source.Name + " has no value to copy."
+			}
+		}
 		p.Modules = append(p.Modules, m)
 	}
 	for _, t := range p.read {
@@ -263,15 +276,16 @@ func (a *App) promoteModule(ctx context.Context, s storage.WorkspaceTemplate, cu
 	}
 	m.Template, m.template = t.Name, t
 	own := map[string]any{} // the target's values a promotion keeps: of the same template only
+	var follows []string
 	switch {
 	case cur == nil:
 		m.Change = PromoteAdd
 	case cur.TemplateID != s.TemplateID:
 		m.Change, m.FromRef, m.FromSrc = PromoteReplace, cur.ModuleRef, cur.ModuleSource
 	default:
-		m.FromRef, m.FromSrc, own = cur.ModuleRef, cur.ModuleSource, cur.Inputs
+		m.FromRef, m.FromSrc, own, follows = cur.ModuleRef, cur.ModuleSource, cur.Inputs, cur.Follows
 	}
-	locked := env.Locked(t, own)
+	locked := env.Locked(t, own, follows)
 	raw, asked := map[string]string{}, map[string]bool{}
 	for _, in := range t.Inputs {
 		v, has := s.Inputs[in.Name]
@@ -299,13 +313,12 @@ func (a *App) promoteModule(ctx context.Context, s storage.WorkspaceTemplate, cu
 			}
 		}
 	}
-	raw = lockInputs(raw, locked)
-	vals, errs := t.Validate(raw)
-	if err := a.SealInputs(t, raw, vals, own, errs, targetID, s.Name); err != nil {
+	sv, err := a.save(formSave{T: t, Raw: raw, Old: own, Follows: follows, Env: env, Workspace: targetID, Module: s.Name})
+	if err != nil {
 		return m, err
 	}
-	keepOwn(vals, errs, locked, own)
-	m.vals = vals
+	raw, vals, errs := sv.Raw, sv.Vals, sv.Errs
+	m.vals, m.follows = vals, sv.Follows
 	for _, in := range t.Inputs {
 		if !t.Match(in.ShowIf, raw) {
 			continue
@@ -316,6 +329,9 @@ func (a *App) promoteModule(ctx context.Context, s storage.WorkspaceTemplate, cu
 			if !in.Sensitive {
 				pi.Value = raw[in.Name]
 			}
+			fd := Field{Input: in, ID: pi.Field, Label: s.Name + ": " + in.Title(), Value: pi.Value, Visible: true}
+			fd.ShowIf = nil // shown: its sources are the promoted values, not fields of this form
+			pi.Form = fd
 		}
 		switch {
 		case in.Sensitive:
@@ -382,7 +398,7 @@ func (a *App) Promote(ctx context.Context, actor Actor, source string, to Promot
 			ve.Message = strings.TrimPrefix(ve.Message+"; ", "; ") + "module " + m.Module + ", " + e
 		}
 		if m.Change != PromoteRemove {
-			set = append(set, storage.WorkspaceTemplate{Name: m.Module, TemplateID: m.template.ID, ModuleSource: m.ToSrc, ModuleRef: m.ToRef, Inputs: m.vals})
+			set = append(set, storage.WorkspaceTemplate{Name: m.Module, TemplateID: m.template.ID, ModuleSource: m.ToSrc, ModuleRef: m.ToRef, Inputs: m.vals, Follows: m.follows})
 		}
 	}
 	if len(ve.Fields) > 0 || ve.Message != "" {

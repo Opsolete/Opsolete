@@ -199,7 +199,7 @@ func (q *Queries) SetRolloutStatus(ctx context.Context, arg SetRolloutStatusPara
 const templateUses = `-- name: TemplateUses :many
 
 SELECT w.id AS workspace_id, w.name AS workspace, p.name AS project_name, w.execution_mode,
-    u.name AS module, u.module_source, u.module_ref, u.inputs, r.id AS run_id, r.status AS run_status
+    u.name AS module, u.module_source, u.module_ref, u.inputs, u.follows, r.id AS run_id, r.status AS run_status
 FROM workspace_templates u
 JOIN workspaces w ON w.id = u.workspace_id
 JOIN projects p ON p.id = w.project_id
@@ -222,6 +222,7 @@ type TemplateUsesRow struct {
 	ModuleSource  string
 	ModuleRef     string
 	Inputs        []byte
+	Follows       []string
 	RunID         uuid.NullUUID
 	RunStatus     *string
 }
@@ -246,6 +247,7 @@ func (q *Queries) TemplateUses(ctx context.Context, arg TemplateUsesParams) ([]T
 			&i.ModuleSource,
 			&i.ModuleRef,
 			&i.Inputs,
+			&i.Follows,
 			&i.RunID,
 			&i.RunStatus,
 		); err != nil {

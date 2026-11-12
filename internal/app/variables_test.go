@@ -5,6 +5,9 @@ import (
 	"errors"
 	"maps"
 	"net/url"
+	"os"
+	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/hashicorp/terraform-config-inspect/tfconfig"
@@ -32,15 +35,16 @@ func TestWithWorkspaceVars(t *testing.T) {
 	}
 	src := u.Host + "/" + ns + "/m/null"
 	vars := map[string]any{"greeting": "from-set", "name": "from-set", "region": "undeclared"}
-	got, err := a.withWorkspaceVars(ctx, "", src, "1.0.0", map[string]any{"name": "own"}, vars)
+	greeting, _ := a.Templates.Get("greeting")
+	got, err := a.withWorkspaceVars(ctx, templates.Template{}, src, "1.0.0", map[string]any{"name": "own"}, vars)
 	if want := map[string]any{"greeting": "from-set", "name": "own"}; err != nil || !maps.Equal(got, want) {
 		t.Fatalf("registry module: %v %v", got, err)
 	}
 	// the greeting template asks both: unset (hidden or left empty), they keep the module's default
-	if got, err := a.withWorkspaceVars(ctx, "greeting", src, "1.0.0", map[string]any{}, vars); err != nil || len(got) != 0 {
+	if got, err := a.withWorkspaceVars(ctx, greeting, src, "1.0.0", map[string]any{}, vars); err != nil || len(got) != 0 {
 		t.Fatalf("inputs the template asks: %v %v", got, err)
 	}
-	if got, err := a.withWorkspaceVars(ctx, "", "git::https://example.com/m.git", "v1", nil, vars); err != nil || got != nil {
+	if got, err := a.withWorkspaceVars(ctx, templates.Template{}, "git::https://example.com/m.git", "v1", nil, vars); err != nil || got != nil {
 		t.Fatalf("external source: %v %v", got, err)
 	}
 }
@@ -115,5 +119,51 @@ func TestVariableAccess(t *testing.T) {
 	}
 	if err := a.DeleteWorkspaceVariable(ctx, reader, ws.Name, wv.Own[0].ID); !errors.Is(err, ErrForbidden) {
 		t.Errorf("a reader deletes: %v", err)
+	}
+}
+
+// TestTemplateAt: a workspace runs the template as its pinned module version declares it, not as the catalog's
+// current version does: what jobs check project values against and the Overview lists.
+func TestTemplateAt(t *testing.T) {
+	a, ctx := testApp(t), context.Background()
+	u, _ := url.Parse("https://ops.example.com")
+	ns := uniq("ta")
+	src := u.Host + "/" + ns + "/m/null"
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "t.json"), []byte(`{"id": "t", "name": "T", "module": {"source": "`+src+`", "ref": "2.0.0"},
+		"inputs": [{"name": "greeting", "type": "string"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tpls, err := templates.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Registry, a.Templates, a.RegistryEnabled = &registry.Registry{PublicURL: u, Key: []byte("test-key")}, tpls, true
+	for ver, vars := range map[string][]string{"1.0.0": {"greeting", "name"}, "2.0.0": {"greeting"}} {
+		var decl []registry.Variable
+		for _, v := range vars {
+			decl = append(decl, registry.Variable{Variable: tfconfig.Variable{Name: v}})
+		}
+		if err := a.Store.CreateModule(ctx, storage.Module{Namespace: ns, Name: "m", System: "null", Version: ver, Variables: decl},
+			storage.ModuleDocs{}, []byte("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	names := func(tpl templates.Template) (out []string) {
+		for _, in := range tpl.Inputs {
+			out = append(out, in.Name)
+		}
+		return out
+	}
+	cur, err := a.Template(ctx, "t")
+	if err != nil || !slices.Equal(names(cur), []string{"greeting"}) {
+		t.Fatalf("current: %v %v", names(cur), err)
+	}
+	old, ok, err := a.TemplateAt(ctx, "t", src, "1.0.0")
+	if err != nil || !ok || !slices.Equal(names(old), []string{"greeting", "name"}) || old.Module.Ref != "1.0.0" {
+		t.Fatalf("at 1.0.0: %v %v %v", names(old), ok, err)
+	}
+	if _, ok, err := a.TemplateAt(ctx, "gone", src, "1.0.0"); ok || err != nil {
+		t.Fatalf("not in the catalog: %v %v", ok, err)
 	}
 }

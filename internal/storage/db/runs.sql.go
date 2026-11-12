@@ -28,7 +28,7 @@ func (q *Queries) AddRunHistory(ctx context.Context, arg AddRunHistoryParams) er
 }
 
 const listWorkspaceTemplates = `-- name: ListWorkspaceTemplates :many
-SELECT name, template_id, module_source, module_ref, inputs FROM workspace_templates
+SELECT name, template_id, module_source, module_ref, inputs, follows FROM workspace_templates
 WHERE workspace_id = $1::uuid ORDER BY name
 `
 
@@ -38,6 +38,7 @@ type ListWorkspaceTemplatesRow struct {
 	ModuleSource string
 	ModuleRef    string
 	Inputs       []byte
+	Follows      []string
 }
 
 func (q *Queries) ListWorkspaceTemplates(ctx context.Context, workspaceID uuid.UUID) ([]ListWorkspaceTemplatesRow, error) {
@@ -55,6 +56,7 @@ func (q *Queries) ListWorkspaceTemplates(ctx context.Context, workspaceID uuid.U
 			&i.ModuleSource,
 			&i.ModuleRef,
 			&i.Inputs,
+			&i.Follows,
 		); err != nil {
 			return nil, err
 		}

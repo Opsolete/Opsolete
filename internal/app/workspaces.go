@@ -72,33 +72,31 @@ func (a *App) CreateWorkspace(ctx context.Context, actor Actor, in NewWorkspace)
 		return storage.Workspace{}, storage.Run{}, err
 	}
 	p, perr := a.NewWorkspaceProject(ctx, actor, in.Project, uuid.Nil) // reported after the inputs
-	var locked map[string]string
+	// sensitive inputs are sealed to the workspace's id and module name (the key input can't be per environment)
+	s := formSave{T: t, Raw: in.Inputs, Workspace: uuid.New(), Module: defaultModule(t, in.Inputs, nil)}
 	if perr == nil {
-		env, err := a.ProjectEnvironment(ctx, p.ID)
-		if err != nil {
+		var err error
+		if s.Env, err = a.ProjectEnvironment(ctx, p.ID); err != nil {
 			return storage.Workspace{}, storage.Run{}, err
 		}
-		locked = env.Locked(t, nil)
 	}
-	raw := lockInputs(in.Inputs, locked)
-	vals, errs := validate(t, raw) // errs is never nil
+	sv, err := a.save(s)
+	if err != nil {
+		return storage.Workspace{}, storage.Run{}, err
+	}
+	errs := sv.Errs // never nil
 	if !ValidName(in.Name) {
 		errs[FieldName] = NameRule
 	}
-	id := uuid.New() // sensitive inputs are sealed to the workspace's id and module name
-	module := defaultModule(t, raw, nil)
-	if err := a.SealInputs(t, raw, vals, nil, errs, id, module); err != nil {
-		return storage.Workspace{}, storage.Run{}, err
-	}
-	keepOwn(vals, errs, locked, nil)
 	if len(errs) > 0 {
 		return storage.Workspace{}, storage.Run{}, &ValidationError{Fields: errs}
 	}
+	id, module, vals := s.Workspace, s.Module, sv.Vals
 	if perr != nil {
 		return storage.Workspace{}, storage.Run{}, perr
 	}
 	ws, run, err := a.Store.CreateWorkspace(ctx, id, in.Name, p.Name, storage.WorkspaceTemplate{Name: module, TemplateID: t.ID,
-		ModuleSource: t.Module.Source, ModuleRef: t.Module.Ref, Inputs: vals}, in.AutoApply, actor.UserID)
+		ModuleSource: t.Module.Source, ModuleRef: t.Module.Ref, Inputs: vals, Follows: sv.Follows}, in.AutoApply, actor.UserID)
 	if errors.Is(err, storage.ErrNameTaken) {
 		return ws, run, invalid(FieldName, err.Error())
 	}

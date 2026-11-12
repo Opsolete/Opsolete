@@ -35,7 +35,7 @@ func configModules(ctx context.Context, q *db.Queries, cv uuid.NullUUID) ([]Work
 	}
 	out := make([]WorkspaceTemplate, 0, len(rows))
 	for _, r := range rows {
-		t := WorkspaceTemplate{Name: r.Name, TemplateID: r.TemplateID, ModuleSource: r.ModuleSource, ModuleRef: r.ModuleRef}
+		t := WorkspaceTemplate{Name: r.Name, TemplateID: r.TemplateID, ModuleSource: r.ModuleSource, ModuleRef: r.ModuleRef, Follows: nilIfEmpty(r.Follows)}
 		if err := json.Unmarshal(r.Inputs, &t.Inputs); err != nil {
 			return nil, err
 		}
@@ -67,8 +67,11 @@ func newVersion(ctx context.Context, q *db.Queries, workspaceID uuid.UUID, paren
 		if err != nil {
 			return id, err
 		}
+		if m.Follows == nil {
+			m.Follows = []string{} // NOT NULL
+		}
 		if err := q.InsertConfigModule(ctx, db.InsertConfigModuleParams{CvID: id, Name: m.Name, TemplateID: m.TemplateID,
-			ModuleSource: m.ModuleSource, ModuleRef: m.ModuleRef, Inputs: raw}); err != nil {
+			ModuleSource: m.ModuleSource, ModuleRef: m.ModuleRef, Inputs: raw, Follows: m.Follows}); err != nil {
 			return id, err
 		}
 	}
@@ -111,4 +114,12 @@ func (s *Store) RunTemplates(ctx context.Context, runID uuid.UUID) ([]WorkspaceT
 		return nil, notFound(err)
 	}
 	return configModules(ctx, s.q, rc.CvID)
+}
+
+// nilIfEmpty is s, nil when empty: Postgres's empty array and Go's nil slice compare equal (sameTemplates).
+func nilIfEmpty(s []string) []string {
+	if len(s) == 0 {
+		return nil
+	}
+	return s
 }

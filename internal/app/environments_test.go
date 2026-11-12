@@ -8,8 +8,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/opsolete/opsolete/internal/registry"
 	"github.com/opsolete/opsolete/internal/runnerapi"
@@ -197,22 +200,34 @@ func TestEnvironmentValuesInJobs(t *testing.T) {
 	}
 }
 
-// Locked: a keep_own value locks an input unless the workspace's own value (stored, or found when importing)
-// differs; a plain project value locks it always.
+// Locked: a keep_own value locks an input where the module has no own value for it or follows the project for it
+// (decided when a save had it locked), whatever the values are; a plain project value locks it always. A module
+// that follows keeps following when the project changes its value; one with its own value keeps it, also if it
+// happens to equal the project's.
 func TestLockedKeepOwn(t *testing.T) {
 	tpl := templates.Template{ID: "vm", Inputs: []templates.Input{{Name: "subnet", PerEnvironment: true}, {Name: "size", PerEnvironment: true}, {Name: "name"}}}
 	env := EnvironmentMap{"vm": {"subnet": {Value: "prd", KeepOwn: true}, "size": {Value: "m"}, "name": {Value: "x"}}}
+	changed := EnvironmentMap{"vm": {"subnet": {Value: "prd2", KeepOwn: true}, "size": {Value: "m"}}}
 	for _, c := range []struct {
-		own  map[string]any
-		want map[string]string
+		env     EnvironmentMap
+		own     map[string]any
+		follows []string
+		want    map[string]string
 	}{
-		{nil, map[string]string{"subnet": "prd", "size": "m"}},
-		{map[string]any{"subnet": "prd", "size": "s"}, map[string]string{"subnet": "prd", "size": "m"}},
-		{map[string]any{"subnet": "imported", "size": "s"}, map[string]string{"size": "m"}},
+		{env, nil, nil, map[string]string{"subnet": "prd", "size": "m"}},
+		{env, map[string]any{"subnet": "prd", "size": "s"}, nil, map[string]string{"size": "m"}}, // own, equal by chance
+		{env, map[string]any{"subnet": "imported", "size": "s"}, nil, map[string]string{"size": "m"}},
+		{env, map[string]any{"subnet": "prd"}, []string{"subnet"}, map[string]string{"subnet": "prd", "size": "m"}},
+		{changed, map[string]any{"subnet": "prd"}, []string{"subnet"}, map[string]string{"subnet": "prd2", "size": "m"}}, // still follows
+		{changed, map[string]any{"subnet": "prd"}, nil, map[string]string{"size": "m"}},                                  // still its own
 	} {
-		if got := env.Locked(tpl, c.own); !maps.Equal(got, c.want) {
-			t.Errorf("own %v: %v, want %v", c.own, got, c.want)
+		if got := c.env.Locked(tpl, c.own, c.follows); !maps.Equal(got, c.want) {
+			t.Errorf("own %v follows %v: %v, want %v", c.own, c.follows, got, c.want)
 		}
+	}
+	// found values are the module's own, also where it followed the project
+	if got := env.LockedForm(tpl, map[string]any{"subnet": "prd"}, []string{"subnet"}, map[string]any{"subnet": "/found"}); !maps.Equal(got, map[string]string{"size": "m"}) {
+		t.Errorf("found: %v", got)
 	}
 }
 
@@ -221,9 +236,76 @@ func TestEnvironmentValueShowIf(t *testing.T) {
 	a, ctx := envApp(t), context.Background()
 	env := EnvironmentMap{"env": {"ip": {Value: "10.0.0.1"}}}
 	for public, want := range map[bool]any{false: nil, true: "10.0.0.1"} {
-		got, err := a.withEnvironmentValues(ctx, "env", map[string]any{"public": public}, env)
+		tpl, err := a.Template(ctx, "env")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := withEnvironmentValues(tpl, true, map[string]any{"public": public}, nil, env)
 		if _, set := got["ip"]; err != nil || got["ip"] != want || set != public {
 			t.Errorf("public=%v: ip %v, want %v (%v)", public, got["ip"], want, err)
 		}
+	}
+}
+
+// A keep_own project value: a workspace created while it's set follows it (recorded with its template), so it
+// takes the project's next value too; one created before keeps its own, also if it equals the project's.
+func TestFollowsKeepOwn(t *testing.T) {
+	a, ctx := envApp(t), context.Background()
+	prd := uniq("prd-")
+	if _, err := a.CreateProject(ctx, admin, prd, ""); err != nil {
+		t.Fatal(err)
+	}
+	set := func(v string) {
+		t.Helper()
+		if err := a.SetEnvironmentValue(ctx, admin, prd, "env", "region", v, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	create := func(region string) storage.Workspace {
+		t.Helper()
+		ws, run, err := a.CreateWorkspace(ctx, admin, NewWorkspace{Name: uniq("f-"), Project: prd, TemplateID: "env",
+			Inputs: map[string]string{"size": "s", "region": region}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := a.Store.CancelRun(ctx, run.ID, "x", false); err != nil { // the workspace keeps the template it was created with
+			t.Fatal(err)
+		}
+		return ws
+	}
+	region := func(ws storage.Workspace) any {
+		t.Helper()
+		run, err := a.Store.CreateRun(ctx, ws.ID, "apply", uuid.Nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		j, ok, err := a.Store.ClaimJob(ctx, storage.Runner{Name: "r", Pool: storage.DefaultPool}, time.Minute)
+		if err != nil || !ok || j.RunID != run.ID {
+			t.Fatalf("claim: %v %v", ok, err)
+		}
+		body, err := a.assembleJob(ctx, j)
+		var job runnerapi.Job
+		if err == nil {
+			err = json.Unmarshal(body, &job)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		a.Store.CancelRun(ctx, run.ID, "x", true)
+		return job.Modules[0].Inputs["region"]
+	}
+
+	before := create("prd") // its own value, equal to what the project sets next
+	set("prd")
+	after := create("ignored") // the project's: locked, follows it
+	if mods, _ := a.Store.WorkspaceTemplates(ctx, after.ID); len(mods) != 1 || !slices.Equal(mods[0].Follows, []string{"region"}) {
+		t.Fatalf("follows of a workspace created with the value locked: %+v", mods)
+	}
+	set("prdtwo")
+	if got := region(after); got != "prdtwo" {
+		t.Errorf("a workspace that follows the project: %v, want the project's new value", got)
+	}
+	if got := region(before); got != "prd" {
+		t.Errorf("a workspace with its own value: %v, want its own", got)
 	}
 }

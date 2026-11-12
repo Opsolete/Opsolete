@@ -45,7 +45,6 @@ type formPage struct {
 	FoundRun  uuid.UUID
 	ImportURL string     // creating or adding a template whose module can import: the form importing instead; "" can't
 	CreateURL string     // and creating
-	Importing bool       // the module imports what exists (app.Importing): only the key input required
 	F         *formState // a refused submit
 	Workspace string
 	AutoApply bool
@@ -61,17 +60,13 @@ type formPage struct {
 	EnvReload bool              // creating: picking another project posts the form with refresh, shown again with that project's values
 }
 
-// FoundText is the found value of input name as the form shows it; "" none.
-func (p formPage) FoundText(name string) string {
-	if v, ok := p.Found[name]; ok {
-		return templates.FormatValue(v)
-	}
-	return ""
+// Form is the page's form (app.NewForm): its fields as they're drawn.
+func (p formPage) Form() app.Form {
+	return app.NewForm(p.T, app.FormState{Values: p.Values, Locked: p.Locked, Project: p.LockedBy, Set: p.Set, Found: p.Found})
 }
 
 // importChoice offers creating or importing, when the form adds or deploys a template whose module can import, and
-// shows it importing when ?import=1 asks or its values say so (T then marks only the key input required, as the
-// server checks it).
+// opens it importing when ?import=1 asks (the form then marks only the key input required, as the server checks it).
 func (p *formPage) importChoice(r *http.Request) {
 	if !app.CanImport(p.T) || p.Configure != nil && !p.Adding {
 		return
@@ -85,21 +80,14 @@ func (p *formPage) importChoice(r *http.Request) {
 		p.Values = maps.Clone(p.Values)
 		p.Values[app.ImportInput] = "true"
 	}
-	if p.Importing = app.Importing(p.T, p.Values); p.Importing {
-		p.T = app.ForImport(p.T)
-	}
 }
 
-// LockedText is how the form says the project's value of the locked input in.
-func (p formPage) LockedText(in templates.Input) string { return app.ValueText(in, p.Locked[in.Name]) }
-
-// lock shows the inputs project sets read-only (app.EnvironmentMap.Locked, the workspace's own values own): their
-// values are the project's, also for show_if, and the server ignores what is posted for them.
-func (s *Server) lock(r *http.Request, page *formPage, project storage.Project, own map[string]any) error {
+// lock shows the inputs project sets read-only (app.EnvironmentMap.LockedForm: the module's stored inputs old and
+// follows, and the page's found values): their values are the project's, also for show_if, and the server ignores
+// what is posted for them.
+func (s *Server) lock(r *http.Request, page *formPage, project storage.Project, old map[string]any, follows []string) error {
 	env, err := s.App.ProjectEnvironment(r.Context(), project.ID)
-	page.Locked, page.LockedBy = env.Locked(page.T, own), project.Name
-	page.Values = maps.Clone(page.Values)
-	maps.Copy(page.Values, page.Locked)
+	page.Locked, page.LockedBy = env.LockedForm(page.T, old, follows, page.Found), project.Name
 	return err
 }
 
@@ -110,7 +98,7 @@ func (s *Server) lockDeploy(r *http.Request, page *formPage) error {
 	if i < 0 {
 		return nil
 	}
-	return s.lock(r, page, page.Projects[i], nil)
+	return s.lock(r, page, page.Projects[i], nil, nil)
 }
 
 var nonNameChars = regexp.MustCompile(`[^a-z0-9]+`)

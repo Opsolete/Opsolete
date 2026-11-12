@@ -37,6 +37,7 @@ type ConfigurationModule struct {
 	ModuleSource string
 	ModuleRef    string
 	Inputs       []byte
+	Follows      []string
 }
 
 type ConfigurationVersion struct {
@@ -422,6 +423,7 @@ type WorkspaceTemplate struct {
 	ModuleSource string
 	ModuleRef    string
 	Inputs       []byte
+	Follows      []string
 }
 
 type WorkspaceVc struct {

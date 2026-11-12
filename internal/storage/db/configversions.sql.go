@@ -48,7 +48,7 @@ func (q *Queries) AllConfigInputs(ctx context.Context) ([]AllConfigInputsRow, er
 }
 
 const configModules = `-- name: ConfigModules :many
-SELECT name, template_id, module_source, module_ref, inputs FROM configuration_modules WHERE cv_id = $1::uuid ORDER BY name
+SELECT name, template_id, module_source, module_ref, inputs, follows FROM configuration_modules WHERE cv_id = $1::uuid ORDER BY name
 `
 
 type ConfigModulesRow struct {
@@ -57,6 +57,7 @@ type ConfigModulesRow struct {
 	ModuleSource string
 	ModuleRef    string
 	Inputs       []byte
+	Follows      []string
 }
 
 func (q *Queries) ConfigModules(ctx context.Context, cvID uuid.UUID) ([]ConfigModulesRow, error) {
@@ -74,6 +75,7 @@ func (q *Queries) ConfigModules(ctx context.Context, cvID uuid.UUID) ([]ConfigMo
 			&i.ModuleSource,
 			&i.ModuleRef,
 			&i.Inputs,
+			&i.Follows,
 		); err != nil {
 			return nil, err
 		}
@@ -98,9 +100,9 @@ func (q *Queries) CurrentConfig(ctx context.Context, id uuid.UUID) (uuid.NullUUI
 }
 
 const insertConfigModule = `-- name: InsertConfigModule :exec
-INSERT INTO configuration_modules (cv_id, name, template_id, module_source, module_ref, inputs)
+INSERT INTO configuration_modules (cv_id, name, template_id, module_source, module_ref, inputs, follows)
 VALUES ($1::uuid, $2::text, $3::text, $4::text,
-    $5::text, $6::jsonb)
+    $5::text, $6::jsonb, $7::text[])
 `
 
 type InsertConfigModuleParams struct {
@@ -110,6 +112,7 @@ type InsertConfigModuleParams struct {
 	ModuleSource string
 	ModuleRef    string
 	Inputs       []byte
+	Follows      []string
 }
 
 func (q *Queries) InsertConfigModule(ctx context.Context, arg InsertConfigModuleParams) error {
@@ -120,6 +123,7 @@ func (q *Queries) InsertConfigModule(ctx context.Context, arg InsertConfigModule
 		arg.ModuleSource,
 		arg.ModuleRef,
 		arg.Inputs,
+		arg.Follows,
 	)
 	return err
 }

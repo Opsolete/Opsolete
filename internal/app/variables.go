@@ -79,9 +79,10 @@ func (a *App) workspaceMasker(ctx context.Context, workspaceID uuid.UUID) (mask.
 // none, as the server can't read their variables. Publish them to the registry (e.g. via VCS) to get
 // them, as HCP Terraform's no-code modules must be. To upgrade: the runner has every module on disk
 // after init (writeOutputs reads them there) and could add the declared ones itself, if the job also
-// lists the inputs each template's form asks, which keep winning. Inputs the template (by id) asks for are left alone, also when
+// lists the inputs each template's form asks, which keep winning. Inputs t (the template at the module version it
+// runs, generated inputs included; zero if it's no longer in the catalog) asks for are left alone, also when
 // hidden or empty: its form decided those, and the module's default applies.
-func (a *App) withWorkspaceVars(ctx context.Context, templateID, source, ref string, in, vars map[string]any) (map[string]any, error) {
+func (a *App) withWorkspaceVars(ctx context.Context, t templates.Template, source, ref string, in, vars map[string]any) (map[string]any, error) {
 	if !a.RegistryEnabled || len(vars) == 0 {
 		return in, nil
 	}
@@ -96,7 +97,6 @@ func (a *App) withWorkspaceVars(ctx context.Context, templateID, source, ref str
 	if err != nil {
 		return in, fmt.Errorf("module variables: %w", err)
 	}
-	t, _ := a.Templates.Get(templateID) // a deleted template: only its stored inputs are known
 	out := maps.Clone(in)
 	if out == nil {
 		out = map[string]any{}

@@ -21,6 +21,7 @@ type TemplateUse struct {
 	Module                                string
 	ModuleSource, ModuleRef               string
 	Inputs                                map[string]any
+	Follows                               []string  // per-environment inputs that follow the project (WorkspaceTemplate.Follows)
 	RunID                                 uuid.UUID // the workspace's active run; uuid.Nil if none
 	RunStatus                             string    // its status; "" if none
 }
@@ -35,7 +36,7 @@ func (s *Store) TemplateUses(ctx context.Context, templateID string, projectID u
 	out := make([]TemplateUse, 0, len(rows))
 	for _, r := range rows {
 		u := TemplateUse{WorkspaceID: r.WorkspaceID, Workspace: r.Workspace, ProjectName: r.ProjectName, ExecutionMode: r.ExecutionMode,
-			Module: r.Module, ModuleSource: r.ModuleSource, ModuleRef: r.ModuleRef, RunID: r.RunID.UUID}
+			Module: r.Module, ModuleSource: r.ModuleSource, ModuleRef: r.ModuleRef, Follows: nilIfEmpty(r.Follows), RunID: r.RunID.UUID}
 		if r.RunStatus != nil {
 			u.RunStatus = *r.RunStatus
 		}
@@ -52,6 +53,7 @@ func (s *Store) TemplateUses(ctx context.Context, templateID string, projectID u
 type TemplateUpgrade struct {
 	TemplateID, Module, ModuleSource, ModuleRef string
 	Inputs                                      map[string]any
+	Follows                                     []string
 	From                                        TemplateUse
 }
 
@@ -82,11 +84,12 @@ func (s *Store) UpgradeTemplates(ctx context.Context, workspaceID uuid.UUID, ups
 			// only if it still runs what the new inputs were made from: a change meanwhile isn't overwritten
 			i := slices.IndexFunc(mods, func(m WorkspaceTemplate) bool { return m.Name == u.Module })
 			if i < 0 || mods[i].TemplateID != u.TemplateID || !sameTemplates([]WorkspaceTemplate{mods[i]},
-				[]WorkspaceTemplate{{Name: u.Module, TemplateID: u.TemplateID, ModuleSource: u.From.ModuleSource, ModuleRef: u.From.ModuleRef, Inputs: u.From.Inputs}}) {
+				[]WorkspaceTemplate{{Name: u.Module, TemplateID: u.TemplateID, ModuleSource: u.From.ModuleSource, ModuleRef: u.From.ModuleRef,
+					Inputs: u.From.Inputs, Follows: u.From.Follows}}) {
 				return ErrNotFound
 			}
 			mods = withModule(mods, WorkspaceTemplate{Name: u.Module, TemplateID: u.TemplateID, ModuleSource: u.ModuleSource,
-				ModuleRef: u.ModuleRef, Inputs: u.Inputs})
+				ModuleRef: u.ModuleRef, Inputs: u.Inputs, Follows: u.Follows})
 		}
 		if r, err = queueVersion(ctx, q, workspaceID, cv, mods, SourceRollout, "apply", createdBy); err != nil {
 			return err
