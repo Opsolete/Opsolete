@@ -118,7 +118,8 @@ the example modules 1.1.0 already have them.
    and ends without its apply (a failed plan too) keeps what it set the template to, sealed inputs left out
    (`storage.keepEntered`, before the restore), so Change settings works there too. The form opens with the found values over the inputs that plan ran
    with (stored with them, `Found.Saved`: what the user set by hand, such as a NIC name the module builds from two
-   inputs, isn't lost when the discard removes the template) and `existing` on; saving plans again, these values
+   inputs, isn't lost when the discard removes the template), `existing` as that run had it (a plan that failed
+   creating comes back creating); an applied run offers nothing to go back to, also by an old `?found` link; saving plans again, these values
    counting as the workspace's own against a project's keep-own value. Live (`test-vm`): round 1 found 15
    settings; round 2 left the NIC name and boot diagnostics; with the NIC name set, round 3 left boot diagnostics
    only (`2 to import, 0 to add, 1 to change, 0 to destroy`).
