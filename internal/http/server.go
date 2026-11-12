@@ -69,7 +69,7 @@ type Features struct {
 func New(a *app.App, au *auth.Auth, f Features) *Server {
 	a.RegistryEnabled, a.VCSEnabled, a.TemplateEditor = f.Registry, f.VCS, f.Editor
 	pages := template.Must(template.New("").Funcs(template.FuncMap{"join": strings.Join, "json": toJSON, "dict": dict,
-		"duration": humanDuration, "ago": ago, "asset": asset,
+		"duration": humanDuration, "ago": ago, "asset": asset, "confirmWhy": confirmWhy,
 		"provider": func(p string) string { return strings.TrimPrefix(p, "registry.terraform.io/") },
 		"status":   func(s string) string { return strings.ReplaceAll(s, "_", " ") }}).Funcs(formFuncs).ParseFS(views, "views/*.html"))
 	return &Server{App: a, Auth: au, Features: f, ClaimWait: 20 * time.Second, Stopping: context.Background(), pages: pages}

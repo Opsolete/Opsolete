@@ -2,7 +2,6 @@ package app
 
 import (
 	"bytes"
-	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -22,14 +21,10 @@ import (
 // (SECRET_KEY_PREVIOUS): variables, VCS tokens, sensitive template inputs and the files in the
 // state store (bucket; nil without deployments). Servers keep running: they open either key and
 // seal with the current one. Values already under the current key are skipped, so it can run again
-// after a failure. It refuses while a run is active, and fails if one started meanwhile: a pending
-// promotion (runs.promotion) holds sealed inputs it doesn't re-seal; run it again once that run has
-// ended. Sensitive template inputs are re-sealed in every configuration version. Values that open with neither key were already
-// unreadable: they are logged and left alone.
+// after a failure. Runs may be active: no run keeps its own copy of a sealed value (sensitive template
+// inputs are in configuration versions, all re-sealed here). Values that open with neither key were
+// already unreadable: they are logged and left alone.
 func RotateKey(ctx context.Context, st *storage.Store, bucket *blob.Bucket, keys *secrets.Keyring, log *slog.Logger) (int, error) {
-	if active, err := st.AnyActiveRun(ctx); err != nil || active {
-		return 0, cmp.Or(err, errors.New("a run is active: wait until it ends (or discard it), then rotate"))
-	}
 	n := 0
 	// reseal returns sealed under the current key; nil if it needs nothing (already, or unreadable).
 	reseal := func(what string, sealed []byte, ad string) ([]byte, error) {
@@ -143,9 +138,6 @@ func RotateKey(ctx context.Context, st *storage.Store, bucket *blob.Bucket, keys
 	}
 	if raced > 0 {
 		return n, fmt.Errorf("%d values changed while being re-sealed: run rotate-key again", raced)
-	}
-	if active, err := st.AnyActiveRun(ctx); err != nil || active {
-		return n, cmp.Or(err, errors.New("a run started during the rotation: run rotate-key again once it has ended"))
 	}
 	return n, nil
 }

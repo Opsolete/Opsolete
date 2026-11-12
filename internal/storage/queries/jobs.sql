@@ -46,8 +46,9 @@ UPDATE runs SET cancel_requested = true WHERE id = sqlc.arg(id)::uuid;
 
 -- name: LockLeasedRun :one
 -- The run, if lease_id holds it; the lease is checked here, setStatus then checks the transition.
--- needs_confirmation: a template rollout's run (see template_rollouts) or a promotion's always waits for a human.
-SELECT r.status, r.action, r.workspace_id, w.auto_apply, (r.rollout_id IS NOT NULL OR r.always_confirm)::boolean AS needs_confirmation, r.cancel_requested
+-- in_rollout, in_promotion: the run is a template rollout's or a promotion's (storage.confirmReason).
+SELECT r.status, r.action, r.workspace_id, w.auto_apply, (r.rollout_id IS NOT NULL)::boolean AS in_rollout,
+    EXISTS (SELECT 1 FROM promotions p WHERE r.id IN (p.destroy_run_id, p.apply_run_id))::boolean AS in_promotion, r.cancel_requested
 FROM runs r JOIN workspaces w ON w.id = r.workspace_id
 WHERE r.id = sqlc.arg(id)::uuid AND r.lease_id = sqlc.arg(lease_id)::text AND run_working(r.status) AND r.lease_acked_at IS NOT NULL
 FOR UPDATE OF r;
@@ -78,6 +79,3 @@ SELECT (SELECT count(*) FROM workspaces)::bigint AS workspaces,
 
 -- name: RunsByStatus :many
 SELECT status, count(*)::bigint AS n FROM runs GROUP BY status;
-
--- name: AnyActiveRun :one
-SELECT EXISTS (SELECT 1 FROM runs WHERE run_active(status));

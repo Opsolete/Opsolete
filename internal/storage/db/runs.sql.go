@@ -67,17 +67,20 @@ func (q *Queries) ListWorkspaceTemplates(ctx context.Context, workspaceID uuid.U
 }
 
 const lockRun = `-- name: LockRun :one
-SELECT status, workspace_id, remove_templates, promotion, cv_id FROM runs WHERE id = $1::uuid FOR UPDATE
+SELECT r.status, r.workspace_id, r.remove_templates, r.cv_id,
+    EXISTS (SELECT 1 FROM promotions p WHERE p.destroy_run_id = r.id AND p.apply_run_id IS NULL)::boolean AS promotes
+FROM runs r WHERE r.id = $1::uuid FOR UPDATE OF r
 `
 
 type LockRunRow struct {
 	Status          string
 	WorkspaceID     uuid.UUID
 	RemoveTemplates []string
-	Promotion       []byte
 	CvID            uuid.NullUUID
+	Promotes        bool
 }
 
+// promotes: a promotion's destroy run whose apply run isn't queued yet (storage.continuePromotion).
 func (q *Queries) LockRun(ctx context.Context, id uuid.UUID) (LockRunRow, error) {
 	row := q.db.QueryRow(ctx, lockRun, id)
 	var i LockRunRow
@@ -85,8 +88,8 @@ func (q *Queries) LockRun(ctx context.Context, id uuid.UUID) (LockRunRow, error)
 		&i.Status,
 		&i.WorkspaceID,
 		&i.RemoveTemplates,
-		&i.Promotion,
 		&i.CvID,
+		&i.Promotes,
 	)
 	return i, err
 }
@@ -400,12 +403,17 @@ func (q *Queries) RunPlan(ctx context.Context, id uuid.UUID) ([]byte, error) {
 	return plan, err
 }
 
-const setRunAlwaysConfirm = `-- name: SetRunAlwaysConfirm :exec
-UPDATE runs SET always_confirm = true WHERE id = $1::uuid
+const setConfirmReason = `-- name: SetConfirmReason :exec
+UPDATE runs SET confirm_reason = $1::text WHERE id = $2::uuid
 `
 
-func (q *Queries) SetRunAlwaysConfirm(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, setRunAlwaysConfirm, id)
+type SetConfirmReasonParams struct {
+	Reason string
+	ID     uuid.UUID
+}
+
+func (q *Queries) SetConfirmReason(ctx context.Context, arg SetConfirmReasonParams) error {
+	_, err := q.db.Exec(ctx, setConfirmReason, arg.Reason, arg.ID)
 	return err
 }
 
@@ -420,20 +428,6 @@ type SetRunFoundParams struct {
 
 func (q *Queries) SetRunFound(ctx context.Context, arg SetRunFoundParams) error {
 	_, err := q.db.Exec(ctx, setRunFound, arg.Found, arg.ID)
-	return err
-}
-
-const setRunPromotion = `-- name: SetRunPromotion :exec
-UPDATE runs SET promotion = $1::jsonb WHERE id = $2::uuid
-`
-
-type SetRunPromotionParams struct {
-	Promotion []byte
-	ID        uuid.UUID
-}
-
-func (q *Queries) SetRunPromotion(ctx context.Context, arg SetRunPromotionParams) error {
-	_, err := q.db.Exec(ctx, setRunPromotion, arg.Promotion, arg.ID)
 	return err
 }
 
@@ -483,26 +477,19 @@ const updateRunStatus = `-- name: UpdateRunStatus :exec
 UPDATE runs SET status = $1::text, updated_at = now(),
     lease_id = CASE WHEN $2::boolean THEN lease_id END,
     lease_until = CASE WHEN $2::boolean THEN lease_until END,
-    lease_acked_at = NULL,
-    promotion = CASE WHEN $3::boolean THEN NULL ELSE promotion END
-WHERE id = $4::uuid
+    lease_acked_at = NULL
+WHERE id = $3::uuid
 `
 
 type UpdateRunStatusParams struct {
 	Status string
 	Leased bool
-	Ended  bool
 	ID     uuid.UUID
 }
 
 // Only setStatus calls this. The lease ends unless the run starts working (a new claim: not acknowledged
-// yet); promotion goes when it ends.
+// yet).
 func (q *Queries) UpdateRunStatus(ctx context.Context, arg UpdateRunStatusParams) error {
-	_, err := q.db.Exec(ctx, updateRunStatus,
-		arg.Status,
-		arg.Leased,
-		arg.Ended,
-		arg.ID,
-	)
+	_, err := q.db.Exec(ctx, updateRunStatus, arg.Status, arg.Leased, arg.ID)
 	return err
 }

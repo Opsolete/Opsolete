@@ -105,7 +105,8 @@ Test paths are relative to `internal/`, except `cmd/opsolete/…` (from the repo
 
 **C2. Auto-apply** — `full`
 - Workspace setting; an apply plan with changes goes straight to `apply_queued`. Destroys, refresh-only and rollout plans still ask.
-- Coverage: `http/flows_test.go:TestAutoApply` (apply plan → `apply_queued` without confirmation → applied; no changes → `no_changes`; plan-only → `planned`; destroy and rollout plans ask); `http/flows_test.go:TestRefreshOnlyRun` (refresh-only asks); `storage/jobs_test.go:TestAutoApplyAndDiscard`; `http/runs_test.go:TestWorkspaceFlow/a_destroy_plan_asks_even_with_auto-apply…`.
+- One rule (`storage.afterPlan`): the reason a plan waits is stored and shown on the run page; status changes are typed events with an explicit effects list.
+- Coverage: `storage/runs_test.go:TestAfterPlan`, `TestTransitions`, `TestEffects`; `storage/configversions_test.go:TestRunStateUpgrade`; `http/flows_test.go:TestAutoApply` (apply plan → `apply_queued` without confirmation → applied; no changes → `no_changes`; plan-only → `planned`; destroy and rollout plans ask); `http/flows_test.go:TestRefreshOnlyRun` (refresh-only asks); `storage/jobs_test.go:TestAutoApplyAndDiscard`; `http/runs_test.go:TestWorkspaceFlow/a_destroy_plan_asks_even_with_auto-apply…`.
 
 **C3. Discard** — `full`
 - `POST …/runs/{id}/discard` → `discarded`, plan artifacts deleted, workspace free.
@@ -444,8 +445,8 @@ Test paths are relative to `internal/`, except `cmd/opsolete/…` (from the repo
 - Coverage: `app/retention_test.go:TestRetention`, `TestRetentionBatches`; `http/runs_test.go:TestRemovedLog`; `config/config_test.go:TestLoad`.
 
 **P2. Key rotation (`opsolete rotate-key`)** — `full`
-- Restart with both keys → rotate (re-seal variables, VCS tokens, sensitive inputs, state files, plans; refuse with an active run; idempotent) → drop `SECRET_KEY_PREVIOUS`.
-- Coverage: `cmd/opsolete/main_test.go:TestRotateKeyCLI` (refused without `SECRET_KEY_PREVIOUS`, with it equal or short, with an unusable `STATE_STORE`, none audited; a variable and a state store file re-sealed, audited with the count; again: 0); `app/rotate_test.go:TestRotateKey`, `TestRotateKeyRace` (a value changed meanwhile keeps the server's write and fails the rotation; a run started meanwhile fails it); `secrets/secrets_test.go:TestRotation`; `storage/audit_test.go:TestAuditLogKeyRotation`.
+- Restart with both keys → rotate (re-seal variables, VCS tokens, sensitive inputs in every configuration version, state files, plans; runs may go on; idempotent) → drop `SECRET_KEY_PREVIOUS`.
+- Coverage: `cmd/opsolete/main_test.go:TestRotateKeyCLI` (refused without `SECRET_KEY_PREVIOUS`, with it equal or short, with an unusable `STATE_STORE`, none audited; a variable and a state store file re-sealed, audited with the count; again: 0); `app/rotate_test.go:TestRotateKey`, `TestRotateKeyRace` (a value changed meanwhile keeps the server's write and fails the rotation; a rotation with a run active succeeds); `secrets/secrets_test.go:TestRotation`; `storage/audit_test.go:TestAuditLogKeyRotation`.
 
 **P3. Registry token from the CLI (`opsolete token <name>`)** — `full`
 - Prints the token on stdout only, audits `create token`.

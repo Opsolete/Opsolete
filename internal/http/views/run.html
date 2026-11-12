@@ -110,7 +110,8 @@
   <div class="body">
     {{if not .Start.IsZero}}<p class="steps"><strong>Started</strong> {{.Start.Format "15:04:05"}}{{if not .End.IsZero}} › <strong>{{if eq .State "finished"}}Finished{{else}}{{status .State}}{{end}}</strong> {{.End.Format "15:04:05"}}{{end}}</p>{{end}}
     {{if and (eq $r.Status "needs_confirmation") $.CanOperate}}
-    <p>{{if eq $r.Action "destroy"}}Confirm to destroy the resources above.{{else}}Review the plan above, then confirm to apply it.{{end}}</p>
+    <p>{{if eq $r.Action "destroy"}}Confirm to destroy the resources above.{{else}}Review the plan above, then confirm to apply it.{{end}}
+      {{with confirmWhy $r.ConfirmReason}}<span class="muted">{{.}}</span>{{end}}</p>
     <div class="actions mt-0">
       <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/confirm">
         <button type="submit"{{if eq $r.Action "destroy"}} class="danger"{{end}}>Confirm &amp; {{if eq $r.Action "destroy"}}destroy{{else}}apply{{end}}</button></form>
@@ -121,7 +122,7 @@
     </div>
     {{if $.Found}}<p class="hint">Importing: <em>Change settings</em> discards this plan and opens the template's form with what you entered and what the plan found.</p>{{end}}
     {{else if eq $r.Status "needs_confirmation"}}
-    <p class="muted">Waiting for the workspace's owner or an admin to confirm.</p>
+    <p class="muted">Waiting for the workspace's owner or an admin to confirm.{{with confirmWhy $r.ConfirmReason}} {{.}}{{end}}</p>
     {{else if eq .State "queued"}}<p class="muted">Waiting for a runner…</p>
     {{else if eq .State "discarded"}}<p class="muted">The plan was discarded{{with $r.ConfirmedBy}} by {{.}}{{end}}.</p>
     {{end}}

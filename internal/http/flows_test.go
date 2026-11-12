@@ -178,7 +178,8 @@ func TestRefreshOnlyRun(t *testing.T) {
 			t.Fatalf("refresh-only plan: %s", s)
 		}
 		r.noJob(t, "a refresh plan waiting for confirmation")
-		pageHas(t, h, "/workspaces/"+ws+"/runs/"+run, "Refresh state", "needs confirmation", "Confirm &amp; apply", "Discard", `<span class="change update">~1</span>`)
+		pageHas(t, h, "/workspaces/"+ws+"/runs/"+run, "Refresh state", "needs confirmation", "Confirm &amp; apply", "Discard", `<span class="change update">~1</span>`,
+			"Refresh-only runs always wait for confirmation.")
 	})
 	step(t, "confirmed, its apply writes the refreshed state", func(t *testing.T) {
 		if rec := post(h, "/workspaces/"+ws+"/runs/"+run+"/confirm", nil); rec.Code != http.StatusSeeOther {

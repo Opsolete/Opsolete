@@ -173,3 +173,15 @@ func runPhases(r storage.Run, hist []storage.StatusEntry) (plan, apply phase) {
 	}
 	return
 }
+
+// confirmWhy says why a plan waits for confirmation (storage.Run.ConfirmReason); "" for none.
+func confirmWhy(reason string) string {
+	return map[string]string{
+		storage.ReasonPromotion: "A promotion's runs always wait for confirmation.",
+		storage.ReasonRollout:   "A template rollout's runs always wait for confirmation.",
+		storage.ReasonImport:    "It imports existing resources into a template: a human always confirms that.",
+		storage.ReasonDestroy:   "Destroys always wait for confirmation.",
+		storage.ReasonRefresh:   "Refresh-only runs always wait for confirmation.",
+		storage.ReasonManual:    "The workspace doesn't apply automatically.",
+	}[reason]
+}

@@ -70,10 +70,9 @@ func TestRotateKey(t *testing.T) {
 	}
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	if _, err := RotateKey(ctx, store, bucket, both, log); err == nil {
-		t.Fatal("rotation while a run is active")
+	if r, _, _ := store.GetRun(ctx, run.ID); !r.Active() {
+		t.Fatal("the run must be active: a rotation doesn't wait for it")
 	}
-	store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE id = $1::uuid`, run.ID)
 	if n, err := RotateKey(ctx, store, bucket, both, log); err != nil || n != 4 {
 		t.Fatalf("rotate: %d %v", n, err)
 	}
@@ -117,30 +116,13 @@ func (h onWarn) Handle(ctx context.Context, r slog.Record) error {
 }
 
 // The servers keep running during rotate-key: a value changed between its reading and re-sealing
-// keeps the server's write and fails the rotation, as does a run started meanwhile; both say to run
-// it again. The hook is the warning about a value under neither key.
+// keeps the server's write and fails the rotation, which says to run it again. The hook is the
+// warning about a value under neither key.
 func TestRotateKeyRace(t *testing.T) {
 	a := testApp(t)
 	store, ctx := a.Store, context.Background()
 	oldSecret, newSecret := "rotate-old-"+uniq(""), "rotate-new-"+uniq("")
 	both, newKey := keys(newSecret, oldSecret), keys(newSecret, "")
-	name := uniq("race-")
-	if err := store.CreateVariableSet(ctx, name, "", false); err != nil {
-		t.Fatal(err)
-	}
-	set, _ := store.GetVariableSet(ctx, name)
-	o := storage.VarOwner{SetID: set.ID}
-	put := func(key, plain string, k *secrets.Keyring) {
-		t.Helper()
-		v := storage.Variable{Owner: o, Category: "env", Key: key, Sensitive: true}
-		var err error
-		if v.Value, err = k.Seal(plain, VariableAD(v)); err != nil {
-			t.Fatal(err)
-		}
-		if err := store.SetVariable(ctx, o, v); err != nil {
-			t.Fatal(err)
-		}
-	}
 	// The race is on one row, so it doesn't depend on the order rows are read in: an added template's
 	// inputs are stored after all of them were re-sealed, and the warning about "lost" comes in between.
 	wsID := uuid.New()
@@ -152,13 +134,12 @@ func TestRotateKeyRace(t *testing.T) {
 		}
 		return map[string]any{"sealed": base64.StdEncoding.EncodeToString(b)}
 	}
-	_, run, err := store.CreateWorkspace(ctx, wsID, uniq("race-"), "", storage.WorkspaceTemplate{Name: "main", TemplateID: "t",
+	_, _, err := store.CreateWorkspace(ctx, wsID, uniq("race-"), "", storage.WorkspaceTemplate{Name: "main", TemplateID: "t",
 		ModuleSource: "git::https://x//m", ModuleRef: "v1", Inputs: map[string]any{
 			"lost": sealed(keys("rotate-lost-"+uniq(""), ""), "lost", `"x"`), "good": sealed(keys(oldSecret, ""), "good", `"v1"`)}}, false, uuid.Nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store.Pool.Exec(ctx, `UPDATE runs SET status = 'errored', lease_id = NULL, lease_until = NULL WHERE id = $1::uuid`, run.ID)
 	var hook func()
 	log := slog.New(onWarn{slog.DiscardHandler, func() { hook() }})
 
@@ -175,17 +156,5 @@ func TestRotateKeyRace(t *testing.T) {
 	uses, _ := store.WorkspaceTemplates(ctx, wsID)
 	if in, _, err := (&App{Secrets: newKey}).OpenInputs(uses[0].Inputs, wsID, "main"); err != nil || in["good"] != "v2" {
 		t.Fatalf("the server's write must stay: %v %v", in, err)
-	}
-
-	put("LOST", "x", keys("rotate-lost-"+uniq(""), "")) // the next hook's trigger
-	hook = func() {                                     // a run starts meanwhile
-		if _, _, err := store.CreateWorkspace(ctx, uuid.New(), uniq("race-"), "", storage.WorkspaceTemplate{Name: "main", TemplateID: "t",
-			ModuleSource: "git::https://x//m", ModuleRef: "v1"}, false, uuid.Nil); err != nil {
-			t.Error(err)
-		}
-		hook = func() {}
-	}
-	if _, err := RotateKey(ctx, store, nil, both, log); err == nil || !strings.Contains(err.Error(), "a run started during the rotation") {
-		t.Fatalf("a run started meanwhile: %v", err)
 	}
 }

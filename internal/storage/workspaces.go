@@ -76,7 +76,8 @@ func toWorkspace(w db.WorkspaceList) Workspace {
 func toRun(r db.RunList) (Run, error) {
 	run := Run{ID: r.ID, WorkspaceID: r.WorkspaceID, Action: r.Action, Status: r.Status, Runner: r.Runner,
 		CreatedBy: r.CreatedByEmail, ConfirmedBy: r.ConfirmedByEmail, CancelRequested: r.CancelRequested,
-		VCSCommit: r.VcsCommit, VCSPullRequest: int(r.VcsPullRequest), CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt}
+		VCSCommit: r.VcsCommit, VCSPullRequest: int(r.VcsPullRequest), CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		ConfirmReason: r.ConfirmReason}
 	if r.LogBytes > 0 { // retention marks every ended run it passed (so it isn't picked again); only one with a log lost one
 		run.LogRemovedAt = r.LogRemovedAt
 	}
@@ -594,26 +595,21 @@ func (s *Store) GetRun(ctx context.Context, id uuid.UUID) (Run, []StatusEntry, e
 
 // ConfirmRun queues the apply of a plan that waits for confirmation.
 func (s *Store) ConfirmRun(ctx context.Context, id, userID uuid.UUID, email string) error {
-	return s.decide(ctx, id, ApplyQueued, userID, "confirmed by "+email+", waiting for a runner")
+	return s.decide(ctx, id, EvConfirm, ApplyQueued, userID, "confirmed by "+email+", waiting for a runner")
 }
 
 // DiscardRun ends a run whose plan waits for confirmation, without applying it.
 func (s *Store) DiscardRun(ctx context.Context, id uuid.UUID, email string) error {
-	return s.decide(ctx, id, Discarded, uuid.Nil, "discarded by "+email)
+	return s.decide(ctx, id, EvDiscard, Discarded, uuid.Nil, "discarded by "+email)
 }
 
 // decide moves a run out of needs_confirmation; confirmedBy (a user id) is recorded unless uuid.Nil.
-func (s *Store) decide(ctx context.Context, id uuid.UUID, status string, confirmedBy uuid.UUID, message string) error {
+func (s *Store) decide(ctx context.Context, id uuid.UUID, ev Event, status string, confirmedBy uuid.UUID, message string) error {
 	return s.tx(ctx, func(q *db.Queries) error {
-		// checked here, not by the state machine: planning may also move to apply_queued (auto-apply)
-		cur, err := q.LockRunStatus(ctx, id)
-		if errors.Is(err, pgx.ErrNoRows) || err == nil && cur != NeedsConfirmation {
+		// only confirm and discard leave needs_confirmation (the state machine)
+		if _, err := setStatus(ctx, q, id, ev, status, message); errors.Is(err, ErrTransition) || errors.Is(err, ErrNotFound) {
 			return ErrNotConfirmable
-		}
-		if err != nil {
-			return err
-		}
-		if _, err := setStatus(ctx, q, id, status, message); err != nil {
+		} else if err != nil {
 			return err
 		}
 		return q.SetConfirmedBy(ctx, db.SetConfirmedByParams{ID: id, ConfirmedBy: optID(confirmedBy)})

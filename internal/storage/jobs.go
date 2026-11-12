@@ -55,7 +55,7 @@ func (s *Store) ClaimJob(ctx context.Context, runner Runner, lease time.Duration
 		if status == Applying {
 			j.Phase = "apply"
 		}
-		if _, err := setStatus(ctx, q, j.RunID, status, j.Phase+" claimed by runner "+runner.Name); err != nil {
+		if _, err := setStatus(ctx, q, j.RunID, EvClaim, status, j.Phase+" claimed by runner "+runner.Name); err != nil {
 			return err
 		}
 		r, err := q.LeaseRun(ctx, db.LeaseRunParams{ID: j.RunID, Runner: runner.Name, LeaseID: j.LeaseID, LeaseSecs: lease.Seconds()})
@@ -170,7 +170,7 @@ func (s *Store) CancelRun(ctx context.Context, id uuid.UUID, email string, force
 		if busy {
 			msg = "force-canceled by " + email + "; the runner was cut off, check the state for resources it may have missed"
 		}
-		if _, err := setStatus(ctx, q, id, Canceled, msg); errors.Is(err, ErrTransition) {
+		if _, err := setStatus(ctx, q, id, EvCancel, Canceled, msg); errors.Is(err, ErrTransition) {
 			return ErrNotCancelable
 		} else if err != nil {
 			return err
@@ -234,35 +234,39 @@ func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 			}
 			importing = len(names) > 0
 		}
+		var ev Event
+		var reason string
 		switch {
-		case final != "":
+		case final == Errored:
+			ev = EvFail
+		case final == Canceled:
+			ev = EvCancel
 		case r.Status == Applying:
-			final = Applied
+			final, ev = Applied, EvApplied
 			if r.Action == "apply" {
 				if err := endImport(ctx, q, runID, r.WorkspaceID); err != nil {
 					return err
 				}
 			}
 		case conflict != "":
-			final, message = Errored, conflict
+			final, message, ev = Errored, conflict, EvFail
 		case importing && plan.Destroy > 0: // the template doesn't fit what exists
-			final, message = Errored, "import refused: the plan would replace or delete existing resources, so the template's "+
-				"inputs don't match them; nothing was applied"
-		case plan == nil:
-			final = NoChanges
-		case r.Action == "assess":
-			final = Drifted
-		case r.Action == "plan":
-			final = Planned
-		case r.AutoApply && r.Action == "apply" && !r.NeedsConfirmation && !importing:
-			final = ApplyQueued
+			final, message, ev = Errored, "import refused: the plan would replace or delete existing resources, so the template's "+
+				"inputs don't match them; nothing was applied", EvFail
 		default:
-			final = NeedsConfirmation
+			ev = EvPlanned
+			final, reason = afterPlan(PlanContext{Action: r.Action, AutoApply: r.AutoApply, Rollout: r.InRollout, Promotion: r.InPromotion,
+				Importing: importing}, plan != nil)
 		}
 		// The plan finished before a cancel reached Terraform: end the run here, or the request still
 		// standing would interrupt its apply.
 		if r.CancelRequested && (final == NeedsConfirmation || final == ApplyQueued) {
-			final, message = Canceled, "canceled: the plan finished before the cancel request reached the runner"
+			final, message, ev, reason = Canceled, "canceled: the plan finished before the cancel request reached the runner", EvCancel, ""
+		}
+		if reason != "" {
+			if err := q.SetConfirmReason(ctx, db.SetConfirmReasonParams{ID: runID, Reason: reason}); err != nil {
+				return err
+			}
 		}
 		var planJSON, outJSON, foundJSON []byte
 		if plan != nil {
@@ -294,7 +298,7 @@ func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 				return err
 			}
 		}
-		_, step, err := transition(ctx, q, runID, final, message)
+		_, step, err := transition(ctx, q, runID, ev, final, message)
 		if err != nil {
 			return err
 		}
@@ -411,7 +415,7 @@ func (s *Store) UnclaimJobs(ctx context.Context) ([]Unclaimed, error) {
 		}
 		for _, r := range rows {
 			queued := map[string]string{Planning: PlanQueued, Applying: ApplyQueued}[r.Status]
-			if _, err := setStatus(ctx, q, r.ID, queued, "not acknowledged by runner "+r.Runner+": queued again"); err != nil {
+			if _, err := setStatus(ctx, q, r.ID, EvUnclaim, queued, "not acknowledged by runner "+r.Runner+": queued again"); err != nil {
 				return err
 			}
 			if err := q.ClearRunner(ctx, r.ID); err != nil {
@@ -438,7 +442,7 @@ func (s *Store) ReapExpiredLeases(ctx context.Context) ([]uuid.UUID, error) {
 			return err
 		}
 		for _, id := range ids {
-			if _, err := setStatus(ctx, q, id, Errored, "runner stopped responding (lease expired)"); err != nil {
+			if _, err := setStatus(ctx, q, id, EvFail, Errored, "runner stopped responding (lease expired)"); err != nil {
 				return err
 			}
 		}
@@ -484,9 +488,4 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 		st.Runs[r.Status] = int(r.N)
 	}
 	return st, err
-}
-
-// AnyActiveRun reports whether a run is active anywhere: a SECRET_KEY rotation waits for none.
-func (s *Store) AnyActiveRun(ctx context.Context) (bool, error) {
-	return s.q.AnyActiveRun(ctx)
 }

@@ -73,14 +73,11 @@ UPDATE runs SET replace = sqlc.arg(replace)::jsonb WHERE id = sqlc.arg(id)::uuid
 -- name: SetRunRemoveTemplates :exec
 UPDATE runs SET remove_templates = sqlc.arg(remove_templates)::text[] WHERE id = sqlc.arg(id)::uuid;
 
--- name: SetRunPromotion :exec
-UPDATE runs SET promotion = sqlc.arg(promotion)::jsonb WHERE id = sqlc.arg(id)::uuid;
-
 -- name: SetRunRollout :exec
 UPDATE runs SET rollout_id = sqlc.arg(rollout_id)::uuid WHERE id = sqlc.arg(id)::uuid;
 
--- name: SetRunAlwaysConfirm :exec
-UPDATE runs SET always_confirm = true WHERE id = sqlc.arg(id)::uuid;
+-- name: SetConfirmReason :exec
+UPDATE runs SET confirm_reason = sqlc.arg(reason)::text WHERE id = sqlc.arg(id)::uuid;
 
 -- name: RunPlan :one
 SELECT plan FROM runs WHERE id = sqlc.arg(id)::uuid;
@@ -95,16 +92,18 @@ SELECT found FROM runs WHERE id = sqlc.arg(id)::uuid;
 SELECT status FROM runs WHERE id = sqlc.arg(id)::uuid FOR UPDATE;
 
 -- name: LockRun :one
-SELECT status, workspace_id, remove_templates, promotion, cv_id FROM runs WHERE id = sqlc.arg(id)::uuid FOR UPDATE;
+-- promotes: a promotion's destroy run whose apply run isn't queued yet (storage.continuePromotion).
+SELECT r.status, r.workspace_id, r.remove_templates, r.cv_id,
+    EXISTS (SELECT 1 FROM promotions p WHERE p.destroy_run_id = r.id AND p.apply_run_id IS NULL)::boolean AS promotes
+FROM runs r WHERE r.id = sqlc.arg(id)::uuid FOR UPDATE OF r;
 
 -- name: UpdateRunStatus :exec
 -- Only setStatus calls this. The lease ends unless the run starts working (a new claim: not acknowledged
--- yet); promotion goes when it ends.
+-- yet).
 UPDATE runs SET status = sqlc.arg(status)::text, updated_at = now(),
     lease_id = CASE WHEN sqlc.arg(leased)::boolean THEN lease_id END,
     lease_until = CASE WHEN sqlc.arg(leased)::boolean THEN lease_until END,
-    lease_acked_at = NULL,
-    promotion = CASE WHEN sqlc.arg(ended)::boolean THEN NULL ELSE promotion END
+    lease_acked_at = NULL
 WHERE id = sqlc.arg(id)::uuid;
 
 -- name: AddRunHistory :exec
