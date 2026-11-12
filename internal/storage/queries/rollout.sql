@@ -15,12 +15,6 @@ ORDER BY w.name, u.name;
 -- FOR SHARE: a pause or stop waits until the caller's run is queued, and is seen by the next
 SELECT status FROM template_rollouts WHERE id = sqlc.arg(id)::uuid FOR SHARE;
 
--- name: UpgradeTemplate :execrows
--- only if it still runs what the new inputs were made from: a change meanwhile isn't overwritten
-UPDATE workspace_templates SET module_source = sqlc.arg(module_source)::text, module_ref = sqlc.arg(module_ref)::text, inputs = sqlc.arg(inputs)::jsonb
-WHERE workspace_id = sqlc.arg(workspace_id)::uuid AND name = sqlc.arg(name)::text AND template_id = sqlc.arg(template_id)::text
-    AND module_source = sqlc.arg(from_source)::text AND module_ref = sqlc.arg(from_ref)::text AND inputs = sqlc.arg(from_inputs)::jsonb;
-
 -- name: CreateRollout :one
 -- ticked_at now: its first turn is the caller's
 INSERT INTO template_rollouts (template_id, module_source, module_ref, project_id, batch_size, created_by, ticked_at)

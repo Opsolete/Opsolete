@@ -11,10 +11,10 @@ import (
 	"github.com/opsolete/opsolete/internal/runnerapi"
 )
 
-// A run that changes the configuration puts the previous one back if it ends before its apply
-// started (discarded, canceled, errored while planning), keeps it once its apply started or when it
-// had nothing to change, removes an added template again, and leaves a use changed since alone.
-func TestRunConfigRestore(t *testing.T) {
+// A run that changes the configuration plans a new version: ended before its apply started (discarded, canceled,
+// errored while planning) the workspace keeps its current one, a template it added isn't there and a change made
+// meanwhile stays; once its apply started, or with nothing to change, the workspace takes the run's version.
+func TestRunConfigVersions(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	w, run := newWorkspace(t, s, false) // template main: job-test git::x v1, n=1
@@ -50,20 +50,18 @@ func TestRunConfigRestore(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	changes := func(r Run) bool {
-		var ok bool
-		s.Pool.QueryRow(context.Background(), `SELECT config_changes IS NOT NULL FROM runs WHERE id = $1`, r.ID).Scan(&ok)
-		return ok
-	}
-
-	// discarded: back to v1, and the run keeps no copy
+	// while it runs, the workspace shows the version it plans
 	r := configure("v2")
+	if got := root(); got != "v2" {
+		t.Fatalf("while planning: %s", got)
+	}
+	// discarded: v1
 	plan(r, true)
 	if err := s.DiscardRun(ctx, r.ID, "x"); err != nil {
 		t.Fatal(err)
 	}
-	if got := root(); got != "v1" || changes(r) {
-		t.Fatalf("after discard: %s, copy kept %v", got, changes(r))
+	if got := root(); got != "v1" {
+		t.Fatalf("after discard: %s", got)
 	}
 	// canceled while queued
 	r = configure("v2")
@@ -85,17 +83,17 @@ func TestRunConfigRestore(t *testing.T) {
 	// changed since the run's change: left alone
 	r = configure("v2")
 	plan(r, true)
-	s.Pool.Exec(context.Background(), `UPDATE workspace_templates SET module_ref = 'v9' WHERE workspace_id = $1 AND name = 'main'`, w.ID)
+	putTemplates(t, s, w.ID, WorkspaceTemplate{Name: "main", TemplateID: "job-test", ModuleSource: "git::x", ModuleRef: "v9", Inputs: map[string]any{"n": 1.0}})
 	s.DiscardRun(ctx, r.ID, "x")
 	if got := root(); got != "v9" {
 		t.Fatalf("a later change was overwritten: %s", got)
 	}
-	s.Pool.Exec(context.Background(), `UPDATE workspace_templates SET module_ref = 'v1' WHERE workspace_id = $1 AND name = 'main'`, w.ID)
-	// no changes to make: the new version stays
+	putTemplates(t, s, w.ID, WorkspaceTemplate{Name: "main", TemplateID: "job-test", ModuleSource: "git::x", ModuleRef: "v1", Inputs: map[string]any{"n": 1.0}})
+	// no changes to make: the workspace takes the new version
 	r = configure("v2")
 	plan(r, false)
-	if got := root(); got != "v2" || changes(r) {
-		t.Fatalf("after no changes: %s, copy kept %v", got, changes(r))
+	if got := root(); got != "v2" {
+		t.Fatalf("after no changes: %s", got)
 	}
 	// the apply started, then failed: the new version stays
 	r = configure("v3")
@@ -111,7 +109,7 @@ func TestRunConfigRestore(t *testing.T) {
 		t.Fatalf("after a failed apply: %s", got)
 	}
 
-	// an added template whose first plan is discarded is removed again; a changed one goes back
+	// an added template whose first plan is discarded isn't there; a changed one is as it was
 	add := WorkspaceTemplate{Name: "extra", TemplateID: "job-test", ModuleSource: "git::x", ModuleRef: "v1", Inputs: map[string]any{}}
 	r, err := s.SetWorkspaceTemplate(ctx, w.ID, add, true, uuid.Nil)
 	if err != nil {
@@ -122,10 +120,9 @@ func TestRunConfigRestore(t *testing.T) {
 	var n int
 	s.Pool.QueryRow(context.Background(), `SELECT count(*) FROM workspace_templates WHERE workspace_id = $1 AND name = 'extra'`, w.ID).Scan(&n)
 	if n != 0 {
-		t.Fatal("a discarded added template must be removed again")
+		t.Fatal("a discarded added template is there")
 	}
-	s.Pool.Exec(context.Background(), `INSERT INTO workspace_templates (workspace_id, name, template_id, module_source, module_ref, inputs)
-		VALUES ($1, 'extra', 'job-test', 'git::x', 'v1', '{}')`, w.ID)
+	putTemplates(t, s, w.ID, add)
 	add.ModuleRef = "v2"
 	if r, err = s.SetWorkspaceTemplate(ctx, w.ID, add, false, uuid.Nil); err != nil {
 		t.Fatal(err)
@@ -199,14 +196,16 @@ func TestImportPlan(t *testing.T) {
 	if status := finish(r, runnerapi.Plan{Import: 1, Imports: main, Add: 1, Destroy: 1}, nil); status != ApplyQueued {
 		t.Fatalf("a configuration's own import with auto-apply: %s", status)
 	}
-	s.Pool.Exec(ctx, `UPDATE runs SET status = 'applied' WHERE id = $1`, r.ID)
-	if _, err := s.Pool.Exec(ctx, `DELETE FROM workspace_templates WHERE workspace_id = $1 AND name = 'vm'`, w.ID); err != nil {
+	s.Pool.Exec(ctx, `WITH done AS (UPDATE runs SET status = 'applied' WHERE id = $1 RETURNING runs.workspace_id, runs.cv_id) UPDATE workspaces cur SET current_cv_id = COALESCE(done.cv_id, cur.current_cv_id) FROM done WHERE cur.id = done.workspace_id`, r.ID)
+	if _, err := s.RemoveWorkspaceTemplate(ctx, w.ID, "vm", uuid.Nil); err != nil { // nothing deployed: at once
 		t.Fatal(err)
 	}
 	r = add()
 	if status := finish(r, runnerapi.Plan{Import: 1, Imports: main}, []runnerapi.Resource{{Address: "aws_s3_bucket.old", ID: "/x/3"}}); status != Errored {
 		t.Fatalf("a configuration's own import of a managed resource: %s", status)
 	}
+	// another template has the switch on too, but imports nothing
+	putTemplates(t, s, w.ID, WorkspaceTemplate{Name: "main", TemplateID: "job-test", ModuleSource: "git::x", ModuleRef: "v1", Inputs: map[string]any{"existing": true}})
 	r = add()
 	if status := finish(r, runnerapi.Plan{Import: 2, Imports: imports, Change: 1}, nil); status != NeedsConfirmation { // the workspace auto-applies
 		t.Fatalf("an import with auto-apply: %s", status)
@@ -214,10 +213,7 @@ func TestImportPlan(t *testing.T) {
 	if got, err := s.RunFound(ctx, r.ID); err != nil || got["vm"].TemplateID != "job-test" || got["vm"].Inputs["size"] != "Standard_DS1_v2" {
 		t.Fatalf("found: %v %v", got, err)
 	}
-	// applied: the template stops importing; another one that also has the switch on, but imported nothing, keeps it
-	if _, err := s.Pool.Exec(ctx, `UPDATE workspace_templates SET inputs = '{"existing": true}' WHERE workspace_id = $1 AND name = 'main'`, w.ID); err != nil {
-		t.Fatal(err)
-	}
+	// applied: the template stops importing; the other one keeps its switch
 	if err := s.ConfirmRun(ctx, r.ID, uuid.Nil, "x"); err != nil {
 		t.Fatal(err)
 	}
@@ -240,9 +236,9 @@ func TestImportPlan(t *testing.T) {
 	}
 }
 
-// A run that ends without its apply keeps what it set its templates to (sealed inputs left out), beside what its
-// plan found: config_changes goes, and the restore may remove a template it added.
-func TestKeepEntered(t *testing.T) {
+// A run that ends without its apply offers what it set its templates to (its version, sealed inputs left out),
+// beside what its plan found; the workspace doesn't have a template it added.
+func TestRunFoundEntered(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	w, run := newWorkspace(t, s, false)

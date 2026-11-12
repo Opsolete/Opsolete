@@ -135,12 +135,12 @@ func (s *Store) createWorkspace(ctx context.Context, id uuid.UUID, e EmptyWorksp
 		if t == nil {
 			return nil
 		}
-		raw, err := json.Marshal(t.Inputs)
+		// a new workspace starts with the templates it was created with: a discarded first plan leaves them
+		cv, err := newVersion(ctx, q, id, uuid.NullUUID{}, []WorkspaceTemplate{*t}, SourceForm, e.CreatedBy)
 		if err != nil {
 			return err
 		}
-		if _, err := q.InsertWorkspaceTemplate(ctx, db.InsertWorkspaceTemplateParams{WorkspaceID: id, Name: t.Name, TemplateID: t.TemplateID,
-			ModuleSource: t.ModuleSource, ModuleRef: t.ModuleRef, Inputs: raw}); err != nil {
+		if err := setCurrent(ctx, q, id, cv); err != nil {
 			return err
 		}
 		run, err = createRun(ctx, q, id, "apply", e.CreatedBy)
@@ -200,10 +200,15 @@ func (s *Store) CreateRun(ctx context.Context, workspaceID uuid.UUID, action str
 	return r, nil
 }
 
-// createRun queues a run on a remote workspace: ErrRunActive if it has an active run,
-// ErrLocalExecution if it uses local execution (or was deleted meanwhile).
+// createRun queues a run of the workspace's current configuration on a remote workspace: ErrRunActive if it has
+// an active run, ErrLocalExecution if it uses local execution (or was deleted meanwhile).
 func createRun(ctx context.Context, q *db.Queries, workspaceID uuid.UUID, action string, createdBy uuid.UUID) (Run, error) {
-	r, err := q.QueueRun(ctx, db.QueueRunParams{WorkspaceID: workspaceID, Action: action, CreatedBy: optID(createdBy),
+	return queueRun(ctx, q, workspaceID, action, createdBy, uuid.NullUUID{})
+}
+
+// queueRun is createRun of configuration version cv (invalid: the current one).
+func queueRun(ctx context.Context, q *db.Queries, workspaceID uuid.UUID, action string, createdBy uuid.UUID, cv uuid.NullUUID) (Run, error) {
+	r, err := q.QueueRun(ctx, db.QueueRunParams{WorkspaceID: workspaceID, Action: action, CreatedBy: optID(createdBy), CvID: cv,
 		Message: action + " plan queued, waiting for a runner"})
 	if err == nil {
 		if err := notifyJobs(ctx, q); err != nil {

@@ -30,6 +30,24 @@ type AuditLog struct {
 	Hash     []byte
 }
 
+type ConfigurationModule struct {
+	CvID         uuid.UUID
+	Name         string
+	TemplateID   string
+	ModuleSource string
+	ModuleRef    string
+	Inputs       []byte
+}
+
+type ConfigurationVersion struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	ParentID    uuid.NullUUID
+	Source      string
+	CreatedBy   uuid.NullUUID
+	CreatedAt   time.Time
+}
+
 type EnvironmentValue struct {
 	ProjectID  uuid.UUID
 	TemplateID string
@@ -124,7 +142,6 @@ type Run struct {
 	VcsCommit       *string
 	VcsPullRequest  *int32
 	RolloutID       uuid.NullUUID
-	ConfigChanges   []byte
 	CreatedBy       uuid.NullUUID
 	ConfirmedBy     uuid.NullUUID
 	CreatedAt       time.Time
@@ -133,6 +150,7 @@ type Run struct {
 	RemoveTemplates []string
 	Promotion       []byte
 	Found           []byte
+	CvID            uuid.NullUUID
 }
 
 type RunList struct {
@@ -353,6 +371,7 @@ type Workspace struct {
 	StateLockedAt     *time.Time
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+	CurrentCvID       uuid.NullUUID
 }
 
 type WorkspaceAccess struct {
@@ -391,7 +410,6 @@ type WorkspaceTemplate struct {
 	ModuleSource string
 	ModuleRef    string
 	Inputs       []byte
-	CreatedAt    time.Time
 }
 
 type WorkspaceVc struct {

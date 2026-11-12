@@ -5,14 +5,14 @@
 -- must match it exactly), h records the first history entry. They return the new runs.
 
 -- name: QueueRun :one
--- A run of a remote workspace, queued by a user.
+-- A run of a remote workspace, queued by a user: of configuration version cv_id, else the workspace's current one.
 WITH s AS (
     SELECT w.id AS workspace_id, sqlc.arg(action)::text AS action, sqlc.narg(created_by)::uuid AS created_by,
-        NULL::text AS vcs_commit, NULL::integer AS vcs_pull_request
+        NULL::text AS vcs_commit, NULL::integer AS vcs_pull_request, COALESCE(sqlc.narg(cv_id)::uuid, w.current_cv_id) AS cv_id
     FROM workspaces w WHERE w.id = sqlc.arg(workspace_id)::uuid AND w.execution_mode = 'remote'
 ), r AS (
-    INSERT INTO runs (workspace_id, action, status, created_by, vcs_commit, vcs_pull_request)
-    SELECT s.workspace_id, s.action, 'plan_queued', s.created_by, s.vcs_commit, s.vcs_pull_request FROM s
+    INSERT INTO runs (workspace_id, action, status, created_by, vcs_commit, vcs_pull_request, cv_id)
+    SELECT s.workspace_id, s.action, 'plan_queued', s.created_by, s.vcs_commit, s.vcs_pull_request, s.cv_id FROM s
     ON CONFLICT (workspace_id) WHERE run_active(status) DO NOTHING
     RETURNING runs.id, runs.workspace_id, runs.action, runs.created_at
 ), h AS (
@@ -26,15 +26,15 @@ SELECT r.id, r.workspace_id, r.action, r.created_at FROM r;
 -- plan, for a pull request a speculative plan of it.
 WITH s AS (
     SELECT w.id AS workspace_id, sqlc.arg(action)::text AS action, NULL::uuid AS created_by,
-        sqlc.arg(commit)::text AS vcs_commit, NULLIF(sqlc.arg(pull_request)::integer, 0) AS vcs_pull_request
+        sqlc.arg(commit)::text AS vcs_commit, NULLIF(sqlc.arg(pull_request)::integer, 0) AS vcs_pull_request, w.current_cv_id AS cv_id
     FROM workspaces w
     WHERE w.id = sqlc.arg(workspace_id)::uuid AND w.execution_mode = 'remote' AND NOT EXISTS (SELECT 1 FROM runs x
         WHERE x.workspace_id = w.id AND x.vcs_commit = sqlc.arg(commit)::text
             AND CASE WHEN sqlc.arg(pull_request)::integer > 0 THEN x.action = 'plan' AND x.vcs_pull_request = sqlc.arg(pull_request)::integer
                 ELSE x.action NOT IN ('assess', 'plan') END)
 ), r AS (
-    INSERT INTO runs (workspace_id, action, status, created_by, vcs_commit, vcs_pull_request)
-    SELECT s.workspace_id, s.action, 'plan_queued', s.created_by, s.vcs_commit, s.vcs_pull_request FROM s
+    INSERT INTO runs (workspace_id, action, status, created_by, vcs_commit, vcs_pull_request, cv_id)
+    SELECT s.workspace_id, s.action, 'plan_queued', s.created_by, s.vcs_commit, s.vcs_pull_request, s.cv_id FROM s
     ON CONFLICT (workspace_id) WHERE run_active(status) DO NOTHING
     RETURNING runs.id, runs.workspace_id, runs.action, runs.created_at
 ), h AS (
@@ -46,7 +46,8 @@ SELECT r.id, r.workspace_id, r.action, r.created_at FROM r;
 -- An assess run on every remote workspace with drift detection and configuration whose current
 -- state manages resources and that wasn't assessed within every_secs.
 WITH s AS (
-    SELECT w.id AS workspace_id, 'assess'::text AS action, NULL::uuid AS created_by, NULL::text AS vcs_commit, NULL::integer AS vcs_pull_request
+    SELECT w.id AS workspace_id, 'assess'::text AS action, NULL::uuid AS created_by, NULL::text AS vcs_commit, NULL::integer AS vcs_pull_request,
+        w.current_cv_id AS cv_id
     FROM workspaces w
     WHERE w.drift_detection AND w.execution_mode = 'remote'
         AND (EXISTS (SELECT 1 FROM workspace_vcs v WHERE v.workspace_id = w.id)
@@ -56,8 +57,8 @@ WITH s AS (
         AND NOT EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = w.id AND a.action = 'assess'
             AND a.created_at > now() - make_interval(secs => sqlc.arg(every_secs)::float8))
 ), r AS (
-    INSERT INTO runs (workspace_id, action, status, created_by, vcs_commit, vcs_pull_request)
-    SELECT s.workspace_id, s.action, 'plan_queued', s.created_by, s.vcs_commit, s.vcs_pull_request FROM s
+    INSERT INTO runs (workspace_id, action, status, created_by, vcs_commit, vcs_pull_request, cv_id)
+    SELECT s.workspace_id, s.action, 'plan_queued', s.created_by, s.vcs_commit, s.vcs_pull_request, s.cv_id FROM s
     ON CONFLICT (workspace_id) WHERE run_active(status) DO NOTHING
     RETURNING runs.id, runs.workspace_id, runs.action, runs.created_at
 ), h AS (
@@ -84,13 +85,6 @@ UPDATE runs SET always_confirm = true WHERE id = sqlc.arg(id)::uuid;
 -- name: RunPlan :one
 SELECT plan FROM runs WHERE id = sqlc.arg(id)::uuid;
 
--- name: EndImport :exec
--- An applied import: the templates' modules stop importing (their import input false). The resources are in the
--- state now, so their import blocks did nothing anymore: the next plan doesn't change.
-UPDATE workspace_templates SET inputs = jsonb_set(inputs, ARRAY[sqlc.arg(input)::text], 'false'::jsonb)
-WHERE workspace_id = sqlc.arg(workspace_id)::uuid AND name = ANY(sqlc.arg(names)::text[])
-    AND inputs -> sqlc.arg(input)::text = 'true'::jsonb;
-
 -- name: SetRunFound :exec
 UPDATE runs SET found = sqlc.arg(found)::jsonb WHERE id = sqlc.arg(id)::uuid;
 
@@ -101,16 +95,15 @@ SELECT found FROM runs WHERE id = sqlc.arg(id)::uuid;
 SELECT status FROM runs WHERE id = sqlc.arg(id)::uuid FOR UPDATE;
 
 -- name: LockRun :one
-SELECT status, workspace_id, remove_templates, config_changes, promotion FROM runs WHERE id = sqlc.arg(id)::uuid FOR UPDATE;
+SELECT status, workspace_id, remove_templates, promotion, cv_id FROM runs WHERE id = sqlc.arg(id)::uuid FOR UPDATE;
 
 -- name: UpdateRunStatus :exec
 -- Only setStatus calls this. The lease ends unless the run starts working (a new claim: not acknowledged
--- yet); config_changes and promotion go when it ends.
+-- yet); promotion goes when it ends.
 UPDATE runs SET status = sqlc.arg(status)::text, updated_at = now(),
     lease_id = CASE WHEN sqlc.arg(leased)::boolean THEN lease_id END,
     lease_until = CASE WHEN sqlc.arg(leased)::boolean THEN lease_until END,
     lease_acked_at = NULL,
-    config_changes = CASE WHEN sqlc.arg(ended)::boolean THEN NULL ELSE config_changes END,
     promotion = CASE WHEN sqlc.arg(ended)::boolean THEN NULL ELSE promotion END
 WHERE id = sqlc.arg(id)::uuid;
 
@@ -122,61 +115,9 @@ INSERT INTO run_status_history (run_id, status, message) VALUES (sqlc.arg(run_id
 UPDATE workspaces SET state_lock = NULL, state_locked_at = NULL
 WHERE id = sqlc.arg(workspace_id)::uuid AND state_lock->>'OpsoleteRun' = sqlc.arg(run_id)::uuid::text;
 
--- name: DeleteWorkspaceTemplate :exec
-DELETE FROM workspace_templates WHERE workspace_id = sqlc.arg(workspace_id)::uuid AND name = sqlc.arg(name)::text;
-
--- name: ConfigSnapshot :one
-SELECT template_config(t.template_id, t.module_source, t.module_ref, t.inputs)::jsonb FROM workspace_templates t
-WHERE t.workspace_id = sqlc.arg(workspace_id)::uuid AND t.name = sqlc.arg(name)::text;
-
--- name: SetConfigChanges :exec
-UPDATE runs SET config_changes = sqlc.arg(config_changes)::jsonb WHERE id = sqlc.arg(id)::uuid;
-
--- name: RestoreTemplate :exec
--- puts before back, only while the template is still at after
-UPDATE workspace_templates t SET template_id = sqlc.arg(before)::jsonb->>'template_id', module_source = sqlc.arg(before)::jsonb->>'module_source',
-    module_ref = sqlc.arg(before)::jsonb->>'module_ref', inputs = sqlc.arg(before)::jsonb->'inputs'
-WHERE t.workspace_id = sqlc.arg(workspace_id)::uuid AND t.name = sqlc.arg(name)::text
-    AND template_config(t.template_id, t.module_source, t.module_ref, t.inputs) = sqlc.arg(after)::jsonb;
-
--- name: RemoveRestoredTemplate :exec
--- removes a template a run added, only while it is still at after
-DELETE FROM workspace_templates t
-WHERE t.workspace_id = sqlc.arg(workspace_id)::uuid AND t.name = sqlc.arg(name)::text
-    AND template_config(t.template_id, t.module_source, t.module_ref, t.inputs) = sqlc.arg(after)::jsonb;
-
--- name: RestoreRemovedTemplate :exec
--- puts back a template a run removed, unless a template took its name since
-INSERT INTO workspace_templates (workspace_id, name, template_id, module_source, module_ref, inputs)
-VALUES (sqlc.arg(workspace_id)::uuid, sqlc.arg(name)::text, sqlc.arg(before)::jsonb->>'template_id', sqlc.arg(before)::jsonb->>'module_source',
-    sqlc.arg(before)::jsonb->>'module_ref', sqlc.arg(before)::jsonb->'inputs')
-ON CONFLICT (workspace_id, name) DO NOTHING;
-
 -- name: ListWorkspaceTemplates :many
 SELECT name, template_id, module_source, module_ref, inputs FROM workspace_templates
 WHERE workspace_id = sqlc.arg(workspace_id)::uuid ORDER BY name;
-
--- name: AllTemplateInputs :many
-SELECT workspace_id, name, inputs FROM workspace_templates;
-
--- name: ResealInputs :execrows
-UPDATE workspace_templates SET inputs = sqlc.arg(inputs)::jsonb
-WHERE workspace_id = sqlc.arg(workspace_id)::uuid AND name = sqlc.arg(name)::text AND inputs = sqlc.arg(old)::jsonb;
-
--- name: InsertWorkspaceTemplate :execrows
-INSERT INTO workspace_templates (workspace_id, name, template_id, module_source, module_ref, inputs)
-VALUES (sqlc.arg(workspace_id)::uuid, sqlc.arg(name)::text, sqlc.arg(template_id)::text, sqlc.arg(module_source)::text,
-    sqlc.arg(module_ref)::text, sqlc.arg(inputs)::jsonb);
-
--- name: UpdateWorkspaceTemplate :execrows
-UPDATE workspace_templates SET template_id = sqlc.arg(template_id)::text, module_source = sqlc.arg(module_source)::text,
-    module_ref = sqlc.arg(module_ref)::text, inputs = sqlc.arg(inputs)::jsonb
-WHERE workspace_id = sqlc.arg(workspace_id)::uuid AND name = sqlc.arg(name)::text;
-
--- name: LockWorkspaceTemplate :one
--- FOR UPDATE: templates can't be added meanwhile (their FK check waits for the lock).
-SELECT EXISTS (SELECT 1 FROM workspace_templates t WHERE t.workspace_id = w.id AND t.name = sqlc.arg(name)::text)::boolean
-FROM workspaces w WHERE w.id = sqlc.arg(workspace_id)::uuid FOR UPDATE;
 
 -- Retention (storage.PruneRunLogs, storage.PruneSpeculativeRuns): at most lim runs per statement, so
 -- a first pass over a big database holds short locks; ended runs only, updated_at is when they ended.

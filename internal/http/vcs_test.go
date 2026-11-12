@@ -180,7 +180,7 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 		if rec.Code != http.StatusSeeOther {
 			t.Fatalf("provision: %d %s", rec.Code, rec.Body.String())
 		}
-		store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL FROM workspaces w WHERE w.id = runs.workspace_id AND w.name = $1`, wsName)
+		store.Pool.Exec(context.Background(), `WITH done AS (UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL FROM workspaces w WHERE w.id = runs.workspace_id AND w.name = $1 AND run_active(runs.status) RETURNING runs.workspace_id, runs.cv_id) UPDATE workspaces cur SET current_cv_id = COALESCE(done.cv_id, cur.current_cv_id) FROM done WHERE cur.id = done.workspace_id`, wsName)
 	})
 
 	// New tag with a new required input; sync publishes it, the template moves to it.

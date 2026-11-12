@@ -22,9 +22,9 @@ import (
 // (SECRET_KEY_PREVIOUS): variables, VCS tokens, sensitive template inputs and the files in the
 // state store (bucket; nil without deployments). Servers keep running: they open either key and
 // seal with the current one. Values already under the current key are skipped, so it can run again
-// after a failure. It refuses while a run is active, and fails if one started meanwhile: a run's
-// saved configuration (runs.config_changes) holds sealed inputs it doesn't re-seal, which a failed
-// run restores; run it again once that run has ended. Values that open with neither key were already
+// after a failure. It refuses while a run is active, and fails if one started meanwhile: a pending
+// promotion (runs.promotion) holds sealed inputs it doesn't re-seal; run it again once that run has
+// ended. Sensitive template inputs are re-sealed in every configuration version. Values that open with neither key were already
 // unreadable: they are logged and left alone.
 func RotateKey(ctx context.Context, st *storage.Store, bucket *blob.Bucket, keys *secrets.Keyring, log *slog.Logger) (int, error) {
 	if active, err := st.AnyActiveRun(ctx); err != nil || active {
@@ -130,7 +130,7 @@ func RotateKey(ctx context.Context, st *storage.Store, bucket *blob.Bucket, keys
 			if err != nil {
 				return n, err
 			}
-			if err := stored(st.ResealInputs(ctx, u.WorkspaceID, u.Name, u.Inputs, raw)); err != nil {
+			if err := stored(st.ResealInputs(ctx, u.CVID, u.Name, u.Inputs, raw)); err != nil {
 				return n, err
 			}
 		}

@@ -164,8 +164,8 @@ func validate(t templates.Template, raw map[string]string) (map[string]any, map[
 	return vals, errs
 }
 
-// FoundValues is what import plan runID of the workspace found for its template module (added from t, now or
-// before the run's restore removed it): the real values of t's inputs that alone set an imported attribute
+// FoundValues is what import plan runID of the workspace found for its template module (added from t; the workspace
+// may not have it, when the run ended without its apply): the real values of t's inputs that alone set an imported attribute
 // (runnerapi.FinishRequest.Found), over the inputs the plan ran with (what the user set by hand, such as a name the
 // module builds from several inputs, so adding the template again keeps it); typed as stored, sensitive inputs
 // never. Needs operate. ErrNotFound: no such run, or it found nothing for module from t.

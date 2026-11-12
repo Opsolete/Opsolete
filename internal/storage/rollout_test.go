@@ -22,10 +22,7 @@ func TestUpgradeTemplates(t *testing.T) {
 	if _, err := s.FinishJob(ctx, run.ID, j.LeaseID, "succeeded", "", nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Pool.Exec(context.Background(), `INSERT INTO workspace_templates (workspace_id, name, template_id, module_source, module_ref, inputs)
-		VALUES ($1, 'extra', 'job-test', 'git::x', 'v1', '{}')`, w.ID); err != nil {
-		t.Fatal(err)
-	}
+	putTemplates(t, s, w.ID, WorkspaceTemplate{Name: "extra", TemplateID: "job-test", ModuleSource: "git::x", ModuleRef: "v1", Inputs: map[string]any{}})
 	ro, err := s.CreateRollout(ctx, Rollout{TemplateID: "job-test", ModuleSource: "git::x", ModuleRef: "v2"})
 	if err != nil {
 		t.Fatal(err)

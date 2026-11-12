@@ -1,7 +1,8 @@
 # Design: configuration versions and the run split
 
-Status: proposal (November 2026), for review before any code. Not published (outside `docs/content`).
-Steps 2 and 3 of the redesign; step 5 (import as a session) builds on it.
+Status: phases A and B built (November 2026, migration `010_configuration_versions.sql`, `storage/configversions.go`);
+C–F proposed. Not published (outside `docs/content`). Steps 2 and 3 of the redesign; step 5 (import as a session)
+builds on it. What was built differs from the proposal below where [Built](#built-phases-a-and-b) says so.
 
 ## Why
 
@@ -143,13 +144,26 @@ the workspace), so it carries the docs and flows.md updates.
 - `NeedsConfirmation` table test: every reason × auto-apply on/off.
 - A transition table test per event, and a test that `FinishJob`'s effects are exactly the returned list.
 
-## Open questions
+## Built (phases A and B)
 
-1. **What the workspace shows during a run.** Today it shows the pending configuration, because the rows change at
-   queue time. Proposal: show the current (applied) one, with a "pending in run X" banner and a diff. Agree?
-2. **Keep every version?** Proposal: yes, they're small. Prune versions no run references after 30 days, like
-   speculative runs.
-3. **Variables snapshot at plan time.** Not needed for correctness (see Why). Do we want it for audit ("what did
-   this run run with")? It would be sealed and pruned with the plan artifact.
-4. **Upgrades.** Releases 0.6 and 0.7 are out, so phase A needs a real migration (`workspace_templates` →
-   first versions), not a schema reset. Confirm that's the target.
+Decisions on the open questions, and where the build differs from the proposal:
+
+1. **What the workspace shows during a run: as before.** `workspace_templates` is a view of the active run's
+   version, else the current one. Users see what they saw with the undo (the templates the workspace is getting,
+   and after a discard the ones it has), without an undo; no banner needed, and every reader stayed as it was.
+2. **Every version is kept.** No pruning yet; they're small.
+3. **No variables snapshot.** Not needed for correctness (see Why).
+4. **A real migration.** 010 makes each workspace's templates its first version. An active run that changed them
+   gets them as they are, and the current version has the run's befores put back, as its restore would have
+   (`TestConfigVersionsUpgrade`). So upgrading needs no idle system.
+5. **A new workspace starts at the version it was created with** (current at once, its first run plans it), as
+   before: discarding its first plan leaves the template to configure and plan again. A promotion's new target
+   doesn't: its templates are the promotion's version, which a discard leaves unapplied.
+6. **Not yet: the parent check** (rule 1's `ErrChanged` for a version whose parent isn't current). Every change
+   builds from the current version inside the transaction that queues its run, and only one run is active, so it
+   can't race; `sameTemplates` and the promotion digest stay until a stale form needs refusing.
+7. Columns left for later phases: `vcs_commit` (VCS runs keep `runs.vcs_commit`), `import` (phase F). `source`
+   is `form`, `promote`, `rollout`, `import` (an applied import switching `existing` off: still a version without
+   a run, until phase F), `remove`, `upgrade` (migration 010).
+8. `RotateKey` re-seals inputs in every version; it still refuses while a run is active, because a pending
+   promotion (`runs.promotion`, phase E) holds sealed inputs.

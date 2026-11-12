@@ -86,10 +86,12 @@ func TestTickRollout(t *testing.T) {
 		}
 		ws[n] = w.ID
 	}
-	end := func(n, status string) { // ends the workspace's active run
+	end := func(n, status string) { // ends the workspace's active run; applied, the workspace takes its version
 		t.Helper()
-		if _, err := store.Pool.Exec(context.Background(), `UPDATE runs SET status = $2, lease_id = NULL, lease_until = NULL, updated_at = now() WHERE workspace_id = $1
-			AND run_active(status)`, ws[n], status); err != nil {
+		if _, err := store.Pool.Exec(context.Background(), `WITH done AS (UPDATE runs SET status = $2, lease_id = NULL, lease_until = NULL, updated_at = now()
+			WHERE workspace_id = $1 AND run_active(status) RETURNING runs.workspace_id, runs.cv_id)
+			UPDATE workspaces cur SET current_cv_id = CASE WHEN $2 = 'applied' THEN COALESCE(done.cv_id, cur.current_cv_id) ELSE cur.current_cv_id END
+			FROM done WHERE cur.id = done.workspace_id`, ws[n], status); err != nil {
 			t.Fatal(err)
 		}
 	}

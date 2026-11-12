@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 
 	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage/db"
@@ -102,10 +101,10 @@ type StatusEntry struct {
 // allow (ErrTransition; ErrNotFound for no such run), and performs what the new status implies:
 //   - leaving planning or applying: the lease ends, and with it the state lock the run's Terraform
 //     may have left behind (never a rollback's or CLI's)
-//   - ending: config_changes is dropped; ended before its apply started (discarded, canceled,
-//     errored), the configuration the run changed goes back (see restoreConfig), what it was set to kept for
-//     Change settings (keepEntered); a destroy run
-//     removing templates that succeeded (applied, or no changes: nothing was left) removes them
+//   - its apply starting (applying), or no changes: the workspace takes the run's configuration version
+//     (configversions.go); a run that ends before that changes no configuration
+//   - a destroy run removing templates that succeeded (applied, or no changes: nothing was left) removes
+//     them: a version without them
 //   - a promotion's first run (a destroy carrying the pending promotion) that succeeded queues the
 //     promotion's apply run, after removing its templates (continuePromotion); one that ended any
 //     other way drops the promotion, and nothing else changes
@@ -149,20 +148,23 @@ func transition(ctx context.Context, q *db.Queries, runID uuid.UUID, to, message
 			return from, nil, err
 		}
 	}
-	if (to == Discarded || to == Canceled || to == Errored) && from != Applying && run.ConfigChanges != nil {
-		if err := keepEntered(ctx, q, runID, run.ConfigChanges); err != nil {
-			return from, nil, err
-		}
-		if err := restoreConfig(ctx, q, run.WorkspaceID, run.ConfigChanges); err != nil {
+	if (to == Applying || to == NoChanges) && run.CvID.Valid {
+		if err := setCurrent(ctx, q, run.WorkspaceID, run.CvID.UUID); err != nil {
 			return from, nil, err
 		}
 	}
 	succeeded := to == Applied || to == NoChanges
-	if succeeded { // the removed templates' resources are gone now
-		for _, name := range run.RemoveTemplates {
-			if err := q.DeleteWorkspaceTemplate(ctx, db.DeleteWorkspaceTemplateParams{WorkspaceID: run.WorkspaceID, Name: name}); err != nil {
-				return from, nil, err
-			}
+	if succeeded && len(run.RemoveTemplates) > 0 { // the removed templates' resources are gone now
+		cur, mods, err := currentConfig(ctx, q, run.WorkspaceID)
+		if err != nil {
+			return from, nil, err
+		}
+		cv, err := newVersion(ctx, q, run.WorkspaceID, cur, without(mods, run.RemoveTemplates), SourceRemove, uuid.Nil)
+		if err != nil {
+			return from, nil, err
+		}
+		if err := setCurrent(ctx, q, run.WorkspaceID, cv); err != nil {
+			return from, nil, err
 		}
 	}
 	switch {
@@ -207,71 +209,6 @@ func locksReleased(ctx context.Context, q *db.Queries, n int64, err error) error
 // the current status (a cancel request).
 func addHistory(ctx context.Context, q *db.Queries, runID uuid.UUID, status, message string) error {
 	return q.AddRunHistory(ctx, db.AddRunHistoryParams{RunID: runID, Status: status, Message: message})
-}
-
-// configChange is one added template's configuration before and after a run's change (configuring
-// templates, rollouts, promotions). A run that ends before its apply started puts the before back, so the
-// workspace never claims a version that wasn't applied; once its apply started the state may already
-// hold part of the new one, so it stays. Before and After are template_config (001_schema.sql).
-type configChange struct {
-	Module string          `json:"module"`
-	Before json.RawMessage `json:"before"` // nil (null): an added template that wasn't there
-	After  json.RawMessage `json:"after"`  // nil (null): a removed template (a promotion)
-}
-
-// configSnapshot reads one added template's configuration; nil if there is none.
-func configSnapshot(ctx context.Context, q *db.Queries, workspaceID uuid.UUID, module string) (json.RawMessage, error) {
-	b, err := q.ConfigSnapshot(ctx, db.ConfigSnapshotParams{WorkspaceID: workspaceID, Name: module})
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	return b, err
-}
-
-// recordConfigChanges stores on run runID the changes made to the templates in changes (Before
-// read before the change), reading each After now.
-func recordConfigChanges(ctx context.Context, q *db.Queries, runID, workspaceID uuid.UUID, changes []configChange) error {
-	for i := range changes {
-		after, err := configSnapshot(ctx, q, workspaceID, changes[i].Module)
-		if err != nil {
-			return err
-		}
-		changes[i].After = after
-	}
-	b, err := json.Marshal(changes)
-	if err != nil {
-		return err
-	}
-	return q.SetConfigChanges(ctx, db.SetConfigChangesParams{ID: runID, ConfigChanges: b})
-}
-
-// restoreConfig puts back the before of each change (raw config_changes):
-//   - changed (before and after): only while the template is still at its after; one changed since is left alone
-//   - added (before null): removed, only while it is still at its after
-//   - removed (after null, a promotion): put back, unless a template took its module name since
-func restoreConfig(ctx context.Context, q *db.Queries, workspaceID uuid.UUID, raw []byte) error {
-	var changes []configChange
-	if err := json.Unmarshal(raw, &changes); err != nil {
-		return err
-	}
-	isNull := func(b json.RawMessage) bool { return b == nil || string(b) == "null" }
-	for _, c := range changes {
-		var err error
-		switch {
-		case isNull(c.After) && isNull(c.Before):
-			continue // nothing was there before or after
-		case isNull(c.After):
-			err = q.RestoreRemovedTemplate(ctx, db.RestoreRemovedTemplateParams{WorkspaceID: workspaceID, Name: c.Module, Before: c.Before})
-		case isNull(c.Before):
-			err = q.RemoveRestoredTemplate(ctx, db.RemoveRestoredTemplateParams{WorkspaceID: workspaceID, Name: c.Module, After: c.After})
-		default:
-			err = q.RestoreTemplate(ctx, db.RestoreTemplateParams{WorkspaceID: workspaceID, Name: c.Module, After: c.After, Before: c.Before})
-		}
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // pruneBatch is how many runs one retention statement handles: short locks on a big first pass.
@@ -319,11 +256,10 @@ func prune(batch func(lim int32) (int64, error), lim int32) (int64, error) {
 type Found struct {
 	TemplateID string         `json:"template_id"`
 	Inputs     map[string]any `json:"inputs,omitempty"` // found by the plan
-	Saved      map[string]any `json:"saved,omitempty"`  // the module's inputs the run had, sensitive (sealed) ones left out
+	Saved      map[string]any `json:"saved,omitempty"`  // the module's inputs in the run's version, sensitive (sealed) ones left out
 }
 
-// unsealed is inputs without the sealed values: kept past their run, they'd escape rotate-key's re-sealing (it
-// re-seals stored inputs and refuses while a run is active), and the form never shows them anyway.
+// unsealed is inputs without the sealed values: the form never shows them.
 func unsealed(inputs map[string]any) map[string]any {
 	out := map[string]any{}
 	for k, v := range inputs {
@@ -334,44 +270,9 @@ func unsealed(inputs map[string]any) map[string]any {
 	return out
 }
 
-// keepEntered records on run runID, ending without its apply, what it set its templates to (raw config_changes'
-// afters), beside what its plan found: config_changes goes, and a restore may remove a template it added.
-func keepEntered(ctx context.Context, q *db.Queries, runID uuid.UUID, raw []byte) error {
-	var changes []configChange
-	if err := json.Unmarshal(raw, &changes); err != nil {
-		return err
-	}
-	found := map[string]Found{}
-	if cur, err := q.RunFound(ctx, runID); err != nil {
-		return err
-	} else if cur != nil {
-		if err := json.Unmarshal(cur, &found); err != nil {
-			return err
-		}
-	}
-	for _, c := range changes {
-		var after struct {
-			TemplateID string         `json:"template_id"`
-			Inputs     map[string]any `json:"inputs"`
-		}
-		if c.After == nil || string(c.After) == "null" {
-			continue // a removal
-		}
-		if err := json.Unmarshal(c.After, &after); err != nil {
-			return err
-		}
-		f := found[c.Module]
-		f.TemplateID, f.Saved = after.TemplateID, unsealed(after.Inputs)
-		found[c.Module] = f
-	}
-	b, err := json.Marshal(found)
-	if err != nil {
-		return err
-	}
-	return q.SetRunFound(ctx, db.SetRunFoundParams{ID: runID, Found: b})
-}
-
-// RunFound is what run runID's plan found importing, by template module; nil none. ErrNotFound: no such run.
+// RunFound is, by template module, what run runID's plan found importing and, once the run ended without its
+// apply, the modules it changed (it made the change: the first run of its version); each with its inputs in the
+// run's version (Saved). nil none. ErrNotFound: no such run.
 func (s *Store) RunFound(ctx context.Context, runID uuid.UUID) (map[string]Found, error) {
 	raw, err := s.q.RunFound(ctx, runID)
 	if err != nil {
@@ -379,7 +280,38 @@ func (s *Store) RunFound(ctx context.Context, runID uuid.UUID) (map[string]Found
 	}
 	var found map[string]Found
 	if raw != nil {
-		err = json.Unmarshal(raw, &found)
+		if err := json.Unmarshal(raw, &found); err != nil {
+			return nil, err
+		}
 	}
-	return found, err
+	rc, err := s.q.RunConfig(ctx, runID)
+	if err != nil {
+		return nil, err
+	}
+	mods, err := configModules(ctx, s.q, rc.CvID)
+	if err != nil {
+		return nil, err
+	}
+	entered := rc.Changed && !rc.Active && !rc.Applied // ended without its apply
+	var before []WorkspaceTemplate
+	if entered {
+		if before, err = configModules(ctx, s.q, rc.ParentID); err != nil {
+			return nil, err
+		}
+	}
+	for _, m := range mods {
+		f, read := found[m.Name]
+		changed := entered && !slices.ContainsFunc(before, func(b WorkspaceTemplate) bool {
+			return sameTemplates([]WorkspaceTemplate{b}, []WorkspaceTemplate{m})
+		})
+		if !read && !changed {
+			continue
+		}
+		if found == nil {
+			found = map[string]Found{}
+		}
+		f.TemplateID, f.Saved = m.TemplateID, unsealed(m.Inputs)
+		found[m.Name] = f
+	}
+	return found, nil
 }

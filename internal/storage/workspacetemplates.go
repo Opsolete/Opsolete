@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 
 	"github.com/google/uuid"
 
@@ -20,26 +21,28 @@ type WorkspaceTemplate struct {
 	Inputs       map[string]any
 }
 
-// TemplateInputs is one added template's inputs as stored, for re-sealing them under a new SECRET_KEY.
+// TemplateInputs is one module's inputs in a configuration version as stored, for re-sealing them under a new
+// SECRET_KEY (bound to the workspace and module, not the version: versions share them).
 type TemplateInputs struct {
 	WorkspaceID uuid.UUID
+	CVID        uuid.UUID
 	Name        string
 	Inputs      []byte
 }
 
+// AllTemplateInputs lists the inputs of every module of every configuration version.
 func (s *Store) AllTemplateInputs(ctx context.Context) ([]TemplateInputs, error) {
-	rows, err := s.q.AllTemplateInputs(ctx)
+	rows, err := s.q.AllConfigInputs(ctx)
 	out := make([]TemplateInputs, 0, len(rows))
 	for _, t := range rows {
-		out = append(out, TemplateInputs{WorkspaceID: t.WorkspaceID, Name: t.Name, Inputs: t.Inputs})
+		out = append(out, TemplateInputs{WorkspaceID: t.WorkspaceID, CVID: t.CvID, Name: t.Name, Inputs: t.Inputs})
 	}
 	return out, err
 }
 
-// ResealInputs replaces an added template's inputs, unless they changed since they were read
-// (ErrNotFound).
-func (s *Store) ResealInputs(ctx context.Context, workspaceID uuid.UUID, name string, old, inputs []byte) error {
-	return affected(s.q.ResealInputs(ctx, db.ResealInputsParams{WorkspaceID: workspaceID, Name: name, Old: old, Inputs: inputs}))
+// ResealInputs replaces a version's module's inputs, unless they changed since they were read (ErrNotFound).
+func (s *Store) ResealInputs(ctx context.Context, cv uuid.UUID, name string, old, inputs []byte) error {
+	return affected(s.q.ResealConfigInputs(ctx, db.ResealConfigInputsParams{CvID: cv, Name: name, Old: old, Inputs: inputs}))
 }
 
 // WorkspaceTemplates lists a workspace's added templates by name.
@@ -64,38 +67,44 @@ func workspaceTemplates(ctx context.Context, q *db.Queries, workspaceID uuid.UUI
 }
 
 // SetWorkspaceTemplate adds a template to a workspace (add: ErrExists if the name is taken), or
-// changes an added one's module version and inputs (ErrNotFound if there is none), and queues the
-// plan that applies it. Without a free workspace (ErrRunActive) nothing changes.
+// changes an added one's module version and inputs (ErrNotFound if there is none): a new configuration version,
+// and the plan that applies it. Without a free workspace (ErrRunActive) nothing changes.
 func (s *Store) SetWorkspaceTemplate(ctx context.Context, workspaceID uuid.UUID, t WorkspaceTemplate, add bool, createdBy uuid.UUID) (Run, error) {
-	raw, err := json.Marshal(t.Inputs)
+	var r Run
+	err := s.tx(ctx, func(q *db.Queries) error {
+		cur, mods, err := currentConfig(ctx, q, workspaceID)
+		if err != nil {
+			return err
+		}
+		switch exists := slices.ContainsFunc(mods, func(m WorkspaceTemplate) bool { return m.Name == t.Name }); {
+		case add && exists:
+			return ErrExists
+		case !add && !exists:
+			return ErrNotFound
+		}
+		r, err = queueVersion(ctx, q, workspaceID, cur, withModule(mods, t), SourceForm, "apply", createdBy)
+		return err
+	})
 	if err != nil {
 		return Run{}, err
 	}
-	change := func(q *db.Queries) (int64, error) {
-		if add {
-			return q.InsertWorkspaceTemplate(ctx, db.InsertWorkspaceTemplateParams{WorkspaceID: workspaceID, Name: t.Name,
-				TemplateID: t.TemplateID, ModuleSource: t.ModuleSource, ModuleRef: t.ModuleRef, Inputs: raw})
-		}
-		return q.UpdateWorkspaceTemplate(ctx, db.UpdateWorkspaceTemplateParams{WorkspaceID: workspaceID, Name: t.Name,
-			TemplateID: t.TemplateID, ModuleSource: t.ModuleSource, ModuleRef: t.ModuleRef, Inputs: raw})
-	}
-	return s.changeTemplates(ctx, workspaceID, t.Name, createdBy, change)
+	return r, nil
 }
 
 // RemoveWorkspaceTemplate removes an added template. A template's module may configure its own
 // providers, so dropping its block before its resources are gone leaves Terraform unable to destroy
 // them ("Provider configuration not present"): if the state manages resources, a destroy run
 // targeting module.<name> is queued that removes the template once applied; if not, it is removed
-// right away and no run is queued (Run.ID uuid.Nil). ErrNotFound: no such template.
+// right away (a version without it) and no run is queued (Run.ID uuid.Nil). ErrNotFound: no such template.
 func (s *Store) RemoveWorkspaceTemplate(ctx context.Context, workspaceID uuid.UUID, name string, createdBy uuid.UUID) (Run, error) {
 	var r Run
 	err := s.tx(ctx, func(q *db.Queries) error {
-		exists, err := q.LockWorkspaceTemplate(ctx, db.LockWorkspaceTemplateParams{WorkspaceID: workspaceID, Name: name})
+		cur, mods, err := currentConfig(ctx, q, workspaceID)
 		if err != nil {
-			return notFound(err)
+			return err
 		}
 		switch err := requireIdle(ctx, q, workspaceID); {
-		case !exists:
+		case !slices.ContainsFunc(mods, func(m WorkspaceTemplate) bool { return m.Name == name }):
 			return ErrNotFound
 		case errors.Is(err, ErrHasResources):
 			if r, err = createRun(ctx, q, workspaceID, "destroy", createdBy); err != nil {
@@ -105,35 +114,11 @@ func (s *Store) RemoveWorkspaceTemplate(ctx context.Context, workspaceID uuid.UU
 		case err != nil:
 			return err
 		}
-		return q.DeleteWorkspaceTemplate(ctx, db.DeleteWorkspaceTemplateParams{WorkspaceID: workspaceID, Name: name})
-	})
-	if err != nil {
-		return Run{}, err
-	}
-	return r, nil
-}
-
-// changeTemplates runs change (which must change one row, added template name's, else ErrNotFound)
-// and queues a plan, atomically; if the run ends before its apply, the change is undone (configChange).
-func (s *Store) changeTemplates(ctx context.Context, workspaceID uuid.UUID, name string, createdBy uuid.UUID,
-	change func(q *db.Queries) (int64, error)) (Run, error) {
-	var r Run
-	err := s.tx(ctx, func(q *db.Queries) error {
-		before, err := configSnapshot(ctx, q, workspaceID, name)
+		cv, err := newVersion(ctx, q, workspaceID, cur, without(mods, []string{name}), SourceRemove, createdBy)
 		if err != nil {
 			return err
 		}
-		err = affected(change(q))
-		if isUnique(err) {
-			return ErrExists
-		}
-		if err != nil {
-			return err
-		}
-		if r, err = createRun(ctx, q, workspaceID, "apply", createdBy); err != nil {
-			return err
-		}
-		return recordConfigChanges(ctx, q, r.ID, workspaceID, []configChange{{Module: name, Before: before}})
+		return setCurrent(ctx, q, workspaceID, cv)
 	})
 	if err != nil {
 		return Run{}, err

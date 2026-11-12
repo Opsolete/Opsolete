@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/opsolete/opsolete/internal/runnerapi"
+	"github.com/opsolete/opsolete/internal/storage/db"
 	"github.com/opsolete/opsolete/internal/testdb"
 )
 
@@ -1119,5 +1120,28 @@ func TestRunnerPools(t *testing.T) {
 	}
 	if _, err := s.RunnerByToken(ctx, prdToken); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a deleted runner's token: %v", err)
+	}
+}
+
+// putTemplates makes mods (by name, over the current ones) the workspace's current configuration version without a
+// run, as an applied run would.
+func putTemplates(t *testing.T, s *Store, workspaceID uuid.UUID, mods ...WorkspaceTemplate) {
+	t.Helper()
+	err := s.tx(context.Background(), func(q *db.Queries) error {
+		cur, have, err := currentConfig(context.Background(), q, workspaceID)
+		if err != nil {
+			return err
+		}
+		for _, m := range mods {
+			have = withModule(have, m)
+		}
+		cv, err := newVersion(context.Background(), q, workspaceID, cur, have, SourceForm, uuid.Nil)
+		if err != nil {
+			return err
+		}
+		return setCurrent(context.Background(), q, workspaceID, cv)
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

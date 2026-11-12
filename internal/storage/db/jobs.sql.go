@@ -187,7 +187,7 @@ const leaseRun = `-- name: LeaseRun :one
 UPDATE runs SET runner = $1::text, lease_id = $2::text,
     lease_until = now() + make_interval(secs => $3::float8)
 WHERE id = $4::uuid
-RETURNING workspace_id, action, replace, COALESCE(vcs_commit, '')::text AS vcs_commit, remove_templates
+RETURNING workspace_id, action, replace, COALESCE(vcs_commit, '')::text AS vcs_commit, remove_templates, cv_id
 `
 
 type LeaseRunParams struct {
@@ -203,6 +203,7 @@ type LeaseRunRow struct {
 	Replace         []byte
 	VcsCommit       string
 	RemoveTemplates []string
+	CvID            uuid.NullUUID
 }
 
 func (q *Queries) LeaseRun(ctx context.Context, arg LeaseRunParams) (LeaseRunRow, error) {
@@ -219,6 +220,7 @@ func (q *Queries) LeaseRun(ctx context.Context, arg LeaseRunParams) (LeaseRunRow
 		&i.Replace,
 		&i.VcsCommit,
 		&i.RemoveTemplates,
+		&i.CvID,
 	)
 	return i, err
 }

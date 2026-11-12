@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -73,7 +74,7 @@ func (s *Store) ClaimJob(ctx context.Context, runner Runner, lease time.Duration
 		if j.VCS, err = q.WorkspaceHasVCS(ctx, j.WorkspaceID); err != nil {
 			return err
 		}
-		if j.Modules, err = workspaceTemplates(ctx, q, j.WorkspaceID); err != nil {
+		if j.Modules, err = configModules(ctx, q, r.CvID); err != nil { // the run's version, both phases
 			return err
 		}
 		ok = true
@@ -213,13 +214,21 @@ func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 		final = map[string]string{"failed": Errored, "canceled": Canceled}[result]
 		// a template's module importing what exists: always a human's call (a VCS configuration's own import
 		// blocks are its authors' business, but no resource may be in two states either way)
+		rc, err := q.RunConfig(ctx, runID)
+		if err != nil {
+			return err
+		}
+		mods, err := configModules(ctx, q, rc.CvID) // the templates the run plans
+		if err != nil {
+			return err
+		}
 		var importing bool
 		var conflict string
 		if r.Status == Planning && r.Action == "apply" && plan != nil && len(plan.Imports) > 0 && final == "" {
 			if conflict, err = importConflict(ctx, q, plan.Imports, resources); err != nil {
 				return err
 			}
-			names, err := importedTemplates(ctx, q, r.WorkspaceID, plan.Imports)
+			names := importedTemplates(mods, plan.Imports)
 			if err != nil {
 				return err
 			}
@@ -266,15 +275,11 @@ func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 				return err
 			}
 		}
-		if len(found) > 0 { // with each module's template: a restore may remove the module
-			mods, err := workspaceTemplates(ctx, q, r.WorkspaceID)
-			if err != nil {
-				return err
-			}
+		if len(found) > 0 { // with each module's template: the workspace may not have the module (yet)
 			byModule := map[string]Found{}
 			for _, m := range mods {
 				if in := found[m.Name]; len(in) > 0 {
-					byModule[m.Name] = Found{TemplateID: m.TemplateID, Inputs: in, Saved: unsealed(m.Inputs)}
+					byModule[m.Name] = Found{TemplateID: m.TemplateID, Inputs: in}
 				}
 			}
 			if foundJSON, err = json.Marshal(byModule); err != nil {
@@ -284,7 +289,7 @@ func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 		if final == ApplyQueued && message == "" {
 			message = "auto-apply: waiting for a runner"
 		}
-		if foundJSON != nil { // before the transition: one that undoes the run's template change adds what it was set to
+		if foundJSON != nil {
 			if err := q.SetRunFound(ctx, db.SetRunFoundParams{ID: runID, Found: foundJSON}); err != nil {
 				return err
 			}
@@ -322,21 +327,20 @@ func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 // docs: templates.md, "Writing modules that can import").
 const ImportInput = "existing"
 
-// importedTemplates are the added templates whose modules imports go into.
-func importedTemplates(ctx context.Context, q *db.Queries, workspaceID uuid.UUID, imports []runnerapi.Import) ([]string, error) {
-	mods, err := workspaceTemplates(ctx, q, workspaceID)
+// importedTemplates are the templates of mods whose modules imports go into.
+func importedTemplates(mods []WorkspaceTemplate, imports []runnerapi.Import) []string {
 	var names []string
 	for _, m := range mods {
 		if slices.ContainsFunc(imports, func(im runnerapi.Import) bool { return strings.HasPrefix(im.To, "module."+m.Name+".") }) {
 			names = append(names, m.Name)
 		}
 	}
-	return names, err
+	return names
 }
 
-// endImport switches ImportInput off in the templates applied run runID imported into: what they imported is in
-// the state, so their modules stop looking for it (a resource deleted outside Terraform later is created again,
-// not looked for), and a promotion doesn't copy the switch.
+// endImport switches ImportInput off in the templates applied run runID imported into, in a new version the
+// workspace takes at once: what they imported is in the state, so their modules stop looking for it (a resource
+// deleted outside Terraform later is created again, not looked for), and a promotion doesn't copy the switch.
 func endImport(ctx context.Context, q *db.Queries, runID, workspaceID uuid.UUID) error {
 	raw, err := q.RunPlan(ctx, runID)
 	if err != nil || raw == nil {
@@ -346,11 +350,26 @@ func endImport(ctx context.Context, q *db.Queries, runID, workspaceID uuid.UUID)
 	if err := json.Unmarshal(raw, &plan); err != nil || len(plan.Imports) == 0 {
 		return err
 	}
-	names, err := importedTemplates(ctx, q, workspaceID, plan.Imports)
-	if err != nil || len(names) == 0 {
+	cur, mods, err := currentConfig(ctx, q, workspaceID) // the run's: its apply started
+	if err != nil {
 		return err
 	}
-	return q.EndImport(ctx, db.EndImportParams{WorkspaceID: workspaceID, Names: names, Input: ImportInput})
+	changed := false
+	for i, m := range mods {
+		if slices.Contains(importedTemplates(mods, plan.Imports), m.Name) && m.Inputs[ImportInput] == true {
+			mods[i].Inputs = maps.Clone(m.Inputs)
+			mods[i].Inputs[ImportInput] = false
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	cv, err := newVersion(ctx, q, workspaceID, cur, mods, SourceImport, uuid.Nil)
+	if err != nil {
+		return err
+	}
+	return setCurrent(ctx, q, workspaceID, cv)
 }
 
 // importConflict says which of a plan's imports a state manages already ("" none): this workspace's as its plan

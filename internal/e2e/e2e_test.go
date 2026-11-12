@@ -423,10 +423,10 @@ output "message" { value = module.inner.message }
 			t.Fatal(err)
 		}
 		prd = w.ID
-		if _, err := store.Pool.Exec(ctx, `INSERT INTO workspace_templates (workspace_id, name, template_id, module_source, module_ref, inputs)
-			VALUES ($1, $2, 'greeting', $3, '1.0.0', '{"greeting": "hello"}'), ($1, 'third', 'greeting', $3, '1.2.0', '{"greeting": "hi", "name": "Third"}')`,
-			w.ID, dev[0].Name, dev[0].ModuleSource); err != nil {
-			t.Fatal(err)
+		for _, m := range [][4]string{{dev[0].Name, "1.0.0", `{"greeting": "hello"}`}, {"third", "1.2.0", `{"greeting": "hi", "name": "Third"}`}} {
+			if _, err := store.Pool.Exec(ctx, putTemplate, w.ID, m[0], "greeting", dev[0].ModuleSource, m[1], m[2]); err != nil {
+				t.Fatal(err)
+			}
 		}
 		runOf(postForm(t, "/workspaces/"+ws+"/runs", url.Values{"action": {"apply"}}))
 		await(t, storage.Applied)
@@ -542,3 +542,15 @@ func tarGz(t *testing.T, dir string) []byte {
 	gz.Close()
 	return buf.Bytes()
 }
+
+// putTemplate ($1 workspace, $2 name, $3 template, $4 source, $5 ref, $6 inputs) makes a template part of the
+// workspace's current configuration version, as an applied run would.
+const putTemplate = `WITH v AS (
+	INSERT INTO configuration_versions (workspace_id, parent_id, source) SELECT id, current_cv_id, 'form' FROM workspaces WHERE id = $1 RETURNING id, parent_id
+), keep AS (
+	INSERT INTO configuration_modules (cv_id, name, template_id, module_source, module_ref, inputs)
+	SELECT v.id, m.name, m.template_id, m.module_source, m.module_ref, m.inputs FROM v JOIN configuration_modules m ON m.cv_id = v.parent_id WHERE m.name <> $2
+), put AS (
+	INSERT INTO configuration_modules (cv_id, name, template_id, module_source, module_ref, inputs) SELECT v.id, $2, $3, $4, $5, $6 FROM v
+)
+UPDATE workspaces w SET current_cv_id = v.id FROM v WHERE w.id = $1`

@@ -158,7 +158,7 @@ func TestEnvironmentValuesInJobs(t *testing.T) {
 	}
 
 	// configure: a posted value for an input the project sets is ignored, the workspace's own kept
-	if _, err := a.Store.Pool.Exec(ctx, `UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL WHERE workspace_id = $1`, ws.ID); err != nil {
+	if _, err := a.Store.Pool.Exec(ctx, `WITH done AS (UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL WHERE workspace_id = $1 AND run_active(status) RETURNING runs.workspace_id, runs.cv_id) UPDATE workspaces cur SET current_cv_id = COALESCE(done.cv_id, cur.current_cv_id) FROM done WHERE cur.id = done.workspace_id`, ws.ID); err != nil {
 		t.Fatal(err)
 	}
 	added, err := a.Store.WorkspaceTemplates(ctx, ws.ID)
