@@ -98,7 +98,12 @@ func toRun(r db.RunList) (Run, error) {
 // is a user id, or uuid.Nil. id is the new workspace's id (uuid.Nil = a random one): set when inputs are
 // sealed to it beforehand. project is the name of the project it goes into; "" is the default project.
 func (s *Store) CreateWorkspace(ctx context.Context, id uuid.UUID, name, project string, t WorkspaceTemplate, autoApply bool, createdBy uuid.UUID) (Workspace, Run, error) {
-	return s.createWorkspace(ctx, id, EmptyWorkspace{Name: name, Project: project, AutoApply: autoApply, CreatedBy: createdBy}, &t)
+	return s.createWorkspace(ctx, id, EmptyWorkspace{Name: name, Project: project, AutoApply: autoApply, CreatedBy: createdBy}, &t, "apply")
+}
+
+// CreateWorkspaceAs is CreateWorkspace with the first run's action: plan for an import's first round.
+func (s *Store) CreateWorkspaceAs(ctx context.Context, id uuid.UUID, name, project string, t WorkspaceTemplate, autoApply bool, action string, createdBy uuid.UUID) (Workspace, Run, error) {
+	return s.createWorkspace(ctx, id, EmptyWorkspace{Name: name, Project: project, AutoApply: autoApply, CreatedBy: createdBy}, &t, action)
 }
 
 // EmptyWorkspace is a workspace to create without templates and without a run.
@@ -122,11 +127,11 @@ type VCSLink struct {
 // CreateEmptyWorkspace creates a workspace, its execution mode and its VCS link in one transaction:
 // if any part fails there is no workspace. ErrNameTaken: the name is in use.
 func (s *Store) CreateEmptyWorkspace(ctx context.Context, e EmptyWorkspace) (Workspace, error) {
-	w, _, err := s.createWorkspace(ctx, uuid.Nil, e, nil)
+	w, _, err := s.createWorkspace(ctx, uuid.Nil, e, nil, "")
 	return w, err
 }
 
-func (s *Store) createWorkspace(ctx context.Context, id uuid.UUID, e EmptyWorkspace, t *WorkspaceTemplate) (Workspace, Run, error) {
+func (s *Store) createWorkspace(ctx context.Context, id uuid.UUID, e EmptyWorkspace, t *WorkspaceTemplate, action string) (Workspace, Run, error) {
 	var run Run
 	err := s.tx(ctx, func(q *db.Queries) error {
 		var err error
@@ -144,7 +149,7 @@ func (s *Store) createWorkspace(ctx context.Context, id uuid.UUID, e EmptyWorksp
 		if err := setCurrent(ctx, q, id, cv); err != nil {
 			return err
 		}
-		run, err = createRun(ctx, q, id, "apply", e.CreatedBy)
+		run, err = createRun(ctx, q, id, action, e.CreatedBy)
 		return err
 	})
 	if err != nil {

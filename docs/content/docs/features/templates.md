@@ -191,8 +191,10 @@ finds and imports them itself, and must be able to describe them as they are:
 - **An `existing` input** (a `bool`, default `false`) that switches on `import` blocks in the module (Terraform ≥
   1.16). Their IDs come from the inputs that identify the resource (name, resource group) and from data sources
   for what the user doesn't know (a VM's network interface); `azurerm_resources` finds any type by name without
-  the feature-frozen `azurerm_virtual_machine` family, and its postcondition says clearly when nothing is there. Once the import is applied, Opsolete switches
-  `existing` off again, so the data sources aren't read anymore. Opsolete writes no import blocks and knows nothing
+  the feature-frozen `azurerm_virtual_machine` family, and its postcondition says clearly when nothing is there. The
+  template lists the input like any other; the form doesn't show it as a field (its *Create new* / *Import existing*
+  choice sets it), and Opsolete turns it on only for the runs of an import, never storing it: once the import is
+  applied it's off, so the data sources aren't read anymore. Opsolete writes no import blocks and knows nothing
   about the cloud: the module does.
 
   ```hcl

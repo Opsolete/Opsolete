@@ -119,8 +119,8 @@ func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, 
 	if len(sv.Errs) > 0 {
 		return module, storage.Run{}, &ValidationError{Fields: sv.Errs}
 	}
-	run, err := a.Store.SetWorkspaceTemplate(ctx, f.Workspace.ID, storage.WorkspaceTemplate{Name: module, TemplateID: t.ID,
-		ModuleSource: t.Module.Source, ModuleRef: t.Module.Ref, Inputs: sv.Vals, Follows: sv.Follows}, adding, actor.UserID)
+	run, err := a.Store.SetWorkspaceTemplateAs(ctx, f.Workspace.ID, storage.WorkspaceTemplate{Name: module, TemplateID: t.ID,
+		ModuleSource: t.Module.Source, ModuleRef: t.Module.Ref, Inputs: sv.Vals, Follows: sv.Follows, Import: sv.Import}, adding, runAction(sv.Import), actor.UserID)
 	if errors.Is(err, storage.ErrExists) {
 		return module, run, &ValidationError{Message: "this workspace already has a template named " + module + " (added meanwhile), try again"}
 	}
@@ -132,9 +132,18 @@ func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, 
 	return module, run, nil
 }
 
+// runAction is the action of the run a save queues: an import is planned first (rounds of plans, never applied,
+// until AdoptImport applies one), anything else applied.
+func runAction(importing bool) string {
+	if importing {
+		return "plan"
+	}
+	return "apply"
+}
+
 // ImportInput is the input with which a template's module imports what exists instead of creating it (a bool);
 // an applied import switches it off again (storage.FinishJob).
-const ImportInput = storage.ImportInput
+const ImportInput = "existing"
 
 // CanImport reports whether t's module imports what exists when asked (ImportInput, a bool input).
 func CanImport(t templates.Template) bool {
@@ -177,12 +186,11 @@ func validate(t templates.Template, raw map[string]string) (map[string]any, map[
 // module builds from several inputs, so adding the template again keeps it); typed as stored, sensitive inputs
 // never. Needs operate. ErrNotFound: no such run, or it found nothing for module from t.
 func (a *App) FoundValues(ctx context.Context, actor Actor, workspace string, runID uuid.UUID, module string, t templates.Template) (map[string]any, error) {
-	d, err := a.Run(ctx, actor, workspace, runID, LevelOperate)
-	if err != nil {
+	if _, err := a.Run(ctx, actor, workspace, runID, LevelOperate); err != nil {
 		return nil, err
 	}
-	if d.Run.Status == storage.Applied { // what it found is applied: an old link would undo endImport
-		return nil, ErrNotFound
+	if applied, err := a.Store.RunVersionApplied(ctx, runID); err != nil || applied { // an old link would undo endImport
+		return nil, cmp.Or(err, ErrNotFound)
 	}
 	all, err := a.Store.RunFound(ctx, runID)
 	if err != nil {
@@ -195,6 +203,9 @@ func (a *App) FoundValues(ctx context.Context, actor Actor, workspace string, ru
 	found := map[string]any{}
 	for _, in := range t.Inputs {
 		v, set := f.Inputs[in.Name]
+		if set && !fits(in, v) { // the plan's value isn't one the input takes (a map behind a string input): what was entered
+			set = false
+		}
 		if !set {
 			v, set = f.Saved[in.Name]
 		}
@@ -202,7 +213,28 @@ func (a *App) FoundValues(ctx context.Context, actor Actor, workspace string, ru
 			found[in.Name] = v
 		}
 	}
+	if f.Import && CanImport(t) { // the run imported: the form goes on importing
+		found[ImportInput] = true
+	}
 	return found, nil
+}
+
+// fits: v (a decoded JSON value an import plan found) is of the kind input in takes: a value the form can show
+// and Validate can check, not, say, a whole map an attribute was set from.
+func fits(in templates.Input, v any) bool {
+	switch v.(type) {
+	case string:
+		return in.Type == "" || in.Type == "string" || in.Type == "select"
+	case float64:
+		return in.Type == "number" || in.Type == "string" // a numeric string attribute read back as a number
+	case bool:
+		return in.Type == "bool"
+	case []any:
+		return in.RowFields() != nil
+	case map[string]any:
+		return in.Type == "object" || in.Type == "map"
+	}
+	return false
 }
 
 // ChangeSettings goes back from run id to its template's form: a plan still waiting for confirmation is discarded
@@ -236,8 +268,8 @@ type FoundTemplate struct {
 // FoundTemplates lists the template modules run d (RunDetail checked the actor's access) can go back to the form of
 // (storage.Found), by name; none once it applied.
 func (a *App) FoundTemplates(ctx context.Context, d RunDetail) ([]FoundTemplate, error) {
-	if d.Run.Status == storage.Applied {
-		return nil, nil
+	if applied, err := a.Store.RunVersionApplied(ctx, d.Run.ID); err != nil || applied {
+		return nil, err
 	}
 	all, err := a.Store.RunFound(ctx, d.Run.ID)
 	if err != nil || len(all) == 0 {

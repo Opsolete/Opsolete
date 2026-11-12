@@ -38,6 +38,7 @@ type ConfigurationModule struct {
 	ModuleRef    string
 	Inputs       []byte
 	Follows      []string
+	Importing    bool
 }
 
 type ConfigurationVersion struct {
@@ -425,6 +426,7 @@ type WorkspaceTemplate struct {
 	ModuleRef    string
 	Inputs       []byte
 	Follows      []string
+	Importing    bool
 }
 
 type WorkspaceVc struct {

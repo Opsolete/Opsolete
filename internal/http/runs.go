@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 
@@ -22,6 +23,7 @@ type runPage struct {
 	Plan, Apply phase
 	Found       []app.FoundTemplate               // what a plan that imports found: operators may take it into the form
 	Diff        map[string]runnerapi.ResourceDiff // the plan's attribute changes by resource address
+	Import      *app.ImportSession                // an import's plan round: what it found, what's next (operators)
 }
 
 func (s *Server) run(w http.ResponseWriter, r *http.Request) {
@@ -36,6 +38,13 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 		var err error
 		if page.Found, err = s.App.FoundTemplates(r.Context(), d); err != nil {
 			s.internalError(w, "found values", err)
+			return
+		}
+		switch is, err := s.App.ImportRound(r.Context(), actor(r), d.Workspace.Name, d.Run.ID); {
+		case err == nil:
+			page.Import = &is
+		case !errors.Is(err, app.ErrNotFound):
+			s.internalError(w, "import round", err)
 			return
 		}
 	}
@@ -137,4 +146,26 @@ func (s *Server) decided(w http.ResponseWriter, r *http.Request, id uuid.UUID, e
 		return
 	}
 	http.Redirect(w, r, "/workspaces/"+r.PathValue("name")+"/runs/"+id.String(), http.StatusSeeOther)
+}
+
+// planImportAgain plans an import's round again with what its plan found (app.PlanImportAgain) and opens that run.
+func (s *Server) planImportAgain(w http.ResponseWriter, r *http.Request) {
+	id, _ := pathID(r, "run") // not an id: not found
+	run, err := s.App.PlanImportAgain(r.Context(), actor(r), r.PathValue("name"), id)
+	if err != nil {
+		s.uiError(w, r, err)
+		return
+	}
+	http.Redirect(w, r, "/workspaces/"+r.PathValue("name")+"/runs/"+run.ID.String(), http.StatusSeeOther)
+}
+
+// adoptImport applies what an import's round planned (app.AdoptImport) and opens that run.
+func (s *Server) adoptImport(w http.ResponseWriter, r *http.Request) {
+	id, _ := pathID(r, "run") // not an id: not found
+	run, err := s.App.AdoptImport(r.Context(), actor(r), r.PathValue("name"), id)
+	if err != nil {
+		s.uiError(w, r, err)
+		return
+	}
+	http.Redirect(w, r, "/workspaces/"+r.PathValue("name")+"/runs/"+run.ID.String(), http.StatusSeeOther)
 }

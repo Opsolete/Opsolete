@@ -31,6 +31,8 @@ var (
 	ErrChanged = storage.ErrChanged
 	// ErrNotPromotable: the source can't be promoted (as it is now) to the target; the reason says why.
 	ErrNotPromotable = errors.New("can't promote")
+	// ErrNotImport: the run isn't an import's plan round that can go on (planned again, adopted); the reason says why.
+	ErrNotImport = errors.New("not an import plan that can go on")
 
 	errReadOnly   = reason{ErrForbidden, "you have read-only access to this workspace"}
 	errAdminsOnly = reason{ErrForbidden, "admins only"}
@@ -50,7 +52,7 @@ func (r reason) Unwrap() error { return r.kind }
 var conflicts = []error{storage.ErrRunActive, storage.ErrNotConfirmable, storage.ErrNotCancelable,
 	storage.ErrHasResources, storage.ErrStateLocked, storage.ErrLocalExecution, storage.ErrExists,
 	storage.ErrProjectNotEmpty, storage.ErrDefaultProject, storage.ErrInUse,
-	storage.ErrLeaseLost, storage.ErrNotCloudLocked, storage.ErrLockLost, storage.ErrRolloutClosed, ErrNoConfig, ErrStateConflict, ErrRemoteExecution, ErrChanged, ErrNotPromotable}
+	storage.ErrLeaseLost, storage.ErrNotCloudLocked, storage.ErrLockLost, storage.ErrRolloutClosed, ErrNoConfig, ErrStateConflict, ErrRemoteExecution, ErrChanged, ErrNotPromotable, ErrNotImport}
 
 // IsConflict reports whether err is a conflict (HTTP 409); its message says why.
 func IsConflict(err error) bool {

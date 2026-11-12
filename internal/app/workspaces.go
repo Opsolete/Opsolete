@@ -95,8 +95,9 @@ func (a *App) CreateWorkspace(ctx context.Context, actor Actor, in NewWorkspace)
 	if perr != nil {
 		return storage.Workspace{}, storage.Run{}, perr
 	}
-	ws, run, err := a.Store.CreateWorkspace(ctx, id, in.Name, p.Name, storage.WorkspaceTemplate{Name: module, TemplateID: t.ID,
-		ModuleSource: t.Module.Source, ModuleRef: t.Module.Ref, Inputs: vals, Follows: sv.Follows}, in.AutoApply, actor.UserID)
+	ws, run, err := a.Store.CreateWorkspaceAs(ctx, id, in.Name, p.Name, storage.WorkspaceTemplate{Name: module, TemplateID: t.ID,
+		ModuleSource: t.Module.Source, ModuleRef: t.Module.Ref, Inputs: vals, Follows: sv.Follows, Import: sv.Import}, in.AutoApply,
+		runAction(sv.Import), actor.UserID)
 	if errors.Is(err, storage.ErrNameTaken) {
 		return ws, run, invalid(FieldName, err.Error())
 	}

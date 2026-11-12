@@ -28,7 +28,7 @@ func (q *Queries) AddRunHistory(ctx context.Context, arg AddRunHistoryParams) er
 }
 
 const listWorkspaceTemplates = `-- name: ListWorkspaceTemplates :many
-SELECT name, template_id, module_source, module_ref, inputs, follows FROM workspace_templates
+SELECT name, template_id, module_source, module_ref, inputs, follows, importing FROM workspace_templates
 WHERE workspace_id = $1::uuid ORDER BY name
 `
 
@@ -39,6 +39,7 @@ type ListWorkspaceTemplatesRow struct {
 	ModuleRef    string
 	Inputs       []byte
 	Follows      []string
+	Importing    bool
 }
 
 func (q *Queries) ListWorkspaceTemplates(ctx context.Context, workspaceID uuid.UUID) ([]ListWorkspaceTemplatesRow, error) {
@@ -57,6 +58,7 @@ func (q *Queries) ListWorkspaceTemplates(ctx context.Context, workspaceID uuid.U
 			&i.ModuleRef,
 			&i.Inputs,
 			&i.Follows,
+			&i.Importing,
 		); err != nil {
 			return nil, err
 		}
@@ -69,13 +71,14 @@ func (q *Queries) ListWorkspaceTemplates(ctx context.Context, workspaceID uuid.U
 }
 
 const lockRun = `-- name: LockRun :one
-SELECT r.status, r.workspace_id, r.remove_templates, r.cv_id,
+SELECT r.status, r.action, r.workspace_id, r.remove_templates, r.cv_id,
     EXISTS (SELECT 1 FROM promotions p WHERE p.destroy_run_id = r.id AND p.apply_run_id IS NULL)::boolean AS promotes
 FROM runs r WHERE r.id = $1::uuid FOR UPDATE OF r
 `
 
 type LockRunRow struct {
 	Status          string
+	Action          string
 	WorkspaceID     uuid.UUID
 	RemoveTemplates []string
 	CvID            uuid.NullUUID
@@ -88,6 +91,7 @@ func (q *Queries) LockRun(ctx context.Context, id uuid.UUID) (LockRunRow, error)
 	var i LockRunRow
 	err := row.Scan(
 		&i.Status,
+		&i.Action,
 		&i.WorkspaceID,
 		&i.RemoveTemplates,
 		&i.CvID,

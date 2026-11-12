@@ -22,6 +22,8 @@ var noInvalidInput = map[string]string{
 	"POST /account/tokens/{id}/revoke":                          "a button",
 	"POST /account/tokens/revoke":                               "a button",
 	"POST /organization/runners/{id}/delete":                    "a button",
+	"POST /workspaces/{name}/runs/{run}/plan-again":             "a button",
+	"POST /workspaces/{name}/runs/{run}/adopt":                  "a button",
 	"POST /account/sessions/revoke":                             "a button",
 	"POST /users/{id}/sessions/revoke":                          "a button: the user is in the path",
 	"POST /registry/{ns}/{name}/{system}/sync":                  "a button",

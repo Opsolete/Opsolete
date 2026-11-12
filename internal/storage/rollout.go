@@ -22,6 +22,7 @@ type TemplateUse struct {
 	ModuleSource, ModuleRef               string
 	Inputs                                map[string]any
 	Follows                               []string  // per-environment inputs that follow the project (WorkspaceTemplate.Follows)
+	Import                                bool      // the module imports what exists
 	RunID                                 uuid.UUID // the workspace's active run; uuid.Nil if none
 	RunStatus                             string    // its status; "" if none
 }
@@ -36,7 +37,7 @@ func (s *Store) TemplateUses(ctx context.Context, templateID string, projectID u
 	out := make([]TemplateUse, 0, len(rows))
 	for _, r := range rows {
 		u := TemplateUse{WorkspaceID: r.WorkspaceID, Workspace: r.Workspace, ProjectName: r.ProjectName, ExecutionMode: r.ExecutionMode,
-			Module: r.Module, ModuleSource: r.ModuleSource, ModuleRef: r.ModuleRef, Follows: nilIfEmpty(r.Follows), RunID: r.RunID.UUID}
+			Module: r.Module, ModuleSource: r.ModuleSource, ModuleRef: r.ModuleRef, Follows: nilIfEmpty(r.Follows), Import: r.Importing, RunID: r.RunID.UUID}
 		if r.RunStatus != nil {
 			u.RunStatus = *r.RunStatus
 		}
@@ -85,11 +86,11 @@ func (s *Store) UpgradeTemplates(ctx context.Context, workspaceID uuid.UUID, ups
 			i := slices.IndexFunc(mods, func(m WorkspaceTemplate) bool { return m.Name == u.Module })
 			if i < 0 || mods[i].TemplateID != u.TemplateID || !sameTemplates([]WorkspaceTemplate{mods[i]},
 				[]WorkspaceTemplate{{Name: u.Module, TemplateID: u.TemplateID, ModuleSource: u.From.ModuleSource, ModuleRef: u.From.ModuleRef,
-					Inputs: u.From.Inputs, Follows: u.From.Follows}}) {
+					Inputs: u.From.Inputs, Follows: u.From.Follows, Import: u.From.Import}}) {
 				return ErrNotFound
 			}
 			mods = withModule(mods, WorkspaceTemplate{Name: u.Module, TemplateID: u.TemplateID, ModuleSource: u.ModuleSource,
-				ModuleRef: u.ModuleRef, Inputs: u.Inputs, Follows: u.Follows})
+				ModuleRef: u.ModuleRef, Inputs: u.Inputs, Follows: u.Follows, Import: u.From.Import})
 		}
 		if r, err = queueVersion(ctx, q, workspaceID, cv, mods, SourceRollout, "apply", createdBy); err != nil {
 			return err

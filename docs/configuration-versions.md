@@ -2,7 +2,7 @@
 
 Status: phases A–E built (November 2026: A and B in migration `010_configuration_versions.sql` and
 `storage/configversions.go`, C–E in `011_run_state.sql` and `storage/runs.go`, with D and E narrowed, see
-[Built (C, D, E)](#built-phases-c-d-and-e)); F proposed. Not published (outside `docs/content`). Steps 2 and 3 of the redesign; step 5 (import as a session)
+[Built (C, D, E)](#built-phases-c-d-and-e)); F built as the import session (migration 014, docs/resource-import.md). Not published (outside `docs/content`). Steps 2 and 3 of the redesign; step 5 (import as a session)
 builds on it. What was built differs from the proposal below where [Built](#built-phases-a-and-b) says so.
 
 ## Why

@@ -36,6 +36,7 @@
 {{end}}
 {{if .Found}}<div class="alert" role="status">Filled in with what <a href="/workspaces/{{.Configure.Name}}/runs/{{.FoundRun}}">the import plan</a> found, over what you entered for it. Set what that plan still changes, then start the plan again: it imports what exists instead of creating it, and waits for your confirmation.</div>{{end}}
 <form method="post" class="card form-rows" id="template-form">
+{{if $form.Importing}}<input type="hidden" name="existing" value="on">{{end}}
 {{if not .Configure}}
   <div class="rows-head"><h2>Workspace</h2><p class="hint"><span class="req" aria-hidden="true">*</span> Required</p></div>
   <div class="rows">
