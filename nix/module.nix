@@ -108,6 +108,7 @@ self: {
       OPS_RUNNER_NAME = rcfg.name;
       OPS_JOB_TIMEOUT = rcfg.jobTimeout;
       OPS_JOB_GRACE = rcfg.jobGrace;
+      OPS_SANDBOX = rcfg.sandbox;
       OPS_TERRAFORM = lib.getExe rcfg.terraformPackage;
       OPS_INFRACOST =
         if rcfg.infracost.apiKeyFile != null
@@ -303,6 +304,11 @@ in {
         default = "10m";
         description = "OPS_JOB_GRACE (Go duration, also valid as a systemd time span): after any interrupt (timeout, cancel, stop), how long Terraform may take to finish in-flight operations and save state before it is killed.";
       };
+      sandbox = mkOption {
+        type = types.enum ["namespaces" "auto" "off"];
+        default = "namespaces";
+        description = "OPS_SANDBOX: each Terraform command in its own user, mount, PID and IPC namespaces (a private /tmp, its own processes). `namespaces` (the default here) doesn't start the runner without it; the kernel must allow unprivileged user namespaces (`security.unprivilegedUsernsClone`, off in the hardened profile).";
+      };
       terraformPackage = mkOption {
         type = types.package;
         default = pkgs.terraform; # unfree (BSL): needs allowUnfree or an allowUnfreePredicate
@@ -424,6 +430,11 @@ in {
             StateDirectory = ["opsolete-runner" "opsolete-runner/plugin-cache"];
             # own PID namespace: jobs see no other processes of the host (the runner kills what a job leaves running itself)
             PrivatePIDs = true;
+            # the job sandbox's namespaces (OPS_SANDBOX); no others
+            RestrictNamespaces =
+              if rcfg.sandbox == "off"
+              then true
+              else ["user" "mnt" "pid" "ipc"];
             # for the launcher only (read secret files of any owner, drop to the user); gone after setpriv
             CapabilityBoundingSet = "CAP_SETUID CAP_SETGID CAP_DAC_READ_SEARCH";
             # Stop = SIGTERM to the runner only: it stops claiming and finishes the current job. A job that

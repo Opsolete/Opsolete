@@ -173,7 +173,13 @@ func TestJobEnv(t *testing.T) {
 	defer srv.Close()
 	r := testRunner(t, srv)
 	j := job("env1", "plan", "apply", f.module(t, helloModule), map[string]any{"greeting": "hi"})
-	data := filepath.Join(t.TempDir(), "tfdata")
+	// not under /tmp: the job sandbox hides the runner's /tmp, but for the job's own directories
+	parent, err := os.MkdirTemp(".", ".test-tfdata-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(parent) })
+	data, _ := filepath.Abs(filepath.Join(parent, "tfdata"))
 	j.Env = map[string]string{"TF_DATA_DIR": data}
 	if res, logs := f.do(t, r, j); res.Status != "succeeded" {
 		t.Fatalf("plan: %+v\n%s", res, logs)

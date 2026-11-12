@@ -35,6 +35,8 @@ type tfProc struct {
 	interrupted atomic.Bool // a running command got SIGINT
 	killed      atomic.Bool // a command didn't stop in time and was killed
 	rescued     string      // what became of state the apply couldn't save (rescueState); "" if none
+	self        string      // the runner's binary: commands run in the job sandbox (sandbox.go); "" not
+	binds       []string    // the job's directories, writable in the sandbox
 }
 
 // run runs a terraform command, with its colors on unless args has -no-color (the run page renders
@@ -43,6 +45,9 @@ type tfProc struct {
 func (p *tfProc) run(ctx context.Context, stdout, stderr io.Writer, args ...string) (bool, error) {
 	errs := headBuffer{max: 64 << 10} // the job's message keeps only the start of it
 	cmd := exec.CommandContext(ctx, p.bin, args...)
+	if p.self != "" {
+		cmd = sandboxCommand(ctx, p.self, p.bin, args, p.binds)
+	}
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = p.dir, p.env, stdout, io.MultiWriter(stderr, &errs)
 	var kill *time.Timer // set by Cancel, which returns before Wait does
 	cmd.Cancel = func() error {

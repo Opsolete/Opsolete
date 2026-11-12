@@ -33,6 +33,7 @@ type Runner struct {
 	config.Runner
 	HTTP *http.Client
 	Log  *slog.Logger
+	self string // the runner's binary, which starts the job sandbox's helper; "" no sandbox (setupSandbox)
 }
 
 func New(c config.Runner, log *slog.Logger) *Runner {
@@ -46,6 +47,9 @@ func New(c config.Runner, log *slog.Logger) *Runner {
 func (r *Runner) Run(ctx, hard context.Context) error {
 	if err := hardenProcess(); err != nil {
 		return fmt.Errorf("harden runner process: %w", err)
+	}
+	if err := r.setupSandbox(); err != nil {
+		return err
 	}
 	r.Log.Info("runner started", "name", r.Name, "server", r.ServerURL.String())
 	if !isolates {
@@ -87,7 +91,7 @@ func (r *Runner) Execute(hard context.Context, job runnerapi.Job) {
 	deadline := time.Now().Add(r.JobTimeout)
 	ctx, cancel := context.WithDeadline(hard, deadline)
 	defer cancel()
-	p := &tfProc{bin: r.Terraform, grace: r.JobGrace, end: deadline.Add(r.JobGrace)}
+	p := &tfProc{bin: r.Terraform, grace: r.JobGrace, end: deadline.Add(r.JobGrace), self: r.self}
 
 	var signed []string // resolved signed URLs, kept out of the log
 	resolve := func(src string) (string, error) {
@@ -181,7 +185,17 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	env["TF_HTTP_USERNAME"], env["TF_HTTP_PASSWORD"] = job.WorkspaceID, job.StateToken
 	env["HOME"] = home
 	delete(env, "XDG_DATA_HOME") // Terraform's other implied provider mirror; defaults to under HOME
-	if job.Registry != nil {     // modules from the server's registry, e.g. ones a template's module calls
+	// the job's own temporary files, removed with HOME (in the sandbox /tmp is private anyway)
+	tmp := filepath.Join(home, "tmp")
+	if err := os.Mkdir(tmp, 0o700); err != nil {
+		return fail("prepare workdir", err)
+	}
+	env["TMPDIR"], env["TMP"], env["TEMP"] = tmp, tmp, tmp
+	tf.binds = []string{dir, home}
+	if c := env["TF_PLUGIN_CACHE_DIR"]; c != "" { // shared on purpose; kept reachable when it's under /tmp
+		tf.binds = append(tf.binds, c)
+	}
+	if job.Registry != nil { // modules from the server's registry, e.g. ones a template's module calls
 		modules := strings.TrimSuffix(r.ServerURL.String(), "/") + "/v1/modules/"
 		if env["TF_CLI_CONFIG_FILE"], err = writeCLIConfig(home, *job.Registry, modules, env["TF_CLI_CONFIG_FILE"]); err != nil {
 			return fail("prepare workdir", err)

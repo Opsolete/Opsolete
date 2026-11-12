@@ -30,6 +30,8 @@ self: {
     # no token step: the server registered the runner's token before it started
     machine.fail("systemctl show opsolete -p Environment | grep fedcba9876543210")
     machine.wait_until_succeeds("journalctl -u opsolete-runner | grep 'runner started'")
+    # the job sandbox works under the unit's hardening (OPS_SANDBOX=namespaces: else the runner doesn't start)
+    machine.succeed("journalctl -u opsolete-runner | grep 'job sandbox: namespaces'")
     machine.sleep(5)  # a rejected token would have stopped it by now
     machine.succeed("systemctl is-active opsolete-runner")
     # another runner's own token, for a host elsewhere

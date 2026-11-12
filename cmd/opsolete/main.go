@@ -44,6 +44,9 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == runner.SandboxArg { // a job's sandbox: no logging, it becomes Terraform
+		os.Exit(runner.SandboxMain(os.Args[2:]))
+	}
 	out := os.Stdout
 	if len(os.Args) > 1 && (os.Args[1] == "token" || os.Args[1] == "runner-token" || os.Args[1] == "unseal-state") {
 		out = os.Stderr // stdout must carry only the token or state: scripts capture or pipe it

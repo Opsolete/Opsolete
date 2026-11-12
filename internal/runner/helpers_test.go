@@ -208,6 +208,9 @@ func (f *fakeServer) do(t *testing.T, r *Runner, j runnerapi.Job) (*runnerapi.Fi
 	f.logs.Reset()
 	f.finish = nil
 	f.stateToken, f.planning = j.StateToken, j.Phase == "plan"
+	if os.Getenv("OPS_TEST_SANDBOX") == "1" && r.self == "" { // test-linux's sandbox pass: every job in it
+		r.self = sandboxed(t)
+	}
 	r.Execute(context.Background(), j)
 	if f.finish == nil {
 		t.Fatalf("%s %s: no result\n%s", j.Phase, j.RunID, f.logs.String())
