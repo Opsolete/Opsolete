@@ -15,6 +15,9 @@ import (
 // In the sandbox a command is PID 1 of its own namespace, sees a private /tmp (not the runner's files, its own
 // leave nothing behind) with the job's directories in it, and what it leaves running dies with it.
 func TestSandbox(t *testing.T) {
+	if err := hardenProcess(); err != nil { // as the runner: not dumpable (its child's uid_map then isn't writable)
+		t.Fatal(err)
+	}
 	self := sandboxed(t)
 	hostFile := filepath.Join(os.TempDir(), "ops-sandbox-host-"+time.Now().Format("150405.000000"))
 	if err := os.WriteFile(hostFile, nil, 0o600); err != nil {

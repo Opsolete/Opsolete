@@ -144,13 +144,20 @@ test-linux:
             -v "$PWD/$bin:/usr/local/bin/terraform:ro" -e CGO_ENABLED=0 -e GOTOOLCHAIN=local -e GOFLAGS=-buildvcs=false "golang:$go" \
             sh -c 'go test -count=1 ./... && go test -c -o /tmp/runner.test ./internal/runner && cd internal/runner && echo "runner test binary: PID $$" && exec /tmp/runner.test -test.count=1 -test.v'
     done
-    # every runner job in the job sandbox (OPS_TEST_SANDBOX=1 fails where it can't work). Privileged: the container's
-    # default seccomp profile forbids user namespaces, and Ubuntu's AppArmor (apparmor_restrict_unprivileged_userns)
-    # strips their capabilities from an unprivileged user.
-    echo "==> Linux tests: runner in the job sandbox"
+    # every runner job in the job sandbox (OPS_TEST_SANDBOX=1 fails where it can't work), as a non-root user like a
+    # real runner (root's capabilities hide permission bugs). Privileged only to lift what forbids user namespaces
+    # for that user: Ubuntu's AppArmor sysctl (the Docker VM's or CI host's kernel; set back afterwards) and the
+    # default seccomp profile.
+    echo "==> Linux tests: runner in the job sandbox, non-root"
     docker run --rm --privileged -v "$PWD:/src" -w /src -v "$(go env GOMODCACHE):/go/pkg/mod" -v opsolete-linux-gocache:/root/.cache/go-build \
-        -v "$PWD/$bin:/usr/local/bin/terraform:ro" -e CGO_ENABLED=0 -e GOTOOLCHAIN=local -e GOFLAGS=-buildvcs=false -e OPS_TEST_SANDBOX=1 "golang:$go" \
-        go test -count=1 -v ./internal/runner
+        -v "$PWD/$bin:/usr/local/bin/terraform:ro" -e CGO_ENABLED=0 -e GOTOOLCHAIN=local -e GOFLAGS=-buildvcs=false "golang:$go" sh -c '
+            set -e
+            aa=/proc/sys/kernel/apparmor_restrict_unprivileged_userns
+            old=$(cat $aa 2>/dev/null || true)
+            [ -z "$old" ] || { echo 0 > $aa; trap "echo $old > $aa" EXIT; }
+            mkdir /home/rt && go test -c -o /home/rt/runner.test ./internal/runner && cp -r internal/runner/. /home/rt/
+            chown -R 1000:1000 /home/rt && cd /home/rt
+            setpriv --reuid=1000 --regid=1000 --clear-groups env HOME=/home/rt OPS_TEST_SANDBOX=1 ./runner.test -test.count=1 -test.v'
 
 # fix flake.nix's vendorHash after go.mod/go.sum changes (no-op when it is current)
 vendorhash:

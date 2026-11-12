@@ -66,9 +66,6 @@ func (p *tfProc) run(ctx context.Context, stdout, stderr io.Writer, args ...stri
 	// shortcut: such a process can hold the phase a second past its hard end; fine unless that matters.
 	cmd.WaitDelay = p.grace + time.Second
 	isolateCommand(cmd)
-	if p.self != "" {
-		sandboxAttrs(cmd)
-	}
 	err := cmd.Run()
 	if kill != nil {
 		kill.Stop()

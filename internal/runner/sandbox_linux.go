@@ -7,24 +7,30 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 )
 
 // The job sandbox (OPS_SANDBOX): every Terraform command runs in its own user, mount, PID and IPC namespaces. The
-// runner starts itself as a setup helper (SandboxArg) in them; the helper makes /tmp a private tmpfs with only the
+// runner starts itself as a helper (SandboxArg), which starts itself again in them (nsArg): not the runner directly,
+// since the runner isn't dumpable (its memory holds the token), so neither is a child it clones before that child's
+// exec, and the child's uid_map can't be written then. The helper's exec made it dumpable again; it holds only the
+// job's environment, forwards interrupts and exits as the command does. In the namespaces it makes /tmp a private tmpfs with only the
 // job's directories bound back in, mounts its own /proc where the kernel lets it, and execs Terraform, which is then
 // PID 1 of its namespace: when it exits the kernel kills whatever it left running. Inside, the runner's user is root
 // of the user namespace and nobody else; outside it's the runner's user, as before. A job then doesn't see another
 // job's temporary files, the runner's or the other processes, and leaves nothing behind in /tmp.
 
-// sandboxAttrs adds the namespaces to cmd's process attributes (isolateCommand set the rest).
+// nsArg starts the helper's second stage, in the namespaces.
+const nsArg = "--ns"
+
+// sandboxAttrs are the namespaces' process attributes; it dies with the helper.
 func sandboxAttrs(cmd *exec.Cmd) {
-	if cmd.SysProcAttr == nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-	}
-	a := cmd.SysProcAttr
+	a := &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
+	cmd.SysProcAttr = a
 	a.Cloneflags = syscall.CLONE_NEWUSER | syscall.CLONE_NEWNS | syscall.CLONE_NEWPID | syscall.CLONE_NEWIPC
 	a.UidMappings = []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getuid(), Size: 1}}
 	a.GidMappings = []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getgid(), Size: 1}}
@@ -41,7 +47,6 @@ func probeSandbox(self string) error {
 	defer os.RemoveAll(dir)
 	cmd := exec.Command(self, SandboxArg, "--bind", dir, "--probe")
 	isolateCommand(cmd)
-	sandboxAttrs(cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
@@ -52,9 +57,37 @@ func probeSandbox(self string) error {
 	return nil
 }
 
-// SandboxMain is the helper, in the new namespaces: it returns only on failure (exit status 125, the reason on
-// stderr); otherwise it becomes the command.
+// SandboxMain is the helper: it runs its second stage in new namespaces and returns its exit status (125: the
+// sandbox failed, the reason on stderr; 128+n: killed by signal n).
 func SandboxMain(args []string) int {
+	if len(args) > 0 && args[0] == nsArg {
+		return sandboxStage(args[1:])
+	}
+	runtime.LockOSThread() // Pdeathsig: the stage dies with this thread, which lives as long as the helper
+	cmd := exec.Command("/proc/self/exe", append([]string{SandboxArg, nsArg}, args...)...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	sandboxAttrs(cmd)
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM) // the runner's interrupt: Terraform saves its state
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "sandbox: user namespaces: %v\n", err)
+		return 125
+	}
+	go func() {
+		for s := range sigs {
+			cmd.Process.Signal(s)
+		}
+	}()
+	cmd.Wait()
+	if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		return 128 + int(ws.Signal())
+	}
+	return cmd.ProcessState.ExitCode()
+}
+
+// sandboxStage is the helper's second stage, in the new namespaces: it returns only on failure (exit status 125, the
+// reason on stderr); otherwise it becomes the command.
+func sandboxStage(args []string) int {
 	var binds, cmd []string
 	probe := false
 	for i := 0; i < len(args); i++ {
@@ -117,10 +150,8 @@ func SandboxMain(args []string) int {
 	// its own /proc: only its processes. A container that masks parts of /proc refuses this; the runner's
 	// memory and environment stay unreadable anyway (it's not dumpable).
 	syscall.Mount("proc", "/proc", "proc", syscall.MS_NOSUID|syscall.MS_NODEV|syscall.MS_NOEXEC, "")
-	if wd != "" {
-		if err := os.Chdir(wd); err != nil {
-			return fail("chdir "+wd, err)
-		}
+	if wd != "" && os.Chdir(wd) != nil { // a command's is a job directory; elsewhere under /tmp it's gone
+		os.Chdir("/")
 	}
 	if probe {
 		if len(binds) == 0 {
