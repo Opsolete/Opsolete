@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/opsolete/opsolete/internal/runnerapi"
+	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
 )
 
@@ -66,7 +67,7 @@ func TestImport(t *testing.T) {
 	}
 
 	// the plan imports and finds
-	j, ok, err := a.Store.ClaimJob(ctx, "r", time.Minute)
+	j, ok, err := a.Store.ClaimJob(ctx, storage.Runner{Name: "r", Pool: storage.DefaultPool}, time.Minute)
 	if err != nil || !ok || j.RunID != run.ID {
 		t.Fatalf("claim: %v %v", ok, err)
 	}
@@ -125,7 +126,7 @@ func TestImport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	j, _, _ = a.Store.ClaimJob(ctx, "r", time.Minute)
+	j, _, _ = a.Store.ClaimJob(ctx, storage.Runner{Name: "r", Pool: storage.DefaultPool}, time.Minute)
 	a.Store.AckJob(ctx, j.RunID, j.LeaseID, time.Minute)
 	if _, err := a.FinishJob(ctx, run.ID, j.LeaseID, runnerapi.FinishRequest{Status: "succeeded",
 		Plan:  &runnerapi.Plan{Import: 1, Imports: []runnerapi.Import{{To: "module." + two + ".x.y", ID: "/vm2"}}, Change: 1},

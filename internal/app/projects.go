@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"slices"
@@ -83,7 +84,8 @@ func (a *App) CreateProject(ctx context.Context, actor Actor, name, description 
 // ProjectSettings is a project's General page.
 type ProjectSettings struct {
 	Name, Description string
-	Default           bool // make it the default project (unsetting one isn't possible: pick another)
+	Default           bool   // make it the default project (unsetting one isn't possible: pick another)
+	RunnerPool        string // only its runners get the project's jobs; "": storage.DefaultPool
 }
 
 // UpdateProject renames a project, sets its description and maybe makes it the default. Admins only.
@@ -96,7 +98,11 @@ func (a *App) UpdateProject(ctx context.Context, actor Actor, project string, se
 	if err := checkProject(name, description); err != nil {
 		return err
 	}
-	if err := a.Store.UpdateProject(ctx, p.ID, name, description); errors.Is(err, storage.ErrProjectNameTaken) {
+	pool := cmp.Or(strings.TrimSpace(set.RunnerPool), storage.DefaultPool)
+	if !ValidName(pool) {
+		return invalid("runner_pool", "a runner pool is "+NameRule)
+	}
+	if err := a.Store.UpdateProject(ctx, p.ID, name, description, pool); errors.Is(err, storage.ErrProjectNameTaken) {
 		return invalid("name", err.Error())
 	} else if err != nil {
 		return err
@@ -106,7 +112,7 @@ func (a *App) UpdateProject(ctx context.Context, actor Actor, project string, se
 			return err
 		}
 	}
-	a.Log.Info("project updated", "project", p.Name, "name", name, "default", set.Default, "user", actor.Email)
+	a.Log.Info("project updated", "project", p.Name, "name", name, "default", set.Default, "runner_pool", pool, "user", actor.Email)
 	return nil
 }
 

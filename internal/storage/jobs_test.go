@@ -61,7 +61,7 @@ func testTemplate(inputs map[string]any) WorkspaceTemplate {
 
 func claim(t *testing.T, s *Store, phase string) Job {
 	t.Helper()
-	j, ok, err := s.ClaimJob(context.Background(), "r", time.Minute)
+	j, ok, err := s.ClaimJob(context.Background(), Runner{Name: "r", Pool: DefaultPool}, time.Minute)
 	if err != nil || !ok || j.Phase != phase {
 		t.Fatalf("claim %s: %+v %v %v", phase, j, ok, err)
 	}
@@ -99,7 +99,7 @@ func TestRunLifecycle(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			j, ok, err := s.ClaimJob(ctx, "r", time.Minute)
+			j, ok, err := s.ClaimJob(ctx, Runner{Name: "r", Pool: DefaultPool}, time.Minute)
 			if err != nil {
 				t.Error(err)
 			}
@@ -155,7 +155,7 @@ func TestRunLifecycle(t *testing.T) {
 	if st, err := s.FinishJob(ctx, run.ID, plan.LeaseID, "succeeded", "", nil, sum, nil, nil); err != nil || st != NeedsConfirmation {
 		t.Fatalf("finish plan: %q %v", st, err)
 	}
-	if _, ok, _ := s.ClaimJob(ctx, "r", time.Minute); ok {
+	if _, ok, _ := s.ClaimJob(ctx, Runner{Name: "r", Pool: DefaultPool}, time.Minute); ok {
 		t.Fatal("a plan waiting for confirmation must not be claimed")
 	}
 	if _, err := s.CreateRun(ctx, w.ID, "apply", uuid.Nil, nil); !errors.Is(err, ErrRunActive) {
@@ -212,7 +212,7 @@ func TestRunLifecycle(t *testing.T) {
 	if st, err := s.FinishJob(ctx, again.ID, j.LeaseID, "succeeded", "", nil, nil, nil, nil); err != nil || st != NoChanges {
 		t.Fatalf("no-op plan: %q %v", st, err)
 	}
-	if _, ok, _ := s.ClaimJob(ctx, "r", time.Minute); ok {
+	if _, ok, _ := s.ClaimJob(ctx, Runner{Name: "r", Pool: DefaultPool}, time.Minute); ok {
 		t.Fatal("nothing should be left to claim")
 	}
 }
@@ -256,7 +256,7 @@ func TestFinishKeepsForeignStateLock(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	w, run := newWorkspace(t, s, false)
-	j, ok, err := s.ClaimJob(ctx, "r", time.Minute)
+	j, ok, err := s.ClaimJob(ctx, Runner{Name: "r", Pool: DefaultPool}, time.Minute)
 	if err != nil || !ok {
 		t.Fatalf("claim: %v %v", ok, err)
 	}
@@ -294,7 +294,7 @@ func TestReleaseOrphanedLocks(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	working, run := newWorkspace(t, s, false)
-	if _, ok, err := s.ClaimJob(ctx, "r", time.Minute); err != nil || !ok {
+	if _, ok, err := s.ClaimJob(ctx, Runner{Name: "r", Pool: DefaultPool}, time.Minute); err != nil || !ok {
 		t.Fatalf("claim: %v %v", ok, err)
 	}
 	queued, queuedRun := newWorkspace(t, s, false) // its run has no lease
@@ -335,7 +335,7 @@ func TestStateWriteFenced(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	w, run := newWorkspace(t, s, false)
-	if _, ok, err := s.ClaimJob(ctx, "r", time.Minute); err != nil || !ok {
+	if _, ok, err := s.ClaimJob(ctx, Runner{Name: "r", Pool: DefaultPool}, time.Minute); err != nil || !ok {
 		t.Fatalf("claim: %v %v", ok, err)
 	}
 	v := StateVersion{Serial: 1, Lineage: "lin", BlobKey: "fence/" + w.ID.String(), MD5: "m", Size: 1}
@@ -408,7 +408,7 @@ func TestExpiredLeaseIsErrored(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	w, run := newWorkspace(t, s, false)
-	j, ok, err := s.ClaimJob(ctx, "r", time.Minute)
+	j, ok, err := s.ClaimJob(ctx, Runner{Name: "r", Pool: DefaultPool}, time.Minute)
 	if err != nil || !ok {
 		t.Fatalf("claim: %v %v", ok, err)
 	}
@@ -467,7 +467,7 @@ func TestUnclaim(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	j, ok, err := s.ClaimJob(ctx, "lost", 10*time.Millisecond)
+	j, ok, err := s.ClaimJob(ctx, Runner{Name: "lost", Pool: DefaultPool}, 10*time.Millisecond)
 	if err != nil || !ok {
 		t.Fatalf("claim: %v %v", ok, err)
 	}
@@ -495,7 +495,7 @@ func TestUnclaim(t *testing.T) {
 	if err := s.ConfirmRun(ctx, run.ID, uuid.Nil, "a@b.c"); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, err := s.ClaimJob(ctx, "lost", 10*time.Millisecond); err != nil || !ok {
+	if _, ok, err := s.ClaimJob(ctx, Runner{Name: "lost", Pool: DefaultPool}, 10*time.Millisecond); err != nil || !ok {
 		t.Fatalf("claim apply: %v %v", ok, err)
 	}
 	unclaim(run.ID)
@@ -1057,5 +1057,67 @@ func TestRollbackWriteFenced(t *testing.T) {
 	lock("rollback-2")
 	if err := s.AddRollbackVersion(ctx, w.ID, vs[0].ID, "rollback-2", copyOf(2)); err != nil {
 		t.Fatalf("a rollback holding its lock: %v", err)
+	}
+}
+
+// TestRunnerPools: a project's jobs go only to runners of its pool; a runner is known by its token, and a
+// deleted one is unknown.
+func TestRunnerPools(t *testing.T) {
+	s, ctx := testStore(t), context.Background()
+	prdToken := "prd-runner-token-0123456789abcdef0123"
+	if err := s.RegisterRunner(ctx, "prd-1", "prd", prdToken); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RegisterRunner(ctx, "other", DefaultPool, prdToken); !errors.Is(err, ErrExists) {
+		t.Fatalf("another runner with the same token: %v", err)
+	}
+	devToken, err := s.CreateRunner(ctx, "dev-1", DefaultPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateRunner(ctx, "dev-1", DefaultPool); !errors.Is(err, ErrExists) {
+		t.Fatalf("the name again: %v", err)
+	}
+	prd, err := s.RunnerByToken(ctx, prdToken)
+	if err != nil || prd.Name != "prd-1" || prd.Pool != "prd" {
+		t.Fatalf("by token: %+v %v", prd, err)
+	}
+	dev, err := s.RunnerByToken(ctx, devToken)
+	if err != nil || dev.Name != "dev-1" {
+		t.Fatalf("by token: %+v %v", dev, err)
+	}
+
+	created, err := s.CreateProject(ctx, "prd-"+strings.ToLower(rand.Text()[:6]), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.Project(ctx, created.Name)
+	pid := p.ID
+	if err != nil || p.RunnerPool != DefaultPool {
+		t.Fatalf("a new project's pool: %+v %v", p, err)
+	}
+	if err := s.UpdateProject(ctx, pid, p.Name, "", "prd"); err != nil {
+		t.Fatal(err)
+	}
+	w, run := newWorkspace(t, s, false)
+	if err := s.MoveWorkspace(ctx, w.ID, pid); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := s.ClaimJob(ctx, dev, time.Minute); err != nil || ok {
+		t.Fatalf("a default-pool runner got a prd job: %v %v", ok, err)
+	}
+	j, ok, err := s.ClaimJob(ctx, prd, time.Minute)
+	if err != nil || !ok || j.RunID != run.ID {
+		t.Fatalf("the prd runner: %+v %v %v", j, ok, err)
+	}
+	if pools, err := s.RunnerPools(ctx); err != nil || !slices.Equal(pools, []string{DefaultPool, "prd"}) {
+		t.Fatalf("pools: %v %v", pools, err)
+	}
+
+	if _, err := s.DeleteRunner(ctx, prd.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RunnerByToken(ctx, prdToken); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a deleted runner's token: %v", err)
 	}
 }

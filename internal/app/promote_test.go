@@ -180,7 +180,7 @@ func TestPromote(t *testing.T) {
 		}
 	})
 	step(t, "planned on an auto-apply target: waits; discarded: the previous templates are back", func(t *testing.T) {
-		j, ok, err := a.Store.ClaimJob(ctx, "r", time.Minute)
+		j, ok, err := a.Store.ClaimJob(ctx, storage.Runner{Name: "r", Pool: storage.DefaultPool}, time.Minute)
 		if err != nil || !ok || j.RunID != run.ID {
 			t.Fatalf("claim: %+v %v %v", j, ok, err)
 		}

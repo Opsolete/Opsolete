@@ -65,6 +65,7 @@ type Project struct {
 	Name        string
 	Description string
 	CreatedAt   time.Time
+	RunnerPool  string
 }
 
 type ProjectAccess struct {
@@ -81,6 +82,7 @@ type ProjectList struct {
 	Workspaces  int64
 	Grants      int64
 	CreatedAt   time.Time
+	RunnerPool  string
 }
 
 type RemoteStateConsumer struct {
@@ -166,6 +168,15 @@ type RunStatusHistory struct {
 	Status    string
 	Message   *string
 	CreatedAt time.Time
+}
+
+type Runner struct {
+	ID         uuid.UUID
+	Name       string
+	Pool       string
+	TokenHash  []byte
+	CreatedAt  time.Time
+	LastSeenAt *time.Time
 }
 
 type Session struct {

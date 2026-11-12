@@ -157,7 +157,7 @@
           export STATE_STORE="file://$PGHOST/state-store?create_dir=1&metadata=skip" # workspace state files
           export PUBLIC_URL=http://opsolete.localhost:8080 # registry host needs a dot
           export SECRET_KEY=dev-only-secret-key-not-for-production # encrypts VCS tokens; dev only
-          export RUNNER_TOKEN=dev-only-runner-token-not-for-production # `just runner` passes it on; dev only
+          export DEV_RUNNER_TOKEN=dev-only-runner-token-not-for-production # `just runner` registers it as runner "dev"; dev only
           echo "opsolete: run 'just' to list tasks ('just run', 'just check')"
         '';
       };

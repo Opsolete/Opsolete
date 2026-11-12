@@ -13,6 +13,7 @@ import (
 
 	"github.com/opsolete/opsolete/internal/registry"
 	"github.com/opsolete/opsolete/internal/runnerapi"
+	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
 )
 
@@ -117,7 +118,7 @@ func TestEnvironmentValuesInJobs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	j, ok, err := a.Store.ClaimJob(ctx, "r", time.Minute)
+	j, ok, err := a.Store.ClaimJob(ctx, storage.Runner{Name: "r", Pool: storage.DefaultPool}, time.Minute)
 	if err != nil || !ok {
 		t.Fatalf("claim: %v %v", ok, err)
 	}

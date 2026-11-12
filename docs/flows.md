@@ -23,11 +23,11 @@ Test paths are relative to `internal/`, except `cmd/opsolete/…` (from the repo
 
 **A1. First start + first admin login** — `full` (login), `partial` (startup)
 - Actor: operator deploying; first admin (in `ADMIN_EMAILS`/`ADMIN_GROUPS`).
-- Pre: Postgres, `SECRET_KEY` ≥ 32, `RUNNER_TOKEN` ≥ 32 and `STATE_STORE` (with deployments), OIDC or `AUTH_DEV_USER`.
+- Pre: Postgres, `SECRET_KEY` ≥ 32 and `STATE_STORE` (with deployments), OIDC or `AUTH_DEV_USER`.
 - Steps: start `opsolete` (migrations, signing key, state store probe, catalog load, `CheckTemplates`) → open UI → redirected to `/auth/login` → IdP → `/auth/callback` → session cookie.
 - Outcome: user row keyed by issuer+sub, groups recorded, role admin/user re-derived every request; sign-in audited.
 - Failures: bad config (startup error); forged state/nonce, `email_verified:false`, email of another subject → 4xx; open redirect blocked; `preferred_username` never matches `ADMIN_EMAILS`.
-- Coverage: `auth/auth_test.go:TestOIDCLogin`, `TestOIDCLoginRejects`, `TestSessionCookie`, `TestLocalPath`; `storage/storage_test.go:TestUpsertUserSubject`; `http/server_test.go:TestLoginRequired`; `config/config_test.go:TestLoad`; `http/server_test.go:TestFeatureSwitches` (CheckTemplates). Missing: `serve()` startup checks (RUNNER_TOKEN length, STATE_STORE probe, `AUTH_DEV_USER` warning) untested.
+- Coverage: `auth/auth_test.go:TestOIDCLogin`, `TestOIDCLoginRejects`, `TestSessionCookie`, `TestLocalPath`; `storage/storage_test.go:TestUpsertUserSubject`; `http/server_test.go:TestLoginRequired`; `config/config_test.go:TestLoad`; `http/server_test.go:TestFeatureSwitches` (CheckTemplates). Missing: `serve()` startup checks (STATE_STORE probe, `AUTH_DEV_USER` warning) untested.
 
 **A2. Logout** — `full`
 - Actor: any user. Steps: `POST /auth/logout`; **Account › Sessions › Log out everywhere** (`POST /account/sessions/revoke`); admin: audit log entry › **End this user's sessions** (`POST /users/{id}/sessions/revoke`).
@@ -468,7 +468,7 @@ Test paths are relative to `internal/`, except `cmd/opsolete/…` (from the repo
 ## Q. Runner lifecycle
 
 **Q1. Runner start and configuration** — `partial`
-- `opsolete runner` with `OPS_SERVER_URL`, `OPS_RUNNER_TOKEN` (scrubbed from env), timeouts; non-dumpable, child subreaper (refuses to start without).
+- `opsolete runner` with `OPS_SERVER_URL`, `OPS_RUNNER_TOKEN` (its own token, `http/runners_test.go:TestRunners`, `storage/jobs_test.go:TestRunnerPools`; scrubbed from env), timeouts; non-dumpable, child subreaper (refuses to start without).
 - Coverage: `config/config_test.go:TestLoadRunner`; NixOS VM test `nix/test.nix` (outside `go test`). Missing: startup refusal when subreaper fails (unverified testable).
 
 **Q2. Claim, acknowledge, heartbeat, log, artifacts, finish** — `full`
@@ -577,7 +577,7 @@ Closed alongside P2: `opsolete token` (`cmd/opsolete/main_test.go:TestCreateToke
 3. P4 `/readyz` 503 without DB; `METRICS_ADDR` listener — http.
 4. C12 Live SSE woken by a new chunk while the run is active — http.
 5. C13 Organization currency reaching the job — http e2e.
-6. A1 `serve()` startup refusals (short `RUNNER_TOKEN`, unusable `STATE_STORE`) — needs `serve` split for testability.
+6. A1 `serve()` startup refusals (unusable `STATE_STORE`) — needs `serve` split for testability.
 7. Q1 Runner refuses to start without child subreaper — runner (Linux).
 
 ---

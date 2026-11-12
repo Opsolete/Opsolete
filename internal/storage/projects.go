@@ -25,12 +25,13 @@ type Project struct {
 	Workspaces  int  // all of them, also those the viewer can't see
 	Grants      int  // group grants on the project
 	CreatedAt   time.Time
+	RunnerPool  string // only runners of this pool get its workspaces' jobs
 }
 
 // toProject maps a project_list row (001_schema.sql).
 func toProject(p db.ProjectList) Project {
 	return Project{ID: p.ID, Name: p.Name, Description: p.Description, Default: p.IsDefault, Workspaces: int(p.Workspaces),
-		Grants: int(p.Grants), CreatedAt: p.CreatedAt}
+		Grants: int(p.Grants), CreatedAt: p.CreatedAt, RunnerPool: p.RunnerPool}
 }
 
 func toProjects(rows []db.ProjectList, err error) ([]Project, error) {
@@ -84,9 +85,9 @@ func (s *Store) CreateProject(ctx context.Context, name, description string) (Pr
 	return toProject(p), err
 }
 
-// UpdateProject renames a project and sets its description; ErrNotFound for an unknown id.
-func (s *Store) UpdateProject(ctx context.Context, id uuid.UUID, name, description string) error {
-	err := affected(s.q.UpdateProject(ctx, db.UpdateProjectParams{ID: id, Name: name, Description: description}))
+// UpdateProject renames a project and sets its description and runner pool; ErrNotFound for an unknown id.
+func (s *Store) UpdateProject(ctx context.Context, id uuid.UUID, name, description, runnerPool string) error {
+	err := affected(s.q.UpdateProject(ctx, db.UpdateProjectParams{ID: id, Name: name, Description: description, RunnerPool: runnerPool}))
 	if isUnique(err) {
 		return ErrProjectNameTaken
 	}

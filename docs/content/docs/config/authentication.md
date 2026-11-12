@@ -5,7 +5,7 @@ aliases:
   - /docs/operations/authentication/
 ---
 
-All pages require login. Health checks, the registry protocol (`/v1/…`, which uses API tokens and signed URLs), the runner API (`RUNNER_TOKEN`) and the cloud API (`/api/v2/…`, user tokens from `terraform login`) don't.
+All pages require login. Health checks, the registry protocol (`/v1/…`, which uses API tokens and signed URLs), the runner API (each runner's token) and the cloud API (`/api/v2/…`, user tokens from `terraform login`) don't.
 
 ## Login
 

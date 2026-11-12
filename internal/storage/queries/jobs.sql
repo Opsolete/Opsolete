@@ -3,10 +3,11 @@
 -- artifacts, state) only once acknowledged (lease_acked_at): before that the claim may be undone.
 
 -- name: ClaimableRun :one
--- The longest-waiting queued phase. SKIP LOCKED: runners never get the same one. Runs of a locked
--- workspace wait, except speculative plans and drift checks, which never take the state lock.
-SELECT r.id, r.status FROM runs r WHERE r.status IN ('plan_queued', 'apply_queued')
-    AND (r.action IN ('plan', 'assess') OR NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.id = r.workspace_id AND w.state_lock IS NOT NULL))
+-- The longest-waiting queued phase of a workspace whose project uses pool. SKIP LOCKED: runners never get the
+-- same one. Runs of a locked workspace wait, except speculative plans and drift checks, which never take the state lock.
+SELECT r.id, r.status FROM runs r JOIN workspaces w ON w.id = r.workspace_id JOIN projects p ON p.id = w.project_id
+WHERE r.status IN ('plan_queued', 'apply_queued') AND p.runner_pool = sqlc.arg(pool)::text
+    AND (r.action IN ('plan', 'assess') OR w.state_lock IS NULL)
 ORDER BY r.updated_at FOR UPDATE OF r SKIP LOCKED LIMIT 1;
 
 -- name: LeaseRun :one

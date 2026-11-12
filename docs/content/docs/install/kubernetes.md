@@ -3,13 +3,12 @@ title: Kubernetes (Helm)
 weight: 2
 ---
 
-The [Helm chart](https://github.com/Opsolete/Helm-charts) runs the app and the runners as two Deployments. Put the secrets in a Secret with the keys `DATABASE_URL`, `SECRET_KEY`, `RUNNER_TOKEN` and `OIDC_CLIENT_SECRET` (or manage it with sops or External Secrets):
+The [Helm chart](https://github.com/Opsolete/Helm-charts) runs the app and the runners as two Deployments. Put the secrets in a Secret with the keys `DATABASE_URL`, `SECRET_KEY` and `OIDC_CLIENT_SECRET` (or manage it with sops or External Secrets):
 
 ```sh
 kubectl create secret generic opsolete \
   --from-literal=DATABASE_URL=postgres://opsolete:…@postgres:5432/opsolete \
   --from-literal=SECRET_KEY=$(openssl rand -base64 32) \
-  --from-literal=RUNNER_TOKEN=$(openssl rand -hex 32) \
   --from-literal=OIDC_CLIENT_SECRET=…
 ```
 
@@ -44,7 +43,7 @@ The chart's [values.yaml](https://github.com/Opsolete/Helm-charts/blob/main/char
 The chart does all of the below, so you need this only to check it or to deploy without it. It runs as non-root with a read-only root filesystem, and can give the app workload identity for `STATE_STORE` (`workloadIdentity.provider: azure|aws|gcp`). Runners never get one.
 
 - Run two Deployments of the same images: the app, and the runners. The app is stateless: everything it keeps is in Postgres and `STATE_STORE`, and the templates come from a [Git repository]({{< relref "/docs/features/templates#where-templates-live" >}}), so it needs no volume.
-- Put the runner token in one Secret (`kubectl create secret generic opsolete-runner --from-literal=token=$(openssl rand -hex 32)`, or from sops / External Secrets). Map it to `RUNNER_TOKEN` in the app and to `OPS_RUNNER_TOKEN` in the runners with `secretKeyRef`. Start order doesn't matter: runners retry until the app is up. Cloud credentials come from [variables]({{< relref "/docs/features/variables" >}}).
+- Give the runners a token of their own: generate one (`openssl rand -hex 32`) into a Secret (or from sops / External Secrets), map it to `OPS_RUNNER_TOKEN` in the runners with `secretKeyRef`, and register it with the app: `kubectl exec deploy/opsolete -- /bin/opsolete runner-token -from-stdin -pool default k8s < token` (or a Job running the same before the runners start). Runners that share a Deployment share the token, so they are one runner to the app (one name, one pool); a Deployment per pool keeps production credentials on production runners. Start order doesn't matter: runners retry until the app is up, and stop on a token the app doesn't know. Cloud credentials come from [variables]({{< relref "/docs/features/variables" >}}).
 - Scale runners with `replicas`, one job each at a time.
 - Point `OPS_SERVER_URL` at the app's Service, so registry downloads stay inside the cluster.
 - Optionally mount a volume at `TF_PLUGIN_CACHE_DIR` (`/home/runner/.terraform.d/plugin-cache` in the image) to keep providers between restarts.

@@ -12,7 +12,7 @@ import (
 )
 
 const creatableProjects = `-- name: CreatableProjects :many
-SELECT id, name, description, is_default, workspaces, grants, created_at FROM project_list p
+SELECT id, name, description, is_default, workspaces, grants, created_at, runner_pool FROM project_list p
 WHERE $1::boolean
     OR EXISTS (SELECT 1 FROM project_access a JOIN users u ON u.id = $2::uuid
         WHERE a.project_id = p.id AND a.level = 'operate' AND a.group_name = ANY(u.groups))
@@ -42,6 +42,7 @@ func (q *Queries) CreatableProjects(ctx context.Context, arg CreatableProjectsPa
 			&i.Workspaces,
 			&i.Grants,
 			&i.CreatedAt,
+			&i.RunnerPool,
 		); err != nil {
 			return nil, err
 		}
@@ -70,7 +71,7 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (u
 }
 
 const defaultProject = `-- name: DefaultProject :one
-SELECT id, name, description, is_default, workspaces, grants, created_at FROM project_list WHERE is_default
+SELECT id, name, description, is_default, workspaces, grants, created_at, runner_pool FROM project_list WHERE is_default
 `
 
 func (q *Queries) DefaultProject(ctx context.Context) (ProjectList, error) {
@@ -84,6 +85,7 @@ func (q *Queries) DefaultProject(ctx context.Context) (ProjectList, error) {
 		&i.Workspaces,
 		&i.Grants,
 		&i.CreatedAt,
+		&i.RunnerPool,
 	)
 	return i, err
 }
@@ -115,7 +117,7 @@ func (q *Queries) DeleteProjectGrant(ctx context.Context, arg DeleteProjectGrant
 }
 
 const getProjectByID = `-- name: GetProjectByID :one
-SELECT id, name, description, is_default, workspaces, grants, created_at FROM project_list WHERE id = $1::uuid
+SELECT id, name, description, is_default, workspaces, grants, created_at, runner_pool FROM project_list WHERE id = $1::uuid
 `
 
 func (q *Queries) GetProjectByID(ctx context.Context, id uuid.UUID) (ProjectList, error) {
@@ -129,12 +131,13 @@ func (q *Queries) GetProjectByID(ctx context.Context, id uuid.UUID) (ProjectList
 		&i.Workspaces,
 		&i.Grants,
 		&i.CreatedAt,
+		&i.RunnerPool,
 	)
 	return i, err
 }
 
 const getProjectByName = `-- name: GetProjectByName :one
-SELECT id, name, description, is_default, workspaces, grants, created_at FROM project_list WHERE name = $1::text
+SELECT id, name, description, is_default, workspaces, grants, created_at, runner_pool FROM project_list WHERE name = $1::text
 `
 
 func (q *Queries) GetProjectByName(ctx context.Context, name string) (ProjectList, error) {
@@ -148,13 +151,14 @@ func (q *Queries) GetProjectByName(ctx context.Context, name string) (ProjectLis
 		&i.Workspaces,
 		&i.Grants,
 		&i.CreatedAt,
+		&i.RunnerPool,
 	)
 	return i, err
 }
 
 const listProjects = `-- name: ListProjects :many
 
-SELECT id, name, description, is_default, workspaces, grants, created_at FROM project_list p
+SELECT id, name, description, is_default, workspaces, grants, created_at, runner_pool FROM project_list p
 WHERE $1::boolean OR p.is_default
     OR EXISTS (SELECT 1 FROM workspaces w WHERE w.project_id = p.id AND access_level(w.id, $2::uuid) IS NOT NULL)
     OR EXISTS (SELECT 1 FROM project_access a JOIN users u ON u.id = $2::uuid
@@ -186,6 +190,7 @@ func (q *Queries) ListProjects(ctx context.Context, arg ListProjectsParams) ([]P
 			&i.Workspaces,
 			&i.Grants,
 			&i.CreatedAt,
+			&i.RunnerPool,
 		); err != nil {
 			return nil, err
 		}
@@ -285,17 +290,24 @@ func (q *Queries) SetProjectGrant(ctx context.Context, arg SetProjectGrantParams
 }
 
 const updateProject = `-- name: UpdateProject :execrows
-UPDATE projects SET name = $1::text, description = $2::text WHERE id = $3::uuid
+UPDATE projects SET name = $1::text, description = $2::text, runner_pool = $3::text
+WHERE id = $4::uuid
 `
 
 type UpdateProjectParams struct {
 	Name        string
 	Description string
+	RunnerPool  string
 	ID          uuid.UUID
 }
 
 func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (int64, error) {
-	result, err := q.db.Exec(ctx, updateProject, arg.Name, arg.Description, arg.ID)
+	result, err := q.db.Exec(ctx, updateProject,
+		arg.Name,
+		arg.Description,
+		arg.RunnerPool,
+		arg.ID,
+	)
 	if err != nil {
 		return 0, err
 	}

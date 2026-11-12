@@ -1,7 +1,7 @@
 package app
 
 // The runner protocol: runners claim a run's phase as a job, keep its lease alive, post its log,
-// ship its artifacts and finish it. Runners authenticate with the shared RUNNER_TOKEN (checked by
+// ship its artifacts and finish it. Runners authenticate with their own token (RunnerByToken, checked by
 // the surface) and are named, not Actors; a job's lease id is their credential for it.
 
 import (
@@ -55,7 +55,7 @@ func (a *App) StateToken(workspaceID, runID uuid.UUID) string {
 // ReapLeases queues it again: the response may never have reached the runner. A claimed job that can't be assembled (variables that don't open, no
 // configuration, VCS unreachable, too big) fails at once rather than waiting for the lease reaper,
 // and the next one is tried.
-func (a *App) ClaimJob(ctx context.Context, runner string) (body []byte, ok bool, err error) {
+func (a *App) ClaimJob(ctx context.Context, runner storage.Runner) (body []byte, ok bool, err error) {
 	for {
 		j, ok, err := a.Store.ClaimJob(ctx, runner, AckWindow)
 		if err != nil || !ok {
@@ -63,7 +63,7 @@ func (a *App) ClaimJob(ctx context.Context, runner string) (body []byte, ok bool
 		}
 		body, err := a.assembleJob(ctx, j)
 		if err == nil {
-			a.Log.Info("job claimed", "run", j.RunID, "phase", j.Phase, "action", j.Action, "runner", runner)
+			a.Log.Info("job claimed", "run", j.RunID, "phase", j.Phase, "action", j.Action, "runner", runner.Name, "pool", runner.Pool)
 			return body, true, nil
 		}
 		a.Log.Error("job variables", "run", j.RunID, "err", err)

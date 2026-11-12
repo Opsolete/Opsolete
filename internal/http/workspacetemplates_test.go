@@ -113,7 +113,7 @@ func TestWorkspaceTemplates(t *testing.T) {
 		if rec := post(h, base+name+"/remove", nil); rec.Code != http.StatusSeeOther || !strings.Contains(rec.Header().Get("Location"), "/runs/") {
 			t.Fatalf("remove %s: %d %q", name, rec.Code, rec.Header().Get("Location"))
 		}
-		dj, ok, err := store.ClaimJob(ctx, "r1", time.Minute)
+		dj, ok, err := store.ClaimJob(ctx, storage.Runner{Name: "r1", Pool: storage.DefaultPool}, time.Minute)
 		if err != nil || !ok || dj.Action != "destroy" || len(dj.Modules) != left+1 || len(dj.Target) != 1 || dj.Target[0] != "module."+name {
 			t.Fatalf("destroy job: %+v %v %v", dj, ok, err)
 		}

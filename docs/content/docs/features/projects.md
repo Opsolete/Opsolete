@@ -17,7 +17,7 @@ A **project** groups [workspaces]({{< relref "/docs/features/workspaces" >}}). T
 - **Overview:** its ID and description, and the most recently active workspaces. **+ New workspace** creates one in this project, if you [may](#access).
 - **Workspaces:** all of the project's workspaces you can see.
 - **Environment values:** the project's values for template inputs marked per environment; they apply to each of its workspaces at every run. Admins and groups with `operate` on the project set them. See [Environments and promotion]({{< relref "/docs/features/environments" >}}).
-- **Settings** (admins only): *General* (name, description, default project, delete), *Team access* and *Variable sets*.
+- **Settings** (admins only): *General* (name, description, [runner pool]({{< relref "/docs/config/runners#runners-and-pools" >}}), default project, delete), *Team access* and *Variable sets*.
 
 Everyone who can see a project sees the first three; only admins see and change its settings.
 

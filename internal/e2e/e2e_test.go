@@ -111,7 +111,10 @@ func TestRealRunner(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := httpserver.New(a, au, httpserver.Features{Deployments: true, Registry: true, Editor: true})
-	srv.RunnerToken, srv.ClaimWait = runnerToken, 500*time.Millisecond
+	srv.ClaimWait = 500 * time.Millisecond
+	if err := store.RegisterRunner(ctx, "e2e", storage.DefaultPool, runnerToken); err != nil {
+		t.Fatal(err)
+	}
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 

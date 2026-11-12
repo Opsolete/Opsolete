@@ -3,6 +3,8 @@
 //	opsolete                          serve the web UI, registry and runner API
 //	opsolete runner                   execute deployments (no database needed)
 //	opsolete token <name>             create a registry API token
+//	opsolete runner-token [-pool p] [-from-stdin] <name>
+//	                                  create a runner's token (or register the one on stdin)
 //	opsolete rotate-key               re-seal everything from SECRET_KEY_PREVIOUS to SECRET_KEY
 //	opsolete unseal-state <file>      print a state a runner kept sealed (OPS_RUNNER_TOKEN: that runner's)
 package main
@@ -11,12 +13,15 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -40,7 +45,7 @@ import (
 
 func main() {
 	out := os.Stdout
-	if len(os.Args) > 1 && (os.Args[1] == "token" || os.Args[1] == "unseal-state") {
+	if len(os.Args) > 1 && (os.Args[1] == "token" || os.Args[1] == "runner-token" || os.Args[1] == "unseal-state") {
 		out = os.Stderr // stdout must carry only the token or state: scripts capture or pipe it
 	}
 	log := slog.New(slog.NewJSONHandler(out, nil))
@@ -53,12 +58,14 @@ func main() {
 		err = runRunner(log)
 	case os.Args[1] == "token" && len(os.Args) == 3:
 		err = createToken()
+	case os.Args[1] == "runner-token":
+		err = runnerToken(os.Args[2:])
 	case os.Args[1] == "rotate-key" && len(os.Args) == 2:
 		err = rotateKey(log)
 	case os.Args[1] == "unseal-state" && len(os.Args) == 3:
 		err = unsealState(os.Args[2])
 	default:
-		err = errors.New("usage: opsolete [runner | token <name> | rotate-key | unseal-state <file>]")
+		err = errors.New("usage: opsolete [runner | token <name> | runner-token [-pool p] [-from-stdin] <name> | rotate-key | unseal-state <file>]")
 	}
 	if err != nil {
 		log.Error("fatal", "err", err)
@@ -164,6 +171,53 @@ func unsealState(file string) error {
 	return err
 }
 
+// runnerToken registers a runner: with a new token, printed once, or (-from-stdin) with the token on stdin, which
+// replaces the runner's token and pool, for deployments that generate it themselves.
+func runnerToken(args []string) error {
+	fl := flag.NewFlagSet("runner-token", flag.ContinueOnError)
+	pool := fl.String("pool", storage.DefaultPool, "the runner pool: it gets the jobs of projects that use it")
+	stdin := fl.Bool("from-stdin", false, "register the token on stdin instead of creating one")
+	if err := fl.Parse(args); err != nil {
+		return err
+	}
+	if fl.NArg() != 1 {
+		return errors.New("usage: opsolete runner-token [-pool p] [-from-stdin] <name>")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	store, err := openStore(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	ops := &app.App{Store: store, Log: slog.New(slog.DiscardHandler)}
+	cli, name, token := app.Actor{Email: "cli", Admin: true}, fl.Arg(0), ""
+	if *stdin {
+		b, rerr := io.ReadAll(io.LimitReader(os.Stdin, 4096))
+		if rerr != nil {
+			return rerr
+		}
+		token = strings.TrimSpace(string(b))
+		err = ops.RegisterRunner(ctx, cli, name, *pool, token)
+	} else {
+		token, err = ops.CreateRunner(ctx, cli, name, *pool)
+	}
+	if err != nil {
+		return err
+	}
+	if err := store.Audit(ctx, "cli", "create runner", map[string]any{"principal": map[string]any{"type": "system"},
+		"name": name, "pool": *pool}); err != nil {
+		return fmt.Errorf("runner registered, but not audited: %w", err)
+	}
+	if !*stdin {
+		fmt.Println(token)
+	}
+	return nil
+}
+
 // runRunner: the first SIGTERM/SIGINT stops claiming and lets the current job finish
 // (give pods a terminationGracePeriodSeconds of at least OPS_JOB_TIMEOUT + OPS_JOB_GRACE + 5m); a
 // second one interrupts it (SIGINT, killed after OPS_JOB_GRACE).
@@ -231,8 +285,8 @@ func serve(log *slog.Logger) error {
 
 	var state *blob.Bucket
 	if cfg.Deployments {
-		if len(cfg.RunnerToken) < 32 {
-			return errors.New("RUNNER_TOKEN is required for deployments and must be at least 32 characters (e.g. openssl rand -hex 32); runners get the same value as OPS_RUNNER_TOKEN")
+		if os.Getenv("RUNNER_TOKEN") != "" {
+			log.Warn("RUNNER_TOKEN is no longer used: each runner has its own token, see opsolete runner-token")
 		}
 		if cfg.StateStore == "" {
 			return errors.New("STATE_STORE is required for deployments, e.g. azblob://tfstate, s3://tfstate?region=…, gs://tfstate or file:///path")
@@ -255,7 +309,6 @@ func serve(log *slog.Logger) error {
 	server := httpserver.New(ops, authn, httpserver.Features{
 		Deployments: cfg.Deployments, Registry: cfg.Registry, Editor: cfg.TemplateEditor, VCS: vcsOn})
 	server.Organization = cfg.Organization
-	server.RunnerToken = cfg.RunnerToken
 	// A catalog in Git (Settings → Templates) replaces TEMPLATES_DIR: its last loaded commit now, then what the leader syncs.
 	if cfg.Deployments {
 		if err := ops.LoadCatalog(ctx); err != nil {

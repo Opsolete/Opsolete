@@ -44,8 +44,9 @@ func (q *Queries) AnyActiveRun(ctx context.Context) (bool, error) {
 
 const claimableRun = `-- name: ClaimableRun :one
 
-SELECT r.id, r.status FROM runs r WHERE r.status IN ('plan_queued', 'apply_queued')
-    AND (r.action IN ('plan', 'assess') OR NOT EXISTS (SELECT 1 FROM workspaces w WHERE w.id = r.workspace_id AND w.state_lock IS NOT NULL))
+SELECT r.id, r.status FROM runs r JOIN workspaces w ON w.id = r.workspace_id JOIN projects p ON p.id = w.project_id
+WHERE r.status IN ('plan_queued', 'apply_queued') AND p.runner_pool = $1::text
+    AND (r.action IN ('plan', 'assess') OR w.state_lock IS NULL)
 ORDER BY r.updated_at FOR UPDATE OF r SKIP LOCKED LIMIT 1
 `
 
@@ -57,10 +58,10 @@ type ClaimableRunRow struct {
 // Jobs: runners claiming, heartbeating and finishing run phases. "Working" is status planning or
 // applying, the statuses a lease (lease_id) belongs to. A claim is used (heartbeat, log, finish,
 // artifacts, state) only once acknowledged (lease_acked_at): before that the claim may be undone.
-// The longest-waiting queued phase. SKIP LOCKED: runners never get the same one. Runs of a locked
-// workspace wait, except speculative plans and drift checks, which never take the state lock.
-func (q *Queries) ClaimableRun(ctx context.Context) (ClaimableRunRow, error) {
-	row := q.db.QueryRow(ctx, claimableRun)
+// The longest-waiting queued phase of a workspace whose project uses pool. SKIP LOCKED: runners never get the
+// same one. Runs of a locked workspace wait, except speculative plans and drift checks, which never take the state lock.
+func (q *Queries) ClaimableRun(ctx context.Context, pool string) (ClaimableRunRow, error) {
+	row := q.db.QueryRow(ctx, claimableRun, pool)
 	var i ClaimableRunRow
 	err := row.Scan(&i.ID, &i.Status)
 	return i, err

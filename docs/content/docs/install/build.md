@@ -36,11 +36,11 @@ Requirements: Go 1.26+, PostgreSQL 13+ (it needs `gen_random_uuid()`; CI tests 1
 docker compose up -d            # compose.yaml: PostgreSQL 17 on 127.0.0.1:5432; or use any local PostgreSQL
 export DATABASE_URL=postgres://opsolete:opsolete@localhost:5432/opsolete
 export AUTH_DEV_USER=dev@localhost ADMIN_EMAILS=dev@localhost   # local only, see Login
-export SECRET_KEY=$(openssl rand -hex 32) RUNNER_TOKEN=$(openssl rand -hex 32) STATE_STORE="file://$PWD/.devdata/state-store?create_dir=1&metadata=skip"
+export SECRET_KEY=$(openssl rand -hex 32) STATE_STORE="file://$PWD/.devdata/state-store?create_dir=1&metadata=skip"
 go run ./cmd/opsolete
 ```
 
-Then open http://localhost:8080. The schema is created on startup. For a runner, in a second terminal with the same `RUNNER_TOKEN`: `OPS_RUNNER_TOKEN=$RUNNER_TOKEN OPS_SERVER_URL=http://localhost:8080 go run ./cmd/opsolete runner`. All settings are listed in the [option reference]({{< relref "/docs/config/reference" >}}); `AUTH_DEV_USER` is explained under [Login]({{< relref "/docs/config/authentication" >}}).
+Then open http://localhost:8080. The schema is created on startup. For a runner, in a second terminal with the same settings: `OPS_RUNNER_TOKEN=$(go run ./cmd/opsolete runner-token local) OPS_SERVER_URL=http://localhost:8080 go run ./cmd/opsolete runner`. All settings are listed in the [option reference]({{< relref "/docs/config/reference" >}}); `AUTH_DEV_USER` is explained under [Login]({{< relref "/docs/config/authentication" >}}).
 
 ## Examples
 

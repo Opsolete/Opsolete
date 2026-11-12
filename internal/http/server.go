@@ -28,7 +28,6 @@ type Server struct {
 	Features Features
 	// Organization is the one organization of the cloud API (Terraform's cloud block).
 	Organization string
-	RunnerToken  string             // RUNNER_TOKEN: the runner API's bearer token; empty rejects every runner
 	ClaimWait    time.Duration      // how long a runner's claim waits for a job: below typical proxy idle timeouts
 	pages        *template.Template // views/*.html, parsed once; render executes them
 	patterns     []string           // registered by Handler: access_test.go needs a matrix row for each
@@ -94,6 +93,11 @@ func (s *Server) Handler() http.Handler {
 	s.accountRoutes(mux)
 	mux.HandleFunc("GET /organization", s.admin(s.organizationPage))
 	mux.HandleFunc("POST /organization", s.admin(s.saveOrganization))
+	if s.Features.Deployments {
+		mux.HandleFunc("GET /organization/runners", s.admin(s.runnersPage))
+		mux.HandleFunc("POST /organization/runners", s.admin(s.createRunner))
+		mux.HandleFunc("POST /organization/runners/{id}/delete", s.admin(s.deleteRunner))
+	}
 	if !s.Features.Deployments {
 		mux.Handle("GET /{$}", http.RedirectHandler("/registry", http.StatusFound))
 		return instrument(mux.ServeMux, s.logRequests(s.audit(http.NewCrossOriginProtection().Handler(s.requireLogin(mux)))))

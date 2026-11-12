@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -26,14 +27,15 @@ import (
 
 // fakeRunner plays one runner against h: the runner API and Terraform's http state backend.
 type fakeRunner struct {
-	h   http.Handler
-	job runnerapi.Job // the last claimed job
+	h     http.Handler
+	job   runnerapi.Job // the last claimed job
+	token string        // "": testRunnerToken
 }
 
 // call sends a runner API request with the runner token and the job's lease.
 func (r *fakeRunner) call(method, path, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(method, runnerapi.Prefix+path, strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+testRunnerToken)
+	req.Header.Set("Authorization", "Bearer "+cmp.Or(r.token, testRunnerToken))
 	req.Header.Set(runnerapi.LeaseHeader, r.job.LeaseID)
 	return do(r.h, req)
 }

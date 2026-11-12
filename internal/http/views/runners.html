@@ -1,0 +1,49 @@
+{{template "top" .Page}}
+<nav class="back" aria-label="breadcrumb">Organization settings: Runners</nav>
+<div class="page-head">
+  <div>
+    <h1>Runners</h1>
+    <p class="muted">Each runner has its own token. A project's runs go only to runners in the project's pool (its settings; <code>default</code> unless changed),
+      so production credentials can stay on production runners. Deleting a runner revokes its token at once; a run it's working on fails when its lease runs out.</p>
+  </div>
+</div>
+
+{{with .Token}}
+<section class="alert" role="status" aria-labelledby="token-head">
+  <h2 id="token-head">Token of runner {{$.Created}}</h2>
+  <p>Copy it now: it isn't shown again. Start the runner with it:</p>
+  <pre><code>OPS_SERVER_URL={{$.Server}} OPS_RUNNER_TOKEN={{.}} opsolete runner</code></pre>
+  <button type="button" class="secondary" data-copy="{{.}}">Copy token</button>
+</section>
+{{end}}
+
+<div class="card flush">
+<table>
+<tr><th>Name</th><th>Pool</th><th>Last seen</th><th><span class="sr-hint">Actions</span></th></tr>
+{{range .Runners}}
+<tr>
+  <td><strong>{{.Name}}</strong></td>
+  <td><span class="tag">{{.Pool}}</span></td>
+  <td>{{with .LastSeen}}{{ago .}}{{else}}<span class="muted">never</span>{{end}}</td>
+  <td class="nowrap"><form method="post" action="/organization/runners/{{.ID}}/delete" data-confirm="Delete runner {{.Name}}? Its token stops working at once.">
+    <button type="submit" class="secondary">Delete</button></form></td>
+</tr>
+{{else}}
+<tr><td colspan="4" class="empty">No runners yet: create one below, or with <code>opsolete runner-token &lt;name&gt;</code> on the server.</td></tr>
+{{end}}
+</table>
+</div>
+
+<h2 id="create">Create a runner</h2>
+{{$f := .F}}{{template "formerror" $f}}
+<form method="post" action="/organization/runners" class="card">
+  <label for="name">Name <span class="req" aria-hidden="true">*</span></label>
+  <input id="name" name="name" required pattern="[a-z0-9][a-z0-9\-]{1,62}" placeholder="prd-runner-1" value="{{value $f "name" ""}}"{{aria $f "name"}}>
+  {{template "fielderror" (dict "F" $f "N" "name")}}
+  <label for="pool">Pool</label>
+  <input id="pool" name="pool" pattern="[a-z0-9][a-z0-9\-]{1,62}" placeholder="default" value="{{value $f "pool" ""}}"{{aria $f "pool" "pool-hint"}}>
+  <p class="hint" id="pool-hint">It gets the runs of projects that use this pool. Empty: <code>default</code>.</p>
+  {{template "fielderror" (dict "F" $f "N" "pool")}}
+  <div class="actions"><button type="submit">Create runner</button></div>
+</form>
+{{template "bottom"}}

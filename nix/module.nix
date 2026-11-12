@@ -86,10 +86,20 @@ self: {
     cfg.secretFiles
     // dropNulls {
       SECRET_KEY = cfg.secretKeyFile;
-      RUNNER_TOKEN = cfg.runnerTokenFile;
       OIDC_CLIENT_SECRET = cfg.oidc.clientSecretFile;
       DATABASE_URL = cfg.database.urlFile;
     };
+
+  # Registers this host's runner (runnerTokenFile) before the server starts: its own credential, not the server's env.
+  runnerName =
+    if rcfg.name != null
+    then rcfg.name
+    else config.networking.hostName;
+  registerRunner = pkgs.writeShellScript "opsolete-register-runner" ''
+    set -euo pipefail
+    ${exportSecrets (k: _: "$CREDENTIALS_DIRECTORY/${k}") serverSecrets}
+    exec ${opsolete} runner-token -from-stdin -pool ${lib.escapeShellArg rcfg.pool} ${lib.escapeShellArg runnerName} < "$CREDENTIALS_DIRECTORY/runner-token"
+  '';
 
   stateDir = "/var/lib/opsolete-runner";
   runnerEnv =
@@ -182,7 +192,7 @@ in {
       example = "/run/secrets/opsolete-secret-key";
       description = "File with SECRET_KEY (32+ characters, e.g. `openssl rand -base64 32`). Encrypts state, plans, variables and VCS tokens and signs the audit log: back it up, losing it loses all state.";
     };
-    runnerTokenFile = secretFile "File with RUNNER_TOKEN (32+ characters, e.g. `openssl rand -hex 32`), which runners present as OPS_RUNNER_TOKEN. Required with deployments.enable.";
+    runnerTokenFile = secretFile "File with the token of this host's runner (32+ characters, e.g. `openssl rand -hex 32`): the server registers it at start as runner `runner.name` (default: the hostname) in pool `runner.pool`, and the runner's tokenFile defaults to it. Runners elsewhere get their own token: `opsolete-admin runner-token <name>`, or Settings → Runners.";
     database = {
       createLocally = mkOption {
         type = types.bool;
@@ -275,9 +285,14 @@ in {
         default = cfg.runnerTokenFile;
         defaultText = lib.literalExpression "config.services.opsolete.runnerTokenFile";
         example = "/run/secrets/opsolete-runner-token";
-        description = "File with OPS_RUNNER_TOKEN: the same value as the server's RUNNER_TOKEN.";
+        description = "File with OPS_RUNNER_TOKEN: the runner's own token (runnerTokenFile on the server's host, else from `opsolete-admin runner-token <name>`).";
       };
-      name = nullOr types.str null "OPS_RUNNER_NAME. null: the hostname.";
+      name = nullOr types.str null "OPS_RUNNER_NAME, and the name runnerTokenFile is registered with. null: the hostname.";
+      pool = mkOption {
+        type = types.str;
+        default = "default";
+        description = "The pool runnerTokenFile's runner is registered in: it gets the runs of projects that use this pool.";
+      };
       jobTimeout = mkOption {
         type = types.str;
         default = "1h";
@@ -331,10 +346,6 @@ in {
           assertion = cfg.templateEditor -> cfg.templatesDir != null;
           message = "services.opsolete.templateEditor writes into templatesDir: set it to a writable directory";
         }
-        {
-          assertion = cfg.deployments.enable -> cfg.runnerTokenFile != null;
-          message = "services.opsolete.runnerTokenFile is required with deployments: a file holding a random token (e.g. `openssl rand -hex 32`) that runners present";
-        }
       ];
 
       users.users.opsolete = {
@@ -366,11 +377,12 @@ in {
         serviceConfig =
           hardening
           // {
+            ExecStartPre = optional (cfg.runnerTokenFile != null) registerRunner;
             ExecStart = launcher "opsolete-start" serverSecrets "";
             User = "opsolete";
             Group = "opsolete";
             StateDirectory = "opsolete";
-            LoadCredential = credentials serverSecrets;
+            LoadCredential = credentials serverSecrets ++ optional (cfg.runnerTokenFile != null) "runner-token:${cfg.runnerTokenFile}";
             ReadWritePaths = optional cfg.templateEditor cfg.templatesDir;
             AmbientCapabilities = optional (cfg.port < 1024) "CAP_NET_BIND_SERVICE";
             CapabilityBoundingSet =

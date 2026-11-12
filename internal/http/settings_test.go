@@ -48,7 +48,7 @@ func TestWorkspaceLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if j, ok, err := store.ClaimJob(ctx, "r", time.Minute); err != nil || !ok || j.RunID != assess.ID {
+	if j, ok, err := store.ClaimJob(ctx, storage.Runner{Name: "r", Pool: storage.DefaultPool}, time.Minute); err != nil || !ok || j.RunID != assess.ID {
 		t.Fatalf("a drift check must run in a locked workspace: %+v %v %v", j, ok, err)
 	}
 	if _, err := store.CancelRun(ctx, assess.ID, "t", true); err != nil {
@@ -61,7 +61,7 @@ func TestWorkspaceLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, err := store.ClaimJob(ctx, "r", time.Minute); err != nil || ok {
+	if _, ok, err := store.ClaimJob(ctx, storage.Runner{Name: "r", Pool: storage.DefaultPool}, time.Minute); err != nil || ok {
 		t.Fatalf("a locked workspace's run was claimed: %v %v", ok, err)
 	}
 	post(bob, u+"/lock", url.Values{"action": {"unlock"}}) // not bob's lock: no effect
@@ -72,7 +72,7 @@ func TestWorkspaceLock(t *testing.T) {
 	if l, _ := store.GetStateLock(ctx, ws.ID); l != nil {
 		t.Fatalf("force unlock: %+v", l)
 	}
-	if j, ok, err := store.ClaimJob(ctx, "r", time.Minute); err != nil || !ok || j.RunID != run.ID {
+	if j, ok, err := store.ClaimJob(ctx, storage.Runner{Name: "r", Pool: storage.DefaultPool}, time.Minute); err != nil || !ok || j.RunID != run.ID {
 		t.Fatalf("the run must start once unlocked: %+v %v %v", j, ok, err)
 	}
 }

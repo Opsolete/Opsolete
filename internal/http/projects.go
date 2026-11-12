@@ -74,6 +74,7 @@ type projectPage struct {
 	Groups     []string            // settings: team access, known groups to grant
 	Sets       []storage.VariableSet
 	Env        app.EnvironmentValues // environment: per-environment input values
+	Pools      []string              // settings: the runner pools to pick from
 }
 
 // projectTab serves the {project}'s menu page tab; "settings" also its sub-pages ({page}).
@@ -124,6 +125,11 @@ func (s *Server) renderProject(w http.ResponseWriter, r *http.Request, tab, sub 
 		data.Workspaces = list
 	case tab == "environment":
 		if data.Env, err = s.App.EnvironmentValues(ctx, a, p.Name); err != nil {
+			s.uiError(w, r, err)
+			return
+		}
+	case tab == "settings" && sub == "":
+		if data.Pools, err = s.App.RunnerPools(ctx, a); err != nil {
 			s.uiError(w, r, err)
 			return
 		}
@@ -189,13 +195,13 @@ func (s *Server) projectAccess(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/projects/"+project+"/settings/access", http.StatusSeeOther)
 }
 
-// projectSettings renames a project, sets its description and, with default=on, makes it the default.
+// projectSettings renames a project, sets its description and runner pool and, with default=on, makes it the default.
 func (s *Server) projectSettings(w http.ResponseWriter, r *http.Request) {
 	f, ok := readForm(w, r)
 	if !ok {
 		return
 	}
-	set := app.ProjectSettings{Name: f.Get("name"), Description: f.Get("description"), Default: f.Get("default") != ""}
+	set := app.ProjectSettings{Name: f.Get("name"), Description: f.Get("description"), Default: f.Get("default") != "", RunnerPool: f.Get("runner_pool")}
 	err := s.App.UpdateProject(r.Context(), actor(r), r.PathValue("project"), set)
 	if s.failed(w, r, err, "general", f, s.onProjectPage(w, r, "")) {
 		return
