@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -145,6 +146,7 @@ type Runner struct {
 	Terraform  string        // terraform binary
 	JobTimeout time.Duration // limit per run phase; then Terraform is interrupted
 	JobGrace   time.Duration // after any interrupt, how long Terraform may take to stop before it's killed
+	Sandbox    string        // auto | namespaces | off: each Terraform command in its own Linux namespaces (runner/sandbox_linux.go)
 	// Cost estimation with Infracost; off without an API key.
 	Infracost       string // infracost binary
 	InfracostAPIKey string
@@ -179,6 +181,9 @@ func LoadRunner() (Runner, error) {
 	// Terraform before they finish can leave real resources missing from state.
 	if c.JobGrace, err = time.ParseDuration(getenv("OPS_JOB_GRACE", "10m")); err != nil || c.JobGrace <= 0 {
 		return c, errors.New("OPS_JOB_GRACE must be a duration like 10m")
+	}
+	if c.Sandbox = getenv("OPS_SANDBOX", "auto"); !slices.Contains([]string{"auto", "namespaces", "off"}, c.Sandbox) {
+		return c, errors.New("OPS_SANDBOX must be auto, namespaces or off")
 	}
 	if c.InfracostAPIKey = os.Getenv("OPS_INFRACOST_API_KEY"); c.InfracostAPIKey != "" {
 		if c.Infracost = os.Getenv("OPS_INFRACOST"); c.Infracost == "" {

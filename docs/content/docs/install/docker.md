@@ -31,6 +31,8 @@ Then open http://opsolete.localhost:8080. This setup is for trying Opsolete only
 - `SECRET_KEY` changes on every run of the command.
 - The images are linux/amd64 only. On an arm64 machine such as Apple Silicon, Docker runs them under emulation: the app works, but the runner exits (`harden runner process: PR_SET_CHILD_SUBREAPER`). Run the runner outside Docker there instead (see [Run from source]({{< relref "/docs/install/build" >}})), with `OPS_SERVER_URL=http://localhost:8080`.
 
+The runner starts without [the job sandbox]({{< relref "/docs/config/runners#the-job-sandbox" >}}) and warns: Docker's default seccomp profile forbids it. Add `--security-opt seccomp=unconfined -e OPS_SANDBOX=namespaces` to the runner's `docker run` to turn it on.
+
 For real use, see [Production](#production). Run more runner containers for more jobs at once: each runs one job at a time, and each gets its own token.
 
 ## Production

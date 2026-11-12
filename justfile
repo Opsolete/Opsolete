@@ -144,6 +144,13 @@ test-linux:
             -v "$PWD/$bin:/usr/local/bin/terraform:ro" -e CGO_ENABLED=0 -e GOTOOLCHAIN=local -e GOFLAGS=-buildvcs=false "golang:$go" \
             sh -c 'go test -count=1 ./... && go test -c -o /tmp/runner.test ./internal/runner && cd internal/runner && echo "runner test binary: PID $$" && exec /tmp/runner.test -test.count=1 -test.v'
     done
+    # every runner job in the job sandbox (OPS_TEST_SANDBOX=1 fails where it can't work). Privileged: the container's
+    # default seccomp profile forbids user namespaces, and Ubuntu's AppArmor (apparmor_restrict_unprivileged_userns)
+    # strips their capabilities from an unprivileged user.
+    echo "==> Linux tests: runner in the job sandbox"
+    docker run --rm --privileged -v "$PWD:/src" -w /src -v "$(go env GOMODCACHE):/go/pkg/mod" -v opsolete-linux-gocache:/root/.cache/go-build \
+        -v "$PWD/$bin:/usr/local/bin/terraform:ro" -e CGO_ENABLED=0 -e GOTOOLCHAIN=local -e GOFLAGS=-buildvcs=false -e OPS_TEST_SANDBOX=1 "golang:$go" \
+        go test -count=1 -v ./internal/runner
 
 # fix flake.nix's vendorHash after go.mod/go.sum changes (no-op when it is current)
 vendorhash:

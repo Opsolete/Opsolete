@@ -494,8 +494,8 @@ Test paths are relative to `internal/`, except `cmd/opsolete/…` (from the repo
 - Coverage: `runner/terraform_test.go:TestInterrupt` (all causes × clean/killed, stall between commands); `runner/ship_test.go:TestShipperStopsAtHardEnd`; `config/config_test.go:TestLoadRunner`.
 
 **Q7. Job isolation and cleanup** — `full` (Linux)
-- Own temp dir and `HOME`; job env on top of runner env, `OPS_*` scrubbed; every leftover process killed after each job.
-- Coverage: `runner/runner_test.go:TestJobHome`, `TestJobEnv`; `runner/isolate_linux_test.go:TestJobProcessesKilled` (Linux only; `just test-linux`).
+- Own temp dir, `HOME` and `TMPDIR`; job env on top of runner env, `OPS_*` scrubbed; every leftover process killed after each job; the job sandbox (`OPS_SANDBOX`): each Terraform command in its own user/mount/PID/IPC namespaces, a private `/tmp` with only the job's directories, PID 1 of its namespace.
+- Coverage: `runner/runner_test.go:TestJobHome`, `TestJobEnv`; `runner/isolate_linux_test.go:TestJobProcessesKilled`, `runner/sandbox_linux_test.go:TestSandbox` (Linux only; `just test-linux`, whose last pass runs every runner test in the sandbox, privileged); `nix/test.nix` (the sandbox works under the NixOS unit's hardening). Missing: network separation (the chart's NetworkPolicy blocks the metadata endpoint).
 
 **Q8. Log shipping, masking, caps** — `full`
 - ~1 s batches cut at line ends; sensitive values and signed URLs masked; 10 MB per run; 256 KB per post.

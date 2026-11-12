@@ -40,6 +40,7 @@ The server and the runner are configured with environment variables; an invalid 
 | `OPS_SERVER_URL` | required | How the runner reaches Opsolete (in k8s: the Service URL). Registry modules are fetched from here too | `serverUrl` (the local server) |
 | `OPS_RUNNER_TOKEN` | required | The runner's own token: `opsolete runner-token <name>` or Settings → Runners ([Runners]({{< relref "/docs/config/runners" >}})) | `tokenFile` (default: `runnerTokenFile`) |
 | `OPS_JOB_TIMEOUT` | `1h` | Limit per run phase; then Terraform is interrupted | `jobTimeout` |
+| `OPS_SANDBOX` | `auto` | Each Terraform command in its own Linux namespaces (a private `/tmp`, its own processes): `namespaces` requires it (the runner doesn't start without it), `auto` uses it where the kernel and the container allow it and warns where they don't, `off` never. See [Runners]({{< relref "/docs/config/runners#the-job-sandbox" >}}) | `sandbox` |
 | `OPS_JOB_GRACE` | `10m` | After any interrupt (timeout, cancel, lost lease, shutdown), how long Terraform may take to finish in-flight operations and save state before it's killed. In-flight operations such as creating a database can take minutes; a kill can leave real resources missing from state | `jobGrace` |
 | `OPS_TERRAFORM` | `terraform` on `PATH` | Terraform binary | `terraformPackage` |
 | `OPS_RUNNER_NAME` | hostname | Shown on runs; the pod name in k8s | `name` |
