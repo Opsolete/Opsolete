@@ -195,3 +195,33 @@ func TestFollowsUpgrade(t *testing.T) {
 		t.Fatalf("follows: %v", follows)
 	}
 }
+
+// TestImportingUpgrade: migration 014 moves the import switch (an input named existing, a bool) into the module's
+// importing flag; other inputs stay.
+func TestImportingUpgrade(t *testing.T) {
+	ctx := context.Background()
+	conn, apply := migratedTo(t, "014_importing.sql")
+	exec := func(sql string) {
+		t.Helper()
+		if _, err := conn.Exec(ctx, sql); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	exec(`INSERT INTO workspaces (id, name, project_id) VALUES ('00000000-0000-0000-0000-00000000000a', 'w', (SELECT default_project_id FROM organization))`)
+	exec(`INSERT INTO configuration_versions (id, workspace_id, source) VALUES ('00000000-0000-0000-0000-0000000000c1', '00000000-0000-0000-0000-00000000000a', 'form')`)
+	exec(`INSERT INTO configuration_modules (cv_id, name, template_id, module_source, module_ref, inputs) VALUES
+		('00000000-0000-0000-0000-0000000000c1', 'on', 'vm', 'x', 'v1', '{"existing": true, "name": "vm1"}'),
+		('00000000-0000-0000-0000-0000000000c1', 'off', 'vm', 'x', 'v1', '{"existing": false, "name": "vm2"}'),
+		('00000000-0000-0000-0000-0000000000c1', 'text', 'vm', 'x', 'v1', '{"existing": "yes"}')`)
+	apply("014_importing.sql")
+	got := map[string]string{}
+	rows, _ := conn.Query(ctx, `SELECT name, importing::text || ' ' || inputs::text FROM configuration_modules`)
+	for rows.Next() {
+		var n, v string
+		rows.Scan(&n, &v)
+		got[n] = v
+	}
+	if got["on"] != `true {"name": "vm1"}` || got["off"] != `false {"name": "vm2"}` || got["text"] != `false {"existing": "yes"}` {
+		t.Fatalf("modules: %v", got)
+	}
+}

@@ -491,7 +491,9 @@ func accessRows() []accessRow {
 		{"GET " + w + "/runs/{run}/logs/stream", ws + "/runs/{run}/logs/stream", "", onUI, []int{302, 404, 200, 200, 200}, false},
 		{"POST " + w + "/runs/{run}/confirm", ws + "/runs/{run}/confirm", "", onUI, []int{401, 404, 403, 409, 409}, true},
 		{"POST " + w + "/runs/{run}/discard", ws + "/runs/{run}/discard", "", onUI, []int{401, 404, 403, 409, 409}, true},
-		{"POST " + w + "/runs/{run}/change", ws + "/runs/{run}/change", "", onUI, []int{401, 404, 403, 404, 404}, true}, // no import plan: nothing found
+		{"POST " + w + "/runs/{run}/change", ws + "/runs/{run}/change", "", onUI, []int{401, 404, 403, 404, 404}, true},         // no import plan: nothing found
+		{"POST " + w + "/runs/{run}/plan-again", ws + "/runs/{run}/plan-again", "", onUI, []int{401, 404, 403, 404, 404}, true}, // not an import's round
+		{"POST " + w + "/runs/{run}/adopt", ws + "/runs/{run}/adopt", "", onUI, []int{401, 404, 403, 404, 404}, true},
 		{"POST " + w + "/runs/{run}/cancel", ws + "/runs/{run}/cancel", "", onUI, []int{401, 404, 403, 303, 303}, true},
 		{"POST " + w + "/delete", ws + "/delete", "", onUI, []int{401, 404, 403, 409, 409}, true},
 

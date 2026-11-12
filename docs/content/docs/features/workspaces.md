@@ -47,26 +47,27 @@ with any template whose module can import (an `existing` input; see
 [Writing modules that can import]({{< relref "/docs/features/templates#writing-modules-that-can-import" >}})):
 
 1. **Import existing** (operate access): at the top of the template's add form (*Deploy…*), or of its deploy form
-   for a new workspace, offered for templates whose module can import. It switches the module's `existing` input
-   on; then only the template's key input is required: fill in what identifies the resource (its name, its
-   resource group); the module finds the rest.
-2. **The plan imports.** It shows `N to import` and every setting where the form differs from the resource. A plan
-   that imports always waits for confirmation, also with auto-apply.
-3. **Confirm, or Change settings.** The plan read the existing resources. When it only imports, confirm it. Else
-   **Change settings** (beside *Confirm*, and on the page of a run that ended without applying, a failed one too)
-   discards it and opens the template's form with what you entered for it and, over that, each setting one input
-   sets directly; check it and plan again. A run that changed several templates (a promotion) lists one *Change
-   settings* link per template instead.
-4. **Fix the rest by hand.** What the module builds from several inputs (a NIC named `<name>-nic` by default) the
-   plan still shows as a change: set it in the form. Repeat until `N to import, 0 to add, 0 to change, 0 to
-   destroy`, then confirm. Once the import is applied, Opsolete switches `existing` off again: from then on it's
-   an ordinary template in the workspace (a resource deleted outside Terraform later is created again, not looked
-   for), and a promotion doesn't copy the switch.
+   for a new workspace, offered for templates whose module can import. Then only the template's key input is
+   required: fill in what identifies the resource (its name, its resource group); the module finds the rest.
+2. **A plan round.** Saving plans the template with its module importing (its `existing` input on), as a plan that
+   is never applied: it takes no state lock, and the workspace doesn't change. The run page's **Import** section
+   shows `N to import · add · change · destroy`, the plan's attribute changes, and for each input one setting
+   sets directly, what exists next to what the round planned with.
+3. **Plan again with the found values**, as often as needed: a new round with what the plan found filled in. What
+   the module builds from several inputs (a NIC named `<name>-nic` by default) isn't found: **Change settings**
+   opens the template's form with what you entered and what the plan found, to set it by hand; saving plans a
+   new round. A run that changed several templates (a promotion) lists one *Change settings* link per template.
+4. **Apply the import** when the latest round imports and replaces or deletes nothing (best when it only
+   imports: `N to import, 0 to add, 0 to change, 0 to destroy`). It queues an apply run of exactly that round's
+   configuration, which always waits for your confirmation, also with auto-apply. Once applied, the module stops
+   importing: from then on it's an ordinary template in the workspace (a resource deleted outside Terraform
+   later is created again, not looked for), and a promotion never copies the import.
 
-Safety: a resource can be in one state only. A plan that imports a resource a workspace manages already (this
-one's state as the plan read it, or another's) ends as errored, and so does an import into a template that would
-replace or delete anything; nothing is applied and an added template is removed again. Sensitive values are never filled in: type
-one (if the module ignores it, as for a VM's admin password, any value works; if not, the plan shows it changes).
+Safety: a resource can be in one state only. A round or apply whose plan imports a resource a workspace manages
+already (this one's state as the plan read it, or another's) ends as errored; the apply checks again when it
+starts, in case another workspace imported it since the round. An apply that would replace or delete anything is
+refused; a round that would can't be applied. Sensitive values are never filled in: type one (if the module
+ignores it, as for a VM's admin password, any value works; if not, the plan shows it changes).
 
 ## Promote to another workspace
 

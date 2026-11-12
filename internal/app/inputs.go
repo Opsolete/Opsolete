@@ -119,11 +119,12 @@ type saved struct {
 	Raw     map[string]string // the form's values with the project's in place: what show_if sees
 	Locked  map[string]string // the project's values (EnvironmentMap.Locked)
 	Errs    map[string]string // by input name; empty: it may be stored
+	Import  bool              // the module imports what exists (the form's import switch, not stored as an input)
 }
 
 // save locks the inputs the project sets (their posted values are ignored, the module keeps its own), validates
-// the rest (only the key input required while importing), seals the sensitive ones (empty keeps the stored value)
-// and records which inputs follow the project.
+// the rest (only the key input required while importing), seals the sensitive ones (empty keeps the stored value),
+// records which inputs follow the project, and takes the import switch out of the inputs (saved.Import).
 func (a *App) save(s formSave) (saved, error) {
 	locked := s.Env.LockedForm(s.T, s.Old, s.Follows, s.Found)
 	raw := lockInputs(s.Raw, locked)
@@ -132,5 +133,7 @@ func (a *App) save(s formSave) (saved, error) {
 		return saved{}, err
 	}
 	keepOwn(vals, errs, locked, s.Old)
-	return saved{Vals: vals, Follows: slices.Sorted(maps.Keys(locked)), Raw: raw, Locked: locked, Errs: errs}, nil
+	imp := Importing(s.T, raw)
+	delete(vals, ImportInput) // a property of the module (storage.WorkspaceTemplate.Import); the runner gets it
+	return saved{Vals: vals, Follows: slices.Sorted(maps.Keys(locked)), Raw: raw, Locked: locked, Errs: errs, Import: imp}, nil
 }

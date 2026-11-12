@@ -20,6 +20,7 @@ type WorkspaceTemplate struct {
 	ModuleRef    string
 	Inputs       map[string]any
 	Follows      []string // per-environment inputs that take the project's value although it lets workspaces keep their own
+	Import       bool     // the module imports what exists (the runner gets the template's import switch on)
 }
 
 // TemplateInputs is one module's inputs in a configuration version as stored, for re-sealing them under a new
@@ -58,7 +59,7 @@ func workspaceTemplates(ctx context.Context, q *db.Queries, workspaceID uuid.UUI
 	}
 	out := make([]WorkspaceTemplate, 0, len(rows))
 	for _, r := range rows {
-		t := WorkspaceTemplate{Name: r.Name, TemplateID: r.TemplateID, ModuleSource: r.ModuleSource, ModuleRef: r.ModuleRef, Follows: nilIfEmpty(r.Follows)}
+		t := WorkspaceTemplate{Name: r.Name, TemplateID: r.TemplateID, ModuleSource: r.ModuleSource, ModuleRef: r.ModuleRef, Follows: nilIfEmpty(r.Follows), Import: r.Importing}
 		if err := json.Unmarshal(r.Inputs, &t.Inputs); err != nil {
 			return nil, err
 		}
@@ -71,6 +72,11 @@ func workspaceTemplates(ctx context.Context, q *db.Queries, workspaceID uuid.UUI
 // changes an added one's module version and inputs (ErrNotFound if there is none): a new configuration version,
 // and the plan that applies it. Without a free workspace (ErrRunActive) nothing changes.
 func (s *Store) SetWorkspaceTemplate(ctx context.Context, workspaceID uuid.UUID, t WorkspaceTemplate, add bool, createdBy uuid.UUID) (Run, error) {
+	return s.SetWorkspaceTemplateAs(ctx, workspaceID, t, add, "apply", createdBy)
+}
+
+// SetWorkspaceTemplateAs is SetWorkspaceTemplate with the run's action: plan for an import's rounds, never applied.
+func (s *Store) SetWorkspaceTemplateAs(ctx context.Context, workspaceID uuid.UUID, t WorkspaceTemplate, add bool, action string, createdBy uuid.UUID) (Run, error) {
 	var r Run
 	err := s.tx(ctx, func(q *db.Queries) error {
 		cur, mods, err := currentConfig(ctx, q, workspaceID)
@@ -83,7 +89,7 @@ func (s *Store) SetWorkspaceTemplate(ctx context.Context, workspaceID uuid.UUID,
 		case !add && !exists:
 			return ErrNotFound
 		}
-		r, err = queueVersion(ctx, q, workspaceID, cur, withModule(mods, t), SourceForm, "apply", createdBy)
+		r, err = queueVersion(ctx, q, workspaceID, cur, withModule(mods, t), SourceForm, action, createdBy)
 		return err
 	})
 	if err != nil {
@@ -125,4 +131,34 @@ func (s *Store) RemoveWorkspaceTemplate(ctx context.Context, workspaceID uuid.UU
 		return Run{}, err
 	}
 	return r, nil
+}
+
+// QueueConfiguration makes mods the workspace's templates in a new version (made from the current one) and queues
+// an action run of it: an import's next round, with what its plan found. ErrRunActive, ErrLocalExecution.
+func (s *Store) QueueConfiguration(ctx context.Context, workspaceID uuid.UUID, mods []WorkspaceTemplate, source, action string, createdBy uuid.UUID) (Run, error) {
+	var r Run
+	err := s.tx(ctx, func(q *db.Queries) error {
+		cur, _, err := currentConfig(ctx, q, workspaceID)
+		if err != nil {
+			return err
+		}
+		r, err = queueVersion(ctx, q, workspaceID, cur, mods, source, action, createdBy)
+		return err
+	})
+	return r, err
+}
+
+// AdoptRun queues an apply run of the configuration version run runID planned (an import's last plan round):
+// exactly what was planned. ErrRunActive, ErrLocalExecution; ErrNotFound: no such run.
+func (s *Store) AdoptRun(ctx context.Context, runID, createdBy uuid.UUID) (Run, error) {
+	var r Run
+	err := s.tx(ctx, func(q *db.Queries) error {
+		run, err := q.LockRun(ctx, runID)
+		if err != nil {
+			return notFound(err)
+		}
+		r, err = queueRun(ctx, q, run.WorkspaceID, "apply", createdBy, run.CvID)
+		return err
+	})
+	return r, err
 }

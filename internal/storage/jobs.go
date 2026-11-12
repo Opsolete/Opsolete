@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
-	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -193,7 +192,7 @@ func (s *Store) CancelRun(ctx context.Context, id uuid.UUID, email string, force
 //   - plan of an apply run that imports a resource a state manages already (resources: this workspace's state as
 //     the plan read it; the index for the others), or that imports into a template and would replace or delete
 //     anything: errored, and the template change is undone like any run that ends before its apply
-//   - apply: applied; the templates it imported into stop importing (ImportInput false)
+//   - apply: applied; the templates it imported into stop importing (WorkspaceTemplate.Import false)
 //   - failed / canceled: errored / canceled
 //
 // resources is the index of the workspace's current state version; found what a plan that imports found
@@ -224,7 +223,8 @@ func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 		}
 		var importing bool
 		var conflict string
-		if r.Status == Planning && r.Action == "apply" && plan != nil && len(plan.Imports) > 0 && final == "" {
+		// an import's plan rounds (action plan) and its apply: no resource in two states
+		if r.Status == Planning && (r.Action == "apply" || r.Action == "plan") && plan != nil && len(plan.Imports) > 0 && final == "" {
 			if conflict, err = importConflict(ctx, q, plan.Imports, resources); err != nil {
 				return err
 			}
@@ -250,7 +250,7 @@ func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 			}
 		case conflict != "":
 			final, message, ev = Errored, conflict, EvFail
-		case importing && plan.Destroy > 0: // the template doesn't fit what exists
+		case importing && r.Action == "apply" && plan.Destroy > 0: // the template doesn't fit what exists (a plan round just shows it)
 			final, message, ev = Errored, "import refused: the plan would replace or delete existing resources, so the template's "+
 				"inputs don't match them; nothing was applied", EvFail
 		default:
@@ -336,10 +336,6 @@ func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 	return final, nil
 }
 
-// ImportInput is the input with which a template's module imports what exists instead of creating it (a bool;
-// docs: templates.md, "Writing modules that can import").
-const ImportInput = "existing"
-
 // importedTemplates are the templates of mods whose modules imports go into.
 func importedTemplates(mods []WorkspaceTemplate, imports []runnerapi.Import) []string {
 	var names []string
@@ -351,9 +347,9 @@ func importedTemplates(mods []WorkspaceTemplate, imports []runnerapi.Import) []s
 	return names
 }
 
-// endImport switches ImportInput off in the templates applied run runID imported into, in a new version the
+// endImport switches importing off in the templates applied run runID imported into, in a new version the
 // workspace takes at once: what they imported is in the state, so their modules stop looking for it (a resource
-// deleted outside Terraform later is created again, not looked for), and a promotion doesn't copy the switch.
+// deleted outside Terraform later is created again, not looked for).
 func endImport(ctx context.Context, q *db.Queries, runID, workspaceID uuid.UUID) error {
 	raw, err := q.RunPlan(ctx, runID)
 	if err != nil || raw == nil {
@@ -369,10 +365,8 @@ func endImport(ctx context.Context, q *db.Queries, runID, workspaceID uuid.UUID)
 	}
 	changed := false
 	for i, m := range mods {
-		if slices.Contains(importedTemplates(mods, plan.Imports), m.Name) && m.Inputs[ImportInput] == true {
-			mods[i].Inputs = maps.Clone(m.Inputs)
-			mods[i].Inputs[ImportInput] = false
-			changed = true
+		if m.Import && slices.Contains(importedTemplates(mods, plan.Imports), m.Name) {
+			mods[i].Import, changed = false, true
 		}
 	}
 	if !changed {
@@ -383,6 +377,20 @@ func endImport(ctx context.Context, q *db.Queries, runID, workspaceID uuid.UUID)
 		return err
 	}
 	return setCurrent(ctx, q, workspaceID, cv)
+}
+
+// ApplyImportConflict checks again, when run runID's apply is claimed, that no other state took a resource its
+// plan imports since the plan ran (two workspaces may plan the same import); "" none.
+func (s *Store) ApplyImportConflict(ctx context.Context, runID uuid.UUID) (string, error) {
+	raw, err := s.q.RunPlan(ctx, runID)
+	if err != nil || raw == nil {
+		return "", notFound(err)
+	}
+	var plan runnerapi.Plan
+	if err := json.Unmarshal(raw, &plan); err != nil || len(plan.Imports) == 0 {
+		return "", err
+	}
+	return importConflict(ctx, s.q, plan.Imports, nil)
 }
 
 // importConflict says which of a plan's imports a state manages already ("" none): this workspace's as its plan

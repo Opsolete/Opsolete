@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 
 	"strings"
@@ -84,6 +85,11 @@ func (a *App) ClaimJob(ctx context.Context, runner storage.Runner) (body []byte,
 
 // assembleJob opens what the runner needs for j: variables, template inputs and the configuration's source.
 func (a *App) assembleJob(ctx context.Context, j storage.Job) ([]byte, error) {
+	if j.Phase == "apply" { // another workspace may have imported a resource this plan imports since it ran
+		if msg, err := a.Store.ApplyImportConflict(ctx, j.RunID); err != nil || msg != "" {
+			return nil, cmp.Or(err, errors.New(msg))
+		}
+	}
 	env, vars, secrets, err := a.runVariables(ctx, j.WorkspaceID)
 	var src, currency string
 	if err == nil {
@@ -107,6 +113,13 @@ func (a *App) assembleJob(ctx context.Context, j storage.Job) ([]byte, error) {
 		}
 		if err == nil {
 			in, err = withEnvironmentValues(t, known, in, m.Follows, envValues)
+		}
+		if err == nil && m.Import && known && CanImport(t) { // the module imports what exists: its switch on
+			in = maps.Clone(in)
+			if in == nil {
+				in = map[string]any{}
+			}
+			in[ImportInput] = true
 		}
 		if err == nil {
 			in, err = a.withWorkspaceVars(ctx, t, m.ModuleSource, m.ModuleRef, in, vars)

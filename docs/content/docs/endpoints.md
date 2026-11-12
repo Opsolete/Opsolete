@@ -88,6 +88,8 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 | `POST /workspaces/{name}/runs/{run}/confirm` | operate | Queues the apply of a plan waiting for confirmation |
 | `POST /workspaces/{name}/runs/{run}/discard` | operate | Ends it without applying |
 | `POST /workspaces/{name}/runs/{run}/change` | operate | Change settings: discards an import plan waiting for confirmation, and redirects to the run's template's form (configure, or add again when the run's end removed it) with what was entered for it and what its plan found; for an import plan, or a run that changed a template and ended without applying; `404` otherwise, `409` while planning |
+| `POST /workspaces/{name}/runs/{run}/plan-again` | operate | An import's plan round: plans a new version with what it found (`409` if it found nothing new) |
+| `POST /workspaces/{name}/runs/{run}/adopt` | operate | An import's plan round: queues the apply run of exactly its version (`409` if it can't: the reason says why) |
 | `POST /workspaces/{name}/runs/{run}/cancel` | operate | Cancels; `force=1` cuts off a runner that doesn't react |
 | `GET /workspaces/{name}/runs/{run}/logs` | read | Raw log |
 | `GET /workspaces/{name}/runs/{run}/logs/stream` | read | Live log (Server-Sent Events); at most 8 streams per user per replica, else `429` |

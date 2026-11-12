@@ -154,7 +154,7 @@ func TestImportPlan(t *testing.T) {
 	add := func() Run {
 		t.Helper()
 		r, err := s.SetWorkspaceTemplate(ctx, w.ID, WorkspaceTemplate{Name: "vm", TemplateID: "job-test", ModuleSource: "git::x", ModuleRef: "v1",
-			Inputs: map[string]any{"existing": true}}, true, uuid.Nil)
+			Inputs: map[string]any{}, Import: true}, true, uuid.Nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -205,7 +205,7 @@ func TestImportPlan(t *testing.T) {
 		t.Fatalf("a configuration's own import of a managed resource: %s", status)
 	}
 	// another template has the switch on too, but imports nothing
-	putTemplates(t, s, w.ID, WorkspaceTemplate{Name: "main", TemplateID: "job-test", ModuleSource: "git::x", ModuleRef: "v1", Inputs: map[string]any{"existing": true}})
+	putTemplates(t, s, w.ID, WorkspaceTemplate{Name: "main", TemplateID: "job-test", ModuleSource: "git::x", ModuleRef: "v1", Inputs: map[string]any{}, Import: true})
 	r = add()
 	if status := finish(r, runnerapi.Plan{Import: 2, Imports: imports, Change: 1}, nil); status != NeedsConfirmation { // the workspace auto-applies
 		t.Fatalf("an import with auto-apply: %s", status)
@@ -221,9 +221,9 @@ func TestImportPlan(t *testing.T) {
 		t.Fatalf("apply: %s %v", status, err)
 	}
 	existing := func(name string) any {
-		var in map[string]any
-		s.Pool.QueryRow(ctx, `SELECT inputs FROM workspace_templates WHERE workspace_id = $1 AND name = $2`, w.ID, name).Scan(&in)
-		return in[ImportInput]
+		var imp bool
+		s.Pool.QueryRow(ctx, `SELECT importing FROM workspace_templates WHERE workspace_id = $1 AND name = $2`, w.ID, name).Scan(&imp)
+		return imp
 	}
 	if existing("vm") != false || existing("main") != true {
 		t.Fatalf("existing after the apply: vm %v, main %v", existing("vm"), existing("main"))
@@ -261,5 +261,53 @@ func TestRunFoundEntered(t *testing.T) {
 	s.Pool.QueryRow(ctx, `SELECT count(*) FROM workspace_templates WHERE workspace_id = $1 AND name = 'vm'`, w.ID).Scan(&n)
 	if n != 0 {
 		t.Fatal("the added template stayed")
+	}
+}
+
+// A speculative plan (an import's round) of a new version that has nothing to change leaves the workspace's version
+// alone: it's never applied.
+func TestPlanRoundKeepsVersion(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	w, run := newWorkspace(t, s, false)
+	if _, err := s.FinishJob(ctx, run.ID, claim(t, s, "plan").LeaseID, "succeeded", "", nil, nil, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	r, err := s.SetWorkspaceTemplateAs(ctx, w.ID, WorkspaceTemplate{Name: "vm", TemplateID: "job-test", ModuleSource: "git::x", ModuleRef: "v1",
+		Inputs: map[string]any{}, Import: true}, true, "plan", uuid.Nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st, err := s.FinishJob(ctx, r.ID, claim(t, s, "plan").LeaseID, "succeeded", "", nil, nil, nil, nil, nil); err != nil || st != NoChanges {
+		t.Fatalf("round: %s %v", st, err)
+	}
+	if mods, _ := s.WorkspaceTemplates(ctx, w.ID); len(mods) != 1 || mods[0].Name != "main" {
+		t.Fatalf("the workspace took a plan's version: %+v", mods)
+	}
+}
+
+// ApplyImportConflict: a resource another workspace started managing after a plan that imports it ran is caught
+// again when the apply is claimed.
+func TestApplyImportConflict(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	_, run := newWorkspace(t, s, false)
+	plan := runnerapi.Plan{Import: 1, Imports: []runnerapi.Import{{To: "module.main.a.b", ID: "/x/9"}}}
+	if _, err := s.FinishJob(ctx, run.ID, claim(t, s, "plan").LeaseID, "succeeded", "", nil, &plan, []runnerapi.Resource{}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if msg, err := s.ApplyImportConflict(ctx, run.ID); err != nil || msg != "" {
+		t.Fatalf("before: %q %v", msg, err)
+	}
+	other, first := newWorkspace(t, s, false)
+	if _, err := s.CancelRun(ctx, first.ID, "x", false); err != nil {
+		t.Fatal(err)
+	}
+	addState(t, s, other.ID, 1)
+	if err := s.IndexState(ctx, other.ID, []runnerapi.Resource{{Address: "a.b", ID: "/X/9"}}); err != nil {
+		t.Fatal(err)
+	}
+	if msg, err := s.ApplyImportConflict(ctx, run.ID); err != nil || !strings.Contains(msg, "managed already, in workspace "+other.Name) {
+		t.Fatalf("after: %q %v", msg, err)
 	}
 }

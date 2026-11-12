@@ -54,6 +54,9 @@ func NewForm(t templates.Template, s FormState) Form {
 		f.T = ForImport(t)
 	}
 	for _, in := range f.T.Inputs {
+		if in.Name == ImportInput && CanImport(t) { // the form's mode (Importing), not a field: the surface switches it
+			continue
+		}
 		fd := Field{Input: in, ID: in.Name, Label: in.Title(), Value: f.Values[in.Name], Visible: f.T.Match(in.ShowIf, f.Values), Set: s.Set[in.Name]}
 		if v, ok := s.Locked[in.Name]; ok {
 			fd.Locked = ValueText(in, v)

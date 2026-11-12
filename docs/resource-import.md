@@ -90,46 +90,32 @@ postcondition.
 Optional parts keep their own switches (`data_disks[].existing`, `auto_shutdown_existing`, `nsg_existing`), as
 the example modules 1.1.0 already have them.
 
-### Flow
+### Flow (an import session, November 2026; replaces rounds of discarded apply plans)
 
-1. **Add the template with `existing` on.** The usual add (or deploy) form: `existing` is a module variable, so
-   it's an input like any other (`app.ImportInput`); for templates that have it (`app.CanImport`) the form offers
-   *Create new* / *Import existing* at the top (`?import=1` ticks it, and the form marks only the key input
-   required, `app.ForImport`). While it's on, only the key input is required (`app.validate`):
-   the user fills what identifies the resource (name, resource group); a required input left empty is stored as
-   `null`, so the module call still has the argument.
-2. **Plan.** An ordinary apply run. Terraform finds and imports; the plan lists every attribute that differs, real
-   value first. The runner reports the plan's imports (`Plan.Imports`, IDs from `importing`). An apply run's plan
-   that imports an ID a state holds (this workspace's as the plan read it, the others' index) → errored
-   (`importConflict`), whatever imports it. One that imports into a template's module (`intoTemplate`) always
-   waits for confirmation, also with auto-apply, and replaces or deletes nothing, else errored; a VCS
-   configuration's own import blocks are left to its authors. Errored, the template change is undone like any run
-   that ends before its apply.
-3. **Found values.** The runner reads the plan JSON (`runner/found.go`): for every imported resource, the real value
-   (`change.before`) of each attribute one input sets alone, following the `configuration` references up through
-   module calls (`each.value.x` of a call repeated over a list input: that row's field, the row matched by the
-   instance key). References can't tell `var.x` from `"${var.x}-nic"`, so an input already set must also be what
-   the plan sets there. Sensitive attributes and variables and workspace secrets are left out (again on the server).
-   Stored per module with its template (`runs.found`, migration 008).
-4. **Confirm, or Change settings.** An import plan's page always offers both to operators: *Change settings*
-   (`POST …/runs/{run}/change`, `app.ChangeImport`) discards a plan still waiting and redirects to the configure
-   form (`?found=<run>`), or the add form again when the workspace doesn't have the template the run added
-   (`?template=…&found=<run>&from=<module>`); from an ended plan it only redirects. Any run that changed a template
-   and ends without its apply (a failed plan too) offers what it set the template to, sealed inputs left out
-   (its configuration version, `storage.RunFound`), so Change settings works there too. The form opens with the found values over the inputs that plan ran
-   with (`Found.Saved`, from the run's version: what the user set by hand, such as a NIC name the module builds from two
-   inputs, isn't lost when the discard removes the template), `existing` as that run had it (a plan that failed
-   creating comes back creating); an applied run offers nothing to go back to, also by an old `?found` link; saving plans again, these values
-   counting as the workspace's own against a project's keep-own value. Live (`test-vm`): round 1 found 15
-   settings; round 2 left the NIC name and boot diagnostics; with the NIC name set, round 3 left boot diagnostics
-   only (`2 to import, 0 to add, 1 to change, 0 to destroy`).
-5. **Fix the rest by hand.** What the module builds from several inputs (`coalesce(var.nic_name,
-   "${var.name}-nic")`) or a dynamic block isn't copied: the plan shows it, the user sets it. Repeat until
-   `N to import, 0 to add, 0 to change, 0 to destroy`, then confirm.
-6. **Applied: the switch goes off.** The apply's finishing transaction sets `existing` false in the templates the
-   plan imported into (`storage.endImport`). That changes no plan (the resources are in the state, so the import
-   blocks did nothing anymore, and the data sources stop being read); a resource deleted outside Terraform later
-   is then created again instead of failing its lookup, and a promotion doesn't copy the switch.
+1. **Import existing.** The add (or deploy) form's *Create new* / *Import existing* chips set the form's mode
+   (`app.Importing`, posted as the hidden `existing`); only the key input is required (`app.ForImport`, a required
+   input left empty is stored as `null`). Saving makes a configuration version whose module **imports**
+   (`configuration_modules.importing`, migration 014; the switch is never stored as an input) and queues a **plan
+   round**: a run with action `plan` (`app.runAction`), never applied, no state lock, the workspace unchanged. The
+   runner gets `existing = true` for importing modules only (`app.assembleJob`, if the template at the pinned
+   version has the switch).
+2. **The round's page** (`app.ImportRound`, operators): `N to import · add · change · destroy`, the plan's
+   attribute diff (step 4b), and per importing module the inputs one setting sets directly, found (`runner/found.go`,
+   type-checked against the input in `app.fits`: a map behind a string input is dropped) next to planned with.
+3. **Plan again with the found values** (`POST …/plan-again`, `app.PlanImportAgain`): a new version, the found values
+   saved through the one input pipeline (validated, sealed, keep-own), another round. **Change settings** opens the
+   form with what was entered and found, still importing; saving queues a round too.
+4. **Apply the import** (`POST …/adopt`, `app.AdoptImport`): offered for the workspace's latest round when it finished
+   with imports and replaces or deletes nothing. It queues an apply run of exactly that round's version
+   (`storage.AdoptRun`): `afterPlan` makes it wait (reason `import`), `FinishJob` errors it if its plan replaces or
+   deletes, and `assembleJob` checks the import guard again when the apply is claimed (`ApplyImportConflict`), since
+   another workspace may have imported the resource since the round.
+5. **Applied:** the apply's finishing transaction makes a version with the modules it imported into no longer
+   importing (`storage.endImport`). Every round of that version, and the apply, then offer nothing to go back to
+   (`RunVersionApplied`), also by an old `?found` link.
+
+A plan round that has nothing to change leaves the workspace's version alone (only applying runs take a version:
+`runFacts.Version`).
 
 Decision (November 2026): the scan (inventory, matching, Import page) is removed, not kept as a picker. A picker
 can come back on `terraform query` if wanted.
@@ -177,6 +163,11 @@ Kept: the import guards, `Plan.Import` counts, keep-own environment values.
 - Not tried: Linux VMs; a NIC outside the VM's resource group; `runner/found.go` itself against Azure (the spike
   was; the Go version is tested on plan JSON shaped like Terraform's, and with a real Terraform import).
 - A picker (what exists, what's managed) on `terraform query`, if wanted.
+- **Forget instead of destroy** when removing a template that holds imported resources (Terraform `removed` blocks
+  with `destroy = false`): today removing it destroys them, behind the usual confirmation. Needs a check with real
+  Terraform of a module that configures its own provider.
+- Explicit attribute → input mappings in templates, if the type-checked inference proves too loose.
+- Imports by resource identity (Terraform 1.12+) have no ID, so the one-state guard can't check them.
 
 ## Research (November 2026)
 

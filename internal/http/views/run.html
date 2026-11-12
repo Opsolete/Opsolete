@@ -40,7 +40,27 @@
   <div><dt>Triggered by</dt><dd>{{if $r.CreatedBy}}{{$r.CreatedBy}}{{else if $r.VCSPullRequest}}pull request #{{$r.VCSPullRequest}}{{else if and $r.VCSCommit (eq $r.Action "apply")}}new commit{{else}}—{{end}}</dd></div>
 </dl>
 
-{{if and .Found (not $r.Active)}}{{$read := false}}{{range .Found}}{{if .Read}}{{$read = true}}{{end}}{{end}}
+{{with .Import}}
+<section class="card import" aria-labelledby="import-head">
+  <h2 id="import-head">Import</h2>
+  {{with .Plan}}<p class="plan">{{.Import}} to import · {{.Add}} to add · {{.Change}} to change · {{.Destroy}} to destroy</p>{{end}}
+  <p>This plan looked up what exists and imports it; a plan round is never applied by itself.
+    {{if .CanAdopt}}{{if or .Plan.Add .Plan.Change}}It still adds or changes something (see the plan below): plan again or change the settings until it only imports, or apply it as it is.{{else}}It only imports: apply it.{{end}}{{else if not $r.Active}}Can't be applied yet: {{.Why}}.{{end}}</p>
+  {{range .Modules}}{{if .Values}}
+  <table class="attrs"><caption><code>{{.Module}}</code>: what the plan found</caption>
+    <tr><th>Input</th><th>Found</th><th>Planned with</th></tr>
+    {{range .Values}}<tr><td>{{.Title}}</td><td><code>{{.Found}}</code></td><td>{{with .Planned}}<code>{{.}}</code>{{else}}<span class="muted">—</span>{{end}}{{if .Differs}} <span class="change update">differs</span>{{end}}</td></tr>{{end}}
+  </table>{{end}}{{end}}
+  <div class="actions">
+    {{if .CanReplan}}<form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/plan-again"><button type="submit">Plan again with the found values</button></form>{{end}}
+    {{if and (not $r.Active) (eq (len $.Found) 1)}}<form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/change"><button type="submit" class="secondary">Change settings</button></form>{{end}}
+    {{if .CanAdopt}}<form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/adopt" data-confirm="Apply this import? An apply run of exactly this configuration starts; it waits for your confirmation.">
+      <button type="submit">Apply the import</button></form>{{end}}
+  </div>
+</section>
+{{end}}
+
+{{if and .Found (not $r.Active) (not .Import)}}{{$read := false}}{{range .Found}}{{if .Read}}{{$read = true}}{{end}}{{end}}
 <section class="alert" role="status" aria-labelledby="found-head">
   <h2 id="found-head">{{if $read}}Importing{{else}}Not applied{{end}}</h2>
   <p>{{if $read}}This plan read the existing resources. {{end}}<strong>Change settings</strong> opens the template's form with
@@ -88,7 +108,7 @@
     {{with .Cost}}<p><strong>Estimated monthly cost:</strong> {{.Currency}} {{printf "%.2f" .Proposed}}
       <span class="change {{if gt .Delta 0.0}}create{{else if lt .Delta 0.0}}delete{{else}}update{{end}}">{{printf "%+.2f" .Delta}}</span>
       <span class="muted">(was {{printf "%.2f" .Prior}}; {{.Priced}} resources priced{{with .Unsupported}}, {{.}} unsupported{{end}}; usage-based charges excluded. Estimate by Infracost.)</span></p>{{end}}
-    {{if eq $r.Action "plan"}}<p class="muted">A speculative plan of a pull request is never applied. Merge the pull request to apply it.</p>{{end}}
+    {{if $r.VCSPullRequest}}<p class="muted">A speculative plan of a pull request is never applied. Merge the pull request to apply it.</p>{{end}}
     {{end}}
     {{with .Changes}}
     <table class="changes">

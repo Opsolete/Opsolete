@@ -93,7 +93,7 @@ SELECT status FROM runs WHERE id = sqlc.arg(id)::uuid FOR UPDATE;
 
 -- name: LockRun :one
 -- promotes: a promotion's destroy run whose apply run isn't queued yet (storage.continuePromotion).
-SELECT r.status, r.workspace_id, r.remove_templates, r.cv_id,
+SELECT r.status, r.action, r.workspace_id, r.remove_templates, r.cv_id,
     EXISTS (SELECT 1 FROM promotions p WHERE p.destroy_run_id = r.id AND p.apply_run_id IS NULL)::boolean AS promotes
 FROM runs r WHERE r.id = sqlc.arg(id)::uuid FOR UPDATE OF r;
 
@@ -115,7 +115,7 @@ UPDATE workspaces SET state_lock = NULL, state_locked_at = NULL
 WHERE id = sqlc.arg(workspace_id)::uuid AND state_lock->>'OpsoleteRun' = sqlc.arg(run_id)::uuid::text;
 
 -- name: ListWorkspaceTemplates :many
-SELECT name, template_id, module_source, module_ref, inputs, follows FROM workspace_templates
+SELECT name, template_id, module_source, module_ref, inputs, follows, importing FROM workspace_templates
 WHERE workspace_id = sqlc.arg(workspace_id)::uuid ORDER BY name;
 
 -- Retention (storage.PruneRunLogs, storage.PruneSpeculativeRuns): at most lim runs per statement, so

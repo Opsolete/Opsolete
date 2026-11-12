@@ -191,7 +191,7 @@ const (
 
 // runFacts is what of a run decides its effects, besides the statuses.
 type runFacts struct {
-	Version  bool // it plans a configuration version
+	Version  bool // it plans a configuration version that it may apply (not a speculative plan or drift check)
 	Removes  bool // a destroy that removes templates (remove_templates)
 	Promotes bool // a promotion's destroy run, its apply run not queued yet
 }
@@ -243,7 +243,7 @@ func transition(ctx context.Context, q *db.Queries, runID uuid.UUID, ev Event, t
 		return from, nil, err
 	}
 	var step *PromotionStep
-	f := runFacts{Version: run.CvID.Valid, Removes: len(run.RemoveTemplates) > 0, Promotes: run.Promotes}
+	f := runFacts{Version: run.CvID.Valid && run.Action != "plan" && run.Action != "assess", Removes: len(run.RemoveTemplates) > 0, Promotes: run.Promotes}
 	for _, e := range effects(f, from, to) {
 		switch e {
 		case effNotifyJobs:
@@ -359,6 +359,7 @@ type Found struct {
 	TemplateID string         `json:"template_id"`
 	Inputs     map[string]any `json:"inputs,omitempty"` // found by the plan
 	Saved      map[string]any `json:"saved,omitempty"`  // the module's inputs in the run's version, sensitive (sealed) ones left out
+	Import     bool           `json:"-"`                // the module imports in the run's version
 }
 
 // unsealed is inputs without the sealed values: the form never shows them.
@@ -412,7 +413,7 @@ func (s *Store) RunFound(ctx context.Context, runID uuid.UUID) (map[string]Found
 		if found == nil {
 			found = map[string]Found{}
 		}
-		f.TemplateID, f.Saved = m.TemplateID, unsealed(m.Inputs)
+		f.TemplateID, f.Saved, f.Import = m.TemplateID, unsealed(m.Inputs), m.Import
 		found[m.Name] = f
 	}
 	return found, nil

@@ -405,6 +405,10 @@ func (r *Runner) plan(ctx context.Context, tf *tfProc, run func(...string) (bool
 	}
 	sum := summarize(rcs)
 	diff := planDiff(rcs, mask.New(job.Secrets))
+	var imported map[string]map[string]any
+	if sum.Import > 0 { // what the imported resources are: an import's next round plans with it
+		imported = found(p, job.Modules, mask.New(job.Secrets))
+	}
 	if !refresh { // a refresh-only plan changes no infrastructure, so no cost
 		sum.Cost = r.estimate(ctx, dir, p, job.Currency, w)
 	}
@@ -414,7 +418,7 @@ func (r *Runner) plan(ctx context.Context, tf *tfProc, run func(...string) (bool
 		return runnerapi.FinishRequest{Status: "succeeded", Plan: &sum, Diff: diff}
 	case "plan":
 		fmt.Fprintf(w, "\n==> speculative plan: %s (never applied)\n", counts(sum))
-		return runnerapi.FinishRequest{Status: "succeeded", Plan: &sum, Diff: diff}
+		return runnerapi.FinishRequest{Status: "succeeded", Plan: &sum, Diff: diff, Found: imported}
 	}
 	for _, a := range []struct{ name, file string }{{runnerapi.ArtifactPlan, planFile}, {runnerapi.ArtifactLockfile, lockFile}} {
 		b, err := os.ReadFile(filepath.Join(dir, a.file))
@@ -429,11 +433,7 @@ func (r *Runner) plan(ctx context.Context, tf *tfProc, run func(...string) (bool
 		}
 	}
 	fmt.Fprintf(w, "\n==> plan saved: %s\n", counts(sum))
-	res := runnerapi.FinishRequest{Status: "succeeded", Plan: &sum, Diff: diff}
-	if sum.Import > 0 { // what the imported resources are, for the form's "Use found values"
-		res.Found = found(p, job.Modules, mask.New(job.Secrets))
-	}
-	return res
+	return runnerapi.FinishRequest{Status: "succeeded", Plan: &sum, Diff: diff, Found: imported}
 }
 
 func sleep(ctx context.Context, d time.Duration) {
