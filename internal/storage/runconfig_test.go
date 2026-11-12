@@ -19,7 +19,7 @@ func TestRunConfigVersions(t *testing.T) {
 	ctx := context.Background()
 	w, run := newWorkspace(t, s, false) // template main: job-test git::x v1, n=1
 	j := claim(t, s, "plan")
-	if _, err := s.FinishJob(ctx, run.ID, j.LeaseID, "succeeded", "", nil, nil, nil, nil); err != nil {
+	if _, err := s.FinishJob(ctx, run.ID, j.LeaseID, "succeeded", "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	root := func() string {
@@ -46,7 +46,7 @@ func TestRunConfigVersions(t *testing.T) {
 			p = &runnerapi.Plan{Change: 1}
 		}
 		j := claim(t, s, "plan")
-		if _, err := s.FinishJob(ctx, r.ID, j.LeaseID, "succeeded", "", nil, p, nil, nil); err != nil {
+		if _, err := s.FinishJob(ctx, r.ID, j.LeaseID, "succeeded", "", nil, p, nil, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -74,7 +74,7 @@ func TestRunConfigVersions(t *testing.T) {
 	// errored while planning
 	r = configure("v2")
 	j = claim(t, s, "plan")
-	if _, err := s.FinishJob(ctx, r.ID, j.LeaseID, "failed", "boom", nil, nil, nil, nil); err != nil {
+	if _, err := s.FinishJob(ctx, r.ID, j.LeaseID, "failed", "boom", nil, nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := root(); got != "v1" {
@@ -102,7 +102,7 @@ func TestRunConfigVersions(t *testing.T) {
 		t.Fatal(err)
 	}
 	j = claim(t, s, "apply")
-	if _, err := s.FinishJob(ctx, r.ID, j.LeaseID, "failed", "boom", nil, nil, nil, nil); err != nil {
+	if _, err := s.FinishJob(ctx, r.ID, j.LeaseID, "failed", "boom", nil, nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := root(); got != "v3" {
@@ -145,7 +145,7 @@ func TestImportPlan(t *testing.T) {
 	ctx := context.Background()
 	w, run := newWorkspace(t, s, true)
 	if j := claim(t, s, "plan"); true {
-		if _, err := s.FinishJob(ctx, run.ID, j.LeaseID, "succeeded", "", nil, nil, nil, nil); err != nil {
+		if _, err := s.FinishJob(ctx, run.ID, j.LeaseID, "succeeded", "", nil, nil, nil, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -162,7 +162,7 @@ func TestImportPlan(t *testing.T) {
 	}
 	finish := func(r Run, plan runnerapi.Plan, have []runnerapi.Resource) string {
 		t.Helper()
-		status, err := s.FinishJob(ctx, r.ID, claim(t, s, "plan").LeaseID, "succeeded", "", nil, &plan, have, found)
+		status, err := s.FinishJob(ctx, r.ID, claim(t, s, "plan").LeaseID, "succeeded", "", nil, &plan, have, found, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -217,7 +217,7 @@ func TestImportPlan(t *testing.T) {
 	if err := s.ConfirmRun(ctx, r.ID, uuid.Nil, "x"); err != nil {
 		t.Fatal(err)
 	}
-	if status, err := s.FinishJob(ctx, r.ID, claim(t, s, "apply").LeaseID, "succeeded", "", nil, nil, []runnerapi.Resource{}, nil); err != nil || status != Applied {
+	if status, err := s.FinishJob(ctx, r.ID, claim(t, s, "apply").LeaseID, "succeeded", "", nil, nil, []runnerapi.Resource{}, nil, nil); err != nil || status != Applied {
 		t.Fatalf("apply: %s %v", status, err)
 	}
 	existing := func(name string) any {
@@ -242,7 +242,7 @@ func TestRunFoundEntered(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
 	w, run := newWorkspace(t, s, false)
-	if _, err := s.FinishJob(ctx, run.ID, claim(t, s, "plan").LeaseID, "succeeded", "", nil, nil, nil, nil); err != nil {
+	if _, err := s.FinishJob(ctx, run.ID, claim(t, s, "plan").LeaseID, "succeeded", "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	r, err := s.SetWorkspaceTemplate(ctx, w.ID, WorkspaceTemplate{Name: "vm", TemplateID: "job-test", ModuleSource: "git::x", ModuleRef: "v1",
@@ -250,7 +250,7 @@ func TestRunFoundEntered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status, err := s.FinishJob(ctx, r.ID, claim(t, s, "plan").LeaseID, "failed", "plan: exit status 1", nil, nil, nil, nil); err != nil || status != Errored {
+	if status, err := s.FinishJob(ctx, r.ID, claim(t, s, "plan").LeaseID, "failed", "plan: exit status 1", nil, nil, nil, nil, nil); err != nil || status != Errored {
 		t.Fatalf("failed plan: %s %v", status, err)
 	}
 	got, err := s.RunFound(ctx, r.ID)

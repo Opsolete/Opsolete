@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/opsolete/opsolete/internal/app"
+	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage"
 )
 
@@ -19,7 +20,8 @@ type runPage struct {
 	R           storage.Run
 	History     []storage.StatusEntry // oldest first
 	Plan, Apply phase
-	Found       []app.FoundTemplate // what a plan that imports found: operators may take it into the form
+	Found       []app.FoundTemplate               // what a plan that imports found: operators may take it into the form
+	Diff        map[string]runnerapi.ResourceDiff // the plan's attribute changes by resource address
 }
 
 func (s *Server) run(w http.ResponseWriter, r *http.Request) {
@@ -36,6 +38,15 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 			s.internalError(w, "found values", err)
 			return
 		}
+	}
+	diff, err := s.App.RunDiff(r.Context(), actor(r), d.Workspace.Name, d.Run.ID)
+	if err != nil {
+		s.uiError(w, r, err)
+		return
+	}
+	page.Diff = map[string]runnerapi.ResourceDiff{}
+	for _, rd := range diff {
+		page.Diff[rd.Address] = rd
 	}
 	s.render(w, r, http.StatusOK, "run.html", page)
 }

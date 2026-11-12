@@ -19,7 +19,7 @@ func TestUpgradeTemplates(t *testing.T) {
 	ctx := context.Background()
 	w, run := newWorkspace(t, s, true) // template main: job-test, git::x v1
 	j := claim(t, s, "plan")
-	if _, err := s.FinishJob(ctx, run.ID, j.LeaseID, "succeeded", "", nil, nil, nil, nil); err != nil {
+	if _, err := s.FinishJob(ctx, run.ID, j.LeaseID, "succeeded", "", nil, nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	putTemplates(t, s, w.ID, WorkspaceTemplate{Name: "extra", TemplateID: "job-test", ModuleSource: "git::x", ModuleRef: "v1", Inputs: map[string]any{}})
@@ -58,7 +58,7 @@ func TestUpgradeTemplates(t *testing.T) {
 		t.Fatalf("not upgraded: %+v", uses)
 	}
 	j = claim(t, s, "plan")
-	if st, _ := s.FinishJob(ctx, r.ID, j.LeaseID, "succeeded", "", nil, &runnerapi.Plan{Change: 1}, nil, nil); st != NeedsConfirmation {
+	if st, _ := s.FinishJob(ctx, r.ID, j.LeaseID, "succeeded", "", nil, &runnerapi.Plan{Change: 1}, nil, nil, nil); st != NeedsConfirmation {
 		t.Fatalf("rollout plan with auto-apply: %q", st)
 	}
 	if _, err := s.UpgradeTemplates(ctx, w.ID, nil, uuid.Nil, ro.ID); !errors.Is(err, ErrRunActive) {

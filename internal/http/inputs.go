@@ -14,8 +14,9 @@ import (
 // secretPrefix names the form fields of sensitive inputs, so the audit log redacts them.
 const secretPrefix = "secret."
 
-// formValues reads t's inputs from a posted form.
-func formValues(f url.Values, t templates.Template) map[string]string {
+// formValues reads t's inputs from a posted form; draft (nil: none) is a sensitive field's value from its draft
+// when the field is left empty (drafts.go).
+func formValues(f url.Values, t templates.Template, draft func(field string) string) map[string]string {
 	raw := map[string]string{}
 	for _, in := range t.Inputs {
 		if in.RowFields() != nil {
@@ -31,6 +32,9 @@ func formValues(f url.Values, t templates.Template) map[string]string {
 			field = secretPrefix + in.Name
 		}
 		raw[in.Name] = f.Get(field)
+		if in.Sensitive && raw[in.Name] == "" && draft != nil {
+			raw[in.Name] = draft(in.Name)
+		}
 	}
 	return raw
 }
@@ -120,6 +124,17 @@ func fieldTexts(obj map[string]any) map[string]string {
 	for k, x := range obj {
 		if x != nil {
 			out[k] = templates.FormatValue(x)
+		}
+	}
+	return out
+}
+
+// sensitiveNames are t's sensitive inputs, the fields a refused form keeps drafts of.
+func sensitiveNames(t templates.Template) []string {
+	var out []string
+	for _, in := range t.Inputs {
+		if in.Sensitive {
+			out = append(out, in.Name)
 		}
 	}
 	return out

@@ -120,7 +120,7 @@ func TestRunLifecycle(t *testing.T) {
 	if _, err := s.Heartbeat(ctx, run.ID, plan.LeaseID, time.Minute); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("a heartbeat before the ack must be refused, got %v", err)
 	}
-	if _, err := s.FinishJob(ctx, run.ID, plan.LeaseID, "failed", "", nil, nil, nil, nil); !errors.Is(err, ErrLeaseLost) {
+	if _, err := s.FinishJob(ctx, run.ID, plan.LeaseID, "failed", "", nil, nil, nil, nil, nil); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("a finish before the ack must be refused, got %v", err)
 	}
 	if _, _, _, err := s.WorkingRun(ctx, w.ID); !errors.Is(err, ErrNotFound) {
@@ -153,7 +153,7 @@ func TestRunLifecycle(t *testing.T) {
 
 	// Plan with changes: waits for a human; nothing else may run on the workspace meanwhile.
 	sum := &runnerapi.Plan{Add: 2, Changes: []runnerapi.Change{{Address: "a.b", Action: "create"}, {Address: "a.c", Action: "create"}}}
-	if st, err := s.FinishJob(ctx, run.ID, plan.LeaseID, "succeeded", "", nil, sum, nil, nil); err != nil || st != NeedsConfirmation {
+	if st, err := s.FinishJob(ctx, run.ID, plan.LeaseID, "succeeded", "", nil, sum, nil, nil, nil); err != nil || st != NeedsConfirmation {
 		t.Fatalf("finish plan: %q %v", st, err)
 	}
 	if _, ok, _ := s.ClaimJob(ctx, Runner{Name: "r", Pool: DefaultPool}, time.Minute); ok {
@@ -184,10 +184,10 @@ func TestRunLifecycle(t *testing.T) {
 	if err := s.AddStateVersion(ctx, w.ID, uuid.Nil, "", StateVersion{Serial: 3, Lineage: "lin", BlobKey: "k/" + w.ID.String(), MD5: "m", Size: 1, Outputs: map[string]any{"id": "abc"}}); err != nil {
 		t.Fatal(err)
 	}
-	if st, err := s.FinishJob(ctx, run.ID, apply.LeaseID, "succeeded", "", map[string]any{"id": "abc"}, nil, res, nil); err != nil || st != Applied {
+	if st, err := s.FinishJob(ctx, run.ID, apply.LeaseID, "succeeded", "", map[string]any{"id": "abc"}, nil, res, nil, nil); err != nil || st != Applied {
 		t.Fatalf("finish apply: %q %v", st, err)
 	}
-	if _, err := s.FinishJob(ctx, run.ID, apply.LeaseID, "failed", "", nil, nil, nil, nil); !errors.Is(err, ErrLeaseLost) {
+	if _, err := s.FinishJob(ctx, run.ID, apply.LeaseID, "failed", "", nil, nil, nil, nil, nil); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("finishing twice must fail, got %v", err)
 	}
 	got, hist, err := s.GetRun(ctx, run.ID)
@@ -210,7 +210,7 @@ func TestRunLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	j := claim(t, s, "plan")
-	if st, err := s.FinishJob(ctx, again.ID, j.LeaseID, "succeeded", "", nil, nil, nil, nil); err != nil || st != NoChanges {
+	if st, err := s.FinishJob(ctx, again.ID, j.LeaseID, "succeeded", "", nil, nil, nil, nil, nil); err != nil || st != NoChanges {
 		t.Fatalf("no-op plan: %q %v", st, err)
 	}
 	if _, ok, _ := s.ClaimJob(ctx, Runner{Name: "r", Pool: DefaultPool}, time.Minute); ok {
@@ -224,11 +224,11 @@ func TestAutoApplyAndDiscard(t *testing.T) {
 	w, run := newWorkspace(t, s, true)
 	j := claim(t, s, "plan")
 	sum := &runnerapi.Plan{Add: 1}
-	if st, _ := s.FinishJob(ctx, run.ID, j.LeaseID, "succeeded", "", nil, sum, nil, nil); st != ApplyQueued {
+	if st, _ := s.FinishJob(ctx, run.ID, j.LeaseID, "succeeded", "", nil, sum, nil, nil, nil); st != ApplyQueued {
 		t.Fatalf("auto-apply plan: %q", st)
 	}
 	j = claim(t, s, "apply")
-	if st, _ := s.FinishJob(ctx, run.ID, j.LeaseID, "succeeded", "", nil, nil, nil, nil); st != Applied {
+	if st, _ := s.FinishJob(ctx, run.ID, j.LeaseID, "succeeded", "", nil, nil, nil, nil, nil); st != Applied {
 		t.Fatalf("auto-applied: %q", st)
 	}
 
@@ -241,7 +241,7 @@ func TestAutoApplyAndDiscard(t *testing.T) {
 	if j.Action != "destroy" {
 		t.Fatalf("job: %+v", j)
 	}
-	if st, _ := s.FinishJob(ctx, d.ID, j.LeaseID, "succeeded", "", nil, sum, nil, nil); st != NeedsConfirmation {
+	if st, _ := s.FinishJob(ctx, d.ID, j.LeaseID, "succeeded", "", nil, sum, nil, nil, nil); st != NeedsConfirmation {
 		t.Fatalf("destroy plan with auto-apply: %q", st)
 	}
 	if err := s.DiscardRun(ctx, d.ID, "bob@example.com"); err != nil || status(t, s, d.ID) != Discarded {
@@ -281,7 +281,7 @@ func TestFinishKeepsForeignStateLock(t *testing.T) {
 	if lock, _ := s.StateLockID(ctx, w.ID); lock != "rb" {
 		t.Fatalf("a run released a rollback's lock: %q", lock)
 	}
-	if _, err := s.FinishJob(ctx, run.ID, j.LeaseID, "failed", "423", nil, nil, nil, nil); err != nil {
+	if _, err := s.FinishJob(ctx, run.ID, j.LeaseID, "failed", "423", nil, nil, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if lock, _ := s.StateLockID(ctx, w.ID); lock != "rb" {
@@ -490,7 +490,7 @@ func TestUnclaim(t *testing.T) {
 
 	// another runner takes it; the plan needs confirmation, then its apply phase is lost the same way
 	plan := claim(t, s, "plan")
-	if _, err := s.FinishJob(ctx, run.ID, plan.LeaseID, "succeeded", "", nil, &runnerapi.Plan{Add: 1}, nil, nil); err != nil {
+	if _, err := s.FinishJob(ctx, run.ID, plan.LeaseID, "succeeded", "", nil, &runnerapi.Plan{Add: 1}, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.ConfirmRun(ctx, run.ID, uuid.Nil, "a@b.c"); err != nil {
@@ -803,7 +803,7 @@ func TestCancel(t *testing.T) {
 	if cancel, err := s.AppendLog(ctx, run2.ID, j.LeaseID, "interrupted\n", time.Minute, 1<<20); err != nil || !cancel {
 		t.Fatalf("log posts carry the cancel too: %v %v", cancel, err)
 	}
-	if st, _ := s.FinishJob(ctx, run2.ID, j.LeaseID, "canceled", "", nil, nil, nil, nil); st != Canceled {
+	if st, _ := s.FinishJob(ctx, run2.ID, j.LeaseID, "canceled", "", nil, nil, nil, nil, nil); st != Canceled {
 		t.Fatalf("finish canceled: %q", st)
 	}
 
@@ -814,7 +814,7 @@ func TestCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := &runnerapi.Plan{Add: 1}
-	if st, err := s.FinishJob(ctx, run4.ID, j.LeaseID, "succeeded", "", nil, plan, nil, nil); err != nil || st != Canceled {
+	if st, err := s.FinishJob(ctx, run4.ID, j.LeaseID, "succeeded", "", nil, plan, nil, nil, nil); err != nil || st != Canceled {
 		t.Fatalf("a plan finished after a cancel request: %q %v", st, err)
 	}
 
@@ -962,7 +962,7 @@ func TestQueueVCSRun(t *testing.T) {
 		if j.RunID == uuid.Nil || j.VCSCommit == "" {
 			t.Fatalf("job without pinned commit: %+v", j)
 		}
-		got, err := s.FinishJob(ctx, j.RunID, j.LeaseID, "succeeded", "", nil, &runnerapi.Plan{Add: 1}, nil, nil)
+		got, err := s.FinishJob(ctx, j.RunID, j.LeaseID, "succeeded", "", nil, &runnerapi.Plan{Add: 1}, nil, nil, nil)
 		if err != nil || got != want {
 			t.Fatalf("finish: %q %v, want %q", got, err, want)
 		}

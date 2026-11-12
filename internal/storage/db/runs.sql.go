@@ -383,6 +383,17 @@ func (q *Queries) ReleaseRunStateLock(ctx context.Context, arg ReleaseRunStateLo
 	return result.RowsAffected(), nil
 }
 
+const runDiff = `-- name: RunDiff :one
+SELECT plan_diff FROM runs WHERE id = $1::uuid
+`
+
+func (q *Queries) RunDiff(ctx context.Context, id uuid.UUID) ([]byte, error) {
+	row := q.db.QueryRow(ctx, runDiff, id)
+	var plan_diff []byte
+	err := row.Scan(&plan_diff)
+	return plan_diff, err
+}
+
 const runFound = `-- name: RunFound :one
 SELECT found FROM runs WHERE id = $1::uuid
 `
@@ -416,6 +427,20 @@ type SetConfirmReasonParams struct {
 
 func (q *Queries) SetConfirmReason(ctx context.Context, arg SetConfirmReasonParams) error {
 	_, err := q.db.Exec(ctx, setConfirmReason, arg.Reason, arg.ID)
+	return err
+}
+
+const setRunDiff = `-- name: SetRunDiff :exec
+UPDATE runs SET plan_diff = $1::jsonb WHERE id = $2::uuid
+`
+
+type SetRunDiffParams struct {
+	PlanDiff []byte
+	ID       uuid.UUID
+}
+
+func (q *Queries) SetRunDiff(ctx context.Context, arg SetRunDiffParams) error {
+	_, err := q.db.Exec(ctx, setRunDiff, arg.PlanDiff, arg.ID)
 	return err
 }
 

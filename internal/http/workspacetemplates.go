@@ -69,11 +69,12 @@ func (s *Server) saveWorkspaceTemplate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	page.Values = formValues(f, page.T)
+	page.Values = formValues(f, page.T, func(n string) string { return s.draft(r, f, n) })
 	page.importChoice(r) // as posted
 	_, run, err := s.App.SaveTemplate(r.Context(), actor(r), r.PathValue("name"), r.PathValue("module"), page.T.ID, page.Values, page.Found)
 	if s.failed(w, r, err, "template", f, func(status int, fs *formState) {
 		fs.Labels, page.F = inputLabels(page.T), fs
+		page.Drafts = s.drafts(r, page.Values, sensitiveNames(page.T))
 		maps.Copy(page.Values, page.Locked) // shown as before, not as posted
 		s.render(w, r, status, "form.html", &page)
 	}) {

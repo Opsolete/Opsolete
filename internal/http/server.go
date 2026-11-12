@@ -123,6 +123,7 @@ func (s *Server) Handler() http.Handler {
 	s.workspaceRoutes(mux)
 	s.projectRoutes(mux)
 	s.variableRoutes(mux)
+	s.apiRoutes(mux)
 	// CrossOriginProtection rejects cross-site browser POSTs (CSRF); token clients send no Origin and pass.
 	return instrument(mux.ServeMux, s.logRequests(s.audit(http.NewCrossOriginProtection().Handler(s.requireLogin(mux)))))
 }
@@ -132,7 +133,7 @@ func public(path string) bool {
 	return path == "/healthz" || path == "/readyz" || path == "/.well-known/terraform.json" || strings.HasPrefix(path, "/static/") ||
 		strings.HasPrefix(path, "/v1/") || strings.HasPrefix(path, runnerapi.Prefix+"/") ||
 		strings.HasPrefix(path, runnerapi.StatePrefix+"/") || strings.HasPrefix(path, "/auth/") ||
-		strings.HasPrefix(path, cloudPrefix+"/") || path == "/oauth/token"
+		strings.HasPrefix(path, cloudPrefix+"/") || path == "/oauth/token" || strings.HasPrefix(path, apiPrefix+"/")
 }
 
 // requireLogin puts the signed-in user on the request; everything not public needs one.

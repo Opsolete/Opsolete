@@ -55,6 +55,7 @@ type formPage struct {
 	Adding    bool
 	Cur       templates.Module  // with Configure: the module version it runs now
 	Set       map[string]bool   // sensitive inputs with a stored value: left empty, it's kept
+	Drafts    map[string]string // a refused form's typed secrets, sealed (drafts.go)
 	Locked    map[string]string // per-environment inputs the project sets (canonical values by name): read-only, not posted
 	LockedBy  string            // that project
 	EnvReload bool              // creating: picking another project posts the form with refresh, shown again with that project's values
@@ -62,7 +63,11 @@ type formPage struct {
 
 // Form is the page's form (app.NewForm): its fields as they're drawn.
 func (p formPage) Form() app.Form {
-	return app.NewForm(p.T, app.FormState{Values: p.Values, Locked: p.Locked, Project: p.LockedBy, Set: p.Set, Found: p.Found})
+	f := app.NewForm(p.T, app.FormState{Values: p.Values, Locked: p.Locked, Project: p.LockedBy, Set: p.Set, Found: p.Found})
+	for i, fd := range f.Fields {
+		f.Fields[i].Draft = p.Drafts[fd.ID]
+	}
+	return f
 }
 
 // importChoice offers creating or importing, when the form adds or deploys a template whose module can import, and

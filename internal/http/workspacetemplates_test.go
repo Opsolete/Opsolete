@@ -120,7 +120,7 @@ func TestWorkspaceTemplates(t *testing.T) {
 		if err := store.AckJob(ctx, dj.RunID, dj.LeaseID, time.Minute); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.FinishJob(ctx, dj.RunID, dj.LeaseID, "succeeded", "", nil, nil, nil, nil); err != nil { // nothing to destroy
+		if _, err := store.FinishJob(ctx, dj.RunID, dj.LeaseID, "succeeded", "", nil, nil, nil, nil, nil); err != nil { // nothing to destroy
 			t.Fatal(err)
 		}
 		if added, _ := store.WorkspaceTemplates(ctx, dj.WorkspaceID); len(added) != left {

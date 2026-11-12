@@ -92,7 +92,14 @@
     {{end}}
     {{with .Changes}}
     <table class="changes">
-    {{range .}}<tr><td class="nowrap w-6"><span class="change {{.Action}}">{{.Action}}</span></td><td><code>{{.Address}}</code></td></tr>{{end}}
+    {{range .}}<tr><td class="nowrap w-6"><span class="change {{.Action}}">{{.Action}}</span></td><td>
+      {{$d := index $.Diff .Address}}{{with $d}}{{if .Attrs}}<details class="attrs"><summary><code>{{.Address}}</code>{{with .Reason}} <span class="muted">({{status .}})</span>{{end}}{{with .ImportID}} <span class="muted">imports {{.}}</span>{{end}}</summary>
+        <table class="attrs">
+        {{range .Attrs}}<tr><td><code>{{.Path}}</code>{{if .Forces}} <span class="change replace">forces replacement</span>{{end}}</td>
+          <td>{{if .Sensitive}}<span class="muted">(sensitive)</span>{{else}}{{if .HasBefore}}<code>{{.Before}}</code>{{else}}<span class="muted">—</span>{{end}} → {{if .Unknown}}<span class="muted">(known after apply)</span>{{else if .HasAfter}}<code>{{.After}}</code>{{else}}<span class="muted">null</span>{{end}}{{end}}</td></tr>{{end}}
+        {{if .Truncated}}<tr><td colspan="2" class="muted">More changes than shown: see the log.</td></tr>{{end}}
+        </table></details>{{end}}{{end}}{{if not $d.Attrs}}<code>{{.Address}}</code>{{end}}
+    </td></tr>{{end}}
     </table>
     {{else}}<p class="muted">Only output values change.</p>{{end}}
     {{else}}{{if eq $r.Status "no_changes"}}<p>No changes: {{if or (eq $r.Action "refresh") (eq $r.Action "assess")}}no drift, the state matches the infrastructure{{else}}the infrastructure matches the configuration{{if eq $r.Action "destroy"}} (nothing to destroy){{end}}{{end}}.</p>{{end}}

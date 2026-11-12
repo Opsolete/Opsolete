@@ -28,7 +28,7 @@ func TestPageModels(t *testing.T) {
 	conn := storage.VCSConnection{ID: uuid.New(), Name: "gh", Provider: "github"}
 	ws := storage.Workspace{ID: uuid.New(), Name: "ws", ProjectName: "p", VCSConnectionID: conn.ID, VCSRepo: "o/r", VCSBranch: "main", Templates: 1,
 		Latest: &storage.Run{Status: storage.Applied}, CreatedAt: now}
-	run := storage.Run{ID: uuid.New(), Action: "apply", Status: storage.NeedsConfirmation, Replace: []string{"a.b"}, Plan: &runnerapi.Plan{Add: 1},
+	run := storage.Run{ID: uuid.New(), Action: "apply", Status: storage.NeedsConfirmation, Replace: []string{"a.b"}, Plan: &runnerapi.Plan{Add: 1, Changes: []runnerapi.Change{{Address: "a.b", Action: "replace"}}},
 		CreatedBy: "a@b", CreatedAt: now, UpdatedAt: now}
 	hist := []storage.StatusEntry{{Status: storage.Planning, CreatedAt: now}, {Status: storage.NeedsConfirmation, CreatedAt: now}}
 	plan, apply := runPhases(run, hist)
@@ -79,7 +79,10 @@ func TestPageModels(t *testing.T) {
 			tab("settings", "deletion", func(p *workspacePage) { p.settingsTab = &settingsTab{} }),
 		},
 		"run.html": {&runPage{}, &runPage{Page: workspaceNav("ws", "runs", "", true), W: ws, R: run, History: hist, Plan: plan, Apply: apply,
-			Found: []app.FoundTemplate{{Module: "vm_1", TemplateID: "vm", Added: true, Read: true}, {Module: "vm_2", TemplateID: "vm"}}}},
+			Found: []app.FoundTemplate{{Module: "vm_1", TemplateID: "vm", Added: true, Read: true}, {Module: "vm_2", TemplateID: "vm"}},
+			Diff: map[string]runnerapi.ResourceDiff{"a.b": {Address: "a.b", Action: "replace", Reason: "replace_because_cannot_update", ImportID: "/x", Truncated: true,
+				Attrs: []runnerapi.Attr{{Path: "size", Before: `"s"`, After: `"m"`, HasBefore: true, HasAfter: true, Forces: true},
+					{Path: "pw", Sensitive: true}, {Path: "id", Unknown: true}}}}}},
 		"account.html": {&accountPage{}, &accountPage{Page: Page{Sub: "profile"}, Groups: []string{"g"}}, &accountPage{Page: Page{Sub: "tokens"}, Tokens: []storage.UserToken{{Name: "t"}}},
 			&accountPage{Page: Page{Sub: "sessions"}, Sessions: []storage.UserSession{{UserAgent: "ua"}}}},
 		"audit.html":     {&auditPage{}, &auditPage{Entries: []auditRow{{Summary: "x", StatusText: "ok"}}, Broken: 3, Access: true}},

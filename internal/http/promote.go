@@ -80,10 +80,14 @@ func (s *Server) renderPromote(w http.ResponseWriter, r *http.Request, status in
 		}
 	} else if page.F != nil {
 		page.F.Labels = map[string]string{}
-		for _, m := range page.P.Modules {
-			for _, in := range m.Inputs {
-				if in.Field != "" {
-					page.F.Labels[in.Field] = m.Module + ": " + in.Title()
+		for i, m := range page.P.Modules {
+			for j, in := range m.Inputs {
+				if in.Field == "" {
+					continue
+				}
+				page.F.Labels[in.Field] = m.Module + ": " + in.Title()
+				if in.Sensitive && values[in.Field] != "" { // kept, sealed, for the next try
+					page.P.Modules[i].Inputs[j].Form.Draft = s.sealDraft(r, in.Field, values[in.Field])
 				}
 			}
 		}
@@ -98,6 +102,13 @@ func (s *Server) promote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	to, values := promoteTarget(f), promoteValues(f)
+	for k := range f { // a refused promotion's typed secrets (drafts.go)
+		if field, ok := strings.CutPrefix(k, draftPrefix); ok && values[field] == "" {
+			if v := s.draft(r, f, field); v != "" {
+				values[field] = v
+			}
+		}
+	}
 	p, run, err := s.App.Promote(r.Context(), actor(r), r.PathValue("name"), to, values, f.Get("digest"))
 	if s.failed(w, r, err, "promote", f, func(status int, fs *formState) { s.renderPromote(w, r, status, to, values, fs) }) {
 		return
@@ -113,7 +124,7 @@ func promoteValues(f url.Values) map[string]string {
 	rows := map[string]map[int]map[string]string{}
 	objects := map[string]map[string]string{}
 	for k := range f {
-		if promoteFields[k] {
+		if promoteFields[k] || strings.HasPrefix(k, draftPrefix) {
 			continue
 		}
 		name := strings.TrimPrefix(k, secretPrefix)

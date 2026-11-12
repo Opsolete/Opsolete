@@ -163,6 +163,7 @@ type Run struct {
 	Found           []byte
 	CvID            uuid.NullUUID
 	ConfirmReason   *string
+	PlanDiff        []byte
 }
 
 type RunList struct {

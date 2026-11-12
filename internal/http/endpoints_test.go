@@ -19,7 +19,7 @@ func TestEndpointsDocumented(t *testing.T) {
 		t.Fatal(err)
 	}
 	var documented []string
-	for _, m := range regexp.MustCompile("`((?:GET|POST|PATCH|LOCK|UNLOCK) /[^`]*)`").FindAllStringSubmatch(string(doc), -1) {
+	for _, m := range regexp.MustCompile("`((?:GET|POST|PUT|PATCH|LOCK|UNLOCK) /[^`]*)`").FindAllStringSubmatch(string(doc), -1) {
 		documented = append(documented, m[1])
 	}
 	for _, p := range s.patterns {

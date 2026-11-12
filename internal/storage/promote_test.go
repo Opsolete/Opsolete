@@ -67,7 +67,7 @@ func TestPromote(t *testing.T) {
 	plan := func(t *testing.T, r Run, result string) {
 		t.Helper()
 		j := claim(t, s, "plan")
-		if _, err := s.FinishJob(ctx, r.ID, j.LeaseID, result, "", nil, &runnerapi.Plan{Add: 1, Destroy: 1}, nil, nil); err != nil {
+		if _, err := s.FinishJob(ctx, r.ID, j.LeaseID, result, "", nil, &runnerapi.Plan{Add: 1, Destroy: 1}, nil, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -126,7 +126,7 @@ func TestPromote(t *testing.T) {
 			t.Fatal(err)
 		}
 		j := claim(t, s, "apply")
-		if _, err := s.FinishJob(ctx, r.ID, j.LeaseID, "succeeded", "", nil, nil, nil, nil); err != nil {
+		if _, err := s.FinishJob(ctx, r.ID, j.LeaseID, "succeeded", "", nil, nil, nil, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 		want(t, "applied", after)
@@ -230,7 +230,7 @@ func TestPromoteChained(t *testing.T) {
 		if phase == "plan" && r.Action == "destroy" && strings.Join(j.Target, ",") != "module.gone,module.swap" {
 			t.Fatalf("targets: %v", j.Target)
 		}
-		st, err := s.FinishJob(ctx, r.ID, j.LeaseID, result, "", nil, plan, nil, nil)
+		st, err := s.FinishJob(ctx, r.ID, j.LeaseID, result, "", nil, plan, nil, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
