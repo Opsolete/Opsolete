@@ -13,8 +13,8 @@ import (
 )
 
 // A promotion is one run that waits for confirmation even with auto-apply; ended before its apply
-// it puts the previous templates back, removed ones included (unless their name was taken since);
-// applied, the promoted ones stay.
+// the workspace keeps its templates (removed ones too, and a change made meanwhile); applied, the
+// promoted ones are its templates.
 func TestPromote(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -22,10 +22,8 @@ func TestPromote(t *testing.T) {
 	if _, err := s.CancelRun(ctx, first.ID, "x", false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Pool.Exec(ctx, `INSERT INTO workspace_templates (workspace_id, name, template_id, module_source, module_ref, inputs)
-		VALUES ($1, 'extra', 'other', 'git::y', 'v1', '{"a": "b"}')`, w.ID); err != nil {
-		t.Fatal(err)
-	}
+	extra := WorkspaceTemplate{Name: "extra", TemplateID: "other", ModuleSource: "git::y", ModuleRef: "v1", Inputs: map[string]any{"a": "b"}}
+	putTemplates(t, s, w.ID, testTemplate(map[string]any{"n": 1.0}), extra) // the first run ended before its apply: none yet
 	before, err := s.WorkspaceTemplates(ctx, w.ID)
 	if err != nil || len(before) != 2 {
 		t.Fatal(before, err)
@@ -98,17 +96,12 @@ func TestPromote(t *testing.T) {
 	})
 	step(t, "canceled, the removed module's name taken meanwhile: left alone", func(t *testing.T) {
 		r := promote(t)
-		if _, err := s.Pool.Exec(ctx, `INSERT INTO workspace_templates (workspace_id, name, template_id, module_source, module_ref, inputs)
-			VALUES ($1, 'extra', 'other', 'git::y', 'v7', '{}')`, w.ID); err != nil {
-			t.Fatal(err)
-		}
+		putTemplates(t, s, w.ID, WorkspaceTemplate{Name: "extra", TemplateID: "other", ModuleSource: "git::y", ModuleRef: "v7", Inputs: map[string]any{}})
 		if _, err := s.CancelRun(ctx, r.ID, "x", false); err != nil {
 			t.Fatal(err)
 		}
 		want(t, "canceled", map[string]string{"main": "v1", "extra": "v7"})
-		if _, err := s.Pool.Exec(ctx, `UPDATE workspace_templates SET module_ref = 'v1', inputs = '{"a": "b"}' WHERE workspace_id = $1 AND name = 'extra'`, w.ID); err != nil {
-			t.Fatal(err)
-		}
+		putTemplates(t, s, w.ID, extra)
 	})
 	step(t, "changed since read, or a run active: refused, nothing changes", func(t *testing.T) {
 		stale := append([]WorkspaceTemplate{}, before...)
@@ -198,12 +191,9 @@ func TestPromoteChained(t *testing.T) {
 	if _, err := s.CancelRun(ctx, first.ID, "x", false); err != nil {
 		t.Fatal(err)
 	}
-	for _, m := range []string{"gone", "swap"} {
-		if _, err := s.Pool.Exec(ctx, `INSERT INTO workspace_templates (workspace_id, name, template_id, module_source, module_ref, inputs)
-			VALUES ($1, $2, 'other', 'git::y', 'v1', '{}')`, w.ID, m); err != nil {
-			t.Fatal(err)
-		}
-	}
+	putTemplates(t, s, w.ID, testTemplate(map[string]any{"n": 1.0}), // the first run ended before its apply: none yet
+		WorkspaceTemplate{Name: "gone", TemplateID: "other", ModuleSource: "git::y", ModuleRef: "v1", Inputs: map[string]any{}},
+		WorkspaceTemplate{Name: "swap", TemplateID: "other", ModuleSource: "git::y", ModuleRef: "v1", Inputs: map[string]any{}})
 	addState(t, s, w.ID, 1)
 	if err := s.IndexState(ctx, w.ID, []runnerapi.Resource{{Address: "module.gone.a.b", Module: "module.gone"}}); err != nil {
 		t.Fatal(err)
@@ -322,10 +312,9 @@ func TestPromoteChained(t *testing.T) {
 		}
 	})
 	step(t, "no changes to destroy: continues as applied", func(t *testing.T) {
-		if _, err := s.Pool.Exec(ctx, `INSERT INTO workspace_templates (workspace_id, name, template_id, module_source, module_ref, inputs)
-			VALUES ($1, 'gone', 'other', 'git::y', 'v1', '{}'), ($1, 'swap', 'other', 'git::y', 'v1', '{}')`, w.ID); err != nil {
-			t.Fatal(err)
-		}
+		putTemplates(t, s, w.ID,
+			WorkspaceTemplate{Name: "gone", TemplateID: "other", ModuleSource: "git::y", ModuleRef: "v1", Inputs: map[string]any{}},
+			WorkspaceTemplate{Name: "swap", TemplateID: "other", ModuleSource: "git::y", ModuleRef: "v1", Inputs: map[string]any{}})
 		r := promote(t)
 		if st := finish(t, r, "plan", "succeeded", nil); st != NoChanges {
 			t.Fatalf("destroy plan: %s", st)

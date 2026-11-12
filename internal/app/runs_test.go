@@ -28,7 +28,7 @@ func configured(t *testing.T, a *App) (storage.Workspace, storage.Run) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.Store.Pool.Exec(ctx, `UPDATE runs SET status = 'applied' WHERE id = $1`, added.ID); err != nil {
+	if _, err := a.Store.Pool.Exec(ctx, `WITH done AS (UPDATE runs SET status = 'applied' WHERE id = $1 RETURNING runs.workspace_id, runs.cv_id) UPDATE workspaces cur SET current_cv_id = COALESCE(done.cv_id, cur.current_cv_id) FROM done WHERE cur.id = done.workspace_id`, added.ID); err != nil {
 		t.Fatal(err)
 	}
 	ws, run, err := a.StartRun(ctx, admin, ws.Name, NewRun{Action: "apply"})

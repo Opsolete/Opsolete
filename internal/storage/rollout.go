@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -60,9 +61,9 @@ var ErrRolloutClosed = errors.New("the rollout is no longer active")
 // UpgradeTemplates applies ups, all of one workspace, and queues one apply run for them as part of
 // rollout rolloutID, which waits for confirmation even with auto-apply. If a use changed meanwhile
 // (ErrNotFound), there is no free workspace (ErrRunActive, ErrLocalExecution) or the rollout is
-// no longer active (ErrRolloutClosed; ErrNotFound if it doesn't exist), nothing changes. If the run
-// ends before its apply (e.g. its plan is discarded), the uses go back (configChange), and a resumed
-// rollout retries them.
+// no longer active (ErrRolloutClosed; ErrNotFound if it doesn't exist), nothing changes. The uses are a
+// new configuration version: if the run ends before its apply (e.g. its plan is discarded), the
+// workspace keeps the old one, and a resumed rollout retries them.
 func (s *Store) UpgradeTemplates(ctx context.Context, workspaceID uuid.UUID, ups []TemplateUpgrade, createdBy, rolloutID uuid.UUID) (Run, error) {
 	var r Run
 	err := s.tx(ctx, func(q *db.Queries) error {
@@ -73,34 +74,24 @@ func (s *Store) UpgradeTemplates(ctx context.Context, workspaceID uuid.UUID, ups
 		if status != "active" {
 			return ErrRolloutClosed
 		}
-		var changes []configChange
+		cv, mods, err := currentConfig(ctx, q, workspaceID)
+		if err != nil {
+			return err
+		}
 		for _, u := range ups {
-			before, err := configSnapshot(ctx, q, workspaceID, u.Module)
-			if err != nil {
-				return err
+			// only if it still runs what the new inputs were made from: a change meanwhile isn't overwritten
+			i := slices.IndexFunc(mods, func(m WorkspaceTemplate) bool { return m.Name == u.Module })
+			if i < 0 || mods[i].TemplateID != u.TemplateID || !sameTemplates([]WorkspaceTemplate{mods[i]},
+				[]WorkspaceTemplate{{Name: u.Module, TemplateID: u.TemplateID, ModuleSource: u.From.ModuleSource, ModuleRef: u.From.ModuleRef, Inputs: u.From.Inputs}}) {
+				return ErrNotFound
 			}
-			changes = append(changes, configChange{Module: u.Module, Before: before})
-			raw, err := json.Marshal(u.Inputs)
-			if err != nil {
-				return err
-			}
-			old, err := json.Marshal(u.From.Inputs)
-			if err != nil {
-				return err
-			}
-			if err := affected(q.UpgradeTemplate(ctx, db.UpgradeTemplateParams{WorkspaceID: workspaceID, Name: u.Module, TemplateID: u.TemplateID,
-				ModuleSource: u.ModuleSource, ModuleRef: u.ModuleRef, Inputs: raw,
-				FromSource: u.From.ModuleSource, FromRef: u.From.ModuleRef, FromInputs: old})); err != nil {
-				return err
-			}
+			mods = withModule(mods, WorkspaceTemplate{Name: u.Module, TemplateID: u.TemplateID, ModuleSource: u.ModuleSource,
+				ModuleRef: u.ModuleRef, Inputs: u.Inputs})
 		}
-		if r, err = createRun(ctx, q, workspaceID, "apply", createdBy); err != nil {
+		if r, err = queueVersion(ctx, q, workspaceID, cv, mods, SourceRollout, "apply", createdBy); err != nil {
 			return err
 		}
-		if err := q.SetRunRollout(ctx, db.SetRunRolloutParams{ID: r.ID, RolloutID: rolloutID}); err != nil {
-			return err
-		}
-		return recordConfigChanges(ctx, q, r.ID, workspaceID, changes)
+		return q.SetRunRollout(ctx, db.SetRunRolloutParams{ID: r.ID, RolloutID: rolloutID})
 	})
 	if err != nil {
 		return Run{}, err

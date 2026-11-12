@@ -36,7 +36,7 @@ func TestWorkspaceTemplates(t *testing.T) {
 		if json.Unmarshal(rec.Body.Bytes(), &j); rec.Code != 200 {
 			t.Fatalf("claim: %d %s", rec.Code, rec.Body.String())
 		}
-		store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL WHERE id = $1`, j.RunID) // free the workspace
+		store.Pool.Exec(context.Background(), `WITH done AS (UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL WHERE id = $1 RETURNING runs.workspace_id, runs.cv_id) UPDATE workspaces cur SET current_cv_id = COALESCE(done.cv_id, cur.current_cv_id) FROM done WHERE cur.id = done.workspace_id`, j.RunID) // free the workspace
 		return j
 	}
 	base := "/workspaces/" + ws + "/templates/"
@@ -243,7 +243,7 @@ func TestSensitiveInputs(t *testing.T) {
 		if json.Unmarshal(rec.Body.Bytes(), &j); rec.Code != 200 {
 			t.Fatalf("claim: %d %s", rec.Code, rec.Body.String())
 		}
-		store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL WHERE id = $1`, j.RunID)
+		store.Pool.Exec(context.Background(), `WITH done AS (UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL WHERE id = $1 RETURNING runs.workspace_id, runs.cv_id) UPDATE workspaces cur SET current_cv_id = COALESCE(done.cv_id, cur.current_cv_id) FROM done WHERE cur.id = done.workspace_id`, j.RunID)
 		return j
 	}
 	leaks := func(what, s string) {
@@ -295,7 +295,8 @@ func TestSensitiveInputs(t *testing.T) {
 		t.Fatalf("after keeping: %+v", j.Modules)
 	}
 	// A sealed value moved to another module doesn't open: it's bound to its workspace and module.
-	store.Pool.Exec(context.Background(), `UPDATE workspace_templates SET name = 'two' WHERE name = $2 AND workspace_id = (SELECT id FROM workspaces WHERE name = $1)`, ws, mod)
+	store.Pool.Exec(context.Background(), `UPDATE configuration_modules SET name = 'two' WHERE name = $2 AND cv_id = (SELECT r.cv_id FROM runs r
+		JOIN workspaces w ON w.id = r.workspace_id WHERE w.name = $1 ORDER BY r.created_at DESC LIMIT 1)`, ws, mod)
 	store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'plan_queued' WHERE id = (SELECT r.id FROM runs r JOIN workspaces w ON w.id = r.workspace_id WHERE w.name = $1 ORDER BY r.created_at DESC LIMIT 1)`, ws)
 	req := httptest.NewRequest("POST", runnerapi.Prefix+"/jobs/claim", strings.NewReader(`{"runner":"r1"}`))
 	req.Header.Set("Authorization", "Bearer "+testRunnerToken)

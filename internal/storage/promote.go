@@ -89,11 +89,10 @@ func Removed(cur, want []WorkspaceTemplate) []string {
 // configures its own providers can't be destroyed once its block is gone: so the first run is a
 // destroy targeting every template it removes or replaces, carrying the rest of the promotion, and
 // changes nothing else; applied, it queues the apply run (setStatus, continuePromotion). Otherwise
-// it is one apply run: every change is in its config_changes, a removal (before: the template,
-// after: null) too, so a run that ends before its apply started puts the previous templates back
-// (restoreConfig). Nothing changes if the templates aren't Read anymore (ErrChanged), the name is
-// taken (ErrNameTaken), a run is active (ErrRunActive) or the workspace uses local execution
-// (ErrLocalExecution). It returns the first run.
+// it is one apply run of a new configuration version with the promoted templates, so a run that ends
+// before its apply started leaves the target's templates as they were. Nothing changes if the
+// templates aren't Read anymore (ErrChanged), the name is taken (ErrNameTaken), a run is active
+// (ErrRunActive) or the workspace uses local execution (ErrLocalExecution). It returns the first run.
 func (s *Store) Promote(ctx context.Context, p Promotion) (Run, error) {
 	var r Run
 	err := s.tx(ctx, func(q *db.Queries) error {
@@ -111,7 +110,7 @@ func (s *Store) Promote(ctx context.Context, p Promotion) (Run, error) {
 				return ErrRunActive
 			}
 		}
-		cur, err := workspaceTemplates(ctx, q, p.WorkspaceID)
+		cv, cur, err := currentConfig(ctx, q, p.WorkspaceID)
 		if err != nil {
 			return err
 		}
@@ -128,7 +127,7 @@ func (s *Store) Promote(ctx context.Context, p Promotion) (Run, error) {
 			destroy = slices.ContainsFunc(removed, idx.Deployed)
 		}
 		if !destroy {
-			r, err = queuePromotion(ctx, q, p.WorkspaceID, cur, p.Templates, p.CreatedBy)
+			r, err = queuePromotion(ctx, q, p.WorkspaceID, cv, p.Templates, p.CreatedBy)
 			return err
 		}
 		if r, err = createRun(ctx, q, p.WorkspaceID, "destroy", p.CreatedBy); err != nil {
@@ -164,11 +163,11 @@ func continuePromotion(ctx context.Context, q *db.Queries, runID, workspaceID uu
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return nil, err
 	}
-	cur, err := workspaceTemplates(ctx, q, workspaceID)
+	cv, _, err := currentConfig(ctx, q, workspaceID)
 	if err != nil {
 		return nil, err
 	}
-	r, err := queuePromotion(ctx, q, workspaceID, cur, p.Templates, p.CreatedBy)
+	r, err := queuePromotion(ctx, q, workspaceID, cv, p.Templates, p.CreatedBy)
 	if errors.Is(err, ErrRunActive) || errors.Is(err, ErrLocalExecution) {
 		return nil, addHistory(ctx, q, runID, status, "promotion not continued: "+err.Error())
 	}
@@ -181,58 +180,14 @@ func continuePromotion(ctx context.Context, q *db.Queries, runID, workspaceID uu
 	return &PromotionStep{Run: r, After: runID, Source: p.Source, Actor: p.Actor}, nil
 }
 
-// queuePromotion queues an apply run that waits for confirmation and makes the workspace's
-// templates (cur) exactly want, every change in its config_changes.
-func queuePromotion(ctx context.Context, q *db.Queries, workspaceID uuid.UUID, cur, want []WorkspaceTemplate, createdBy uuid.UUID) (Run, error) {
-	r, err := createRun(ctx, q, workspaceID, "apply", createdBy)
+// queuePromotion makes want a new version of the workspace (cur: its current one) and queues the apply run of it,
+// which waits for confirmation.
+func queuePromotion(ctx context.Context, q *db.Queries, workspaceID uuid.UUID, cur uuid.NullUUID, want []WorkspaceTemplate, createdBy uuid.UUID) (Run, error) {
+	r, err := queueVersion(ctx, q, workspaceID, cur, want, SourcePromote, "apply", createdBy)
 	if err != nil {
 		return r, err
 	}
-	var changes []configChange
-	for _, t := range cur {
-		if slices.ContainsFunc(want, func(w WorkspaceTemplate) bool { return w.Name == t.Name }) {
-			continue
-		}
-		before, err := configSnapshot(ctx, q, workspaceID, t.Name)
-		if err != nil {
-			return r, err
-		}
-		if err := q.DeleteWorkspaceTemplate(ctx, db.DeleteWorkspaceTemplateParams{WorkspaceID: workspaceID, Name: t.Name}); err != nil {
-			return r, err
-		}
-		changes = append(changes, configChange{Module: t.Name, Before: before})
-	}
-	for _, t := range want {
-		before, err := configSnapshot(ctx, q, workspaceID, t.Name)
-		if err != nil {
-			return r, err
-		}
-		raw, err := json.Marshal(t.Inputs)
-		if err != nil {
-			return r, err
-		}
-		if before == nil {
-			err = affected(q.InsertWorkspaceTemplate(ctx, db.InsertWorkspaceTemplateParams{WorkspaceID: workspaceID, Name: t.Name,
-				TemplateID: t.TemplateID, ModuleSource: t.ModuleSource, ModuleRef: t.ModuleRef, Inputs: raw}))
-		} else {
-			err = affected(q.UpdateWorkspaceTemplate(ctx, db.UpdateWorkspaceTemplateParams{WorkspaceID: workspaceID, Name: t.Name,
-				TemplateID: t.TemplateID, ModuleSource: t.ModuleSource, ModuleRef: t.ModuleRef, Inputs: raw}))
-		}
-		if err != nil {
-			return r, err
-		}
-		after, err := configSnapshot(ctx, q, workspaceID, t.Name)
-		if err != nil {
-			return r, err
-		}
-		if !bytes.Equal(before, after) { // jsonb's own text: equal configurations read the same
-			changes = append(changes, configChange{Module: t.Name, Before: before})
-		}
-	}
-	if err := q.SetRunAlwaysConfirm(ctx, r.ID); err != nil {
-		return r, err
-	}
-	return r, recordConfigChanges(ctx, q, r.ID, workspaceID, changes)
+	return r, q.SetRunAlwaysConfirm(ctx, r.ID)
 }
 
 // sameTemplates: a and b (both by name) hold the same configurations.

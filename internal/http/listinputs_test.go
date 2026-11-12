@@ -63,7 +63,7 @@ func TestListInputForm(t *testing.T) {
 	if got := j.Modules[0].Inputs["data_disks"]; !reflect.DeepEqual(got, want) {
 		t.Fatalf("Terraform gets %#v", got)
 	}
-	store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL WHERE id = $1`, j.RunID)
+	store.Pool.Exec(context.Background(), `WITH done AS (UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL WHERE id = $1 RETURNING runs.workspace_id, runs.cv_id) UPDATE workspaces cur SET current_cv_id = COALESCE(done.cv_id, cur.current_cv_id) FROM done WHERE cur.id = done.workspace_id`, j.RunID)
 	ws1 := get(h, "/workspaces/"+ws+"?show=templates").Body.String()
 	if !strings.Contains(ws1, "LUN: 0, Size (GB): 32, type: Premium_LRS, existing: true\nLUN: 1, Size (GB): 8") {
 		t.Errorf("workspace page: the stored rows, a line each:\n%s", ws1)
@@ -113,7 +113,7 @@ func TestComplexInputForm(t *testing.T) {
 	if !reflect.DeepEqual(j.Modules[0].Inputs, want) {
 		t.Fatalf("Terraform gets %#v", j.Modules[0].Inputs)
 	}
-	store.Pool.Exec(context.Background(), `UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL WHERE id = $1`, j.RunID)
+	store.Pool.Exec(context.Background(), `WITH done AS (UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL WHERE id = $1 RETURNING runs.workspace_id, runs.cv_id) UPDATE workspaces cur SET current_cv_id = COALESCE(done.cv_id, cur.current_cv_id) FROM done WHERE cur.id = done.workspace_id`, j.RunID)
 	edit := get(h, base+j.Modules[0].Name).Body.String()
 	for _, want := range []string{`name="dns.1.value" value="10.0.0.5"`, `name="tags.1.key" value="sealed"`, `name="network.cidr" value="10.1.0.0/16"`,
 		`id="network.ddos" name="network.ddos" checked`} {

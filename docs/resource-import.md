@@ -113,11 +113,11 @@ the example modules 1.1.0 already have them.
    Stored per module with its template (`runs.found`, migration 008).
 4. **Confirm, or Change settings.** An import plan's page always offers both to operators: *Change settings*
    (`POST …/runs/{run}/change`, `app.ChangeImport`) discards a plan still waiting and redirects to the configure
-   form (`?found=<run>`), or the add form again when the run's restore removed the template it added
+   form (`?found=<run>`), or the add form again when the workspace doesn't have the template the run added
    (`?template=…&found=<run>&from=<module>`); from an ended plan it only redirects. Any run that changed a template
-   and ends without its apply (a failed plan too) keeps what it set the template to, sealed inputs left out
-   (`storage.keepEntered`, before the restore), so Change settings works there too. The form opens with the found values over the inputs that plan ran
-   with (stored with them, `Found.Saved`: what the user set by hand, such as a NIC name the module builds from two
+   and ends without its apply (a failed plan too) offers what it set the template to, sealed inputs left out
+   (its configuration version, `storage.RunFound`), so Change settings works there too. The form opens with the found values over the inputs that plan ran
+   with (`Found.Saved`, from the run's version: what the user set by hand, such as a NIC name the module builds from two
    inputs, isn't lost when the discard removes the template), `existing` as that run had it (a plan that failed
    creating comes back creating); an applied run offers nothing to go back to, also by an old `?found` link; saving plans again, these values
    counting as the workspace's own against a project's keep-own value. Live (`test-vm`): round 1 found 15

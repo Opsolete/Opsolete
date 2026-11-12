@@ -67,7 +67,7 @@ The preview is pinned: if the source's or the target's templates change before y
 
 | | What the target keeps |
 |---|---|
-| One run discarded, or its plan fails or is canceled | its previous templates, removed ones included (unless a template took that module name meanwhile) |
+| One run discarded, or its plan fails or is canceled | its templates as they were, removed ones included: the promotion's configuration version never became the target's |
 | One run, the apply started (even if it fails) | the promoted templates: the state may already hold part of them |
 | Chained: the destroy run discarded, failed or canceled | its templates as before (a destroy that failed while applying may have destroyed some resources); the promotion is dropped (the run's history says *promotion not continued*). Promote again |
 | Chained: the destroy applied, the apply run discarded or its plan failed | the templates after the destroy: the removed ones stay removed, the rest as before the promotion |

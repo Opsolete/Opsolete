@@ -68,8 +68,7 @@ func newPromoteFixture(t *testing.T, a *App) promoteFixture {
 	insert := func(ws uuid.UUID, module, tpl, ref string, inputs map[string]any) {
 		t.Helper()
 		raw, _ := json.Marshal(inputs)
-		if _, err := a.Store.Pool.Exec(ctx, `INSERT INTO workspace_templates (workspace_id, name, template_id, module_source, module_ref, inputs)
-			VALUES ($1, $2, $3, 'git::https://x//'||$3, $4, $5)`, ws, module, tpl, ref, raw); err != nil {
+		if _, err := a.Store.Pool.Exec(ctx, putTemplate, ws, module, tpl, "git::https://x//"+tpl, ref, raw); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -222,7 +221,7 @@ func TestPromote(t *testing.T) {
 		if web := opened(t, a, f.tgt.ID, "web"); web["size"] != "l" { // the own value stays stored, the project's applies at run time
 			t.Fatalf("stored size: %v", web["size"])
 		}
-		if _, err := a.Store.Pool.Exec(ctx, `UPDATE runs SET status = 'applied' WHERE workspace_id = $1 AND run_active(status)`, f.tgt.ID); err != nil {
+		if _, err := a.Store.Pool.Exec(ctx, `WITH done AS (UPDATE runs SET status = 'applied' WHERE workspace_id = $1 AND run_active(status) RETURNING runs.workspace_id, runs.cv_id) UPDATE workspaces cur SET current_cv_id = COALESCE(done.cv_id, cur.current_cv_id) FROM done WHERE cur.id = done.workspace_id`, f.tgt.ID); err != nil {
 			t.Fatal(err)
 		}
 		if err := a.ClearEnvironmentValue(ctx, admin, f.prd, "web", "size"); err != nil {
@@ -358,3 +357,15 @@ func step(t *testing.T, name string, f func(t *testing.T)) {
 		t.Skipf("step %q was filtered out: the steps after it need its state", name)
 	}
 }
+
+// putTemplate ($1 workspace, $2 name, $3 template, $4 source, $5 ref, $6 inputs) makes a template part of the
+// workspace's current configuration version, as an applied run would.
+const putTemplate = `WITH v AS (
+	INSERT INTO configuration_versions (workspace_id, parent_id, source) SELECT id, current_cv_id, 'form' FROM workspaces WHERE id = $1 RETURNING id, parent_id
+), keep AS (
+	INSERT INTO configuration_modules (cv_id, name, template_id, module_source, module_ref, inputs)
+	SELECT v.id, m.name, m.template_id, m.module_source, m.module_ref, m.inputs FROM v JOIN configuration_modules m ON m.cv_id = v.parent_id WHERE m.name <> $2
+), put AS (
+	INSERT INTO configuration_modules (cv_id, name, template_id, module_source, module_ref, inputs) SELECT v.id, $2, $3, $4, $5, $6 FROM v
+)
+UPDATE workspaces w SET current_cv_id = v.id FROM v WHERE w.id = $1`

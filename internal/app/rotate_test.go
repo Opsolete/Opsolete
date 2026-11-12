@@ -164,7 +164,8 @@ func TestRotateKeyRace(t *testing.T) {
 
 	hook = func() { // a server saves the inputs meanwhile, under the new key
 		b, _ := json.Marshal(map[string]any{"good": sealed(both, "good", `"v2"`)})
-		if _, err := store.Pool.Exec(ctx, `UPDATE workspace_templates SET inputs = $1::jsonb WHERE workspace_id = $2::uuid`, b, wsID); err != nil {
+		if _, err := store.Pool.Exec(ctx, `UPDATE configuration_modules SET inputs = $1::jsonb
+			WHERE cv_id = (SELECT current_cv_id FROM workspaces WHERE id = $2::uuid)`, b, wsID); err != nil {
 			t.Fatal(err)
 		}
 	}

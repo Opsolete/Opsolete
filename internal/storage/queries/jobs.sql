@@ -14,7 +14,7 @@ ORDER BY r.updated_at FOR UPDATE OF r SKIP LOCKED LIMIT 1;
 UPDATE runs SET runner = sqlc.arg(runner)::text, lease_id = sqlc.arg(lease_id)::text,
     lease_until = now() + make_interval(secs => sqlc.arg(lease_secs)::float8)
 WHERE id = sqlc.arg(id)::uuid
-RETURNING workspace_id, action, replace, COALESCE(vcs_commit, '')::text AS vcs_commit, remove_templates;
+RETURNING workspace_id, action, replace, COALESCE(vcs_commit, '')::text AS vcs_commit, remove_templates, cv_id;
 
 -- name: WorkspaceHasVCS :one
 SELECT EXISTS (SELECT 1 FROM workspace_vcs WHERE workspace_id = sqlc.arg(workspace_id)::uuid);

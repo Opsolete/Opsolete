@@ -27,116 +27,6 @@ func (q *Queries) AddRunHistory(ctx context.Context, arg AddRunHistoryParams) er
 	return err
 }
 
-const allTemplateInputs = `-- name: AllTemplateInputs :many
-SELECT workspace_id, name, inputs FROM workspace_templates
-`
-
-type AllTemplateInputsRow struct {
-	WorkspaceID uuid.UUID
-	Name        string
-	Inputs      []byte
-}
-
-func (q *Queries) AllTemplateInputs(ctx context.Context) ([]AllTemplateInputsRow, error) {
-	rows, err := q.db.Query(ctx, allTemplateInputs)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []AllTemplateInputsRow
-	for rows.Next() {
-		var i AllTemplateInputsRow
-		if err := rows.Scan(&i.WorkspaceID, &i.Name, &i.Inputs); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const configSnapshot = `-- name: ConfigSnapshot :one
-SELECT template_config(t.template_id, t.module_source, t.module_ref, t.inputs)::jsonb FROM workspace_templates t
-WHERE t.workspace_id = $1::uuid AND t.name = $2::text
-`
-
-type ConfigSnapshotParams struct {
-	WorkspaceID uuid.UUID
-	Name        string
-}
-
-func (q *Queries) ConfigSnapshot(ctx context.Context, arg ConfigSnapshotParams) ([]byte, error) {
-	row := q.db.QueryRow(ctx, configSnapshot, arg.WorkspaceID, arg.Name)
-	var column_1 []byte
-	err := row.Scan(&column_1)
-	return column_1, err
-}
-
-const deleteWorkspaceTemplate = `-- name: DeleteWorkspaceTemplate :exec
-DELETE FROM workspace_templates WHERE workspace_id = $1::uuid AND name = $2::text
-`
-
-type DeleteWorkspaceTemplateParams struct {
-	WorkspaceID uuid.UUID
-	Name        string
-}
-
-func (q *Queries) DeleteWorkspaceTemplate(ctx context.Context, arg DeleteWorkspaceTemplateParams) error {
-	_, err := q.db.Exec(ctx, deleteWorkspaceTemplate, arg.WorkspaceID, arg.Name)
-	return err
-}
-
-const endImport = `-- name: EndImport :exec
-UPDATE workspace_templates SET inputs = jsonb_set(inputs, ARRAY[$1::text], 'false'::jsonb)
-WHERE workspace_id = $2::uuid AND name = ANY($3::text[])
-    AND inputs -> $1::text = 'true'::jsonb
-`
-
-type EndImportParams struct {
-	Input       string
-	WorkspaceID uuid.UUID
-	Names       []string
-}
-
-// An applied import: the templates' modules stop importing (their import input false). The resources are in the
-// state now, so their import blocks did nothing anymore: the next plan doesn't change.
-func (q *Queries) EndImport(ctx context.Context, arg EndImportParams) error {
-	_, err := q.db.Exec(ctx, endImport, arg.Input, arg.WorkspaceID, arg.Names)
-	return err
-}
-
-const insertWorkspaceTemplate = `-- name: InsertWorkspaceTemplate :execrows
-INSERT INTO workspace_templates (workspace_id, name, template_id, module_source, module_ref, inputs)
-VALUES ($1::uuid, $2::text, $3::text, $4::text,
-    $5::text, $6::jsonb)
-`
-
-type InsertWorkspaceTemplateParams struct {
-	WorkspaceID  uuid.UUID
-	Name         string
-	TemplateID   string
-	ModuleSource string
-	ModuleRef    string
-	Inputs       []byte
-}
-
-func (q *Queries) InsertWorkspaceTemplate(ctx context.Context, arg InsertWorkspaceTemplateParams) (int64, error) {
-	result, err := q.db.Exec(ctx, insertWorkspaceTemplate,
-		arg.WorkspaceID,
-		arg.Name,
-		arg.TemplateID,
-		arg.ModuleSource,
-		arg.ModuleRef,
-		arg.Inputs,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const listWorkspaceTemplates = `-- name: ListWorkspaceTemplates :many
 SELECT name, template_id, module_source, module_ref, inputs FROM workspace_templates
 WHERE workspace_id = $1::uuid ORDER BY name
@@ -177,15 +67,15 @@ func (q *Queries) ListWorkspaceTemplates(ctx context.Context, workspaceID uuid.U
 }
 
 const lockRun = `-- name: LockRun :one
-SELECT status, workspace_id, remove_templates, config_changes, promotion FROM runs WHERE id = $1::uuid FOR UPDATE
+SELECT status, workspace_id, remove_templates, promotion, cv_id FROM runs WHERE id = $1::uuid FOR UPDATE
 `
 
 type LockRunRow struct {
 	Status          string
 	WorkspaceID     uuid.UUID
 	RemoveTemplates []string
-	ConfigChanges   []byte
 	Promotion       []byte
+	CvID            uuid.NullUUID
 }
 
 func (q *Queries) LockRun(ctx context.Context, id uuid.UUID) (LockRunRow, error) {
@@ -195,8 +85,8 @@ func (q *Queries) LockRun(ctx context.Context, id uuid.UUID) (LockRunRow, error)
 		&i.Status,
 		&i.WorkspaceID,
 		&i.RemoveTemplates,
-		&i.ConfigChanges,
 		&i.Promotion,
+		&i.CvID,
 	)
 	return i, err
 }
@@ -210,24 +100,6 @@ func (q *Queries) LockRunStatus(ctx context.Context, id uuid.UUID) (string, erro
 	var status string
 	err := row.Scan(&status)
 	return status, err
-}
-
-const lockWorkspaceTemplate = `-- name: LockWorkspaceTemplate :one
-SELECT EXISTS (SELECT 1 FROM workspace_templates t WHERE t.workspace_id = w.id AND t.name = $1::text)::boolean
-FROM workspaces w WHERE w.id = $2::uuid FOR UPDATE
-`
-
-type LockWorkspaceTemplateParams struct {
-	Name        string
-	WorkspaceID uuid.UUID
-}
-
-// FOR UPDATE: templates can't be added meanwhile (their FK check waits for the lock).
-func (q *Queries) LockWorkspaceTemplate(ctx context.Context, arg LockWorkspaceTemplateParams) (bool, error) {
-	row := q.db.QueryRow(ctx, lockWorkspaceTemplate, arg.Name, arg.WorkspaceID)
-	var column_1 bool
-	err := row.Scan(&column_1)
-	return column_1, err
 }
 
 const notify = `-- name: Notify :exec
@@ -319,7 +191,8 @@ func (q *Queries) PruneSpeculativeRuns(ctx context.Context, arg PruneSpeculative
 
 const queueAssessments = `-- name: QueueAssessments :many
 WITH s AS (
-    SELECT w.id AS workspace_id, 'assess'::text AS action, NULL::uuid AS created_by, NULL::text AS vcs_commit, NULL::integer AS vcs_pull_request
+    SELECT w.id AS workspace_id, 'assess'::text AS action, NULL::uuid AS created_by, NULL::text AS vcs_commit, NULL::integer AS vcs_pull_request,
+        w.current_cv_id AS cv_id
     FROM workspaces w
     WHERE w.drift_detection AND w.execution_mode = 'remote'
         AND (EXISTS (SELECT 1 FROM workspace_vcs v WHERE v.workspace_id = w.id)
@@ -329,8 +202,8 @@ WITH s AS (
         AND NOT EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = w.id AND a.action = 'assess'
             AND a.created_at > now() - make_interval(secs => $1::float8))
 ), r AS (
-    INSERT INTO runs (workspace_id, action, status, created_by, vcs_commit, vcs_pull_request)
-    SELECT s.workspace_id, s.action, 'plan_queued', s.created_by, s.vcs_commit, s.vcs_pull_request FROM s
+    INSERT INTO runs (workspace_id, action, status, created_by, vcs_commit, vcs_pull_request, cv_id)
+    SELECT s.workspace_id, s.action, 'plan_queued', s.created_by, s.vcs_commit, s.vcs_pull_request, s.cv_id FROM s
     ON CONFLICT (workspace_id) WHERE run_active(status) DO NOTHING
     RETURNING runs.id, runs.workspace_id, runs.action, runs.created_at
 ), h AS (
@@ -378,15 +251,15 @@ const queueRun = `-- name: QueueRun :one
 
 WITH s AS (
     SELECT w.id AS workspace_id, $1::text AS action, $2::uuid AS created_by,
-        NULL::text AS vcs_commit, NULL::integer AS vcs_pull_request
-    FROM workspaces w WHERE w.id = $3::uuid AND w.execution_mode = 'remote'
+        NULL::text AS vcs_commit, NULL::integer AS vcs_pull_request, COALESCE($3::uuid, w.current_cv_id) AS cv_id
+    FROM workspaces w WHERE w.id = $4::uuid AND w.execution_mode = 'remote'
 ), r AS (
-    INSERT INTO runs (workspace_id, action, status, created_by, vcs_commit, vcs_pull_request)
-    SELECT s.workspace_id, s.action, 'plan_queued', s.created_by, s.vcs_commit, s.vcs_pull_request FROM s
+    INSERT INTO runs (workspace_id, action, status, created_by, vcs_commit, vcs_pull_request, cv_id)
+    SELECT s.workspace_id, s.action, 'plan_queued', s.created_by, s.vcs_commit, s.vcs_pull_request, s.cv_id FROM s
     ON CONFLICT (workspace_id) WHERE run_active(status) DO NOTHING
     RETURNING runs.id, runs.workspace_id, runs.action, runs.created_at
 ), h AS (
-    INSERT INTO run_status_history (run_id, status, message) SELECT r.id, 'plan_queued', $4::text FROM r
+    INSERT INTO run_status_history (run_id, status, message) SELECT r.id, 'plan_queued', $5::text FROM r
 )
 SELECT r.id, r.workspace_id, r.action, r.created_at FROM r
 `
@@ -394,6 +267,7 @@ SELECT r.id, r.workspace_id, r.action, r.created_at FROM r
 type QueueRunParams struct {
 	Action      string
 	CreatedBy   uuid.NullUUID
+	CvID        uuid.NullUUID
 	WorkspaceID uuid.UUID
 	Message     string
 }
@@ -410,11 +284,12 @@ type QueueRunRow struct {
 // The Queue* queries share one shape: s selects at most one row per workspace, r inserts each in
 // plan_queued unless the workspace has an active run (runs_one_active_idx: the ON CONFLICT predicate
 // must match it exactly), h records the first history entry. They return the new runs.
-// A run of a remote workspace, queued by a user.
+// A run of a remote workspace, queued by a user: of configuration version cv_id, else the workspace's current one.
 func (q *Queries) QueueRun(ctx context.Context, arg QueueRunParams) (QueueRunRow, error) {
 	row := q.db.QueryRow(ctx, queueRun,
 		arg.Action,
 		arg.CreatedBy,
+		arg.CvID,
 		arg.WorkspaceID,
 		arg.Message,
 	)
@@ -431,15 +306,15 @@ func (q *Queries) QueueRun(ctx context.Context, arg QueueRunParams) (QueueRunRow
 const queueVCSRun = `-- name: QueueVCSRun :one
 WITH s AS (
     SELECT w.id AS workspace_id, $1::text AS action, NULL::uuid AS created_by,
-        $2::text AS vcs_commit, NULLIF($3::integer, 0) AS vcs_pull_request
+        $2::text AS vcs_commit, NULLIF($3::integer, 0) AS vcs_pull_request, w.current_cv_id AS cv_id
     FROM workspaces w
     WHERE w.id = $4::uuid AND w.execution_mode = 'remote' AND NOT EXISTS (SELECT 1 FROM runs x
         WHERE x.workspace_id = w.id AND x.vcs_commit = $2::text
             AND CASE WHEN $3::integer > 0 THEN x.action = 'plan' AND x.vcs_pull_request = $3::integer
                 ELSE x.action NOT IN ('assess', 'plan') END)
 ), r AS (
-    INSERT INTO runs (workspace_id, action, status, created_by, vcs_commit, vcs_pull_request)
-    SELECT s.workspace_id, s.action, 'plan_queued', s.created_by, s.vcs_commit, s.vcs_pull_request FROM s
+    INSERT INTO runs (workspace_id, action, status, created_by, vcs_commit, vcs_pull_request, cv_id)
+    SELECT s.workspace_id, s.action, 'plan_queued', s.created_by, s.vcs_commit, s.vcs_pull_request, s.cv_id FROM s
     ON CONFLICT (workspace_id) WHERE run_active(status) DO NOTHING
     RETURNING runs.id, runs.workspace_id, runs.action, runs.created_at
 ), h AS (
@@ -503,93 +378,6 @@ func (q *Queries) ReleaseRunStateLock(ctx context.Context, arg ReleaseRunStateLo
 	return result.RowsAffected(), nil
 }
 
-const removeRestoredTemplate = `-- name: RemoveRestoredTemplate :exec
-DELETE FROM workspace_templates t
-WHERE t.workspace_id = $1::uuid AND t.name = $2::text
-    AND template_config(t.template_id, t.module_source, t.module_ref, t.inputs) = $3::jsonb
-`
-
-type RemoveRestoredTemplateParams struct {
-	WorkspaceID uuid.UUID
-	Name        string
-	After       []byte
-}
-
-// removes a template a run added, only while it is still at after
-func (q *Queries) RemoveRestoredTemplate(ctx context.Context, arg RemoveRestoredTemplateParams) error {
-	_, err := q.db.Exec(ctx, removeRestoredTemplate, arg.WorkspaceID, arg.Name, arg.After)
-	return err
-}
-
-const resealInputs = `-- name: ResealInputs :execrows
-UPDATE workspace_templates SET inputs = $1::jsonb
-WHERE workspace_id = $2::uuid AND name = $3::text AND inputs = $4::jsonb
-`
-
-type ResealInputsParams struct {
-	Inputs      []byte
-	WorkspaceID uuid.UUID
-	Name        string
-	Old         []byte
-}
-
-func (q *Queries) ResealInputs(ctx context.Context, arg ResealInputsParams) (int64, error) {
-	result, err := q.db.Exec(ctx, resealInputs,
-		arg.Inputs,
-		arg.WorkspaceID,
-		arg.Name,
-		arg.Old,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const restoreRemovedTemplate = `-- name: RestoreRemovedTemplate :exec
-INSERT INTO workspace_templates (workspace_id, name, template_id, module_source, module_ref, inputs)
-VALUES ($1::uuid, $2::text, $3::jsonb->>'template_id', $3::jsonb->>'module_source',
-    $3::jsonb->>'module_ref', $3::jsonb->'inputs')
-ON CONFLICT (workspace_id, name) DO NOTHING
-`
-
-type RestoreRemovedTemplateParams struct {
-	WorkspaceID uuid.UUID
-	Name        string
-	Before      []byte
-}
-
-// puts back a template a run removed, unless a template took its name since
-func (q *Queries) RestoreRemovedTemplate(ctx context.Context, arg RestoreRemovedTemplateParams) error {
-	_, err := q.db.Exec(ctx, restoreRemovedTemplate, arg.WorkspaceID, arg.Name, arg.Before)
-	return err
-}
-
-const restoreTemplate = `-- name: RestoreTemplate :exec
-UPDATE workspace_templates t SET template_id = $1::jsonb->>'template_id', module_source = $1::jsonb->>'module_source',
-    module_ref = $1::jsonb->>'module_ref', inputs = $1::jsonb->'inputs'
-WHERE t.workspace_id = $2::uuid AND t.name = $3::text
-    AND template_config(t.template_id, t.module_source, t.module_ref, t.inputs) = $4::jsonb
-`
-
-type RestoreTemplateParams struct {
-	Before      []byte
-	WorkspaceID uuid.UUID
-	Name        string
-	After       []byte
-}
-
-// puts before back, only while the template is still at after
-func (q *Queries) RestoreTemplate(ctx context.Context, arg RestoreTemplateParams) error {
-	_, err := q.db.Exec(ctx, restoreTemplate,
-		arg.Before,
-		arg.WorkspaceID,
-		arg.Name,
-		arg.After,
-	)
-	return err
-}
-
 const runFound = `-- name: RunFound :one
 SELECT found FROM runs WHERE id = $1::uuid
 `
@@ -610,20 +398,6 @@ func (q *Queries) RunPlan(ctx context.Context, id uuid.UUID) ([]byte, error) {
 	var plan []byte
 	err := row.Scan(&plan)
 	return plan, err
-}
-
-const setConfigChanges = `-- name: SetConfigChanges :exec
-UPDATE runs SET config_changes = $1::jsonb WHERE id = $2::uuid
-`
-
-type SetConfigChangesParams struct {
-	ConfigChanges []byte
-	ID            uuid.UUID
-}
-
-func (q *Queries) SetConfigChanges(ctx context.Context, arg SetConfigChangesParams) error {
-	_, err := q.db.Exec(ctx, setConfigChanges, arg.ConfigChanges, arg.ID)
-	return err
 }
 
 const setRunAlwaysConfirm = `-- name: SetRunAlwaysConfirm :exec
@@ -710,7 +484,6 @@ UPDATE runs SET status = $1::text, updated_at = now(),
     lease_id = CASE WHEN $2::boolean THEN lease_id END,
     lease_until = CASE WHEN $2::boolean THEN lease_until END,
     lease_acked_at = NULL,
-    config_changes = CASE WHEN $3::boolean THEN NULL ELSE config_changes END,
     promotion = CASE WHEN $3::boolean THEN NULL ELSE promotion END
 WHERE id = $4::uuid
 `
@@ -723,7 +496,7 @@ type UpdateRunStatusParams struct {
 }
 
 // Only setStatus calls this. The lease ends unless the run starts working (a new claim: not acknowledged
-// yet); config_changes and promotion go when it ends.
+// yet); promotion goes when it ends.
 func (q *Queries) UpdateRunStatus(ctx context.Context, arg UpdateRunStatusParams) error {
 	_, err := q.db.Exec(ctx, updateRunStatus,
 		arg.Status,
@@ -732,34 +505,4 @@ func (q *Queries) UpdateRunStatus(ctx context.Context, arg UpdateRunStatusParams
 		arg.ID,
 	)
 	return err
-}
-
-const updateWorkspaceTemplate = `-- name: UpdateWorkspaceTemplate :execrows
-UPDATE workspace_templates SET template_id = $1::text, module_source = $2::text,
-    module_ref = $3::text, inputs = $4::jsonb
-WHERE workspace_id = $5::uuid AND name = $6::text
-`
-
-type UpdateWorkspaceTemplateParams struct {
-	TemplateID   string
-	ModuleSource string
-	ModuleRef    string
-	Inputs       []byte
-	WorkspaceID  uuid.UUID
-	Name         string
-}
-
-func (q *Queries) UpdateWorkspaceTemplate(ctx context.Context, arg UpdateWorkspaceTemplateParams) (int64, error) {
-	result, err := q.db.Exec(ctx, updateWorkspaceTemplate,
-		arg.TemplateID,
-		arg.ModuleSource,
-		arg.ModuleRef,
-		arg.Inputs,
-		arg.WorkspaceID,
-		arg.Name,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }

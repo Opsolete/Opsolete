@@ -76,7 +76,7 @@ one (if the module ignores it, as for a VM's admin password, any value works; if
 
 When a template is moved to a newer module version, the workspace's **Templates** tab shows *update: <version>* next to it. **Configure…** shows the form filled with its inputs, plus any new ones. Saving moves it to the template's version and queues a plan, which is confirmed as usual.
 
-If that plan is discarded, or is canceled or errors before its apply starts, the template goes back to its previous version and inputs, so it never shows a version that wasn't applied. The same holds for adding a template (it's removed again) and for rollouts. Once the apply has started, the new version stays, even if the apply fails: the state may already hold part of it.
+Every change to a workspace's templates (adding, configuring, removing, a rollout, a promotion) is a new **configuration version**, and its run plans exactly that version, in both phases. While the run is active the workspace shows the templates it's getting. The workspace takes the version when the run's apply starts (or when its plan has nothing to change). If the plan is discarded, or is canceled or errors before its apply starts, nothing changed: the workspace shows the templates it had, and an added template isn't there. Once the apply has started, the new version stays, even if the apply fails: the state may already hold part of it. A workspace created from a template starts with it, so discarding its first plan leaves the template to configure and plan again.
 
 To update many workspaces at once, an admin opens **Roll out** on the template's card. The page lists each workspace that uses the template, with its module name and version. You can filter the list by project.
 
