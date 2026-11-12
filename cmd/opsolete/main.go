@@ -3,7 +3,7 @@
 //	opsolete                          serve the web UI, registry and runner API
 //	opsolete runner                   execute deployments (no database needed)
 //	opsolete token <name>             create a registry API token
-//	opsolete runner-token [-pool p] [-from-stdin] <name>
+//	opsolete runner-token [-pool p] [-from-stdin | -from-env NAME] <name>
 //	                                  create a runner's token (or register the one on stdin)
 //	opsolete rotate-key               re-seal everything from SECRET_KEY_PREVIOUS to SECRET_KEY
 //	opsolete unseal-state <file>      print a state a runner kept sealed (OPS_RUNNER_TOKEN: that runner's)
@@ -65,7 +65,7 @@ func main() {
 	case os.Args[1] == "unseal-state" && len(os.Args) == 3:
 		err = unsealState(os.Args[2])
 	default:
-		err = errors.New("usage: opsolete [runner | token <name> | runner-token [-pool p] [-from-stdin] <name> | rotate-key | unseal-state <file>]")
+		err = errors.New("usage: opsolete [runner | token <name> | runner-token [-pool p] [-from-stdin | -from-env NAME] <name> | rotate-key | unseal-state <file>]")
 	}
 	if err != nil {
 		log.Error("fatal", "err", err)
@@ -177,12 +177,14 @@ func runnerToken(args []string) error {
 	fl := flag.NewFlagSet("runner-token", flag.ContinueOnError)
 	pool := fl.String("pool", storage.DefaultPool, "the runner pool: it gets the jobs of projects that use it")
 	stdin := fl.Bool("from-stdin", false, "register the token on stdin instead of creating one")
+	env := fl.String("from-env", "", "register the token in this environment variable instead of creating one (a container without a shell)")
 	if err := fl.Parse(args); err != nil {
 		return err
 	}
-	if fl.NArg() != 1 {
-		return errors.New("usage: opsolete runner-token [-pool p] [-from-stdin] <name>")
+	if fl.NArg() != 1 || *stdin && *env != "" {
+		return errors.New("usage: opsolete runner-token [-pool p] [-from-stdin | -from-env NAME] <name>")
 	}
+	register := *stdin || *env != ""
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -195,12 +197,15 @@ func runnerToken(args []string) error {
 	defer store.Close()
 	ops := &app.App{Store: store, Log: slog.New(slog.DiscardHandler)}
 	cli, name, token := app.Actor{Email: "cli", Admin: true}, fl.Arg(0), ""
-	if *stdin {
-		b, rerr := io.ReadAll(io.LimitReader(os.Stdin, 4096))
-		if rerr != nil {
-			return rerr
+	if register {
+		token = strings.TrimSpace(os.Getenv(*env))
+		if *stdin {
+			b, rerr := io.ReadAll(io.LimitReader(os.Stdin, 4096))
+			if rerr != nil {
+				return rerr
+			}
+			token = strings.TrimSpace(string(b))
 		}
-		token = strings.TrimSpace(string(b))
 		err = ops.RegisterRunner(ctx, cli, name, *pool, token)
 	} else {
 		token, err = ops.CreateRunner(ctx, cli, name, *pool)
@@ -212,7 +217,7 @@ func runnerToken(args []string) error {
 		"name": name, "pool": *pool}); err != nil {
 		return fmt.Errorf("runner registered, but not audited: %w", err)
 	}
-	if !*stdin {
+	if !register {
 		fmt.Println(token)
 	}
 	return nil
@@ -286,7 +291,7 @@ func serve(log *slog.Logger) error {
 	var state *blob.Bucket
 	if cfg.Deployments {
 		if os.Getenv("RUNNER_TOKEN") != "" {
-			log.Warn("RUNNER_TOKEN is no longer used: each runner has its own token, see opsolete runner-token")
+			log.Warn("RUNNER_TOKEN is set, but the server doesn't read it: each runner's token must be registered (opsolete runner-token)")
 		}
 		if cfg.StateStore == "" {
 			return errors.New("STATE_STORE is required for deployments, e.g. azblob://tfstate, s3://tfstate?region=…, gs://tfstate or file:///path")

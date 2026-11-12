@@ -28,7 +28,7 @@ Each runner has its own token, so the server knows which runner it is (by its to
 
 - under **Settings → Runners**: name and pool; the token is shown once, with the command to start the runner;
 - with `opsolete runner-token [-pool p] <name>` and the server's settings (NixOS: `sudo opsolete-admin runner-token …`), which prints it;
-- or register a token you generated yourself, for deployments that keep it in their own secret store: `opsolete runner-token -from-stdin [-pool p] <name> < token-file` (at least 32 characters; again replaces that runner's token and pool). The NixOS module does this for `runnerTokenFile` at every server start.
+- or register a token you generated yourself, for deployments that keep it in their own secret store: `opsolete runner-token -from-stdin [-pool p] <name> < token-file` (at least 32 characters; again replaces that runner's token and pool), or from an environment variable in a container without a shell, `opsolete runner-token -from-env NAME [-pool p] <name>`. The NixOS module does this for `runnerTokenFile` at every server start, the Helm chart for its `RUNNER_TOKEN` secret.
 
 Deleting a runner revokes its token at once: its next request gets `401` and it stops; a run it was working on fails when its lease runs out (2 minutes). Settings → Runners shows when each runner was last seen.
 
