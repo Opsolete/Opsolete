@@ -21,6 +21,7 @@ var noInvalidInput = map[string]string{
 	"POST /oauth/authorization":                                 "consent: its input is the OAuth client's query",
 	"POST /account/tokens/{id}/revoke":                          "a button",
 	"POST /account/tokens/revoke":                               "a button",
+	"POST /organization/runners/{id}/delete":                    "a button",
 	"POST /account/sessions/revoke":                             "a button",
 	"POST /users/{id}/sessions/revoke":                          "a button: the user is in the path",
 	"POST /registry/{ns}/{name}/{system}/sync":                  "a button",
@@ -104,6 +105,7 @@ func TestFormsRerender(t *testing.T) {
 	long := strings.Repeat("x", 301)
 	rows := []formRow{
 		{"POST /organization", "/organization", url.Values{"currency": {"GBP"}}, `action="/organization"`, "", "currency", true, false},
+		{"POST /organization/runners", "/organization/runners", url.Values{"name": {"Bad Name"}, "pool": {"echo-pool"}}, `action="/organization/runners"`, `value="echo-pool"`, "name", true, false},
 		{"POST /registry", "/registry", url.Values{"namespace": {ns}, "name": {"bad name"}, "system": {"aws"}, "version": {"1.0.0"}}, `action="/registry"`, `value="bad name"`, "name", true, true},
 		{"POST /registry/publish", "/registry/publish", url.Values{"connection": {"{conn}"}, "repo": {"acme/x"}, "namespace": {ns}, "name": {"net"}, "system": {"aws"}, "dir": {"../x"}},
 			`action="/registry/publish"`, `value="../x"`, "dir", true, false},

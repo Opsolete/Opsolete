@@ -247,7 +247,7 @@ func TestReleaseOrphanedLocks(t *testing.T) {
 	lock(rollback.ID, "rb1", uuid.Nil, "1 hour")
 	lock(newRollback.ID, "rb2", uuid.Nil, "1 minute")
 	lock(cli.ID, storage.CloudLockPrefix+"x", uuid.Nil, "1 day")
-	if _, ok, err := a.Store.ClaimJob(ctx, "r", time.Minute); err != nil || ok {
+	if _, ok, err := a.Store.ClaimJob(ctx, storage.Runner{Name: "r", Pool: storage.DefaultPool}, time.Minute); err != nil || ok {
 		t.Fatalf("claimed behind a state lock: %v %v", ok, err)
 	}
 
@@ -271,7 +271,7 @@ func TestReleaseOrphanedLocks(t *testing.T) {
 	if strings.Count(logged.String(), "orphaned state lock released") != 2 {
 		t.Errorf("logged releases:\n%s", logged.String())
 	}
-	if j, ok, err := a.Store.ClaimJob(ctx, "r", time.Minute); err != nil || !ok || j.RunID != run.ID {
+	if j, ok, err := a.Store.ClaimJob(ctx, storage.Runner{Name: "r", Pool: storage.DefaultPool}, time.Minute); err != nil || !ok || j.RunID != run.ID {
 		t.Fatalf("the run behind the released lock: %+v %v %v", j, ok, err)
 	}
 	a.ReleaseOrphanedLocks(ctx, 15*time.Minute) // its new claim works with a lease: its next lock stays

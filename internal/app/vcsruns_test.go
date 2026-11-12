@@ -173,7 +173,7 @@ func TestPollVCSRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	for {
-		_, ok, err := a.ClaimJob(ctx, "r")
+		_, ok, err := a.ClaimJob(ctx, storage.Runner{Name: "r", Pool: storage.DefaultPool})
 		if err != nil || !ok {
 			t.Fatalf("claim: %v %v", ok, err)
 		}

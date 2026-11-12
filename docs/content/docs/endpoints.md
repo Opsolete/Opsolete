@@ -105,7 +105,7 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 | `POST /projects/{project}/environment/clear` | admin, or operate on the project | Clears one (`template`, `input`) |
 | `GET /projects/{project}/settings` | admin | Settings › General |
 | `GET /projects/{project}/settings/{page}` | admin | `access` (team access), `variable-sets` |
-| `POST /projects/{project}/settings` | admin | `name`, `description`, `default` |
+| `POST /projects/{project}/settings` | admin | `name`, `description`, `default`, `runner_pool` |
 | `POST /projects/{project}/access` | admin | Grants a group `read` or `operate` |
 | `POST /projects/{project}/delete` | admin | Deletes an empty, non-default project |
 
@@ -165,6 +165,9 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 | `POST /users/{id}/sessions/revoke` | admin | Ends a user's sessions and revokes their `terraform login` tokens (from the audit log) |
 | `GET /organization` | admin | Settings → Organization |
 | `POST /organization` | admin | `currency` (Infracost), `module_uploads` |
+| `GET /organization/runners` | admin | Settings → Runners (with deployments) |
+| `POST /organization/runners` | admin | Creates a runner (`name`, `pool`) and shows its token once |
+| `POST /organization/runners/{id}/delete` | admin | Deletes a runner: its token stops working |
 | `GET /audit` | admin | Audit log; `?show=access` for sign-ins and refused requests |
 
 ## Terraform CLI

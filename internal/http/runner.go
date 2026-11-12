@@ -2,7 +2,6 @@ package httpserver
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,11 +11,12 @@ import (
 
 	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/runnerapi"
+	"github.com/opsolete/opsolete/internal/storage"
 )
 
 const maxLogChunk = 256 << 10 // per request
 
-// Runner API: runners pull work over HTTPS with the shared RUNNER_TOKEN, so they need no
+// Runner API: runners pull work over HTTPS with their own token (app.RunnerByToken), so they need no
 // database access and no inbound connectivity. The protocol's rules are app's (jobs.go).
 func (s *Server) runnerRoutes(mux routes) {
 	mux.Handle("POST "+runnerapi.Prefix+"/jobs/claim", s.requireRunner(s.claimJob))
@@ -28,25 +28,33 @@ func (s *Server) runnerRoutes(mux routes) {
 	mux.Handle("GET "+runnerapi.Prefix+"/jobs/{id}/artifacts/{name}", s.requireRunner(s.getArtifact))
 }
 
-// requireRunner admits requests bearing RUNNER_TOKEN, which the operator generates and gives to
-// both the server and the runners, so a fresh deployment needs no token-creation step.
+// runnerKey is the context key of the runner a request authenticated as (requireRunner).
+type runnerKey struct{}
+
+// requireRunner admits requests bearing a registered runner's token (opsolete runner-token, or the
+// Runners settings page); the handler finds the runner with runnerOf.
 func (s *Server) requireRunner(next http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !ok || s.RunnerToken == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.RunnerToken)) != 1 {
+		token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+		runner, err := s.App.RunnerByToken(r.Context(), token)
+		if errors.Is(err, app.ErrNotFound) {
 			writeErrors(w, http.StatusUnauthorized, "missing or invalid runner token")
 			return
 		}
-		next(w, r)
+		if err != nil {
+			s.runnerError(w, r, err)
+			return
+		}
+		next(w, r.WithContext(context.WithValue(r.Context(), runnerKey{}, runner)))
 	})
 }
 
+func runnerOf(r *http.Request) storage.Runner {
+	runner, _ := r.Context().Value(runnerKey{}).(storage.Runner)
+	return runner
+}
+
 func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
-	var req runnerapi.ClaimRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil || strings.TrimSpace(req.Runner) == "" {
-		writeErrors(w, http.StatusBadRequest, `body must be {"runner": "<name>"}`)
-		return
-	}
 	wait, cancel := context.WithTimeout(r.Context(), s.ClaimWait)
 	defer cancel()
 	// on shutdown: 204, the runner claims again elsewhere
@@ -54,7 +62,7 @@ func (s *Server) claimJob(w http.ResponseWriter, r *http.Request) {
 	jobs := s.App.Notify.Jobs() // before the first try: a job queued during it still wakes us
 	defer jobs.Close()
 	for {
-		body, ok, err := s.App.ClaimJob(r.Context(), req.Runner)
+		body, ok, err := s.App.ClaimJob(r.Context(), runnerOf(r)) // the name it was registered with, not the one it sends
 		if err != nil {
 			s.runnerError(w, r, err)
 			return

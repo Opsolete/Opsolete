@@ -1,4 +1,4 @@
-# Server with a local database and secrets from files, and a runner using the server's runner token. Run: nix build .#checks.x86_64-linux.nixos -L
+# Server with a local database and secrets from files, and a runner whose token the server registers at start. Run: nix build .#checks.x86_64-linux.nixos -L
 self: {
   name = "opsolete";
   nodes.machine = {pkgs, ...}: {
@@ -13,7 +13,7 @@ self: {
       enable = true;
       publicUrl = "http://opsolete.test";
       secretKeyFile = "/run/opsolete-secret-key";
-      runnerTokenFile = "/run/opsolete-runner-token"; # the runner's tokenFile defaults to it
+      runnerTokenFile = "/run/opsolete-runner-token"; # registered as runner "machine"; the runner's tokenFile defaults to it
       devUser = "admin@test";
       adminEmails = ["admin@test"];
       runner = {
@@ -27,10 +27,13 @@ self: {
     machine.wait_until_succeeds("curl -sf http://127.0.0.1:8080/readyz")
     # the secret must not leak into the unit's environment
     machine.fail("systemctl show opsolete -p Environment | grep 0123456789abcdef")
-    # no token step: the runner works on first boot
+    # no token step: the server registered the runner's token before it started
+    machine.fail("systemctl show opsolete -p Environment | grep fedcba9876543210")
     machine.wait_until_succeeds("journalctl -u opsolete-runner | grep 'runner started'")
     machine.sleep(5)  # a rejected token would have stopped it by now
     machine.succeed("systemctl is-active opsolete-runner")
+    # another runner's own token, for a host elsewhere
+    machine.succeed("opsolete-admin runner-token -pool prd elsewhere | grep -q '^opsr_'")
     # it read the token as root and dropped to its user; jobs (same user) find no credentials directory
     machine.succeed("test $(stat -c %U /proc/$(systemctl show -p MainPID --value opsolete-runner)) = opsolete-runner")
     machine.fail("test -e /run/credentials/opsolete-runner.service")

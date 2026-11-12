@@ -54,8 +54,17 @@ func newApp(t *testing.T, dir string, store *storage.Store, a *auth.Auth, f Feat
 	}
 	srv := New(&app.App{Store: store, Blobs: memblob.OpenBucket(nil), Secrets: testKeys, Templates: tpls, Registry: testReg,
 		VCS: vcs.NewClient(nil), Notify: startNotifier(t, store), Log: testLog(t)}, a, f)
-	srv.RunnerToken, srv.ClaimWait = testRunnerToken, 100*time.Millisecond
+	srv.ClaimWait = 100 * time.Millisecond
+	registerTestRunner(t, store)
 	return srv
+}
+
+// registerTestRunner registers runner r1 (default pool) with testRunnerToken; again is harmless.
+func registerTestRunner(t *testing.T, store *storage.Store) {
+	t.Helper()
+	if err := store.RegisterRunner(context.Background(), "r1", storage.DefaultPool, testRunnerToken); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // startNotifier listens until t ends, as main.go does on every replica.

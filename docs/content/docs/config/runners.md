@@ -9,7 +9,7 @@ aliases:
 
 ## How it works
 
-- **Pull, don't push.** Runners long-poll `POST /api/runner/v1/jobs/claim` with the server's `RUNNER_TOKEN`: a claim waits up to 20 seconds and gets a job as soon as one is queued (PostgreSQL `LISTEN`/`NOTIFY`, with a look every 5 seconds as a safety net). They need no database credentials and accept no inbound connections. Registry tokens can't claim jobs, and the runner token can't use the registry. All runners share that one token, so revoking one runner means rotating it for all of them.
+- **Pull, don't push.** Runners long-poll `POST /api/runner/v1/jobs/claim` with their own token: a claim waits up to 20 seconds and gets a job as soon as one is queued (PostgreSQL `LISTEN`/`NOTIFY`, with a look every 5 seconds as a safety net). They need no database credentials and accept no inbound connections. Registry tokens can't claim jobs, and runner tokens can't use the registry.
 - **Postgres queue.** Queued run phases are the jobs. `FOR UPDATE SKIP LOCKED` lets any number of runners claim without double-running a job.
 - **Claim, then acknowledge.** A claimed job is the runner's only once it acknowledges it (`POST /api/runner/v1/jobs/<run>/ack` with the lease), before any other call for the job; the server refuses logs, heartbeats, artifacts, the result and the state credential until then. A claim not acknowledged within 30 seconds (the response was lost on the way, or didn't decode) goes back to the queue for any runner, and the run's history says "not acknowledged by runner X: queued again". Nothing ran yet, so that is safe; an acknowledged job is never queued again.
 - **Leases and fencing.** A claim returns a lease id that every log, heartbeat and finish call must send. Log posts double as heartbeats, sent about every 30 s while idle. If a runner disappears for 2 minutes, the server fails the job ("runner stopped responding") and fences the old runner off. An outage of the server or its database doesn't count against the runners: a server that takes over background work waits 1 minute before failing any job, so runners that kept working through the outage report back in time and their applies save their state. A 409 tells a runner it lost the job, so it interrupts Terraform. Jobs are never auto-retried, because a half-applied run needs a human.
@@ -22,11 +22,23 @@ aliases:
 - **State an apply couldn't save.** If an apply's state write fails, the runner pushes it once more. If that fails too (lease lost, server unreachable), it keeps the state in its temp dir, sealed with its runner token so later jobs, which run as the same user, can't read it, and the run's result names the file. Push it from a machine with the runner token: `OPS_RUNNER_TOKEN=… opsolete unseal-state <file> | terraform state push -`. A container loses the file when it restarts.
 - **Shutdown.** The first SIGTERM stops claiming and lets the current job finish; a claim already waiting completes (up to 20 seconds), and a job it returns is acknowledged and run like the current one, so scaling down never strands a job. A second one interrupts the current job as above, and it ends as `canceled`. Set the pod's `terminationGracePeriodSeconds` to at least `OPS_JOB_TIMEOUT` + `OPS_JOB_GRACE` + 5 minutes (for the claim in flight and reporting the result), or a long phase is killed without the grace.
 
+## Runners and pools
+
+Each runner has its own token, so the server knows which runner it is (by its token, not by the name it sends) and an admin can revoke one without touching the others. Create one:
+
+- under **Settings → Runners**: name and pool; the token is shown once, with the command to start the runner;
+- with `opsolete runner-token [-pool p] <name>` and the server's settings (NixOS: `sudo opsolete-admin runner-token …`), which prints it;
+- or register a token you generated yourself, for deployments that keep it in their own secret store: `opsolete runner-token -from-stdin [-pool p] <name> < token-file` (at least 32 characters; again replaces that runner's token and pool). The NixOS module does this for `runnerTokenFile` at every server start.
+
+Deleting a runner revokes its token at once: its next request gets `401` and it stops; a run it was working on fails when its lease runs out (2 minutes). Settings → Runners shows when each runner was last seen.
+
+**Pools.** Every runner is in a pool (`default` unless given), and every project uses one (`default` unless changed in the project's settings, by an admin). A run goes only to runners in its workspace's project's pool, and that's where its variables go. Put production projects in a `prd` pool served by production runners, and production credentials never reach the other runners. A workspace moved to another project takes that project's pool from its next queued phase. A project whose pool has no runner keeps its runs queued.
+
 ## Credentials
 
 Provider credentials come from the workspace's [variables]({{< relref "/docs/features/variables" >}}), set as environment variables for Terraform on top of the runner's own environment. Runners are generic: give them no cloud credentials of their own, or every workspace without variables runs with them. Runners need no state storage credentials.
 
-**Every runner is trusted with every workspace's secrets.** There are no runner pools: any runner, or anyone holding `RUNNER_TOKEN`, can claim any job and receives that workspace's variables (sensitive ones in clear text) and a credential for its state. Treat `RUNNER_TOKEN` like the most privileged cloud credential in any workspace: keep it in a secret store, run runners only on infrastructure as trusted as the server, and if production and non-production credentials must not share hosts, run a separate Opsolete per trust level. Module code runs on the runner with the provider credentials, so scope them to what Opsolete may deploy.
+**Every runner is trusted with the secrets of every workspace in its pool.** A runner, or anyone holding its token, can claim any job of a project in its pool and receives that workspace's variables (sensitive ones in clear text) and a credential for its state. Treat a runner's token like the most privileged cloud credential in its pool: keep it in a secret store, run runners only on infrastructure as trusted as the workspaces they serve, and use pools to keep production credentials on production runners. Module code runs on the runner with the provider credentials, so scope them to what Opsolete may deploy.
 
 ## Cost estimation
 

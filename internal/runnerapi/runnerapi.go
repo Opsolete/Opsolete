@@ -27,6 +27,8 @@ const (
 	MaxJobSize = 16 << 20
 )
 
+// ClaimRequest is the claim's body. The server names the runner by its token, not by Runner (logged on the
+// runner only).
 type ClaimRequest struct {
 	Runner string `json:"runner"`
 }

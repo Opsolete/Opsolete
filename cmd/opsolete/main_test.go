@@ -149,3 +149,59 @@ func TestCreateToken(t *testing.T) {
 		t.Fatalf("audit entry: %s", d)
 	}
 }
+
+// TestRunnerTokenCLI: `opsolete runner-token` prints a new runner's token alone; -from-stdin registers the one on
+// stdin (refused when short) and replaces that runner's token and pool.
+func TestRunnerTokenCLI(t *testing.T) {
+	store := testEnv(t, strings.Repeat("k", 32))
+	ctx := context.Background()
+	run := func(stdin string, args ...string) (string, error) {
+		t.Helper()
+		in, inW, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		inW.WriteString(stdin)
+		inW.Close()
+		outR, outW, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		stdinWas, stdoutWas := os.Stdin, os.Stdout
+		os.Stdin, os.Stdout = in, outW
+		err = runnerToken(args)
+		os.Stdin, os.Stdout = stdinWas, stdoutWas
+		outW.Close()
+		out, _ := io.ReadAll(outR)
+		return string(out), err
+	}
+
+	out, err := run("", "-pool", "prd", "ci-1")
+	token, rest, _ := strings.Cut(out, "\n")
+	if err != nil || token == "" || rest != "" {
+		t.Fatalf("stdout must be the token alone: %q %v", out, err)
+	}
+	if r, err := store.RunnerByToken(ctx, token); err != nil || r.Name != "ci-1" || r.Pool != "prd" {
+		t.Fatalf("printed token: %+v %v", r, err)
+	}
+	if d := audited(t, store, "create runner"); !strings.Contains(d, "ci-1") || strings.Contains(d, token) {
+		t.Fatalf("audit entry: %s", d)
+	}
+	if _, err := run("", "ci-1"); err == nil {
+		t.Fatal("the same name again")
+	}
+
+	if _, err := run("short\n", "-from-stdin", "ci-1"); err == nil {
+		t.Fatal("a short token registered")
+	}
+	own := strings.Repeat("t", 40)
+	if out, err := run(own+"\n", "-from-stdin", "ci-1"); err != nil || out != "" {
+		t.Fatalf("register: %q %v", out, err)
+	}
+	if r, err := store.RunnerByToken(ctx, own); err != nil || r.Name != "ci-1" || r.Pool != storage.DefaultPool {
+		t.Fatalf("registered token: %+v %v", r, err)
+	}
+	if _, err := store.RunnerByToken(ctx, token); err == nil {
+		t.Fatal("the replaced token still works")
+	}
+}

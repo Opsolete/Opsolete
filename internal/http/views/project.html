@@ -89,6 +89,12 @@
   <label for="description">Project description <span class="muted">(optional)</span></label>
   <textarea id="description" name="description" maxlength="1000" rows="3"{{aria $gf "description"}}>{{value $gf "description" $p.Description}}</textarea>
   {{template "fielderror" (dict "F" $gf "N" "description")}}
+  <label for="runner_pool">Runner pool</label>{{$pool := value $gf "runner_pool" $p.RunnerPool}}
+  <select id="runner_pool" name="runner_pool"{{aria $gf "runner_pool" "runner_pool-hint"}}>
+    {{range .Pools}}<option value="{{.}}"{{if eq . $pool}} selected{{end}}>{{.}}</option>{{end}}
+  </select>
+  <p class="hint" id="runner_pool-hint">Only runners in this pool get the runs of this project's workspaces, with their variables. A pool appears here once a runner is in it (<a href="/organization/runners">Runners</a>).</p>
+  {{template "fielderror" (dict "F" $gf "N" "runner_pool")}}
   <fieldset>
     <legend>Default project</legend>
     <label class="check"><input type="checkbox" name="default"{{if $p.Default}} checked disabled{{else if checked $gf "default" false}} checked{{end}}>

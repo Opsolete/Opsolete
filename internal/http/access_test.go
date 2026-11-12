@@ -76,9 +76,10 @@ func TestAccessMatrix(t *testing.T) {
 	all := Features{Deployments: true, Registry: true, Editor: true, VCS: true}
 	server := func(au *auth.Auth) *Server {
 		s := New(a, au, all)
-		s.RunnerToken, s.Organization, s.ClaimWait = testRunnerToken, "acc", 10*time.Millisecond
+		s.Organization, s.ClaimWait = "acc", 10*time.Millisecond
 		return s
 	}
+	registerTestRunner(t, store)
 	is := authtest.New(t)
 	email := func(user string) string { return "acc-" + user + "-" + sfx + "@example.com" }
 	oidc, err := auth.New(ctx, auth.Config{Issuer: is.URL, ClientID: authtest.ClientID, ClientSecret: authtest.ClientSecret,
@@ -207,7 +208,7 @@ func TestAccessMatrix(t *testing.T) {
 	shared := fixture(t)
 
 	// The runner's job: the shared workspace's plan, the only queued run.
-	body, ok, err := a.ClaimJob(ctx, "acc")
+	body, ok, err := a.ClaimJob(ctx, storage.Runner{Name: "acc", Pool: storage.DefaultPool})
 	var job runnerapi.Job
 	if err != nil || !ok || json.Unmarshal(body, &job) != nil || job.RunID != shared.run {
 		t.Fatalf("claim: %v %v %s", ok, err, body)
@@ -375,6 +376,9 @@ func accessRows() []accessRow {
 		{"POST /users/{id}/sessions/revoke", "/users/00000000-0000-0000-0000-000000000000/sessions/revoke", "", onUI, []int{401, 403, 403, 403, 303}, false},
 		{"GET /organization", "/organization", "", onUI, []int{302, 403, 403, 403, 200}, false},
 		{"POST /organization", "/organization", "currency=", onUI, []int{401, 403, 403, 403, 422}, false},
+		{"GET /organization/runners", "/organization/runners", "", onUI, []int{302, 403, 403, 403, 200}, false},
+		{"POST /organization/runners", "/organization/runners", "name=", onUI, []int{401, 403, 403, 403, 422}, false},
+		{"POST /organization/runners/{id}/delete", "/organization/runners/00000000-0000-0000-0000-000000000000/delete", "", onUI, []int{401, 403, 403, 403, 404}, false},
 		{"GET /audit", "/audit", "", onUI, []int{302, 403, 403, 403, 200}, false},
 		{"GET /{$}", "/", "", onUI, []int{302, 200, 200, 200, 200}, false},
 

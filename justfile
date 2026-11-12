@@ -74,7 +74,8 @@ seed: db-start
     req /workspaces/credentials-only/variables -d category=env -d key=ARM_CLIENT_SECRET -d value=not-a-real-secret -d sensitive=on
 
     echo "runner: applying greeting-dev, planning greeting-prod"
-    OPS_RUNNER_TOKEN=$RUNNER_TOKEN OPS_SERVER_URL=$base "$bin" runner > "$PGHOST/seed-runner.log" 2>&1 &
+    echo "$DEV_RUNNER_TOKEN" | "$bin" runner-token -from-stdin dev
+    OPS_RUNNER_TOKEN=$DEV_RUNNER_TOKEN OPS_SERVER_URL=$base "$bin" runner > "$PGHOST/seed-runner.log" 2>&1 &
     pids="$pids $!"
     for ws in greeting-dev:applied greeting-prod:needs_confirmation; do
         for _ in $(seq 180); do curl -sf "$base/workspaces/${ws%%:*}" | grep -q "status ${ws#*:}\"" && continue 2; sleep 1; done
@@ -97,12 +98,13 @@ run: db-start
 token name: db-start
     @go run ./cmd/opsolete token "{{name}}"
 
-# run a runner on this machine against `just run`
-runner: env
+# run a runner on this machine against `just run` (registered as runner "dev", default pool)
+runner: db-start
     #!/usr/bin/env bash
     set -euo pipefail
-    export OPS_RUNNER_TOKEN=$RUNNER_TOKEN
-    unset RUNNER_TOKEN # OPS_* is hidden from jobs, this isn't
+    echo "$DEV_RUNNER_TOKEN" | go run ./cmd/opsolete runner-token -from-stdin dev
+    export OPS_RUNNER_TOKEN=$DEV_RUNNER_TOKEN
+    unset DEV_RUNNER_TOKEN # OPS_* is hidden from jobs, this isn't
     export OPS_SERVER_URL=${OPS_SERVER_URL:-http://127.0.0.1:8080}
     exec go run ./cmd/opsolete runner
 

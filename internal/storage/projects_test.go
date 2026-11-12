@@ -39,10 +39,10 @@ func TestProjects(t *testing.T) {
 	if _, err := s.CreateProject(ctx, name, ""); !errors.Is(err, ErrProjectNameTaken) {
 		t.Fatalf("duplicate name: %v", err)
 	}
-	if err := s.UpdateProject(ctx, p.ID, name+"-x", "e"); err != nil {
+	if err := s.UpdateProject(ctx, p.ID, name+"-x", "e", DefaultPool); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpdateProject(ctx, p.ID, "default", ""); !errors.Is(err, ErrProjectNameTaken) {
+	if err := s.UpdateProject(ctx, p.ID, "default", "", DefaultPool); !errors.Is(err, ErrProjectNameTaken) {
 		t.Fatalf("rename onto a taken name: %v", err)
 	}
 

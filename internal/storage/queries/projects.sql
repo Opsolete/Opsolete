@@ -34,7 +34,8 @@ SELECT NOT EXISTS (SELECT 1 FROM unnest(sqlc.arg(names)::text[]) n
 INSERT INTO projects (name, description) VALUES (sqlc.arg(name)::text, sqlc.arg(description)::text) RETURNING id;
 
 -- name: UpdateProject :execrows
-UPDATE projects SET name = sqlc.arg(name)::text, description = sqlc.arg(description)::text WHERE id = sqlc.arg(id)::uuid;
+UPDATE projects SET name = sqlc.arg(name)::text, description = sqlc.arg(description)::text, runner_pool = sqlc.arg(runner_pool)::text
+WHERE id = sqlc.arg(id)::uuid;
 
 -- name: SetDefaultProject :execrows
 UPDATE organization SET default_project_id = p.id FROM projects p WHERE p.id = sqlc.arg(id)::uuid;

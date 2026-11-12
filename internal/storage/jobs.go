@@ -33,16 +33,16 @@ type Job struct {
 	Modules     []WorkspaceTemplate // templates added to the workspace
 }
 
-// ClaimJob hands the longest-waiting queued phase (plan or confirmed apply) to runner, or returns
-// ok=false if there is none. SKIP LOCKED lets any number of runners claim without handing out a
+// ClaimJob hands the longest-waiting queued phase (plan or confirmed apply) of a workspace whose project uses
+// runner's pool to runner, or returns ok=false if there is none. SKIP LOCKED lets any number of runners claim without handing out a
 // job twice. Runs of a locked workspace (a lock from the UI, the CLI or a rollback) wait until it
 // is unlocked; speculative plans and drift checks, never applied, go ahead
 // without taking the state lock.
-func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration) (Job, bool, error) {
+func (s *Store) ClaimJob(ctx context.Context, runner Runner, lease time.Duration) (Job, bool, error) {
 	j := Job{LeaseID: rand.Text()}
 	var ok bool
 	err := s.tx(ctx, func(q *db.Queries) error {
-		next, err := q.ClaimableRun(ctx)
+		next, err := q.ClaimableRun(ctx, runner.Pool)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
@@ -54,10 +54,10 @@ func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration
 		if status == Applying {
 			j.Phase = "apply"
 		}
-		if _, err := setStatus(ctx, q, j.RunID, status, j.Phase+" claimed by runner "+runner); err != nil {
+		if _, err := setStatus(ctx, q, j.RunID, status, j.Phase+" claimed by runner "+runner.Name); err != nil {
 			return err
 		}
-		r, err := q.LeaseRun(ctx, db.LeaseRunParams{ID: j.RunID, Runner: runner, LeaseID: j.LeaseID, LeaseSecs: lease.Seconds()})
+		r, err := q.LeaseRun(ctx, db.LeaseRunParams{ID: j.RunID, Runner: runner.Name, LeaseID: j.LeaseID, LeaseSecs: lease.Seconds()})
 		if err != nil {
 			return err
 		}
