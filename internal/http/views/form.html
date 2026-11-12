@@ -114,10 +114,11 @@ label, control, hint and error, in a fieldset that show_if hides and disables (s
       {{range $x.Options}}<option value="{{.Value}}"{{if eq .Value $cur}} selected{{end}}>{{.Text}}</option>{{end}}
     </select>
   {{else if $x.Sensitive}}
-    <!-- never filled in: the stored value is sealed; left empty, it's kept -->
+    <!-- never filled in: the stored value is sealed; left empty, it's kept (a refused form's typed value too, sealed in its draft) -->
     <input id="{{$x.ID}}" name="secret.{{$x.ID}}" type="password" autocomplete="new-password"
-      {{if $x.Pattern}} pattern="{{$x.Pattern}}"{{with $x.Help}} title="{{.}}"{{end}}{{end}}{{if and $x.Required (not $x.Set)}} required{{end}}{{aria .F $x.ID (print $x.ID "-hint") $help}}>
-    <p class="hint" id="{{$x.ID}}-hint">{{with $x.Hint}}{{.}}{{else}}Sensitive: stored encrypted and never shown.{{if $x.Set}} A value is set; leave empty to keep it.{{end}}{{end}}</p>
+      {{if $x.Pattern}} pattern="{{$x.Pattern}}"{{with $x.Help}} title="{{.}}"{{end}}{{end}}{{if and $x.Required (not $x.Set) (not $x.Draft)}} required{{end}}{{aria .F $x.ID (print $x.ID "-hint") $help}}>
+    {{with $x.Draft}}<input type="hidden" name="draft.{{$x.ID}}" value="{{.}}">{{end}}
+    <p class="hint" id="{{$x.ID}}-hint">{{if $x.Draft}}What you typed is kept (not shown); type again to change it.{{else}}{{with $x.Hint}}{{.}}{{else}}Sensitive: stored encrypted and never shown.{{if $x.Set}} A value is set; leave empty to keep it.{{end}}{{end}}{{end}}</p>
   {{else}}
     <input id="{{$x.ID}}" name="{{$x.ID}}" value="{{$x.Value}}" autocomplete="off" spellcheck="false"
       {{if eq $x.Type "number"}}type="number" step="any" inputmode="decimal"{{end}}{{if $x.Pattern}} pattern="{{$x.Pattern}}"{{with $x.Help}} title="{{.}}"{{end}}{{end}}{{if $x.Required}} required{{end}}{{aria .F $x.ID $help}}>

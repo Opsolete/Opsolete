@@ -174,3 +174,12 @@ func (a *App) runEnded(ctx context.Context, runID uuid.UUID) {
 		}
 	}
 }
+
+// RunDiff is run id's plan's attribute changes per resource, values that are sensitive or hold a secret hidden:
+// what its log shows as Terraform's plan, so read access is enough. nil: none.
+func (a *App) RunDiff(ctx context.Context, actor Actor, workspace string, id uuid.UUID) ([]runnerapi.ResourceDiff, error) {
+	if _, err := a.Run(ctx, actor, workspace, id, LevelRead); err != nil {
+		return nil, err
+	}
+	return a.Store.RunDiff(ctx, id)
+}

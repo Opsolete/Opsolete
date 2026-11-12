@@ -153,3 +153,9 @@ DELETE FROM runs WHERE id IN (
 -- name: Notify :exec
 -- Inside a transaction Postgres delivers it on commit, and never for one rolled back (notify in runs.go).
 SELECT pg_notify(sqlc.arg(channel)::text, sqlc.arg(payload)::text);
+
+-- name: SetRunDiff :exec
+UPDATE runs SET plan_diff = sqlc.arg(plan_diff)::jsonb WHERE id = sqlc.arg(id)::uuid;
+
+-- name: RunDiff :one
+SELECT plan_diff FROM runs WHERE id = sqlc.arg(id)::uuid;

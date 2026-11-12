@@ -199,7 +199,7 @@ func (s *Store) CancelRun(ctx context.Context, id uuid.UUID, email string, force
 // resources is the index of the workspace's current state version; found what a plan that imports found
 // (runnerapi.FinishRequest.Found), kept for the form's "Use found values".
 func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, message string, outputs map[string]any,
-	plan *runnerapi.Plan, resources []runnerapi.Resource, found map[string]map[string]any) (string, error) {
+	plan *runnerapi.Plan, resources []runnerapi.Resource, found map[string]map[string]any, diff []runnerapi.ResourceDiff) (string, error) {
 	var final string
 	var entry *AuditEntry
 	err := s.tx(ctx, func(q *db.Queries) error {
@@ -295,6 +295,15 @@ func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 		}
 		if foundJSON != nil {
 			if err := q.SetRunFound(ctx, db.SetRunFoundParams{ID: runID, Found: foundJSON}); err != nil {
+				return err
+			}
+		}
+		if diff != nil && r.Status == Planning {
+			b, err := json.Marshal(diff)
+			if err != nil {
+				return err
+			}
+			if err := q.SetRunDiff(ctx, db.SetRunDiffParams{ID: runID, PlanDiff: b}); err != nil {
 				return err
 			}
 		}

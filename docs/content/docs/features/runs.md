@@ -19,6 +19,7 @@ The plan phase saves a plan file and reports what it will do (`+2 ~1 −0`, plus
 - **One active run per workspace.** Starting a run while another is active (queued, planning, waiting for confirmation or applying) is refused: confirm or discard it, or wait for it to finish. A plan waiting for confirmation holds the workspace until then.
 - **Remote execution only.** A workspace set to local execution (*Settings › General*) is run by the [Terraform CLI]({{< relref "/docs/features/terraform-cli" >}}) on your machine: its runs, drift checks, VCS triggers and rollouts don't start in Opsolete.
 - **A held state lock** (a CLI, or *Settings › Locking*) keeps queued runs waiting until it's released; see [Locking]({{< relref "/docs/features/state#locking" >}}).
+- **What changes:** the plan lists every resource it creates, updates, replaces, deletes or imports; open one to see its changed attributes, before → after, the ones that force a replacement marked and values known only after apply said so. Sensitive values, and any value holding a workspace secret, are hidden (by the runner and again by the server). Whoever may read the run sees this, as they see Terraform's plan in the log; the [JSON API]({{< relref "/docs/endpoints#json-api" >}}) returns it as `diff`.
 - **Cost estimation:** when the runners have an Infracost key, the run page shows the estimated monthly cost before anyone confirms. See [Cost estimation]({{< relref "/docs/config/runners#cost-estimation" >}}).
 
 ## Kinds of runs

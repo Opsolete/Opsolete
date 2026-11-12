@@ -170,6 +170,27 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 | `POST /organization/runners/{id}/delete` | admin | Deletes a runner: its token stops working |
 | `GET /audit` | admin | Audit log; `?show=access` for sign-ins and refused requests |
 
+## JSON API
+
+`/api/v1`: the UI's operations for scripts and other front ends, with the same access as the UI (the access column). A signed-in browser uses its session (a cross-site `POST` is refused); a script sends a `terraform login` token as `Authorization: Bearer <token>`. Bodies are JSON; input values are typed (`"size": 2`, `"tags": {"env": "prd"}`), a sensitive one omitted keeps its stored value. Errors are `{"error": "…", "fields": {"name": "…", "inputs.<input>": "…"}}` (fields as the body names them) with the UI's statuses (`401`, `403`, `404`, `409` a conflict such as an active run, `422` invalid input).
+
+| Endpoint | Access | Purpose |
+|---|---|---|
+| `GET /api/v1/templates` | user | The catalog |
+| `GET /api/v1/templates/{id}` | user | A template and its deploy form (`fields`: type, value, required, visible, options, locked by `?project=`) |
+| `GET /api/v1/workspaces` | user | Workspaces you can see (`?project=`), with their latest run |
+| `POST /api/v1/workspaces` | operate on the project | Creates a workspace from a template (`name`, `project`, `template`, `auto_apply`, `inputs`) and queues its plan: `201` |
+| `GET /api/v1/workspaces/{name}` | read | A workspace and its templates with their inputs (sensitive ones never) |
+| `POST /api/v1/workspaces/{name}/templates` | operate | Adds a template (`template`, `inputs`) and queues the plan: `201` with the module name |
+| `GET /api/v1/workspaces/{name}/templates/{module}` | operate | An added template's configure form, its stored values |
+| `PUT /api/v1/workspaces/{name}/templates/{module}` | operate | Saves its inputs (`inputs`) and the template's module version, queues the plan |
+| `GET /api/v1/workspaces/{name}/runs` | read | The latest 25 runs |
+| `POST /api/v1/workspaces/{name}/runs` | operate | Queues a run (`action`, `replace`): `201` |
+| `GET /api/v1/workspaces/{name}/runs/{run}` | read | A run with its history and its plan's attribute changes (`diff`, values that are sensitive or hold a secret hidden) |
+| `POST /api/v1/workspaces/{name}/runs/{run}/confirm` | operate | Confirms a plan that waits: `204` |
+| `POST /api/v1/workspaces/{name}/runs/{run}/discard` | operate | Discards it: `204` |
+| `POST /api/v1/workspaces/{name}/runs/{run}/cancel` | operate | Cancels a run (`force`); returns its status |
+
 ## Terraform CLI
 
 `terraform login` and the [`cloud` block]({{< relref "/docs/features/terraform-cli" >}}). The `/api/v2` routes take a `terraform login` token; `{org}` must be `ORGANIZATION`.

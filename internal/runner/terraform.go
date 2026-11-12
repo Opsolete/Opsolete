@@ -99,42 +99,54 @@ func (h *headBuffer) Write(p []byte) (int, error) {
 }
 
 // summarize counts a plan's resource changes (or drift), like Terraform's "Plan: x to add" line,
-// and lists their addresses. Values are never included.
+// and lists their addresses (values: planDiff).
 func summarize(rcs []*tfjson.ResourceChange) runnerapi.Plan {
 	sum := runnerapi.Plan{Changes: []runnerapi.Change{}}
 	for _, rc := range rcs {
 		if rc.Change == nil {
 			continue
 		}
-		a := rc.Change.Actions
-		imported := rc.Change.Importing != nil
-		if imported {
+		if rc.Change.Importing != nil {
 			sum.Import++
 			sum.Imports = append(sum.Imports, runnerapi.Import{To: rc.Address, ID: rc.Change.Importing.ID})
 		}
-		var action string
-		switch {
-		case a.Replace():
+		action, ok := actionOf(rc)
+		switch action {
+		case "replace":
 			sum.Add++
 			sum.Destroy++
-			action = "replace"
-		case a.Create():
+		case "create":
 			sum.Add++
-			action = "create"
-		case a.Update():
+		case "update":
 			sum.Change++
-			action = "update"
-		case a.Delete():
+		case "delete":
 			sum.Destroy++
-			action = "delete"
-		case imported: // no changes otherwise
-			action = "import"
-		default: // no-op, read, forget
-			continue
 		}
-		sum.Changes = append(sum.Changes, runnerapi.Change{Address: rc.Address, Action: action})
+		if ok {
+			sum.Changes = append(sum.Changes, runnerapi.Change{Address: rc.Address, Action: action})
+		}
 	}
 	return sum
+}
+
+// actionOf is what a plan does to a resource, as the run page says it; ok false: nothing (no-op, read, forget).
+func actionOf(rc *tfjson.ResourceChange) (action string, ok bool) {
+	if rc.Change == nil {
+		return "", false
+	}
+	switch a := rc.Change.Actions; {
+	case a.Replace():
+		return "replace", true
+	case a.Create():
+		return "create", true
+	case a.Update():
+		return "update", true
+	case a.Delete():
+		return "delete", true
+	case rc.Change.Importing != nil: // no changes otherwise
+		return "import", true
+	}
+	return "", false
 }
 
 // counts is Terraform's "Plan:" line for sum.

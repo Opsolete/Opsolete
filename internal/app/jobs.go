@@ -72,7 +72,7 @@ func (a *App) ClaimJob(ctx context.Context, runner storage.Runner) (body []byte,
 		fctx := context.WithoutCancel(ctx)
 		ferr := a.Store.AckJob(fctx, j.RunID, j.LeaseID, LeaseTTL)
 		if ferr == nil {
-			_, ferr = a.Store.FinishJob(fctx, j.RunID, j.LeaseID, "failed", err.Error(), nil, nil, nil, nil)
+			_, ferr = a.Store.FinishJob(fctx, j.RunID, j.LeaseID, "failed", err.Error(), nil, nil, nil, nil, nil)
 		}
 		if ferr != nil {
 			a.Log.Error("fail job", "run", j.RunID, "err", ferr)
@@ -190,9 +190,12 @@ func (a *App) FinishJob(ctx context.Context, runID uuid.UUID, lease string, req 
 			delete(req.Found, mod)
 		}
 	}
+	if len(req.Diff) > 0 {
+		req.Diff = a.maskDiff(ctx, runID, req.Diff)
+	}
 	// not canceled with the request: a job's result must survive a server restart
 	finish := func(ctx context.Context) (string, error) {
-		return a.Store.FinishJob(ctx, runID, lease, req.Status, req.Message, req.Outputs, req.Plan, req.Resources, req.Found)
+		return a.Store.FinishJob(ctx, runID, lease, req.Status, req.Message, req.Outputs, req.Plan, req.Resources, req.Found, req.Diff)
 	}
 	status, err := finish(context.WithoutCancel(ctx))
 	if err != nil {
@@ -316,4 +319,26 @@ func (a *App) maskRunOutputs(ctx context.Context, runID uuid.UUID, outputs map[s
 		a.Log.Error("open workspace secrets to mask outputs; all outputs hidden", "run", runID, "err", err)
 	}
 	return out
+}
+
+// maskDiff hides the diff's values that hold one of the run's workspace's secrets, as the runner does: the server
+// is the trust boundary. Without the secrets the diff is dropped (the log still has Terraform's plan).
+func (a *App) maskDiff(ctx context.Context, runID uuid.UUID, diff []runnerapi.ResourceDiff) []runnerapi.ResourceDiff {
+	run, _, err := a.Store.GetRun(ctx, runID)
+	var secrets mask.Masker
+	if err == nil {
+		secrets, err = a.workspaceMasker(ctx, run.WorkspaceID)
+	}
+	if err != nil {
+		a.Log.Error("open workspace secrets to mask the plan's diff; diff dropped", "run", runID, "err", err)
+		return nil
+	}
+	for i := range diff {
+		for j, at := range diff[i].Attrs {
+			if secrets.Hides(at.Before) || secrets.Hides(at.After) {
+				diff[i].Attrs[j].Before, diff[i].Attrs[j].After, diff[i].Attrs[j].Sensitive = "", "", true
+			}
+		}
+	}
+	return diff
 }

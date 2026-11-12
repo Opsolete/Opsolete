@@ -106,7 +106,8 @@ Test paths are relative to `internal/`, except `cmd/opsolete/…` (from the repo
 **C2. Auto-apply** — `full`
 - Workspace setting; an apply plan with changes goes straight to `apply_queued`. Destroys, refresh-only and rollout plans still ask.
 - One rule (`storage.afterPlan`): the reason a plan waits is stored and shown on the run page; status changes are typed events with an explicit effects list.
-- Coverage: `storage/runs_test.go:TestAfterPlan`, `TestTransitions`, `TestEffects`; `storage/configversions_test.go:TestRunStateUpgrade`; `http/flows_test.go:TestAutoApply` (apply plan → `apply_queued` without confirmation → applied; no changes → `no_changes`; plan-only → `planned`; destroy and rollout plans ask); `http/flows_test.go:TestRefreshOnlyRun` (refresh-only asks); `storage/jobs_test.go:TestAutoApplyAndDiscard`; `http/runs_test.go:TestWorkspaceFlow/a_destroy_plan_asks_even_with_auto-apply…`.
+- The plan's attribute changes per resource on the run page and in the API (`runner/diff.go`, masked again by the server).
+- Coverage: `runner/diff_test.go:TestPlanDiff`, `http/runs_test.go:TestPlanDiffPage` (a value holding a workspace secret hidden by the server), `e2e/e2e_test.go:TestRealRunner` (real Terraform's diff on the page), `storage/runs_test.go:TestAfterPlan`, `TestTransitions`, `TestEffects`; `storage/configversions_test.go:TestRunStateUpgrade`; `http/flows_test.go:TestAutoApply` (apply plan → `apply_queued` without confirmation → applied; no changes → `no_changes`; plan-only → `planned`; destroy and rollout plans ask); `http/flows_test.go:TestRefreshOnlyRun` (refresh-only asks); `storage/jobs_test.go:TestAutoApplyAndDiscard`; `http/runs_test.go:TestWorkspaceFlow/a_destroy_plan_asks_even_with_auto-apply…`.
 
 **C3. Discard** — `full`
 - `POST …/runs/{id}/discard` → `discarded`, plan artifacts deleted, workspace free.
@@ -590,3 +591,13 @@ Checked page by page against the code in Phase 8 step 4: the mismatches listed h
 Remaining, code rather than docs (not changed):
 
 - NixOS has no option for `METRICS_ADDR` or `SECRET_KEY_PREVIOUS` (documented: use `environment` / `secretFiles`).
+
+## S. JSON API
+
+**S1. `/api/v1`** — `full`
+- The UI's operations (templates and their forms, workspaces, adding and configuring templates, runs with their diff, confirm/discard/cancel) as JSON, by session or `terraform login` token, with the UI's access; errors `{"error", "fields"}`.
+- Coverage: `http/api_test.go:TestAPI` (typed inputs, validation fields, unknown field 400, diff, confirm, 404); `http/access_test.go:TestAccessMatrix` (every route × principal through user tokens); `http/endpoints_test.go:TestEndpointsDocumented`.
+
+**S2. Secrets kept when a form is refused** — `full`
+- A refused template or promote form carries typed secrets sealed in hidden drafts (user, page, field, 1 hour); never echoed in clear.
+- Coverage: `http/drafts_test.go:TestDrafts` (kept, not shown; moved or forged drafts ignored; the job gets the typed value).

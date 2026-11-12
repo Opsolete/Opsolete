@@ -366,6 +366,23 @@ func accessRows() []accessRow {
 		{"GET " + cw + "/state-versions/{version}/download", cid + "/state-versions/{sv}/download", "", onAPI, []int{401, 404, 403, 200, 200}, false},
 		{"POST " + cw + "/state-versions", cid + "/state-versions", `{"data":{"attributes":{"state":"eyJ2ZXJzaW9uIjo0fQ=="}}}`, onAPI, []int{401, 404, 403, 409, 409}, true},
 
+		// JSON API: the UI's rules, through user tokens (a session works too).
+		{"GET /api/v1/templates", "/api/v1/templates", "", onAPI, []int{401, 200, 200, 200, 200}, false},
+		{"GET /api/v1/templates/{id}", "/api/v1/templates/{tpl}", "", onAPI, []int{401, 200, 200, 200, 200}, false},
+		{"GET /api/v1/workspaces", "/api/v1/workspaces", "", onAPI, []int{401, 200, 200, 200, 200}, false},
+		{"POST /api/v1/workspaces", "/api/v1/workspaces", `{"name":"{ws}-api","project":"{proj}","template":"{tpl}","inputs":{"location":"westeurope"}}`,
+			onAPI, []int{401, 422, 422, 201, 201}, true},
+		{"GET /api/v1/workspaces/{name}", "/api/v1" + ws, "", onAPI, []int{401, 404, 200, 200, 200}, false},
+		{"POST /api/v1" + w + "/templates", "/api/v1" + ws + "/templates", `{"template":"{tpl}","inputs":{"location":"northeurope"}}`, onAPI, []int{401, 404, 403, 409, 409}, true},
+		{"GET /api/v1" + w + "/templates/{module}", "/api/v1" + ws + "/templates/{module}", "", onAPI, []int{401, 404, 403, 200, 200}, false},
+		{"PUT /api/v1" + w + "/templates/{module}", "/api/v1" + ws + "/templates/{module}", `{"inputs":{"location":"northeurope"}}`, onAPI, []int{401, 404, 403, 409, 409}, true},
+		{"GET /api/v1" + w + "/runs", "/api/v1" + ws + "/runs", "", onAPI, []int{401, 404, 200, 200, 200}, false},
+		{"POST /api/v1" + w + "/runs", "/api/v1" + ws + "/runs", `{"action":"plan"}`, onAPI, []int{401, 404, 403, 409, 409}, true},
+		{"GET /api/v1" + w + "/runs/{run}", "/api/v1" + ws + "/runs/{run}", "", onAPI, []int{401, 404, 200, 200, 200}, false},
+		{"POST /api/v1" + w + "/runs/{run}/confirm", "/api/v1" + ws + "/runs/{run}/confirm", "", onAPI, []int{401, 404, 403, 409, 409}, true},
+		{"POST /api/v1" + w + "/runs/{run}/discard", "/api/v1" + ws + "/runs/{run}/discard", "", onAPI, []int{401, 404, 403, 409, 409}, true},
+		{"POST /api/v1" + w + "/runs/{run}/cancel", "/api/v1" + ws + "/runs/{run}/cancel", `{}`, onAPI, []int{401, 404, 403, 200, 200}, true},
+
 		// UI: OAuth consent, account, organization, audit.
 		{"GET /oauth/authorization", "/oauth/authorization?client_id=terraform-cli&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A10000%2Flogin&state=s&code_challenge=c&code_challenge_method=S256", "", onUI, []int{302, 200, 200, 200, 200}, false},
 		{"POST /oauth/authorization", "/oauth/authorization?client_id=terraform-cli&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A10000%2Flogin&state=s&code_challenge=c&code_challenge_method=S256", "", onUI, []int{401, 303, 303, 303, 303}, false},

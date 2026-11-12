@@ -570,3 +570,25 @@ func TestRemovedLog(t *testing.T) {
 		t.Errorf("stream: %q", s)
 	}
 }
+
+// TestPlanDiffPage: a plan's attribute changes are on its run page for readers, like the log; a value holding a
+// workspace secret is hidden by the server too, whatever the runner sent.
+func TestPlanDiffPage(t *testing.T) {
+	_, _, h, r := flowServer(t)
+	ws := "pd-" + strings.ToLower(newID()[:8])
+	run := greetingWorkspace(t, h, ws, false)
+	if rec := post(h, "/workspaces/"+ws+"/variables", url.Values{"category": {"env"}, "key": {"TOKEN"}, "value": {"hunter2-secret"},
+		"sensitive": {"on"}}); rec.Code != http.StatusSeeOther {
+		t.Fatalf("variable: %d %s", rec.Code, rec.Body.String())
+	}
+	r.claim(t, run, "plan")
+	r.finish(t, `{"status": "succeeded", "plan": {"add": 0, "change": 1, "destroy": 0, "changes": [{"address": "x.y", "action": "update"}]},
+		"diff": [{"address": "x.y", "action": "update", "attrs": [
+			{"path": "size", "before": "\"s\"", "after": "\"m\"", "has_before": true, "has_after": true},
+			{"path": "cmd", "before": "\"echo hunter2-secret\"", "after": "\"x\"", "has_before": true, "has_after": true}]}]}`)
+	page := get(h, "/workspaces/"+ws+"/runs/"+run).Body.String()
+	if !strings.Contains(page, `<code>size</code>`) || !strings.Contains(page, `<code>&#34;m&#34;</code>`) || !strings.Contains(page, "(sensitive)") ||
+		strings.Contains(page, "hunter2-secret") {
+		t.Fatalf("run page:\n%s", page)
+	}
+}

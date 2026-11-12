@@ -417,3 +417,17 @@ func (s *Store) RunFound(ctx context.Context, runID uuid.UUID) (map[string]Found
 	}
 	return found, nil
 }
+
+// RunDiff is run runID's plan's attribute changes per resource; nil none (no changes, or planned before
+// diffs were kept). ErrNotFound: no such run.
+func (s *Store) RunDiff(ctx context.Context, runID uuid.UUID) ([]runnerapi.ResourceDiff, error) {
+	raw, err := s.q.RunDiff(ctx, runID)
+	if err != nil {
+		return nil, notFound(err)
+	}
+	var out []runnerapi.ResourceDiff
+	if raw != nil {
+		err = json.Unmarshal(raw, &out)
+	}
+	return out, err
+}

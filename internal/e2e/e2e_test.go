@@ -207,7 +207,9 @@ func TestRealRunner(t *testing.T) {
 	t.Run("create a workspace from the template: the runner plans it", func(t *testing.T) {
 		runOf(postForm(t, "/templates/greeting", url.Values{"ops-workspace": {ws}, "greeting": {"hi"}, "name": {"Opsolete"}}))
 		await(t, storage.NeedsConfirmation)
-		if p := page(t, "/workspaces/"+ws+"/runs/"+runID.String()); !strings.Contains(p, `<span class="change create">+1</span>`) {
+		// the plan's attribute changes: what Terraform plans for the resource, an id it knows only after apply
+		if p := page(t, "/workspaces/"+ws+"/runs/"+runID.String()); !strings.Contains(p, `<span class="change create">+1</span>`) ||
+			!strings.Contains(p, `<details class="attrs">`) || !strings.Contains(p, "hi, Opsolete!") || !strings.Contains(p, "(known after apply)") {
 			t.Fatalf("plan page: %s", p)
 		}
 	})

@@ -186,7 +186,7 @@ func TestPromote(t *testing.T) {
 		if err := a.Store.AckJob(ctx, j.RunID, j.LeaseID, time.Minute); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := a.Store.FinishJob(ctx, run.ID, j.LeaseID, "succeeded", "", nil, &runnerapi.Plan{Add: 1, Destroy: 2}, nil, nil); err != nil {
+		if _, err := a.Store.FinishJob(ctx, run.ID, j.LeaseID, "succeeded", "", nil, &runnerapi.Plan{Add: 1, Destroy: 2}, nil, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 		if r, _, _ := a.Store.GetRun(ctx, run.ID); r.Status != storage.NeedsConfirmation {

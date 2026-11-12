@@ -98,6 +98,38 @@ type FinishRequest struct {
 	// attribute, with that attribute's real value (list inputs: whole, their rows' fields filled in). Never
 	// sensitive values. The form's "Use found values".
 	Found map[string]map[string]any `json:"found,omitempty"`
+	// Diff: a plan phase's attribute changes per resource (Plan.Changes' resources, in their order), what
+	// Terraform's plan output shows: sensitive values hidden, secrets masked, at most MaxDiffAttrs per resource.
+	Diff []ResourceDiff `json:"diff,omitempty"`
+}
+
+// MaxDiffAttrs and MaxDiffValue bound a ResourceDiff: a plan's diff is shown on the run page, not a dump.
+const (
+	MaxDiffAttrs = 200
+	MaxDiffValue = 1024 // bytes of one value's text
+)
+
+// ResourceDiff is one resource's attribute changes in a plan.
+type ResourceDiff struct {
+	Address   string `json:"address"`
+	Action    string `json:"action"`           // as Change.Action
+	Reason    string `json:"reason,omitempty"` // Terraform's action_reason (e.g. replace_because_cannot_update)
+	ImportID  string `json:"import_id,omitempty"`
+	Attrs     []Attr `json:"attrs"`
+	Truncated bool   `json:"truncated,omitempty"` // more than MaxDiffAttrs changed attributes
+}
+
+// Attr is one changed attribute, by path (a.b[0].c): its values as text (JSON for a string's quotes,
+// numbers, bools and null are as JSON writes them).
+type Attr struct {
+	Path      string `json:"path"`
+	Before    string `json:"before,omitempty"` // "" and !HasBefore: absent
+	After     string `json:"after,omitempty"`
+	HasBefore bool   `json:"has_before,omitempty"`
+	HasAfter  bool   `json:"has_after,omitempty"`
+	Unknown   bool   `json:"unknown,omitempty"`   // known after apply
+	Sensitive bool   `json:"sensitive,omitempty"` // a sensitive value: neither side is shown
+	Forces    bool   `json:"forces,omitempty"`    // changing it forces replacement
 }
 
 // Plan is what a plan will do: counts, resource addresses and the IDs it imports, never other values.

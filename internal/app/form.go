@@ -20,6 +20,7 @@ type Field struct {
 	Set     bool   // sensitive: a value is stored; left empty, it's kept
 	Found   string // what an import plan found for it, as the form shows it; "" none
 	Hint    string // what the surface says under it instead of the sensitive default; "" none
+	Draft   string // sensitive: what the user typed before the form was refused, sealed (the UI's drafts); "" none
 }
 
 // Form is a template's form: its fields and what they share.
