@@ -3,12 +3,13 @@ title: Kubernetes (Helm)
 weight: 2
 ---
 
-The [Helm chart](https://github.com/Opsolete/Helm-charts) runs the app and the runners as two Deployments. Put the secrets in a Secret with the keys `DATABASE_URL`, `SECRET_KEY` and `OIDC_CLIENT_SECRET` (or manage it with sops or External Secrets):
+The [Helm chart](https://github.com/Opsolete/Helm-charts) runs the app and the runners as two Deployments. Put the secrets in a Secret with the keys `DATABASE_URL`, `SECRET_KEY`, `RUNNER_TOKEN` (the chart's runners' token: the app registers it at start as runner `runner.name` in `runner.pool`) and `OIDC_CLIENT_SECRET` (or manage it with sops or External Secrets):
 
 ```sh
 kubectl create secret generic opsolete \
   --from-literal=DATABASE_URL=postgres://opsolete:…@postgres:5432/opsolete \
   --from-literal=SECRET_KEY=$(openssl rand -base64 32) \
+  --from-literal=RUNNER_TOKEN=$(openssl rand -hex 32) \
   --from-literal=OIDC_CLIENT_SECRET=…
 ```
 
