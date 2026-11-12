@@ -26,6 +26,7 @@ import (
 	"github.com/opsolete/opsolete/internal/config"
 	"github.com/opsolete/opsolete/internal/mask"
 	"github.com/opsolete/opsolete/internal/runnerapi"
+	"github.com/opsolete/opsolete/internal/secrets"
 )
 
 type Runner struct {
@@ -318,18 +319,49 @@ func (r *Runner) rescueState(ctx context.Context, tf *tfProc, job runnerapi.Job,
 		fmt.Fprintln(w, "\n==> state saved")
 		return "the state was saved on a second try"
 	}
+	// Jobs run as the runner's user, so the next job (any workspace's) could read a plain file: it's
+	// sealed with the runner token, which jobs can't read (unset, process not dumpable).
 	// shortcut: kept in the runner's temp dir, which an ephemeral container loses on restart; upload it
 	// to the server instead if that matters.
-	kept := filepath.Join(os.TempDir(), "opsolete-errored-"+job.RunID+".tfstate")
-	if err := os.Rename(file, kept); err != nil {
+	kept := filepath.Join(os.TempDir(), "opsolete-errored-"+job.RunID+".tfstate.sealed")
+	if err := sealFile(file, kept, r.Token); err != nil {
 		r.Log.Error("state the apply couldn't save is lost", "run", job.RunID, "err", err)
 		return "the state couldn't be saved and is lost: the resources this apply changed may be untracked"
 	}
-	os.Chmod(kept, 0o600) // it holds secrets
-	r.Log.Error("state the apply couldn't save kept on the runner: push it with terraform state push", "run", job.RunID, "file", kept)
-	msg := fmt.Sprintf("the state couldn't be saved; it is kept on runner %s at %s: push it with terraform state push", r.Name, kept)
+	push := fmt.Sprintf("OPS_RUNNER_TOKEN=… opsolete unseal-state %s | terraform state push -", kept)
+	r.Log.Error("state the apply couldn't save kept sealed on the runner", "run", job.RunID, "file", kept, "push", push)
+	msg := fmt.Sprintf("the state couldn't be saved; it is kept sealed on runner %s: push it with %s", r.Name, push)
 	fmt.Fprintf(w, "\n==> %s\n", msg)
 	return msg
+}
+
+// erroredStateAD binds a sealed errored state to its use: another sealed value doesn't open as one.
+const erroredStateAD = "opsolete errored state"
+
+// sealFile writes src sealed with the runner token to dst (src stays: it's in the workdir, deleted after the job).
+func sealFile(src, dst, token string) error {
+	b, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	k, err := secrets.New(token, "")
+	if err != nil {
+		return err
+	}
+	sealed, err := k.Seal(string(b), erroredStateAD)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, sealed, 0o600)
+}
+
+// UnsealState opens a state rescueState kept, with the token of the runner that kept it.
+func UnsealState(sealed []byte, token string) (string, error) {
+	k, err := secrets.New(token, "")
+	if err != nil {
+		return "", err
+	}
+	return k.Open(sealed, erroredStateAD)
 }
 
 // plan saves a plan; with changes it reports a summary and uploads the plan and the lock file

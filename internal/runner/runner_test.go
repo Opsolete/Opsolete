@@ -150,13 +150,19 @@ func TestErroredState(t *testing.T) {
 	f.do(t, r, job("twice", "plan", "apply", src, map[string]any{"greeting": "hi"}))
 	f.failWrites = 2 // the push fails too
 	res, logs = f.do(t, r, job("twice", "apply", "apply", src, map[string]any{"greeting": "hi"}))
-	kept := filepath.Join(os.TempDir(), "opsolete-errored-twice.tfstate")
+	kept := filepath.Join(os.TempDir(), "opsolete-errored-twice.tfstate.sealed")
 	b, err := os.ReadFile(kept)
-	if res.Status != "failed" || !strings.Contains(res.Message, kept) || err != nil || !strings.Contains(string(b), `"hi"`) {
-		t.Fatalf("kept: %+v %v\n%s", res, err, logs)
+	if res.Status != "failed" || !strings.Contains(res.Message, kept) || err != nil || strings.Contains(string(b), `"hi"`) {
+		t.Fatalf("kept sealed: %+v %v\n%s", res, err, logs)
 	}
 	if fi, _ := os.Stat(kept); fi.Mode().Perm() != 0o600 {
 		t.Errorf("kept state mode %v", fi.Mode().Perm())
+	}
+	if plain, err := UnsealState(b, r.Token); err != nil || !strings.Contains(plain, `"hi"`) {
+		t.Errorf("unseal with the runner token: %v", err)
+	}
+	if _, err := UnsealState(b, "another-runner-token-another-runner-token"); err == nil {
+		t.Error("unsealed with another token")
 	}
 }
 
