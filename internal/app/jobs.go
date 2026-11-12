@@ -100,11 +100,16 @@ func (a *App) assembleJob(ctx context.Context, j storage.Job) ([]byte, error) {
 	for _, m := range j.Modules {
 		in, sec, oerr := a.OpenInputs(m.Inputs, j.WorkspaceID, m.Name)
 		err, secrets = cmp.Or(err, oerr), append(secrets, sec...)
+		var t templates.Template // what the module runs: the template at its pinned version
+		var known bool
 		if err == nil {
-			in, err = a.withEnvironmentValues(ctx, m.TemplateID, in, envValues)
+			t, known, err = a.TemplateAt(ctx, m.TemplateID, m.ModuleSource, m.ModuleRef)
 		}
 		if err == nil {
-			in, err = a.withWorkspaceVars(ctx, m.TemplateID, m.ModuleSource, m.ModuleRef, in, vars)
+			in, err = withEnvironmentValues(t, known, in, m.Follows, envValues)
+		}
+		if err == nil {
+			in, err = a.withWorkspaceVars(ctx, t, m.ModuleSource, m.ModuleRef, in, vars)
 		}
 		mods = append(mods, runnerapi.Module{Name: m.Name, Inputs: in,
 			Source: a.Registry.RunnerSource(templates.Module{Source: m.ModuleSource, Ref: m.ModuleRef}, runnerSrcTTL)})

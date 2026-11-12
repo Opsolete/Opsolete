@@ -56,26 +56,8 @@
   {{if .Asks}}
   <div class="rows-head"><h2>Values for {{.Target.Name}}</h2><p class="hint"><span class="req" aria-hidden="true">*</span> Required</p></div>
   <div class="rows">
-  {{range $m := .Modules}}{{range .Inputs}}{{if .Field}}{{$err := fieldError $f .Field}}
-    <div class="row{{if $err}} invalid{{end}}">
-      <label for="{{.Field}}">{{$m.Module}}: {{.Title}}{{if .Required}} <span class="req" aria-hidden="true">*</span>{{end}}</label>
-      {{if eq .Type "bool"}}
-      <input type="checkbox" id="{{.Field}}" name="{{.Field}}"{{if eq (print (value $f .Field .Value)) "on" "true"}} checked{{end}}{{aria $f .Field}}>
-      {{else if eq .Type "select"}}{{$cur := print (value $f .Field .Value)}}
-      <select id="{{.Field}}" name="{{.Field}}"{{aria $f .Field}}>
-        {{if not .Required}}<option value="">—</option>{{end}}
-        {{range .Options}}<option value="{{.Value}}"{{if eq .Value $cur}} selected{{end}}>{{.Text}}</option>{{end}}
-      </select>
-      {{else if .Sensitive}}
-      <input id="{{.Field}}" name="secret.{{.Field}}" type="password" autocomplete="new-password"{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}{{aria $f .Field (print .Field "-hint")}}>
-      <p class="hint" id="{{.Field}}-hint">Sensitive: {{$.P.Target.Name}} has no value of its own, and {{$.P.Source.Name}}'s is never copied.</p>
-      {{else}}
-      <input id="{{.Field}}" name="{{.Field}}" value="{{value $f .Field .Value}}" autocomplete="off" spellcheck="false"
-        {{if eq .Type "number"}}type="number" step="any" inputmode="decimal"{{end}}{{if .Pattern}} pattern="{{.Pattern}}"{{end}}{{if .Required}} required{{end}}{{aria $f .Field (print .Field "-hint")}}>
-      <p class="hint" id="{{.Field}}-hint">{{if .PerEnvironment}}Per environment: project {{$.P.Target.ProjectName}} sets no value and {{$.P.Target.Name}} has none of its own.{{else}}{{$.P.Source.Name}} has no value to copy.{{end}}</p>
-      {{end}}
-      {{template "fielderror" (dict "F" $f "N" .Field)}}
-    </div>
+  {{range $m := .Modules}}{{range .Inputs}}{{if .Field}}
+    {{template "field" (dict "F" $f "X" .Form "V" nil "By" "")}}
   {{end}}{{end}}{{end}}
   </div>
   {{end}}

@@ -193,17 +193,19 @@ func environmentMap(list []storage.EnvironmentValue, err error) (EnvironmentMap,
 	return m, err
 }
 
-// Locked returns the values (canonical, by input name) env sets for t's per-environment inputs in a workspace whose
-// own values are own (stored, or found by an import plan): the inputs a form shows read-only, a save ignores
-// and runs take from the project. A keep_own value doesn't lock an input whose own value differs: that one is kept.
-func (env EnvironmentMap) Locked(t templates.Template, own map[string]any) map[string]string {
+// Locked returns the values (canonical, by input name) env sets for t's per-environment inputs in a module with
+// the inputs own (stored, and what an import plan found that the form took) that follows the project for follows
+// (storage.WorkspaceTemplate.Follows): the inputs a form shows read-only, a save ignores and runs take from the
+// project. A keep_own value locks an input only where the module has no value of its own for it, or follows the
+// project for it (a save with the input locked decided that).
+func (env EnvironmentMap) Locked(t templates.Template, own map[string]any, follows []string) map[string]string {
 	out := map[string]string{}
 	for _, in := range t.Inputs {
 		v, ok := env[t.ID][in.Name]
 		if !ok || !in.PerEnvironment {
 			continue
 		}
-		if o, has := own[in.Name]; v.KeepOwn && has && templates.FormatValue(o) != v.Value {
+		if _, has := own[in.Name]; v.KeepOwn && has && !slices.Contains(follows, in.Name) {
 			continue
 		}
 		out[in.Name] = v.Value
@@ -211,10 +213,22 @@ func (env EnvironmentMap) Locked(t templates.Template, own map[string]any) map[s
 	return out
 }
 
+// LockedForm is Locked for a module's form: its stored inputs old and follows, with found (what an import plan
+// found that the form takes) as its own, also where it followed the project.
+func (env EnvironmentMap) LockedForm(t templates.Template, old map[string]any, follows []string, found map[string]any) map[string]string {
+	own := maps.Clone(old)
+	if own == nil {
+		own = map[string]any{}
+	}
+	maps.Copy(own, found)
+	follows = slices.DeleteFunc(slices.Clone(follows), func(name string) bool { _, f := found[name]; return f })
+	return env.Locked(t, own, follows)
+}
+
 // Describe is t.Describe(stored) with the values env (project's) sets for t's per-environment
-// inputs in their place: what the workspace runs.
-func (env EnvironmentMap) Describe(t templates.Template, stored map[string]any, project string) []templates.StoredValue {
-	locked := env.Locked(t, stored)
+// inputs in their place (the module follows the project for follows): what the workspace runs.
+func (env EnvironmentMap) Describe(t templates.Template, stored map[string]any, follows []string, project string) []templates.StoredValue {
+	locked := env.Locked(t, stored, follows)
 	stored = maps.Clone(stored)
 	for name := range locked {
 		stored[name] = "" // listed in the form's order, also without a value of its own
@@ -261,23 +275,17 @@ func (a *App) ProjectEnvironment(ctx context.Context, projectID uuid.UUID) (Envi
 
 // withEnvironmentValues puts into an added template's inputs (in: stored and opened) the values the
 // workspace's project sets for its per-environment inputs (env, the project's values at claim time),
-// over the workspace's own: see withWorkspaceVars for the whole precedence. An input the form would
-// hide (show_if, evaluated with the project's values) isn't set, as the form wouldn't send it. A
-// template no longer in the catalog has no known per-environment inputs: its stored inputs apply.
-// A project value the template's current rules reject fails the job: deploying the workspace's own
-// value instead in, say, production would be worse than not running.
-func (a *App) withEnvironmentValues(ctx context.Context, templateID string, in map[string]any, env EnvironmentMap) (map[string]any, error) {
-	if len(env[templateID]) == 0 {
+// over the workspace's own: see withWorkspaceVars for the whole precedence. t is the template at the
+// module version the workspace runs (TemplateAt; ok false: no longer in the catalog, so it has no known
+// per-environment inputs and its stored inputs apply). An input the form would hide (show_if,
+// evaluated with the project's values) isn't set, as the form wouldn't send it. A project value that
+// version's rules reject fails the job: deploying the workspace's own value instead in, say,
+// production would be worse than not running.
+func withEnvironmentValues(t templates.Template, ok bool, in map[string]any, follows []string, env EnvironmentMap) (map[string]any, error) {
+	if !ok || len(env[t.ID]) == 0 {
 		return in, nil
 	}
-	t, err := a.Template(ctx, templateID)
-	if errors.Is(err, ErrNotFound) {
-		return in, nil
-	}
-	if err != nil {
-		return in, err
-	}
-	locked := env.Locked(t, in)
+	locked := env.Locked(t, in, follows)
 	if len(locked) == 0 {
 		return in, nil
 	}

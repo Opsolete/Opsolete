@@ -6,12 +6,12 @@ VALUES (sqlc.arg(workspace_id)::uuid, sqlc.narg(parent_id)::uuid, sqlc.arg(sourc
 RETURNING id;
 
 -- name: InsertConfigModule :exec
-INSERT INTO configuration_modules (cv_id, name, template_id, module_source, module_ref, inputs)
+INSERT INTO configuration_modules (cv_id, name, template_id, module_source, module_ref, inputs, follows)
 VALUES (sqlc.arg(cv_id)::uuid, sqlc.arg(name)::text, sqlc.arg(template_id)::text, sqlc.arg(module_source)::text,
-    sqlc.arg(module_ref)::text, sqlc.arg(inputs)::jsonb);
+    sqlc.arg(module_ref)::text, sqlc.arg(inputs)::jsonb, sqlc.arg(follows)::text[]);
 
 -- name: ConfigModules :many
-SELECT name, template_id, module_source, module_ref, inputs FROM configuration_modules WHERE cv_id = sqlc.arg(cv_id)::uuid ORDER BY name;
+SELECT name, template_id, module_source, module_ref, inputs, follows FROM configuration_modules WHERE cv_id = sqlc.arg(cv_id)::uuid ORDER BY name;
 
 -- name: CurrentConfig :one
 -- The row lock keeps runs from being queued meanwhile (their FK check waits) until the transaction ends.

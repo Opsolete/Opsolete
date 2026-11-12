@@ -1,8 +1,12 @@
 package httpserver
 
 import (
+	"encoding/json"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/opsolete/opsolete/internal/app"
@@ -93,15 +97,60 @@ func (s *Server) promote(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	to, values := promoteTarget(f), map[string]string{}
-	for k := range f {
-		if !promoteFields[k] {
-			values[strings.TrimPrefix(k, secretPrefix)] = f.Get(k)
-		}
-	}
+	to, values := promoteTarget(f), promoteValues(f)
 	p, run, err := s.App.Promote(r.Context(), actor(r), r.PathValue("name"), to, values, f.Get("digest"))
 	if s.failed(w, r, err, "promote", f, func(status int, fs *formState) { s.renderPromote(w, r, status, to, values, fs) }) {
 		return
 	}
 	http.Redirect(w, r, "/workspaces/"+p.Target.Name+"/runs/"+run.ID.String(), http.StatusSeeOther)
+}
+
+// promoteValues reads a posted promotion's asked-for values by field (<module>.<input>), as formValues reads a
+// template form's: a list input's rows (<field>.<row>.<name>) and an object input's fields (<field>.<name>) as
+// JSON, rows left wholly empty dropped.
+func promoteValues(f url.Values) map[string]string {
+	values := map[string]string{}
+	rows := map[string]map[int]map[string]string{}
+	objects := map[string]map[string]string{}
+	for k := range f {
+		if promoteFields[k] {
+			continue
+		}
+		name := strings.TrimPrefix(k, secretPrefix)
+		parts := strings.Split(name, ".")
+		switch n, err := strconv.Atoi(parts[min(2, len(parts)-1)]); {
+		case len(parts) == 4 && err == nil && n >= 0: // a list's row field
+			field := parts[0] + "." + parts[1]
+			if rows[field] == nil {
+				rows[field] = map[int]map[string]string{}
+			}
+			if rows[field][n] == nil {
+				rows[field][n] = map[string]string{}
+			}
+			rows[field][n][parts[3]] = f.Get(k)
+		case len(parts) == 3: // an object's field
+			field := parts[0] + "." + parts[1]
+			if objects[field] == nil {
+				objects[field] = map[string]string{}
+			}
+			objects[field][parts[2]] = f.Get(k)
+		default:
+			values[name] = f.Get(k)
+		}
+	}
+	for field, byRow := range rows {
+		out := []map[string]string{}
+		for _, n := range slices.Sorted(maps.Keys(byRow)) {
+			if slices.ContainsFunc(slices.Collect(maps.Values(byRow[n])), func(v string) bool { return strings.TrimSpace(v) != "" }) {
+				out = append(out, byRow[n])
+			}
+		}
+		b, _ := json.Marshal(out)
+		values[field] = string(b)
+	}
+	for field, obj := range objects {
+		b, _ := json.Marshal(obj)
+		values[field] = string(b)
+	}
+	return values
 }

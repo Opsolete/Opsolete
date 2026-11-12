@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"io/fs"
+	"slices"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -158,5 +159,39 @@ func TestRunStateUpgrade(t *testing.T) {
 	if reasons["00000000-0000-0000-0000-0000000000d1"] != ReasonPromotion || reasons["00000000-0000-0000-0000-0000000000a2"] != ReasonRefresh ||
 		reasons["00000000-0000-0000-0000-0000000000a1"] != "" {
 		t.Fatalf("reasons: %v", reasons)
+	}
+}
+
+// TestFollowsUpgrade: migration 012 records what comparing values decided until then: a module whose stored value
+// equals its project's keep_own value follows it; others keep their own.
+func TestFollowsUpgrade(t *testing.T) {
+	ctx := context.Background()
+	conn, apply := migratedTo(t, "012_follows.sql")
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := conn.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("%s: %v", sql, err)
+		}
+	}
+	exec(`INSERT INTO workspaces (id, name, project_id) VALUES ('00000000-0000-0000-0000-00000000000a', 'w', (SELECT default_project_id FROM organization))`)
+	exec(`INSERT INTO configuration_versions (id, workspace_id, source) VALUES ('00000000-0000-0000-0000-0000000000c1', '00000000-0000-0000-0000-00000000000a', 'form')`)
+	exec(`INSERT INTO configuration_modules (cv_id, name, template_id, module_source, module_ref, inputs) VALUES
+		('00000000-0000-0000-0000-0000000000c1', 'same', 'vm', 'x', 'v1', '{"subnet": "prd", "size": "s"}'),
+		('00000000-0000-0000-0000-0000000000c1', 'own', 'vm', 'x', 'v1', '{"subnet": "mine"}')`)
+	exec(`UPDATE workspaces SET current_cv_id = '00000000-0000-0000-0000-0000000000c1'`)
+	exec(`INSERT INTO environment_values (project_id, template_id, input_name, value, keep_own) VALUES
+		((SELECT default_project_id FROM organization), 'vm', 'subnet', 'prd', true),
+		((SELECT default_project_id FROM organization), 'vm', 'size', 's', false)`)
+	apply("012_follows.sql")
+	follows := map[string][]string{}
+	rows, _ := conn.Query(ctx, `SELECT name, follows FROM workspace_templates`)
+	for rows.Next() {
+		var n string
+		var f []string
+		rows.Scan(&n, &f)
+		follows[n] = f
+	}
+	if len(follows) != 2 || !slices.Equal(follows["same"], []string{"subnet"}) || len(follows["own"]) != 0 {
+		t.Fatalf("follows: %v", follows)
 	}
 }

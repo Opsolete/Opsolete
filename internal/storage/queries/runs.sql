@@ -115,7 +115,7 @@ UPDATE workspaces SET state_lock = NULL, state_locked_at = NULL
 WHERE id = sqlc.arg(workspace_id)::uuid AND state_lock->>'OpsoleteRun' = sqlc.arg(run_id)::uuid::text;
 
 -- name: ListWorkspaceTemplates :many
-SELECT name, template_id, module_source, module_ref, inputs FROM workspace_templates
+SELECT name, template_id, module_source, module_ref, inputs, follows FROM workspace_templates
 WHERE workspace_id = sqlc.arg(workspace_id)::uuid ORDER BY name;
 
 -- Retention (storage.PruneRunLogs, storage.PruneSpeculativeRuns): at most lim runs per statement, so

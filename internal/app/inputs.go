@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -96,4 +97,40 @@ func (a *App) OpenInputs(inputs map[string]any, wsID uuid.UUID, module string) (
 		out[k] = val
 	}
 	return out, secrets, nil
+}
+
+// formSave is one save of a template module's inputs, the one pipeline of every surface that saves them: the
+// add and configure forms, a new workspace, a promotion and a rollout.
+type formSave struct {
+	T         templates.Template // resolved at the module version it saves
+	Raw       map[string]string  // the form's values by input name (sensitive ones as typed, "" to keep)
+	Old       map[string]any     // the module's stored inputs; nil for a new module
+	Follows   []string           // its per-environment inputs that followed the project (storage.WorkspaceTemplate.Follows)
+	Found     map[string]any     // what an import plan found that the form took: the module's own
+	Env       EnvironmentMap     // its project's values
+	Workspace uuid.UUID          // sensitive inputs are sealed to the workspace and module
+	Module    string
+}
+
+// saved is a formSave worked out.
+type saved struct {
+	Vals    map[string]any    // the inputs to store
+	Follows []string          // the per-environment inputs locked to the project's value, which it follows
+	Raw     map[string]string // the form's values with the project's in place: what show_if sees
+	Locked  map[string]string // the project's values (EnvironmentMap.Locked)
+	Errs    map[string]string // by input name; empty: it may be stored
+}
+
+// save locks the inputs the project sets (their posted values are ignored, the module keeps its own), validates
+// the rest (only the key input required while importing), seals the sensitive ones (empty keeps the stored value)
+// and records which inputs follow the project.
+func (a *App) save(s formSave) (saved, error) {
+	locked := s.Env.LockedForm(s.T, s.Old, s.Follows, s.Found)
+	raw := lockInputs(s.Raw, locked)
+	vals, errs := validate(s.T, raw)
+	if err := a.SealInputs(s.T, raw, vals, s.Old, errs, s.Workspace, s.Module); err != nil {
+		return saved{}, err
+	}
+	keepOwn(vals, errs, locked, s.Old)
+	return saved{Vals: vals, Follows: slices.Sorted(maps.Keys(locked)), Raw: raw, Locked: locked, Errs: errs}, nil
 }

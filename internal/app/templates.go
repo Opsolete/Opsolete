@@ -25,6 +25,17 @@ func (a *App) Template(ctx context.Context, id string) (templates.Template, erro
 	return a.Resolve(ctx, t)
 }
 
+// TemplateAt is catalog template id as it was at module version source/ref (resolved from that version's
+// variables): what a workspace that pins that version runs. ok false: id isn't in the catalog anymore.
+func (a *App) TemplateAt(ctx context.Context, id, source, ref string) (t templates.Template, ok bool, err error) {
+	if t, ok = a.Templates.Get(id); !ok {
+		return t, false, nil
+	}
+	t.Module = templates.Module{Source: source, Ref: ref}
+	t, err = a.Resolve(ctx, t)
+	return t, true, err
+}
+
 // Resolve returns t with its inputs resolved from the variables of the registry module version it
 // pins (registry.Resolve), so the form can't drift from the module's variables.tf.
 func (a *App) Resolve(ctx context.Context, t templates.Template) (templates.Template, error) {
@@ -90,30 +101,26 @@ func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, 
 	if err != nil {
 		return module, storage.Run{}, err
 	}
-	t, adding, old := f.Template, f.Current == nil, map[string]any{}
+	t, adding := f.Template, f.Current == nil
+	s := formSave{T: t, Raw: raw, Found: found, Workspace: f.Workspace.ID, Module: module}
 	if adding {
-		module = defaultModule(t, raw, f.Added)
+		s.Module = defaultModule(t, raw, f.Added)
 	} else {
-		old = f.Current.Inputs
+		s.Old, s.Follows = f.Current.Inputs, f.Current.Follows
 	}
-	env, err := a.ProjectEnvironment(ctx, f.Workspace.ProjectID)
+	module = s.Module
+	if s.Env, err = a.ProjectEnvironment(ctx, f.Workspace.ProjectID); err != nil {
+		return module, storage.Run{}, err
+	}
+	sv, err := a.save(s)
 	if err != nil {
 		return module, storage.Run{}, err
 	}
-	own := maps.Clone(old)
-	maps.Copy(own, found)
-	locked := env.Locked(t, own)
-	raw = lockInputs(raw, locked)
-	vals, errs := validate(t, raw)
-	if err := a.SealInputs(t, raw, vals, old, errs, f.Workspace.ID, module); err != nil {
-		return module, storage.Run{}, err
-	}
-	keepOwn(vals, errs, locked, old)
-	if len(errs) > 0 {
-		return module, storage.Run{}, &ValidationError{Fields: errs}
+	if len(sv.Errs) > 0 {
+		return module, storage.Run{}, &ValidationError{Fields: sv.Errs}
 	}
 	run, err := a.Store.SetWorkspaceTemplate(ctx, f.Workspace.ID, storage.WorkspaceTemplate{Name: module, TemplateID: t.ID,
-		ModuleSource: t.Module.Source, ModuleRef: t.Module.Ref, Inputs: vals}, adding, actor.UserID)
+		ModuleSource: t.Module.Source, ModuleRef: t.Module.Ref, Inputs: sv.Vals, Follows: sv.Follows}, adding, actor.UserID)
 	if errors.Is(err, storage.ErrExists) {
 		return module, run, &ValidationError{Message: "this workspace already has a template named " + module + " (added meanwhile), try again"}
 	}

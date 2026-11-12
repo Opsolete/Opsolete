@@ -166,14 +166,19 @@ func (s *Server) renderWorkspace(w http.ResponseWriter, r *http.Request, tab, su
 			return
 		}
 		for _, a := range added {
-			t, ok := s.App.Templates.Get(a.TemplateID)
+			cur, ok := s.App.Templates.Get(a.TemplateID)
 			if ok {
-				o.TemplateNames[t.ID] = t.Name
+				o.TemplateNames[cur.ID] = cur.Name
 			}
-			o.AddedInputs[a.Name] = env.Describe(t, a.Inputs, ws.ProjectName)
-			if ok && (t.Module.Source != a.ModuleSource || t.Module.Ref != a.ModuleRef) {
-				o.Updates[a.Name] = t.Module.Ref
+			if ok && (cur.Module.Source != a.ModuleSource || cur.Module.Ref != a.ModuleRef) {
+				o.Updates[a.Name] = cur.Module.Ref
 			}
+			t, _, err := s.App.TemplateAt(ctx, a.TemplateID, a.ModuleSource, a.ModuleRef) // what it runs
+			if err != nil {
+				s.internalError(w, "template", err)
+				return
+			}
+			o.AddedInputs[a.Name] = env.Describe(t, a.Inputs, a.Follows, ws.ProjectName)
 		}
 		if len(runs) > 0 {
 			d, err := s.App.Run(ctx, actor(r), ws.Name, runs[0].ID, app.LevelRead)

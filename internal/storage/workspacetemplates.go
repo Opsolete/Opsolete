@@ -19,6 +19,7 @@ type WorkspaceTemplate struct {
 	ModuleSource string
 	ModuleRef    string
 	Inputs       map[string]any
+	Follows      []string // per-environment inputs that take the project's value although it lets workspaces keep their own
 }
 
 // TemplateInputs is one module's inputs in a configuration version as stored, for re-sealing them under a new
@@ -57,7 +58,7 @@ func workspaceTemplates(ctx context.Context, q *db.Queries, workspaceID uuid.UUI
 	}
 	out := make([]WorkspaceTemplate, 0, len(rows))
 	for _, r := range rows {
-		t := WorkspaceTemplate{Name: r.Name, TemplateID: r.TemplateID, ModuleSource: r.ModuleSource, ModuleRef: r.ModuleRef}
+		t := WorkspaceTemplate{Name: r.Name, TemplateID: r.TemplateID, ModuleSource: r.ModuleSource, ModuleRef: r.ModuleRef, Follows: nilIfEmpty(r.Follows)}
 		if err := json.Unmarshal(r.Inputs, &t.Inputs); err != nil {
 			return nil, err
 		}

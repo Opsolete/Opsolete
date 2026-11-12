@@ -25,8 +25,9 @@ func (s *Server) loadTemplateForm(w http.ResponseWriter, r *http.Request) (formP
 	// TemplateForm needs operate: the menu offers the settings
 	page := formPage{Page: workspaceNav(r.PathValue("name"), "templates", "", true), T: f.Template, Configure: &f.Workspace, Module: r.PathValue("module"), Adding: f.Current == nil}
 	var inputs map[string]any
+	var follows []string
 	if f.Current != nil {
-		inputs, page.Cur = f.Current.Inputs, templates.Module{Source: f.Current.ModuleSource, Ref: f.Current.ModuleRef}
+		inputs, follows, page.Cur = f.Current.Inputs, f.Current.Follows, templates.Module{Source: f.Current.ModuleSource, Ref: f.Current.ModuleRef}
 	}
 	own := inputs
 	if id, err := uuid.Parse(r.URL.Query().Get("found")); err == nil { // "Use found values" of import plan id
@@ -44,7 +45,7 @@ func (s *Server) loadTemplateForm(w http.ResponseWriter, r *http.Request) (formP
 	}
 	page.Values, page.Set = app.FormDefaults(f.Template, own)
 	page.importChoice(r)
-	if err := s.lock(r, &page, storage.Project{ID: f.Workspace.ProjectID, Name: f.Workspace.ProjectName}, own); err != nil {
+	if err := s.lock(r, &page, storage.Project{ID: f.Workspace.ProjectID, Name: f.Workspace.ProjectName}, inputs, follows); err != nil {
 		s.internalError(w, "environment values", err)
 		return formPage{}, false
 	}
