@@ -45,7 +45,10 @@
   <h2 id="found-head">{{if $read}}Importing{{else}}Not applied{{end}}</h2>
   <p>{{if $read}}This plan read the existing resources. {{end}}<strong>Change settings</strong> opens the template's form with
     what you entered for this run{{if $read}} and what its plan found{{end}}; fix what {{if eq $r.Status "errored"}}stopped it{{else}}it would still change{{end}}, and plan again.</p>
-  <form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/change"><button type="submit">Change settings</button></form>
+  {{if eq (len .Found) 1}}<form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/change"><button type="submit">Change settings</button></form>
+  {{else}}<ul>{{range .Found}}
+    <li><a href="/workspaces/{{$w.Name}}/templates/{{if .Added}}{{.Module}}?found={{$r.ID}}{{else}}new?template={{.TemplateID}}&amp;found={{$r.ID}}&amp;from={{.Module}}{{end}}">Change settings of {{.Module}}</a></li>{{end}}
+  </ul>{{end}}
 </section>
 {{end}}
 

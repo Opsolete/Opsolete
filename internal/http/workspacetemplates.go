@@ -39,8 +39,7 @@ func (s *Server) loadTemplateForm(w http.ResponseWriter, r *http.Request) (formP
 		if own == nil {
 			own = map[string]any{}
 		}
-		maps.Copy(own, page.Found)
-		own[app.ImportInput] = true // still importing what the plan didn't take over yet
+		maps.Copy(own, page.Found) // with existing as the run had it: on only if it was importing
 		page.FoundRun = id
 	}
 	page.Values, page.Set = app.FormDefaults(f.Template, own)

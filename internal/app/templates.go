@@ -170,8 +170,12 @@ func validate(t templates.Template, raw map[string]string) (map[string]any, map[
 // module builds from several inputs, so adding the template again keeps it); typed as stored, sensitive inputs
 // never. Needs operate. ErrNotFound: no such run, or it found nothing for module from t.
 func (a *App) FoundValues(ctx context.Context, actor Actor, workspace string, runID uuid.UUID, module string, t templates.Template) (map[string]any, error) {
-	if _, err := a.Run(ctx, actor, workspace, runID, LevelOperate); err != nil {
+	d, err := a.Run(ctx, actor, workspace, runID, LevelOperate)
+	if err != nil {
 		return nil, err
+	}
+	if d.Run.Status == storage.Applied { // what it found is applied: an old link would undo endImport
+		return nil, ErrNotFound
 	}
 	all, err := a.Store.RunFound(ctx, runID)
 	if err != nil {
@@ -223,8 +227,11 @@ type FoundTemplate struct {
 }
 
 // FoundTemplates lists the template modules run d (RunDetail checked the actor's access) can go back to the form of
-// (storage.Found), by name.
+// (storage.Found), by name; none once it applied.
 func (a *App) FoundTemplates(ctx context.Context, d RunDetail) ([]FoundTemplate, error) {
+	if d.Run.Status == storage.Applied {
+		return nil, nil
+	}
 	all, err := a.Store.RunFound(ctx, d.Run.ID)
 	if err != nil || len(all) == 0 {
 		return nil, err

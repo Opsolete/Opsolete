@@ -68,6 +68,14 @@ func TestImportFlow(t *testing.T) {
 	if page := get(h, loc).Body.String(); !strings.Contains(page, `value="typo"`) || !strings.Contains(page, `name="existing" checked`) {
 		t.Fatalf("the form after a failed plan:\n%s", page)
 	}
+	// a plan that fails creating (not importing): Change settings goes back to the form creating, not importing
+	plain := runID(t, post(h, add, url.Values{"name": {"vm1"}, "subnet": {"/subnets/x"}}))
+	r.claim(t, plain, "plan")
+	r.finish(t, `{"status": "failed", "message": "plan: exit status 1"}`)
+	loc = post(h, "/workspaces/"+ws+"/runs/"+plain+"/change", nil).Header().Get("Location")
+	if page := get(h, loc).Body.String(); !strings.Contains(page, `value="/subnets/x"`) || strings.Contains(page, `name="existing" checked`) {
+		t.Fatalf("the form after a failed plan creating: importing, or not what was entered:\n%s", page)
+	}
 
 	run := runID(t, post(h, add, url.Values{"name": {"vm1"}, "existing": {"on"}, "nic": {"test-vm235"}})) // set by hand: never found
 
@@ -124,5 +132,35 @@ func TestImportFlow(t *testing.T) {
 	run2URL := "/workspaces/" + ws + "/runs/" + run2
 	if page := get(h, run2URL).Body.String(); !strings.Contains(page, `action="`+run2URL+`/change"`) || !strings.Contains(page, "/confirm") {
 		t.Fatalf("a fitting import plan: no Confirm and Change settings:\n%s", page)
+	}
+
+	// another template's plan finds for both: the run page links each template's form (one button would loop back)
+	if rec := post(h, run2URL+"/confirm", nil); rec.Code != http.StatusSeeOther {
+		t.Fatalf("confirm: %d", rec.Code)
+	}
+	r.claim(t, run2, "apply")
+	r.finish(t, `{"status": "succeeded", "resources": []}`)
+	run3 := runID(t, post(h, add, url.Values{"name": {"vm2"}, "existing": {"on"}}))
+	mod3 := r.claim(t, run3, "plan").Modules
+	if len(mod3) != 2 {
+		t.Fatalf("job: %+v", mod3)
+	}
+	r.finish(t, `{"status": "failed", "message": "apply: x", "found": {"`+mod3[0].Name+`": {"size": "a"}, "`+mod3[1].Name+`": {"size": "b"}}}`)
+	run3URL := "/workspaces/" + ws + "/runs/" + run3
+	page = get(h, run3URL).Body.String()
+	if strings.Contains(page, `action="`+run3URL+`/change"`) || !strings.Contains(page, "/templates/"+mod+"?found="+run3) ||
+		!strings.Contains(page, "found="+run3+"&amp;from=") {
+		t.Fatalf("a run with two templates: no link per template:\n%s", page)
+	}
+
+	// applied: nothing to go back to, also by an old link (it would turn existing on again)
+	if page := get(h, run2URL).Body.String(); strings.Contains(page, `/change"`) {
+		t.Fatalf("an applied import still offers Change settings:\n%s", page)
+	}
+	if rec := post(h, run2URL+"/change", nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("change an applied run: %d", rec.Code)
+	}
+	if rec := get(h, "/workspaces/"+ws+"/templates/"+mod+"?found="+run2); rec.Code != http.StatusNotFound {
+		t.Fatalf("found values of an applied run: %d", rec.Code)
 	}
 }
