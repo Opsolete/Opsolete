@@ -41,6 +41,9 @@
           <button type="button" class="secondary" data-close-dialog>Cancel</button></footer>
       </form>
     </dialog>
+    {{else}}
+    <span class="muted">Nothing to run: no template{{if $.Features.VCS}} or repository{{end}}</span>
+    <a class="btn secondary" href="/workspaces/{{$w.Name}}/deploy">Deploy a template</a>
     {{end}}
   </div>
   {{end}}
