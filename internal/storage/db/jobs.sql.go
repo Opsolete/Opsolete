@@ -31,17 +31,6 @@ func (q *Queries) AckLease(ctx context.Context, arg AckLeaseParams) (int64, erro
 	return result.RowsAffected(), nil
 }
 
-const anyActiveRun = `-- name: AnyActiveRun :one
-SELECT EXISTS (SELECT 1 FROM runs WHERE run_active(status))
-`
-
-func (q *Queries) AnyActiveRun(ctx context.Context) (bool, error) {
-	row := q.db.QueryRow(ctx, anyActiveRun)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
-}
-
 const claimableRun = `-- name: ClaimableRun :one
 
 SELECT r.id, r.status FROM runs r JOIN workspaces w ON w.id = r.workspace_id JOIN projects p ON p.id = w.project_id
@@ -226,7 +215,8 @@ func (q *Queries) LeaseRun(ctx context.Context, arg LeaseRunParams) (LeaseRunRow
 }
 
 const lockLeasedRun = `-- name: LockLeasedRun :one
-SELECT r.status, r.action, r.workspace_id, w.auto_apply, (r.rollout_id IS NOT NULL OR r.always_confirm)::boolean AS needs_confirmation, r.cancel_requested
+SELECT r.status, r.action, r.workspace_id, w.auto_apply, (r.rollout_id IS NOT NULL)::boolean AS in_rollout,
+    EXISTS (SELECT 1 FROM promotions p WHERE r.id IN (p.destroy_run_id, p.apply_run_id))::boolean AS in_promotion, r.cancel_requested
 FROM runs r JOIN workspaces w ON w.id = r.workspace_id
 WHERE r.id = $1::uuid AND r.lease_id = $2::text AND run_working(r.status) AND r.lease_acked_at IS NOT NULL
 FOR UPDATE OF r
@@ -238,16 +228,17 @@ type LockLeasedRunParams struct {
 }
 
 type LockLeasedRunRow struct {
-	Status            string
-	Action            string
-	WorkspaceID       uuid.UUID
-	AutoApply         bool
-	NeedsConfirmation bool
-	CancelRequested   bool
+	Status          string
+	Action          string
+	WorkspaceID     uuid.UUID
+	AutoApply       bool
+	InRollout       bool
+	InPromotion     bool
+	CancelRequested bool
 }
 
 // The run, if lease_id holds it; the lease is checked here, setStatus then checks the transition.
-// needs_confirmation: a template rollout's run (see template_rollouts) or a promotion's always waits for a human.
+// in_rollout, in_promotion: the run is a template rollout's or a promotion's (storage.confirmReason).
 func (q *Queries) LockLeasedRun(ctx context.Context, arg LockLeasedRunParams) (LockLeasedRunRow, error) {
 	row := q.db.QueryRow(ctx, lockLeasedRun, arg.ID, arg.LeaseID)
 	var i LockLeasedRunRow
@@ -256,7 +247,8 @@ func (q *Queries) LockLeasedRun(ctx context.Context, arg LockLeasedRunParams) (L
 		&i.Action,
 		&i.WorkspaceID,
 		&i.AutoApply,
-		&i.NeedsConfirmation,
+		&i.InRollout,
+		&i.InPromotion,
 		&i.CancelRequested,
 	)
 	return i, err

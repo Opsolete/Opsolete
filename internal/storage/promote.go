@@ -27,14 +27,6 @@ type Promotion struct {
 	Actor       string // CreatedBy's email, for the audit entry of a chained apply run
 }
 
-// pendingPromotion is runs.promotion: the rest of a promotion its first run (a destroy) carries.
-type pendingPromotion struct {
-	Source    string              `json:"source"`
-	Actor     string              `json:"actor"`
-	CreatedBy uuid.UUID           `json:"created_by"`
-	Templates []WorkspaceTemplate `json:"templates"` // sensitive inputs sealed
-}
-
 // PromotionStep is a promotion's apply run, queued once its destroy run (After) succeeded.
 type PromotionStep struct {
 	Run    Run
@@ -84,11 +76,12 @@ func Removed(cur, want []WorkspaceTemplate) []string {
 	return out
 }
 
-// Promote applies p with runs that always wait for confirmation (runs.always_confirm), even with
-// auto-apply. If it removes or replaces a deployed template (ModuleIndex.Deployed), a module that
-// configures its own providers can't be destroyed once its block is gone: so the first run is a
-// destroy targeting every template it removes or replaces, carrying the rest of the promotion, and
-// changes nothing else; applied, it queues the apply run (setStatus, continuePromotion). Otherwise
+// Promote applies p: its templates become a configuration version of the target, recorded with the
+// promotion (promotions), whose runs always wait for confirmation (afterPlan), even with auto-apply.
+// If it removes or replaces a deployed template (ModuleIndex.Deployed), a module that configures its
+// own providers can't be destroyed once its block is gone: so the first run is a destroy targeting
+// every template it removes or replaces, and changes nothing else; applied, it queues the apply run
+// of the version (effContinuePromotion). Otherwise
 // it is one apply run of a new configuration version with the promoted templates, so a run that ends
 // before its apply started leaves the target's templates as they were. Nothing changes if the
 // templates aren't Read anymore (ErrChanged), the name is taken (ErrNameTaken), a run is active
@@ -126,24 +119,26 @@ func (s *Store) Promote(ctx context.Context, p Promotion) (Run, error) {
 			}
 			destroy = slices.ContainsFunc(removed, idx.Deployed)
 		}
-		if !destroy {
-			r, err = queuePromotion(ctx, q, p.WorkspaceID, cv, p.Templates, p.CreatedBy)
+		want, err := newVersion(ctx, q, p.WorkspaceID, cv, p.Templates, SourcePromote, p.CreatedBy)
+		if err != nil {
 			return err
+		}
+		rec := db.InsertPromotionParams{TargetWorkspaceID: p.WorkspaceID, Source: p.Source, CvID: want, CreatedBy: optID(p.CreatedBy), Actor: p.Actor}
+		if !destroy {
+			if r, err = queueRun(ctx, q, p.WorkspaceID, "apply", p.CreatedBy, optID(want)); err != nil {
+				return err
+			}
+			rec.ApplyRunID = optID(r.ID)
+			return q.InsertPromotion(ctx, rec)
 		}
 		if r, err = createRun(ctx, q, p.WorkspaceID, "destroy", p.CreatedBy); err != nil {
-			return err
-		}
-		pending, err := json.Marshal(pendingPromotion{Source: p.Source, Actor: p.Actor, CreatedBy: p.CreatedBy, Templates: p.Templates})
-		if err != nil {
 			return err
 		}
 		if err := q.SetRunRemoveTemplates(ctx, db.SetRunRemoveTemplatesParams{ID: r.ID, RemoveTemplates: removed}); err != nil {
 			return err
 		}
-		if err := q.SetRunPromotion(ctx, db.SetRunPromotionParams{ID: r.ID, Promotion: pending}); err != nil {
-			return err
-		}
-		if err := q.SetRunAlwaysConfirm(ctx, r.ID); err != nil {
+		rec.DestroyRunID = optID(r.ID)
+		if err := q.InsertPromotion(ctx, rec); err != nil {
 			return err
 		}
 		return addHistory(ctx, q, r.ID, PlanQueued, "Promotion from "+p.Source+": destroys "+strings.Join(removed, ", ")+
@@ -155,39 +150,28 @@ func (s *Store) Promote(ctx context.Context, p Promotion) (Run, error) {
 	return r, nil
 }
 
-// continuePromotion queues the apply run of the promotion (raw runs.promotion) whose destroy run
-// runID succeeded; if no run can start (the workspace moved to local execution meanwhile) the
-// promotion is dropped with a note in runID's history.
-func continuePromotion(ctx context.Context, q *db.Queries, runID, workspaceID uuid.UUID, status string, raw []byte) (*PromotionStep, error) {
-	var p pendingPromotion
-	if err := json.Unmarshal(raw, &p); err != nil {
-		return nil, err
-	}
-	cv, _, err := currentConfig(ctx, q, workspaceID)
+// continuePromotion queues the apply run of the promotion whose destroy run runID succeeded (its version);
+// if no run can start (the workspace moved to local execution meanwhile) the promotion is dropped with a
+// note in runID's history.
+func continuePromotion(ctx context.Context, q *db.Queries, runID, workspaceID uuid.UUID, status string) (*PromotionStep, error) {
+	p, err := q.PromotionAfter(ctx, runID)
 	if err != nil {
 		return nil, err
 	}
-	r, err := queuePromotion(ctx, q, workspaceID, cv, p.Templates, p.CreatedBy)
+	r, err := queueRun(ctx, q, workspaceID, "apply", p.CreatedBy.UUID, p.CvID)
 	if errors.Is(err, ErrRunActive) || errors.Is(err, ErrLocalExecution) {
 		return nil, addHistory(ctx, q, runID, status, "promotion not continued: "+err.Error())
 	}
 	if err != nil {
 		return nil, err
 	}
+	if err := q.SetPromotionApplyRun(ctx, db.SetPromotionApplyRunParams{ID: p.ID, ApplyRunID: r.ID}); err != nil {
+		return nil, err
+	}
 	if err := addHistory(ctx, q, r.ID, PlanQueued, "Promotion from "+p.Source+", after run "+runID.String()); err != nil {
 		return nil, err
 	}
 	return &PromotionStep{Run: r, After: runID, Source: p.Source, Actor: p.Actor}, nil
-}
-
-// queuePromotion makes want a new version of the workspace (cur: its current one) and queues the apply run of it,
-// which waits for confirmation.
-func queuePromotion(ctx context.Context, q *db.Queries, workspaceID uuid.UUID, cur uuid.NullUUID, want []WorkspaceTemplate, createdBy uuid.UUID) (Run, error) {
-	r, err := queueVersion(ctx, q, workspaceID, cur, want, SourcePromote, "apply", createdBy)
-	if err != nil {
-		return r, err
-	}
-	return r, q.SetRunAlwaysConfirm(ctx, r.ID)
 }
 
 // sameTemplates: a and b (both by name) hold the same configurations.

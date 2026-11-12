@@ -103,6 +103,18 @@ type ProjectList struct {
 	RunnerPool  string
 }
 
+type Promotion struct {
+	ID                uuid.UUID
+	TargetWorkspaceID uuid.UUID
+	Source            string
+	CvID              uuid.NullUUID
+	CreatedBy         uuid.NullUUID
+	Actor             string
+	DestroyRunID      uuid.NullUUID
+	ApplyRunID        uuid.NullUUID
+	CreatedAt         time.Time
+}
+
 type RemoteStateConsumer struct {
 	WorkspaceID uuid.UUID
 	ConsumerID  uuid.UUID
@@ -146,11 +158,10 @@ type Run struct {
 	ConfirmedBy     uuid.NullUUID
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
-	AlwaysConfirm   bool
 	RemoveTemplates []string
-	Promotion       []byte
 	Found           []byte
 	CvID            uuid.NullUUID
+	ConfirmReason   *string
 }
 
 type RunList struct {
@@ -171,6 +182,7 @@ type RunList struct {
 	UpdatedAt        time.Time
 	LogRemovedAt     *time.Time
 	LogBytes         int64
+	ConfirmReason    string
 }
 
 type RunLog struct {

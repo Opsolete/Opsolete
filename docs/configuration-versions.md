@@ -1,7 +1,8 @@
 # Design: configuration versions and the run split
 
-Status: phases A and B built (November 2026, migration `010_configuration_versions.sql`, `storage/configversions.go`);
-C–F proposed. Not published (outside `docs/content`). Steps 2 and 3 of the redesign; step 5 (import as a session)
+Status: phases A–E built (November 2026: A and B in migration `010_configuration_versions.sql` and
+`storage/configversions.go`, C–E in `011_run_state.sql` and `storage/runs.go`, with D and E narrowed, see
+[Built (C, D, E)](#built-phases-c-d-and-e)); F proposed. Not published (outside `docs/content`). Steps 2 and 3 of the redesign; step 5 (import as a session)
 builds on it. What was built differs from the proposal below where [Built](#built-phases-a-and-b) says so.
 
 ## Why
@@ -167,3 +168,26 @@ Decisions on the open questions, and where the build differs from the proposal:
    a run, until phase F), `remove`, `upgrade` (migration 010).
 8. `RotateKey` re-seals inputs in every version; it still refuses while a run is active, because a pending
    promotion (`runs.promotion`, phase E) holds sealed inputs.
+
+## Built (phases C, D and E)
+
+- **C: one confirmation rule.** `afterPlan(PlanContext, changes)` (`storage/runs.go`) decides where a finished plan
+  goes and why it waits: promotion, rollout, import, destroy, refresh, manual (the first that applies). The reason is
+  stored on the run (`runs.confirm_reason`) and the run page shows it. `always_confirm`, the SQL alias and the
+  `importing` special case are gone; a run is a promotion's when a `promotions` row names it.
+- **D: typed events, explicit effects.** `setStatus(run, Event, to, message)`: `machine` lists per event the statuses
+  it moves from and to, so `EvUnclaim` is the only way back to a queue and only `EvConfirm`/`EvDiscard` leave
+  `needs_confirmation` (`decide` lost its own status check). A change's side effects are `effects(facts, from, to)`,
+  a pure list (notify jobs, release the state lock, take the version, remove templates, continue or drop a
+  promotion), which `transition` performs in order; `TestEffects` pins it, `TestAfterPlan` the rule.
+  **Not built: `run_phases` and `run_results`.** A run holds one lease at a time, its phases' runners and times are
+  in its history, and plan, outputs and found values are one per run: the split would rewrite about ten job queries
+  for joins that add no information. Revisit if a run ever needs two leases or per-phase retries.
+- **E: promotions as records, not workflows.** `promotions` (target, source, the version it applies, its destroy and
+  apply runs, who) replaces `runs.promotion` and `always_confirm`; the destroy applied continues it
+  (`effContinuePromotion`). Its templates are a configuration version, so RotateKey re-seals them, and **RotateKey no
+  longer refuses while runs are active**: no run keeps its own copy of a sealed value. Rollouts keep
+  `template_rollouts` (already their own table): a generic `workflows` table had one more user than needed.
+  `remove_templates` stays: it's what a destroy run targets.
+- Migration 011 turns in-flight promotions into records (a pending destroy's templates into a version, sealed
+  inputs kept) and gives waiting plans their reason (`TestRunStateUpgrade`).

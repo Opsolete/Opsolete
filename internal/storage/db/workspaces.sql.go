@@ -115,7 +115,7 @@ func (q *Queries) DetachWorkspaceSets(ctx context.Context, workspaceID uuid.UUID
 }
 
 const getRun = `-- name: GetRun :one
-SELECT id, workspace_id, action, status, replace, plan, outputs, runner, cancel_requested, vcs_commit, vcs_pull_request, created_by_email, confirmed_by_email, created_at, updated_at, log_removed_at, log_bytes FROM run_list WHERE id = $1::uuid
+SELECT id, workspace_id, action, status, replace, plan, outputs, runner, cancel_requested, vcs_commit, vcs_pull_request, created_by_email, confirmed_by_email, created_at, updated_at, log_removed_at, log_bytes, confirm_reason FROM run_list WHERE id = $1::uuid
 `
 
 func (q *Queries) GetRun(ctx context.Context, id uuid.UUID) (RunList, error) {
@@ -139,6 +139,7 @@ func (q *Queries) GetRun(ctx context.Context, id uuid.UUID) (RunList, error) {
 		&i.UpdatedAt,
 		&i.LogRemovedAt,
 		&i.LogBytes,
+		&i.ConfirmReason,
 	)
 	return i, err
 }
@@ -240,7 +241,7 @@ func (q *Queries) InsertWorkspace(ctx context.Context, arg InsertWorkspaceParams
 }
 
 const latestAssessment = `-- name: LatestAssessment :one
-SELECT id, workspace_id, action, status, replace, plan, outputs, runner, cancel_requested, vcs_commit, vcs_pull_request, created_by_email, confirmed_by_email, created_at, updated_at, log_removed_at, log_bytes FROM run_list WHERE workspace_id = $1::uuid AND action = 'assess' ORDER BY created_at DESC LIMIT 1
+SELECT id, workspace_id, action, status, replace, plan, outputs, runner, cancel_requested, vcs_commit, vcs_pull_request, created_by_email, confirmed_by_email, created_at, updated_at, log_removed_at, log_bytes, confirm_reason FROM run_list WHERE workspace_id = $1::uuid AND action = 'assess' ORDER BY created_at DESC LIMIT 1
 `
 
 func (q *Queries) LatestAssessment(ctx context.Context, workspaceID uuid.UUID) (RunList, error) {
@@ -264,12 +265,13 @@ func (q *Queries) LatestAssessment(ctx context.Context, workspaceID uuid.UUID) (
 		&i.UpdatedAt,
 		&i.LogRemovedAt,
 		&i.LogBytes,
+		&i.ConfirmReason,
 	)
 	return i, err
 }
 
 const listRuns = `-- name: ListRuns :many
-SELECT id, workspace_id, action, status, replace, plan, outputs, runner, cancel_requested, vcs_commit, vcs_pull_request, created_by_email, confirmed_by_email, created_at, updated_at, log_removed_at, log_bytes FROM run_list WHERE workspace_id = $1::uuid AND action <> 'assess'
+SELECT id, workspace_id, action, status, replace, plan, outputs, runner, cancel_requested, vcs_commit, vcs_pull_request, created_by_email, confirmed_by_email, created_at, updated_at, log_removed_at, log_bytes, confirm_reason FROM run_list WHERE workspace_id = $1::uuid AND action <> 'assess'
 ORDER BY created_at DESC LIMIT $2::integer
 `
 
@@ -306,6 +308,7 @@ func (q *Queries) ListRuns(ctx context.Context, arg ListRunsParams) ([]RunList, 
 			&i.UpdatedAt,
 			&i.LogRemovedAt,
 			&i.LogBytes,
+			&i.ConfirmReason,
 		); err != nil {
 			return nil, err
 		}

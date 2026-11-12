@@ -162,11 +162,11 @@ func TestPromote(t *testing.T) {
 		}
 		var always bool
 		var entries int
-		a.Store.Pool.QueryRow(ctx, `SELECT always_confirm FROM runs WHERE id = $1`, run.ID).Scan(&always)
+		a.Store.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM promotions WHERE apply_run_id = $1)`, run.ID).Scan(&always) // a promotion's: it asks
 		a.Store.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action = 'promote' AND detail->>'run' = $1 AND detail->>'source' = $2`,
 			run.ID.String(), f.source.Name).Scan(&entries)
 		if !always || entries != 1 {
-			t.Fatalf("always_confirm %v, audit entries %d", always, entries)
+			t.Fatalf("a promotion's run %v, audit entries %d", always, entries)
 		}
 	})
 	step(t, "promoted again: nothing to change", func(t *testing.T) {

@@ -292,12 +292,12 @@ func TestPromoteChained(t *testing.T) {
 		var always bool
 		var pending bool
 		var audit int
-		s.Pool.QueryRow(ctx, `SELECT always_confirm FROM runs WHERE id = $1`, b.ID).Scan(&always)
-		s.Pool.QueryRow(ctx, `SELECT promotion IS NOT NULL FROM runs WHERE id = $1`, r.ID).Scan(&pending)
+		s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM promotions WHERE destroy_run_id = $1 AND apply_run_id = $2)`, r.ID, b.ID).Scan(&always)
+		s.Pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM promotions WHERE destroy_run_id = $1 AND apply_run_id IS NULL)`, r.ID).Scan(&pending)
 		s.Pool.QueryRow(ctx, `SELECT count(*) FROM audit_log WHERE action = 'promote apply queued' AND actor = 'a@example.com' AND detail->>'run' = $1`,
 			b.ID.String()).Scan(&audit)
 		if !always || pending || audit != 1 {
-			t.Fatalf("always_confirm %v, promotion kept %v, audit %d", always, pending, audit)
+			t.Fatalf("the promotion's apply run %v, still pending %v, audit %d", always, pending, audit)
 		}
 		if st := finish(t, *b, "plan", "succeeded", &runnerapi.Plan{Add: 1}); st != NeedsConfirmation {
 			t.Fatalf("apply run on an auto-apply workspace: %s", st)
