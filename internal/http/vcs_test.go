@@ -117,8 +117,14 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 		if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/registry/"+ns+"/rds/aws/1.0.0" {
 			t.Fatalf("publish: %d %q %s", rec.Code, rec.Header().Get("Location"), rec.Body.String())
 		}
-		if page := get(h, "/registry").Body.String(); !strings.Contains(page, "/registry/"+ns+"/rds/aws/sync") || !strings.Contains(page, connName) {
+		// the list marks it published from VCS; its repository, Sync now and Unlink are on its page
+		if page := get(h, "/registry").Body.String(); !strings.Contains(page, `title="published from acme/terraform-aws-rds">VCS</span>`) ||
+			strings.Contains(page, "/sync") {
 			t.Fatalf("registry page: %s", page)
+		}
+		if page := get(h, "/registry/"+ns+"/rds/aws/1.0.0").Body.String(); !strings.Contains(page, "/registry/"+ns+"/rds/aws/sync") ||
+			!strings.Contains(page, connName) || !strings.Contains(page, "/rds/aws/unlink") {
+			t.Fatalf("module page: %s", page)
 		}
 	})
 	// A module in a folder, with the namespace left to default to the repository name; then unlinked.
