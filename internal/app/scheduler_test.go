@@ -136,7 +136,6 @@ func TestSchedulerLeader(t *testing.T) {
 	eventually("the other replica takes over", 4*retry, func() bool { return follower.leading.Load() && follower.ran.Load() == ranBefore+1 })
 	follower.stop()
 	follower.wait()
-	if n := locks(); n != 0 {
-		t.Fatalf("the lock must be released on shutdown: %d held", n)
-	}
+	// Close returns before Postgres has ended the session (and released its locks)
+	eventually("the lock is released on shutdown", 4*retry, func() bool { return locks() == 0 })
 }
