@@ -188,7 +188,7 @@ func TestBuilderListInput(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "vm.json"), b, 0o644)
 	page := get(newServer(t, dir, true, store), "/templates/vm/edit").Body.String()
-	for _, want := range []string{`<option value="list" selected>List of rows</option>`, `name="in_field_label_1" value="LUN" placeholder="lun"`, `<code>type</code> <small class="muted">string</small>`} {
+	for _, want := range []string{`<option value="list" selected>List of rows</option>`, `name="in_field_label_1" value="LUN" placeholder="lun"`, `<code>type</code><span class="ltype">string</span>`, `<span>Label shown</span>`} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("builder lacks %s:\n%s", want, page)
 		}
