@@ -11,8 +11,9 @@ import (
 	"github.com/opsolete/opsolete/internal/runnerapi"
 )
 
-// foundPlan is a plan importing a VM (module.vm, the template), its NIC (module.vm.module.nic) and a data disk
-// (module.vm.module.data_disk["0"], for_each over the data_disks rows by lun), shaped like terraform show -json.
+// foundPlan is a plan importing a VM (module.vm, the template), its NIC (module.vm.module.nic) and data disks
+// (module.vm.module.data_disk["0"] and ["1"], for_each over the data_disks rows by lun; ["1"] first, so its
+// key meets row 0's size_gb 1 before row 0 is filled), shaped like terraform show -json.
 const foundPlan = `{
  "format_version": "1.2",
  "configuration": {"root_module": {"module_calls": {"vm": {"module": {
@@ -50,6 +51,10 @@ const foundPlan = `{
    "change": {"actions": ["update"], "importing": {"id": "/nic"},
     "before": {"name": "test-vm235", "ip_configuration": [{"subnet_id": "/subnets/a"}]},
     "after": {"name": "test-vm-nic", "ip_configuration": [{"subnet_id": null}]}}},
+  {"address": "module.vm.module.data_disk[\"1\"].azurerm_managed_disk.main", "module_address": "module.vm.module.data_disk[\"1\"]", "mode": "managed",
+   "type": "azurerm_managed_disk", "name": "main",
+   "change": {"actions": ["update"], "importing": {"id": "/disk1"},
+    "before": {"disk_size_gb": 64, "name": "test-vm_DataDisk_1"}, "after": {"disk_size_gb": 4, "name": "test-vm_DataDisk_1"}}},
   {"address": "module.vm.module.data_disk[\"0\"].azurerm_managed_disk.main", "module_address": "module.vm.module.data_disk[\"0\"]", "mode": "managed",
    "type": "azurerm_managed_disk", "name": "main",
    "change": {"actions": ["update"], "importing": {"id": "/disk"},
@@ -65,7 +70,9 @@ func TestFound(t *testing.T) {
 	}
 	mods := []runnerapi.Module{{Name: "vm", Inputs: map[string]any{
 		"name": "test-vm", "size": "Standard_B2s", "admin_username": "azureuser", "admin_password": "Ops-x", "owner": "me",
-		"data_disks": []any{map[string]any{"lun": 0.0, "size_gb": 1.0, "name": "test-vm_DataDisk_0", "existing": true}},
+		// row 0's size_gb is 1, row 1's LUN: key "1" is row 1's, by the field that keys every instance (lun)
+		"data_disks": []any{map[string]any{"lun": 0.0, "size_gb": 1.0, "name": "test-vm_DataDisk_0", "existing": true},
+			map[string]any{"lun": 1.0, "size_gb": 4.0, "existing": true}},
 	}}}
 	got := found(&p, mods, mask.New([]string{"hunter2"}))
 	want := map[string]map[string]any{"vm": {
@@ -74,7 +81,8 @@ func TestFound(t *testing.T) {
 		"admin_username": "azureuser",
 		"os_disk_type":   "Premium_LRS", // unset, in a nested block
 		"subnet_id":      "/subnets/a",  // unset, through a module call
-		"data_disks":     []any{map[string]any{"lun": 0.0, "size_gb": 32.0, "name": "test-vm_DataDisk_0", "existing": true}},
+		"data_disks": []any{map[string]any{"lun": 0.0, "size_gb": 32.0, "name": "test-vm_DataDisk_0", "existing": true},
+			map[string]any{"lun": 1.0, "size_gb": 64.0, "existing": true}}, // name: built from two references
 		// not: computer_name (built from name: the plan sets another value), the NIC's name (two variables),
 		// admin_password (sensitive), tags (a secret), location (a local), module.other (not a template)
 	}}

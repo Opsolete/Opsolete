@@ -29,6 +29,12 @@ func found(p *tfjson.Plan, mods []runnerapi.Module, secrets mask.Masker) map[str
 	}
 	out := map[string]map[string]any{}
 	rows := map[string]map[string][]any{} // module → list input → its rows, as filled in
+	keys := map[string][]string{}         // a repeated call's address → its instances' keys
+	for _, rc := range p.ResourceChanges {
+		if call, key, ok := instanceOf(rc.ModuleAddress); ok && !slices.Contains(keys[call], key) {
+			keys[call] = append(keys[call], key)
+		}
+	}
 	for _, rc := range p.ResourceChanges {
 		if rc.Change == nil || rc.Change.Importing == nil || rc.Mode != tfjson.ManagedResourceMode {
 			continue
@@ -102,7 +108,8 @@ func found(p *tfjson.Plan, mods []runnerapi.Module, secrets mask.Masker) map[str
 				if rows[mod][in] == nil {
 					rows[mod][in] = clone(inputs[mod][in])
 				}
-				row := keyRow(rows[mod][in], steps[len(steps)-1].key)
+				call, _, _ := instanceOf(rc.ModuleAddress)
+				row := keyRow(rows[mod][in], steps[len(steps)-1].key, keys[call])
 				if row == nil {
 					continue
 				}
@@ -200,17 +207,55 @@ func listOf(c *tfjson.ModuleCall) string {
 	return ""
 }
 
-// keyRow is the row of rows whose some field is key (a for_each keyed by a row field, tostring(d.lun)); nil none.
-func keyRow(rows []any, key string) map[string]any {
+// instanceOf splits module.vm.module.data_disk["0"] into the repeated call's address and the instance key.
+func instanceOf(addr string) (call, key string, ok bool) {
+	i := strings.LastIndex(addr, "[")
+	if i < 0 || !strings.HasSuffix(addr, "]") {
+		return "", "", false
+	}
+	return addr[:i], strings.Trim(addr[i+1:len(addr)-1], `"`), true
+}
+
+// keyRow is the row of instance key of a for_each keyed by a row field (tostring(d.lun)); nil if none or
+// ambiguous. The field is one whose values give each of the call's keys (all) exactly one row: another field
+// may hold the key by chance (a disk of size 1 beside LUN 1).
+func keyRow(rows []any, key string, all []string) map[string]any {
+	fields := map[string]bool{}
 	for _, r := range rows {
 		row, _ := r.(map[string]any)
-		for _, v := range row {
-			if b, err := json.Marshal(v); err == nil && (string(b) == key || string(b) == `"`+key+`"`) {
-				return row
-			}
+		for f := range row {
+			fields[f] = true
 		}
 	}
-	return nil
+	at := func(f, k string) int { // the one row whose f is k; -1 none or several
+		hit := -1
+		for i, r := range rows {
+			row, _ := r.(map[string]any)
+			if b, err := json.Marshal(row[f]); err == nil && (string(b) == k || string(b) == `"`+k+`"`) {
+				if hit >= 0 {
+					return -1
+				}
+				hit = i
+			}
+		}
+		return hit
+	}
+	pick := -1
+	for f := range fields {
+		if slices.ContainsFunc(all, func(k string) bool { return at(f, k) < 0 }) {
+			continue
+		}
+		if i := at(f, key); pick >= 0 && i != pick {
+			return nil // two fields fit, pointing at different rows
+		} else {
+			pick = i
+		}
+	}
+	if pick < 0 {
+		return nil
+	}
+	row, _ := rows[pick].(map[string]any)
+	return row
 }
 
 func sensitiveVar(call *tfjson.ModuleCall, name string) bool {
