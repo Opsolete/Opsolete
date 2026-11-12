@@ -201,6 +201,20 @@ func TestRunnerTokenCLI(t *testing.T) {
 	if r, err := store.RunnerByToken(ctx, own); err != nil || r.Name != "ci-1" || r.Pool != storage.DefaultPool {
 		t.Fatalf("registered token: %+v %v", r, err)
 	}
+	fromEnv := strings.Repeat("e", 40)
+	t.Setenv("CHART_RUNNER_TOKEN", fromEnv)
+	if out, err := run("", "-from-env", "CHART_RUNNER_TOKEN", "-pool", "k8s", "ci-1"); err != nil || out != "" {
+		t.Fatalf("register from env: %q %v", out, err)
+	}
+	if r, err := store.RunnerByToken(ctx, fromEnv); err != nil || r.Name != "ci-1" || r.Pool != "k8s" {
+		t.Fatalf("token from env: %+v %v", r, err)
+	}
+	if _, err := run("", "-from-env", "NOT_SET_ANYWHERE", "ci-1"); err == nil {
+		t.Fatal("an empty variable registered")
+	}
+	if _, err := run("", "-from-env", "CHART_RUNNER_TOKEN", "-from-stdin", "ci-1"); err == nil {
+		t.Fatal("both sources")
+	}
 	if _, err := store.RunnerByToken(ctx, token); err == nil {
 		t.Fatal("the replaced token still works")
 	}
