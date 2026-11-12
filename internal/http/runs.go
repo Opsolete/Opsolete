@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"net/http"
+	"net/url"
 
 	"github.com/google/uuid"
 
@@ -18,7 +19,7 @@ type runPage struct {
 	R           storage.Run
 	History     []storage.StatusEntry // oldest first
 	Plan, Apply phase
-	Scan        *app.ScanResult // a scan run's result
+	Found       []app.FoundTemplate // what a plan that imports found: operators may take it into the form
 }
 
 func (s *Server) run(w http.ResponseWriter, r *http.Request) {
@@ -29,29 +30,14 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request) {
 	plan, apply := runPhases(d.Run, d.History)
 	page := &runPage{Page: workspaceNav(r.PathValue("name"), "runs", "", d.Level == app.LevelOperate),
 		W: d.Workspace, R: d.Run, History: d.History, Plan: plan, Apply: apply}
-	if d.Run.Action == "scan" {
-		sc, err := s.App.ScanResult(r.Context(), d.Run.ID)
-		if err != nil {
-			s.internalError(w, "scan result", err)
+	if d.Level == app.LevelOperate { // Change settings
+		var err error
+		if page.Found, err = s.App.FoundTemplates(r.Context(), d); err != nil {
+			s.internalError(w, "found values", err)
 			return
 		}
-		page.Scan = &sc
 	}
 	s.render(w, r, http.StatusOK, "run.html", page)
-}
-
-// newScan queues a scan for existing resources the catalog's templates can take over, in the posted
-// resource_group ("" the whole subscription) (app.StartScan).
-func (s *Server) newScan(w http.ResponseWriter, r *http.Request) {
-	f, ok := readForm(w, r)
-	if !ok {
-		return
-	}
-	ws, run, err := s.App.StartScan(r.Context(), actor(r), r.PathValue("name"), f.Get(app.FieldResourceGroup))
-	if s.failed(w, r, err, "scan", f, s.onWorkspacePage(w, r, "import", "")) {
-		return
-	}
-	http.Redirect(w, r, "/workspaces/"+ws.Name+"/runs/"+run.ID.String(), http.StatusSeeOther)
 }
 
 // runItem is a row of the runs page; Current: the workspace's latest run.
@@ -106,6 +92,26 @@ func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request) {
 func (s *Server) confirmRun(w http.ResponseWriter, r *http.Request) {
 	id, _ := pathID(r, "run") // not an id: not found
 	s.decided(w, r, id, s.App.ConfirmRun(r.Context(), actor(r), r.PathValue("name"), id))
+}
+
+// changeImport goes back from a run to its template's form (app.ChangeSettings), with what was entered for it and
+// what its plan found importing: the configure form, or the add form when the discard removed the template it added; with
+// several templates, the run page.
+func (s *Server) changeImport(w http.ResponseWriter, r *http.Request) {
+	id, _ := pathID(r, "run") // not an id: not found
+	found, err := s.App.ChangeSettings(r.Context(), actor(r), r.PathValue("name"), id)
+	if err != nil {
+		s.uiError(w, r, err)
+		return
+	}
+	ws, to := r.PathValue("name"), "/workspaces/"+r.PathValue("name")+"/runs/"+id.String()
+	if len(found) == 1 {
+		to = "/workspaces/" + ws + "/templates/" + found[0].Module + "?found=" + id.String()
+		if !found[0].Added {
+			to = "/workspaces/" + ws + "/templates/new?" + url.Values{"template": {found[0].TemplateID}, "found": {id.String()}, "from": {found[0].Module}}.Encode()
+		}
+	}
+	http.Redirect(w, r, to, http.StatusSeeOther)
 }
 
 // discardRun ends a plan that waits for confirmation without applying it.

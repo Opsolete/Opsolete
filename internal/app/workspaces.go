@@ -81,7 +81,7 @@ func (a *App) CreateWorkspace(ctx context.Context, actor Actor, in NewWorkspace)
 		locked = env.Locked(t, nil)
 	}
 	raw := lockInputs(in.Inputs, locked)
-	vals, errs := t.Validate(raw) // errs is never nil
+	vals, errs := validate(t, raw) // errs is never nil
 	if !ValidName(in.Name) {
 		errs[FieldName] = NameRule
 	}

@@ -1,124 +1,188 @@
-# Design: importing existing cloud resources
+# Design: importing existing resources
 
-Status: built on branch `feat/resource-import` (PR #34). Not published (outside `docs/content`); the user docs are
-[Import existing resources](content/docs/features/workspaces.md#import-existing-resources).
+Status: built (November 2026), checked live on `test-vm`. Not published (outside `docs/content`); the user docs are
+[Import existing resources](content/docs/features/workspaces.md#import-existing-resources). Replaces the scan-based
+design of 0.7 (in git history: `docs/resource-import.md` before this one).
 
-## Problem
+## Why rebuild
 
-Teams have infrastructure built by hand (Azure portal, scripts) in no Terraform state: mostly VMs, plus Key Vaults,
-storage accounts and databases. They want to manage it with Opsolete, through the same no-code template forms as
-everything Opsolete creates, **without redeploying it**, and without Terraform, Git or CI/CD knowledge.
+The first design worked out which form values make a template produce an existing resource by **reading the module's HCL and
+inverting it in Go** (`registry/adopt.go`, 678 lines), finds resources with `terraform query`, brute-forces
+optional parts through the modules' import blocks (`runner/probe.go`), and checks the result with a plan
+(`runner/scan.go`). About 1,700 lines with Azure knowledge spread through them (`requireByType`, `probeIDRe`,
+`rgOf`, `/subscriptions/` refs, `azurerm_resources`), covering only the expression shapes someone coded.
+
+Terraform already does each of those jobs: finding (data sources), importing (import blocks in modules, ≥ 1.16),
+mapping attributes to variables (the plan JSON's `configuration` references) and judging the fit (the plan).
+Opsolete should be the GUI around that, not a second interpreter.
+
+A tried and dropped middle way: tracing the module with marked inputs and solving the marks against what exists
+(spike, November 2026). It filled 21 inputs of `test-vm` without knowing the module, but needed an ARM-to-azurerm
+type table, recipes for composite IDs and fallbacks for every format the provider checks: another engine.
 
 ## Design
 
-**A workspace's Import page**, separate from templates:
+**The module imports itself; the plan is the check; Opsolete copies what the plan found into the form.**
 
-1. **Scan** (optionally one resource group): a run with action `scan` and the workspace's credentials. Plan phase
-   only, no backend, no lock, never applied. It lists every resource (Azure: resource groups by `terraform query`,
-   then `azurerm_resources` per group) and what the templates can import.
-2. **Results** in four groups: *can be imported* (fits / differs + the attributes / incomplete, from a plan importing
-   all of them, each as its own module, into a throwaway state), *template needs work* (the plan would replace it),
-   *no template* (its type), *already managed* (the workspace). Resources a candidate imports or refers to (NIC, OS
-   disk, public IP) are listed with it.
-3. **Import**, one at a time: the template's add form, filled in from the scan; the plan imports the resources
-   (IDs from the stored scan result, never the browser), always waits for confirmation.
+### Contract for modules
 
-**Templates need nothing for it.** What a template can find and how that fills its form is read from its registry
-module's code at scan time (`registry/adopt.go`, HashiCorp's HCL parser): every managed resource is searched by its
-type; `count = var.x == "v" ? 1 : 0` → exists for x = v; `attr = var.x` / `coalesce(var.x, …)`, nested blocks too →
-input x; `dynamic "b" { for_each = var.x ? … : [] }` → yes/no input x; `[other.res.id]` → other is related
-(`id_from`); sensitive input in `ignore_changes` → random placeholder. Module calls are followed (local, and this
-registry's newest version within the constraint), values through arguments, locals and outputs. Optional and
-repeated parts (`count = var.x != null ? 1 : 0`, or `for_each` over a list input's rows, on a module call) whose
-module imports existing ones itself (import blocks switched by an input, e.g. `existing`, Terraform ≥ 1.16) are
-probes (`runnerapi.Probe`): where each call argument comes from (an input, a row field, a found resource's ID),
-which one switches the import and which takes the name, the type the import ID names (`/providers/<ns>/<type>/`
-before the name), and which attribute fills which input, row field or list (dynamic blocks). The runner
-(`runner/probe.go`) tries them in one throwaway plan per scan, a module per try calling the part's module directly:
-per inventory resource of that type in the candidate's resource group, or once. A failing import fails only its
-try (the errored plan file still has the others); a try whose every import succeeds belongs, its "before" fills
-the form with the switch on, and the candidate is validated again before the fit check. What the module imports
-itself is the candidate's `found`: checked against the states like its imports, never written as import blocks.
-Required text fields get a placeholder matching their pattern (the provider checks formats before importing). Live:
-`vm-test` fills its data disk, schedule and NSG with its rules, fit `7 to import, 0 to add, 0 to change, 0 to
-destroy`. No naming convention: the code says which
-input sets which attribute. A small table covers azurerm's Linux VM list also returning Windows VMs (`require`).
+A module is importable when an input (by convention `existing`, a bool, default false) makes it import what
+exists instead of creating it: `import` blocks switched by that input, their IDs from the inputs and from data
+sources. Plain Terraform (≥ 1.16: import blocks in modules); the provider knowledge (ID formats, how to find a
+VM's NIC) stays in the module, where the first design's review already put it. The template needs nothing.
 
-Rejected:
-- *Keeping Terraform's generated code* (aztfexport style): doesn't plan without hand edits, needs Terraform users.
-- *Describing adoption in the template* (`adopt` entries, builder section; built first, then removed): ~40 fields per
-  template, all derivable from the module, and it made templates feel like import configuration.
-- *Variable name = attribute name convention*: fragile (shared variables, nested blocks, `coalesce`), and existing
-  modules wouldn't fit.
-- *Opsolete writing the parts' import blocks* (instead of the modules' `existing` switches, review November 2026):
-  the IDs need the provider's formats (a data disk attachment's is `<vm id>/dataDisks/<name>`), which the module
-  knows and Opsolete shouldn't. The modules keep them.
-- *Reading friendly inputs back through tables* (`local.images[var.image].sku` → `image`, built and dropped in
-  review): another code shape to match, the list twice (module and template), and Opsolete reading a module's
-  private locals. Raw inputs (publisher, offer, SKU) import as they are; a template makes them dropdowns.
-- *Terraform variables setting fields the form leaves off* (built and dropped in review): a workspace variable
-  bypassed the template's options and patterns. A project's subnet is a per-environment value, with *keep own*
-  for the workspaces (and imports) that have their own.
+```hcl
+variable "existing" {
+  type    = bool
+  default = false
+}
 
-## How it works
+data "azurerm_resources" "vm" {
+  count               = var.existing ? 1 : 0
+  name                = var.name
+  resource_group_name = var.resource_group_name
+  type                = "Microsoft.Compute/virtualMachines"
 
-- **Server** (`app/imports.go`): per catalog template on a registry module, read the archive and derive the entries;
-  templates on `git::` modules or without findable resources are listed as skipped (Import page, scan log). The job
-  carries the templates (inputs JSON), the entries and each template's module (`runnerapi.Scan`).
-- **Runner** (`runner/scan.go`): one `terraform query -json` with `include_resource` for all list types (attributes
-  as JSON; types the provider can't list are dropped and queried again), filtered by `resource_group_name`; per
-  template, candidates from the primary entries, related ones through `id_from`, inputs filled, IDs given the case
-  of the input values (Azure: `TEST1` in a VM's ID, `test1` in its NIC's: a different case of `resource_group_name`
-  forces replacement), validated like the form; then the fit plan (`fitPlan`). Sensitive values never leave it.
-- **Storage**: `runs.scan_resource_group`, `runs.candidates` (migration 005); `runs.imports` (004), written as import
-  blocks in both phases; resource IDs in the state index (`state_version_resources.resource_id`), indexed at the plan
-  phase of locking runs too.
-- **Guards**: importing an ID a state manages is refused (index), and again at the end of the import's plan (the
-  state the plan read + other workspaces' index); a plan that replaces or deletes ends the run errored. Either way
-  the added template is removed again.
-- **Plans count imports** (`Plan.Import`, change action `import`): before, an import without changes showed as
-  "0 to add, 0 to change, 0 to destroy".
+  lifecycle {
+    postcondition {
+      condition     = length(self.resources) == 1
+      error_message = "existing: there is no VM named ${var.name} in resource group ${var.resource_group_name} to import."
+    }
+  }
+}
 
-## Spike and live check (November 2026, test subscription)
+import {
+  for_each = var.existing ? toset(["vm"]) : toset([])
+  to       = azurerm_windows_virtual_machine.main
+  id       = data.azurerm_resources.vm[0].resources[0].id
+}
 
-- `terraform query -json` with `include_resource` returns each resource's attributes as JSON in ~1 s.
-- azurerm 5.13 lists Linux/Windows VMs, NICs, storage accounts, Key Vaults, SQL, resource groups; not PostgreSQL
-  Flexible Server or managed disks.
-- The portal-made Windows VM `testvm` imported with the example VM module 3.1.0: `2 to import, 0 to add, 0 to change,
-  0 to destroy`, applied, next plan without changes. The scan filled every input as typed by hand before.
-- Module requirements (now in the template docs): optional inputs for portal-made settings (NIC name, image, disk
-  type, Trusted Launch, boot diagnostics), `ignore_changes` for values Azure never returns.
-- Optional parts (data disks, auto-shutdown, NSG): azurerm can't list them, and only its legacy
-  `azurerm_virtual_machine` shows a VM's data disks (a maintainer: "needs to be removed in a future major release").
-  Tried and dropped: reading them through that legacy type (first version), `azapi` (a reference graph of Azure's
-  raw JSON found every link, but adds a provider), Terraform policy (`core::getresources` only sees what list blocks
-  found, and its engine needs an HCP entitlement). Kept: import blocks in the modules (Terraform 1.16): the portal-made
-  `vm-test` (data disk, auto-shutdown, NSG with an RDP rule) with `virtualmachine` 4.1.0, values typed by hand:
-  `7 to import, 0 to add, 0 to change, 0 to destroy`, applied, next plan without changes; a 4.0.0 deployment
-  upgrades with moves only.
+# The VM doesn't report its NICs; a NIC reports its VM.
+data "azurerm_resources" "nics" {
+  count               = var.existing ? 1 : 0
+  resource_group_name = var.resource_group_name
+  type                = "Microsoft.Network/networkInterfaces"
+}
 
-## Live check (November 2026, after the review)
+data "azurerm_network_interface" "found" {
+  for_each            = toset(var.existing ? data.azurerm_resources.nics[0].resources[*].name : [])
+  name                = each.key
+  resource_group_name = var.resource_group_name
+}
 
-- The scan with `virtualmachine` 5.0.0 on the portal-made `test-vm` (subscription-wide, 3 resource groups): 34 s;
-  the VM with its NIC, data disk and attachment, schedule, NSG and its association; fit `7 to import, 0 to add,
-  0 to change, 0 to destroy`. `terraform query` itself: 3 s.
-- A project subnet without *keep own*: the import plan moves the NIC to it **in place** (`1 to change`), which the
-  replace guard doesn't stop: the form now warns when a project value differs from what was found. With *keep own*:
-  `7 to import, 0 to change`.
-- The one-pipeline idea (below), tried by hand: an import plan's "before" equals the query's attributes (58 of 58,
-  but write-only ones), and azurerm refuses a Windows VM imported as Linux by itself (no `requireByType` needed). But
-  it took 9 s against the query's 3, the NIC needs a second round (its ID comes from the VM's attributes), and a
-  primary resource has no import block saying which cloud type to try from the inventory: Opsolete would need a
-  table of azurerm types to Azure types, provider knowledge it now gets from `terraform query`. Not worth it: kept
-  as it is.
+locals {
+  found_nic = one([for n in data.azurerm_network_interface.found : n if lower(n.virtual_machine_id) == lower(data.azurerm_resources.vm[0].resources[0].id)])
+}
+
+import {
+  for_each = var.existing ? toset(["nic"]) : toset([])
+  to       = module.nic.azurerm_network_interface.main
+  id       = local.found_nic.id
+}
+```
+
+The VM is found through `azurerm_resources` (any type, by name), not the feature-frozen `azurerm_virtual_machine`
+family. The example is `windows-vm` 2.0.0 (terraform-modules-examples), one template per OS: the earlier
+`virtualmachine` with its Windows/Linux switch is gone, and `linux-vm` gets the same import later. Checked live
+again with this lookup: `7 to import, 0 to add, 0 to change, 0 to destroy`; an unknown name fails on the
+postcondition.
+
+Optional parts keep their own switches (`data_disks[].existing`, `auto_shutdown_existing`, `nsg_existing`), as
+the example modules 1.1.0 already have them.
+
+### Flow
+
+1. **Add the template with `existing` on.** The usual add (or deploy) form: `existing` is a module variable, so
+   it's an input like any other (`app.ImportInput`); for templates that have it (`app.CanImport`) the form offers
+   *Create new* / *Import existing* at the top (`?import=1` ticks it, and the form marks only the key input
+   required, `app.ForImport`). While it's on, only the key input is required (`app.validate`):
+   the user fills what identifies the resource (name, resource group); a required input left empty is stored as
+   `null`, so the module call still has the argument.
+2. **Plan.** An ordinary apply run. Terraform finds and imports; the plan lists every attribute that differs, real
+   value first. The runner reports the plan's imports (`Plan.Imports`, IDs from `importing`). An apply run's plan
+   that imports an ID a state holds (this workspace's as the plan read it, the others' index) → errored
+   (`importConflict`), whatever imports it. One that imports into a template's module (`intoTemplate`) always
+   waits for confirmation, also with auto-apply, and replaces or deletes nothing, else errored; a VCS
+   configuration's own import blocks are left to its authors. Errored, the template change is undone like any run
+   that ends before its apply.
+3. **Found values.** The runner reads the plan JSON (`runner/found.go`): for every imported resource, the real value
+   (`change.before`) of each attribute one input sets alone, following the `configuration` references up through
+   module calls (`each.value.x` of a call repeated over a list input: that row's field, the row matched by the
+   instance key). References can't tell `var.x` from `"${var.x}-nic"`, so an input already set must also be what
+   the plan sets there. Sensitive attributes and variables and workspace secrets are left out (again on the server).
+   Stored per module with its template (`runs.found`, migration 008).
+4. **Confirm, or Change settings.** An import plan's page always offers both to operators: *Change settings*
+   (`POST …/runs/{run}/change`, `app.ChangeImport`) discards a plan still waiting and redirects to the configure
+   form (`?found=<run>`), or the add form again when the run's restore removed the template it added
+   (`?template=…&found=<run>&from=<module>`); from an ended plan it only redirects. Any run that changed a template
+   and ends without its apply (a failed plan too) keeps what it set the template to, sealed inputs left out
+   (`storage.keepEntered`, before the restore), so Change settings works there too. The form opens with the found values over the inputs that plan ran
+   with (stored with them, `Found.Saved`: what the user set by hand, such as a NIC name the module builds from two
+   inputs, isn't lost when the discard removes the template) and `existing` on; saving plans again, these values
+   counting as the workspace's own against a project's keep-own value. Live (`test-vm`): round 1 found 15
+   settings; round 2 left the NIC name and boot diagnostics; with the NIC name set, round 3 left boot diagnostics
+   only (`2 to import, 0 to add, 1 to change, 0 to destroy`).
+5. **Fix the rest by hand.** What the module builds from several inputs (`coalesce(var.nic_name,
+   "${var.name}-nic")`) or a dynamic block isn't copied: the plan shows it, the user sets it. Repeat until
+   `N to import, 0 to add, 0 to change, 0 to destroy`, then confirm.
+6. **Applied: the switch goes off.** The apply's finishing transaction sets `existing` false in the templates the
+   plan imported into (`storage.endImport`). That changes no plan (the resources are in the state, so the import
+   blocks did nothing anymore, and the data sources stop being read); a resource deleted outside Terraform later
+   is then created again instead of failing its lookup, and a promotion doesn't copy the switch.
+
+Decision (November 2026): the scan (inventory, matching, Import page) is removed, not kept as a picker. A picker
+can come back on `terraform query` if wanted.
+
+### Live check (November 2026, `test-vm`, Terraform 1.17.1, azurerm 4.81, reader credentials, plans only)
+
+| Plan | Inputs | Result |
+|---|---|---|
+| 1 | `name`, `resource_group_name`, `existing` | VM and NIC (`test-vm235`, portal-made) found and imported; plan lists the differences |
+| 2 | + 15 found values (location, subnet, public IP, size, image, disk type, Trusted Launch, IP configuration, …) | `2 to import, 1 to add, 1 to change, 1 to destroy`: only the NIC name and boot diagnostics left |
+| 3 | + `nic_name`, `boot_diagnostics_enabled` by hand | `2 to import, 0 to add, 0 to change, 0 to destroy` |
+| 4 | + schedule, NSG and data disk switches with rough values | `7 to import, 0 to add, 3 to change`; found values filled the schedule's time, time zone and email |
+| 5 | + the data disk row's size, type and caching | `7 to import, 0 to add, 0 to change, 0 to destroy` (the first design's result) |
+
+The prefill was a 50-line Python spike over the plan JSON, without knowledge of Azure or of the module; built as
+`runner/found.go`, which adds the pass-through check and list rows.
+
+## What changed in the code
+
+| 0.7 | now |
+|---|---|
+| `registry/adopt.go`, `runner/scan.go`, `runner/probe.go`, `app/imports.go`, the scan wire types | deleted |
+| scan runs, Import page, `POST /workspaces/{name}/scans` | removed (migration 008 deletes scan runs) |
+| `runs.imports`, import blocks written by Opsolete | the module's import blocks; `Plan.Imports` feeds the guard |
+| form filled from a scan (`?scan&n`) | `?found=<run>` from the plan JSON (`runner/found.go`, `runs.found`) |
+| random placeholders for ignored secrets | gone: the user types a value (any, if the module ignores it; else the plan shows it changes) |
+
+Kept: the import guards, `Plan.Import` counts, keep-own environment values.
+
+## Limits
+
+- Modules have to be written for it (import blocks, data sources, Terraform ≥ 1.16). Modules without an
+  `existing` input simply don't offer the switch.
+- Optional parts aren't detected: the user switches on the schedule, NSG or a data disk row. A module may detect
+  them with data sources where the provider has them.
+- Values built from several inputs are fixed by hand, guided by the plan.
+- Attributes the provider treats as unmanaged when unset (`security_rule` with `nsg_rules = []`) fit without
+  being managed: portal-made NSG rules stay unmanaged until they're entered as rows.
+- Not tried: Linux VMs; a NIC outside the VM's resource group (the module above only looks there).
 
 ## Open
 
-- One fill pipeline (inputs from `terraform query`, parts from the probe plan's "before"): checked live, not worth
-  it (see above).
+- The example modules: `existing` for the VM itself (the data source and import blocks above); in
+  [terraform-modules-examples](https://github.com/Opsolete/terraform-modules-examples), not this repository.
+- Not tried: Linux VMs; a NIC outside the VM's resource group; `runner/found.go` itself against Azure (the spike
+  was; the Go version is tested on plan JSON shaped like Terraform's, and with a real Terraform import).
+- A picker (what exists, what's managed) on `terraform query`, if wanted.
 
-- Linux VMs, extensions: not tried on real resources.
-- Probes: more than 100 tries per scan are skipped (logged); a part from a local module (`./x`) isn't tried.
-- More than 50 found per scan: fit-checked in batches; paging past `limit = 1000` per list type.
-- Resources no template can manage: listing them would show which templates to write next.
-- Import by resource ID (without a scan), bulk import of everything that fits.
+## Research (November 2026)
+
+- Terraform: import blocks (1.5), `for_each` on import (1.7), resource identity (1.12), `list` blocks and
+  `terraform query` (1.14), import blocks in child modules (1.16; 1.16.0 drops some imports on `for_each`
+  instances, use ≥ 1.16.1).
+- Closest products: Pulumi's program-first import (plan the program, plug in IDs), Azure Landing Zones' migration
+  guide (import blocks at module addresses, edit the variables until the plan is clean), StackGuardian and Firefly
+  (AI-filled module inputs, plan until the diff is zero). This design is that loop with Terraform doing the finding and
+  the plan JSON doing the filling.

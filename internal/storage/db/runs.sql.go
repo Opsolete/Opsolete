@@ -88,6 +88,25 @@ func (q *Queries) DeleteWorkspaceTemplate(ctx context.Context, arg DeleteWorkspa
 	return err
 }
 
+const endImport = `-- name: EndImport :exec
+UPDATE workspace_templates SET inputs = jsonb_set(inputs, ARRAY[$1::text], 'false'::jsonb)
+WHERE workspace_id = $2::uuid AND name = ANY($3::text[])
+    AND inputs -> $1::text = 'true'::jsonb
+`
+
+type EndImportParams struct {
+	Input       string
+	WorkspaceID uuid.UUID
+	Names       []string
+}
+
+// An applied import: the templates' modules stop importing (their import input false). The resources are in the
+// state now, so their import blocks did nothing anymore: the next plan doesn't change.
+func (q *Queries) EndImport(ctx context.Context, arg EndImportParams) error {
+	_, err := q.db.Exec(ctx, endImport, arg.Input, arg.WorkspaceID, arg.Names)
+	return err
+}
+
 const insertWorkspaceTemplate = `-- name: InsertWorkspaceTemplate :execrows
 INSERT INTO workspace_templates (workspace_id, name, template_id, module_source, module_ref, inputs)
 VALUES ($1::uuid, $2::text, $3::text, $4::text,
@@ -269,7 +288,7 @@ func (q *Queries) PruneRunLogs(ctx context.Context, arg PruneRunLogsParams) ([]b
 
 const pruneSpeculativeRuns = `-- name: PruneSpeculativeRuns :execrows
 DELETE FROM runs WHERE id IN (
-    SELECT r.id FROM runs r WHERE r.action IN ('assess', 'plan', 'scan') AND NOT run_active(r.status)
+    SELECT r.id FROM runs r WHERE r.action IN ('assess', 'plan') AND NOT run_active(r.status)
         AND r.updated_at < now() - make_interval(secs => $1::float8)
         AND CASE WHEN r.action = 'assess' THEN
                 EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = r.workspace_id AND a.action = 'assess' AND a.created_at > r.created_at)
@@ -286,7 +305,7 @@ type PruneSpeculativeRunsParams struct {
 	Lim       int32
 }
 
-// Drift checks, speculative plans and scans, history and logs with them (cascade), except what readers
+// Drift checks and speculative plans, history and logs with them (cascade), except what readers
 // need: a workspace's latest drift check (LatestAssessment) and latest one that found drift or none
 // (workspace_list.drifted), and a pull request's latest plan (QueueVCSRun's dedupe). Plans run by
 // hand (no pull request) have no exception.
@@ -571,32 +590,26 @@ func (q *Queries) RestoreTemplate(ctx context.Context, arg RestoreTemplateParams
 	return err
 }
 
-const runImports = `-- name: RunImports :one
-SELECT imports FROM runs WHERE id = $1::uuid
+const runFound = `-- name: RunFound :one
+SELECT found FROM runs WHERE id = $1::uuid
 `
 
-func (q *Queries) RunImports(ctx context.Context, id uuid.UUID) ([]byte, error) {
-	row := q.db.QueryRow(ctx, runImports, id)
-	var imports []byte
-	err := row.Scan(&imports)
-	return imports, err
+func (q *Queries) RunFound(ctx context.Context, id uuid.UUID) ([]byte, error) {
+	row := q.db.QueryRow(ctx, runFound, id)
+	var found []byte
+	err := row.Scan(&found)
+	return found, err
 }
 
-const runScan = `-- name: RunScan :one
-SELECT COALESCE(scan_resource_group, '')::text AS resource_group, candidates, inventory FROM runs WHERE id = $1::uuid AND action = 'scan'
+const runPlan = `-- name: RunPlan :one
+SELECT plan FROM runs WHERE id = $1::uuid
 `
 
-type RunScanRow struct {
-	ResourceGroup string
-	Candidates    []byte
-	Inventory     []byte
-}
-
-func (q *Queries) RunScan(ctx context.Context, id uuid.UUID) (RunScanRow, error) {
-	row := q.db.QueryRow(ctx, runScan, id)
-	var i RunScanRow
-	err := row.Scan(&i.ResourceGroup, &i.Candidates, &i.Inventory)
-	return i, err
+func (q *Queries) RunPlan(ctx context.Context, id uuid.UUID) ([]byte, error) {
+	row := q.db.QueryRow(ctx, runPlan, id)
+	var plan []byte
+	err := row.Scan(&plan)
+	return plan, err
 }
 
 const setConfigChanges = `-- name: SetConfigChanges :exec
@@ -622,18 +635,17 @@ func (q *Queries) SetRunAlwaysConfirm(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
-const setRunImports = `-- name: SetRunImports :exec
-UPDATE runs SET imports = $1::jsonb, always_confirm = true WHERE id = $2::uuid
+const setRunFound = `-- name: SetRunFound :exec
+UPDATE runs SET found = $1::jsonb WHERE id = $2::uuid
 `
 
-type SetRunImportsParams struct {
-	Imports []byte
-	ID      uuid.UUID
+type SetRunFoundParams struct {
+	Found []byte
+	ID    uuid.UUID
 }
 
-// An adoption: it always waits for a human, also with auto-apply.
-func (q *Queries) SetRunImports(ctx context.Context, arg SetRunImportsParams) error {
-	_, err := q.db.Exec(ctx, setRunImports, arg.Imports, arg.ID)
+func (q *Queries) SetRunFound(ctx context.Context, arg SetRunFoundParams) error {
+	_, err := q.db.Exec(ctx, setRunFound, arg.Found, arg.ID)
 	return err
 }
 
@@ -690,35 +702,6 @@ type SetRunRolloutParams struct {
 
 func (q *Queries) SetRunRollout(ctx context.Context, arg SetRunRolloutParams) error {
 	_, err := q.db.Exec(ctx, setRunRollout, arg.RolloutID, arg.ID)
-	return err
-}
-
-const setRunScanResourceGroup = `-- name: SetRunScanResourceGroup :exec
-UPDATE runs SET scan_resource_group = $1::text WHERE id = $2::uuid
-`
-
-type SetRunScanResourceGroupParams struct {
-	ResourceGroup string
-	ID            uuid.UUID
-}
-
-func (q *Queries) SetRunScanResourceGroup(ctx context.Context, arg SetRunScanResourceGroupParams) error {
-	_, err := q.db.Exec(ctx, setRunScanResourceGroup, arg.ResourceGroup, arg.ID)
-	return err
-}
-
-const setRunScanResult = `-- name: SetRunScanResult :exec
-UPDATE runs SET candidates = $1::jsonb, inventory = $2::jsonb WHERE id = $3::uuid
-`
-
-type SetRunScanResultParams struct {
-	Candidates []byte
-	Inventory  []byte
-	ID         uuid.UUID
-}
-
-func (q *Queries) SetRunScanResult(ctx context.Context, arg SetRunScanResultParams) error {
-	_, err := q.db.Exec(ctx, setRunScanResult, arg.Candidates, arg.Inventory, arg.ID)
 	return err
 }
 

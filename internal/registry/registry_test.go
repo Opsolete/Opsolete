@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -209,5 +210,64 @@ func TestResolveSensitive(t *testing.T) {
 	want := []templates.Input{{Name: "secret", Label: "secret", Type: "string", Sensitive: true}, {Name: "pw", Label: "pw", Type: "string", Sensitive: true}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got  %+v\nwant %+v", got, want)
+	}
+}
+
+// TestListInputs: a list(object({...})) variable of strings, numbers and bools is a list input, its fields in the
+// order written, optional ones not required with optional()'s default; other complex types stay skipped. A
+// template's JSON adds a label or options to a field like to an input.
+func TestListInputs(t *testing.T) {
+	archive := registrytest.TarGz(t, map[string]string{"main.tf": `
+variable "data_disks" {
+  type = list(object({
+    lun      = number
+    size_gb  = number
+    type     = optional(string, "Standard_LRS")
+    name     = optional(string)
+    existing = optional(bool, false)
+  }))
+  default = [{ lun = 0, size_gb = 32 }]
+}
+variable "tags" { type = map(string) }
+variable "nested" { type = list(object({ ports = list(number) })) }
+variable "dns" { type = list(string) }
+variable "zones" { type = set(string) }
+variable "network" {
+  type = object({
+    cidr = string
+    dns  = optional(bool, true)
+  })
+}
+variable "counts" { type = map(number) }
+`})
+	ins, err := Inspect(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs, skipped := Inputs(ins.Variables)
+	slices.Sort(skipped)
+	if len(inputs) != 5 || !reflect.DeepEqual(skipped, []string{"counts (map(number))", "nested (list(object({ ports = list(number) })))"}) {
+		t.Fatalf("%+v %q", inputs, skipped)
+	}
+	byName := map[string]templates.Input{}
+	for _, in := range inputs {
+		byName[in.Name] = in
+	}
+	if byName["tags"].Type != "map" || byName["dns"].Type != "string_list" || byName["zones"].Type != "string_list" ||
+		!reflect.DeepEqual(byName["network"].Fields, []templates.Input{{Name: "cidr", Label: "cidr", Type: "string", Required: true},
+			{Name: "dns", Label: "dns", Type: "bool", Default: "true"}}) || byName["network"].Type != "object" {
+		t.Fatalf("other types: %+v", byName)
+	}
+	in := byName["data_disks"]
+	want := []templates.Input{{Name: "lun", Label: "lun", Type: "number", Required: true}, {Name: "size_gb", Label: "size_gb", Type: "number", Required: true},
+		{Name: "type", Label: "type", Type: "string", Default: "Standard_LRS"}, {Name: "name", Label: "name", Type: "string"},
+		{Name: "existing", Label: "existing", Type: "bool", Default: "false"}}
+	if in.Type != "list" || in.Default != `[{"lun":0,"size_gb":32}]` || !reflect.DeepEqual(in.Fields, want) {
+		t.Fatalf("%+v", in)
+	}
+	got := Resolve([]templates.Input{{Name: "data_disks", Label: "Data disks", Fields: []templates.Input{
+		{Name: "type", Type: "select", Label: "Disk type", Options: []templates.Option{{Value: "Standard_LRS"}, {Value: "Premium_LRS"}}}}}}, ins.Variables)
+	if f := got[0].Fields[2]; got[0].Label != "Data disks" || f.Label != "Disk type" || f.Type != "select" || len(f.Options) != 2 || f.Default != "Standard_LRS" {
+		t.Fatalf("resolved: %+v", got[0])
 	}
 }

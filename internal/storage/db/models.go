@@ -105,35 +105,32 @@ type RolloutList struct {
 }
 
 type Run struct {
-	ID                uuid.UUID
-	WorkspaceID       uuid.UUID
-	Action            string
-	Status            string
-	Replace           []byte
-	Plan              []byte
-	Outputs           []byte
-	Runner            *string
-	LeaseID           *string
-	LeaseUntil        *time.Time
-	LeaseAckedAt      *time.Time
-	CancelRequested   bool
-	LogBytes          int64
-	LogRemovedAt      *time.Time
-	VcsCommit         *string
-	VcsPullRequest    *int32
-	RolloutID         uuid.NullUUID
-	ConfigChanges     []byte
-	CreatedBy         uuid.NullUUID
-	ConfirmedBy       uuid.NullUUID
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
-	AlwaysConfirm     bool
-	RemoveTemplates   []string
-	Promotion         []byte
-	Imports           []byte
-	ScanResourceGroup *string
-	Candidates        []byte
-	Inventory         []byte
+	ID              uuid.UUID
+	WorkspaceID     uuid.UUID
+	Action          string
+	Status          string
+	Replace         []byte
+	Plan            []byte
+	Outputs         []byte
+	Runner          *string
+	LeaseID         *string
+	LeaseUntil      *time.Time
+	LeaseAckedAt    *time.Time
+	CancelRequested bool
+	LogBytes        int64
+	LogRemovedAt    *time.Time
+	VcsCommit       *string
+	VcsPullRequest  *int32
+	RolloutID       uuid.NullUUID
+	ConfigChanges   []byte
+	CreatedBy       uuid.NullUUID
+	ConfirmedBy     uuid.NullUUID
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+	AlwaysConfirm   bool
+	RemoveTemplates []string
+	Promotion       []byte
+	Found           []byte
 }
 
 type RunList struct {

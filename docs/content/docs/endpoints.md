@@ -59,10 +59,9 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 | `POST /workspaces/{name}/variables` | operate | Sets a variable: `category` (`env` or `terraform`), `key`, `value`, `sensitive` |
 | `POST /workspaces/{name}/variables/{id}/delete` | operate | Deletes a variable |
 | `GET /workspaces/{name}/deploy` | read | Templates to add |
-| `GET /workspaces/{name}/import` | read | Import existing resources: the scan form, the templates a scan can use, the latest scans |
-| `GET /workspaces/{name}/templates/new` | operate | Form to add `?template={id}` |
+| `GET /workspaces/{name}/templates/new` | operate | Form to add `?template={id}`; with `&found={run}&from={module}`, filled in with what that import plan found for the module (`404` if nothing) |
 | `POST /workspaces/{name}/templates/new` | operate | Adds it and queues a plan |
-| `GET /workspaces/{name}/templates/{module}` | operate | Configure an added template (or update it to the template's version) |
+| `GET /workspaces/{name}/templates/{module}` | operate | Configure an added template (or update it to the template's version); with `?found={run}`, filled in with what that import plan found for it (`404` if nothing) |
 | `POST /workspaces/{name}/templates/{module}` | operate | Saves it and queues a plan |
 | `POST /workspaces/{name}/templates/{module}/remove` | operate | Removes it: a plan destroying its resources, or at once if nothing is deployed |
 | `GET /workspaces/{name}/promote` | read | Pick a promotion target; with `?target={workspace}` (operate on it) or `?new={name}&project={project}` (operate on the project) the preview of what changes there |
@@ -85,10 +84,10 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 | Endpoint | Access | Purpose |
 |---|---|---|
 | `POST /workspaces/{name}/runs` | operate | Starts a run: `action=apply\|plan\|destroy\|refresh\|assess`, `replace=<address>` (apply only, repeatable); `409` while another run is active |
-| `POST /workspaces/{name}/scans` | operate | Starts a scan (a run, action `scan`) for existing resources the catalog's registry templates can take over, in `resource_group=<name>` (empty: the whole subscription); `422` for an invalid name or when no template can import, `409` while another run is active |
-| `GET /workspaces/{name}/runs/{run}` | read | Plan, confirm / discard / cancel, live log, history; a scan's results |
+| `GET /workspaces/{name}/runs/{run}` | read | Plan, confirm / discard / cancel, live log, history; an import plan's found values (operate) |
 | `POST /workspaces/{name}/runs/{run}/confirm` | operate | Queues the apply of a plan waiting for confirmation |
 | `POST /workspaces/{name}/runs/{run}/discard` | operate | Ends it without applying |
+| `POST /workspaces/{name}/runs/{run}/change` | operate | Change settings: discards an import plan waiting for confirmation, and redirects to the run's template's form (configure, or add again when the run's end removed it) with what was entered for it and what its plan found; for an import plan, or a run that changed a template and ended without applying; `404` otherwise, `409` while planning |
 | `POST /workspaces/{name}/runs/{run}/cancel` | operate | Cancels; `force=1` cuts off a runner that doesn't react |
 | `GET /workspaces/{name}/runs/{run}/logs` | read | Raw log |
 | `GET /workspaces/{name}/runs/{run}/logs/stream` | read | Live log (Server-Sent Events); at most 8 streams per user per replica, else `429` |

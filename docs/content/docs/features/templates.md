@@ -186,35 +186,55 @@ A template's module is deployed by people who never write Terraform, so it has t
 ### Writing modules that can import
 
 To [import existing resources]({{< relref "/docs/features/workspaces#import-existing-resources" >}}) the module
-must be able to describe them as they are, or the import plans changes, or replaces them:
+finds and imports them itself, and must be able to describe them as they are:
 
-- Make every setting people choose differently, and that forces replacement when changed (names of sub-resources,
-  image, disk type, security settings), an optional input whose default is the module's usual behavior. New
-  deployments then stay the same.
-- Pass inputs straight through (`attr = var.x` or `coalesce(var.x, …)`), so the import can read which input sets
-  which attribute.
-- Put values the cloud never returns (`admin_password`, `custom_data`) in `lifecycle { ignore_changes }`.
-- Use `count = var.x == "value" ? 1 : 0` for resources that depend on a choice (Windows or Linux VM).
-- For parts the scan can't find (Terraform can't list them: data disks, an auto-shutdown schedule, a security
-  group's link to a NIC), let the module import them itself: an input `existing` and an `import` block in the
-  module (Terraform ≥ 1.16) whose ID it builds from its own inputs; once in state, Terraform skips the block, so
-  it stays in the module. The scan then fills those parts in: it tries the part's module with `existing` on for
-  each resource of the type the ID names (`…/providers/<namespace>/<type>/${var.name}`; an ID without a name is
-  tried once), and what imports fills the form. For that, the module call's arguments come from inputs, a list's
-  rows (`each.value.<field>`) or found resources, and required text fields get a placeholder matching their
-  `validation`'s `can(regex(...))`, so the provider's own format checks pass:
+- **An `existing` input** (a `bool`, default `false`) that switches on `import` blocks in the module (Terraform ≥
+  1.16). Their IDs come from the inputs that identify the resource (name, resource group) and from data sources
+  for what the user doesn't know (a VM's network interface); `azurerm_resources` finds any type by name without
+  the feature-frozen `azurerm_virtual_machine` family, and its postcondition says clearly when nothing is there. Once the import is applied, Opsolete switches
+  `existing` off again, so the data sources aren't read anymore. Opsolete writes no import blocks and knows nothing
+  about the cloud: the module does.
 
   ```hcl
+  variable "existing" {
+    type    = bool
+    default = false
+  }
+
+  data "azurerm_resources" "vm" {
+    count               = var.existing ? 1 : 0
+    name                = var.name
+    resource_group_name = var.resource_group_name
+    type                = "Microsoft.Compute/virtualMachines"
+
+    lifecycle {
+      postcondition {
+        condition     = length(self.resources) == 1
+        error_message = "existing: there is no VM named ${var.name} in resource group ${var.resource_group_name} to import."
+      }
+    }
+  }
+
   import {
-    for_each = var.existing ? toset(["main"]) : toset([])
-    to       = azurerm_virtual_machine_data_disk_attachment.main
-    id       = "${var.virtual_machine_id}/dataDisks/${var.name}" # azurerm's ID for the attachment
+    for_each = var.existing ? toset(["vm"]) : toset([])
+    to       = azurerm_windows_virtual_machine.main
+    id       = data.azurerm_resources.vm[0].resources[0].id
   }
   ```
 
-The [example VM module](https://github.com/Opsolete/terraform-modules-examples/tree/main/virtualmachine) does this:
-its data disks (**existing** per disk in `data_disks`), schedule (`auto_shutdown_existing`) and
-security group (`nsg_existing`).
+- **Pass inputs straight through** (`attr = var.x`, or `coalesce(var.x, "default")`), also through module calls and
+  a list's rows (`each.value.<field>`): then **Use found values** fills the input in from the plan. A value the
+  module builds (`"${var.name}-nic"`, several inputs) is set by hand.
+- Make every setting people choose differently, and that forces replacement when changed (names of sub-resources,
+  image, disk type, security settings), an optional input whose default is the module's usual behavior, so new
+  deployments stay the same.
+- Put values the cloud never returns (`admin_password`, `custom_data`) in `lifecycle { ignore_changes }`.
+- Optional parts (data disks, an auto-shutdown schedule, a security group) get a switch of their own (an
+  `existing` field per data disk row, `auto_shutdown_existing`), so the user says which exist.
+
+The [example Windows VM module](https://github.com/Opsolete/terraform-modules-examples/tree/main/windows-vm) does this:
+`existing` imports the VM and its network interface, and its data disks (**existing** per disk in `data_disks`),
+schedule (`auto_shutdown_existing`) and security group (`nsg_existing`) have switches of their own.
 
 ## Conditional inputs
 

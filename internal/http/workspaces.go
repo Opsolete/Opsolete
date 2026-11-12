@@ -29,7 +29,7 @@ func (s *Server) workspaceRoutes(mux routes) {
 	mux.HandleFunc("GET /v1/vcs-archives/{file}", s.vcsArchive)
 	// the workspace's side-menu pages: workspace.html shows the part of the tab
 	mux.HandleFunc("GET /workspaces/{name}", s.workspaceTab("overview"))
-	for _, tab := range []string{"runs", "states", "variables", "settings", "deploy", "import"} {
+	for _, tab := range []string{"runs", "states", "variables", "settings", "deploy"} {
 		mux.HandleFunc("GET /workspaces/{name}/"+tab, s.workspaceTab(tab))
 	}
 	mux.HandleFunc("GET /workspaces/{name}/settings/{page}", s.workspaceTab("settings"))
@@ -42,7 +42,6 @@ func (s *Server) workspaceRoutes(mux routes) {
 	mux.HandleFunc("POST /workspaces/{name}/delete", s.deleteWorkspace)
 	mux.HandleFunc("GET /workspaces/{name}/templates/new", s.workspaceTemplateForm)
 	mux.HandleFunc("POST /workspaces/{name}/templates/new", s.saveWorkspaceTemplate)
-	mux.HandleFunc("POST /workspaces/{name}/scans", s.newScan)
 	mux.HandleFunc("GET /workspaces/{name}/templates/{module}", s.workspaceTemplateForm)
 	mux.HandleFunc("POST /workspaces/{name}/templates/{module}", s.saveWorkspaceTemplate)
 	mux.HandleFunc("POST /workspaces/{name}/templates/{module}/remove", s.removeWorkspaceTemplate)
@@ -52,6 +51,7 @@ func (s *Server) workspaceRoutes(mux routes) {
 	mux.HandleFunc("GET /workspaces/{name}/runs/{run}", s.run)
 	mux.HandleFunc("POST /workspaces/{name}/runs/{run}/confirm", s.confirmRun)
 	mux.HandleFunc("POST /workspaces/{name}/runs/{run}/discard", s.discardRun)
+	mux.HandleFunc("POST /workspaces/{name}/runs/{run}/change", s.changeImport)
 	mux.HandleFunc("POST /workspaces/{name}/runs/{run}/cancel", s.cancelRun)
 	mux.HandleFunc("GET /workspaces/{name}/runs/{run}/logs", s.logText)
 	mux.HandleFunc("GET /workspaces/{name}/runs/{run}/logs/stream", s.logStream)
@@ -76,6 +76,7 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 			fs.Labels = inputLabels(t)
 		}
 		page := formPage{Page: Page{Section: "templates"}, T: t, Editor: s.canEditTemplates(r), Values: in.Inputs, F: fs, Workspace: in.Name, AutoApply: in.AutoApply, Project: in.Project}
+		page.importChoice(r) // as posted
 		var err error
 		if page.Projects, err = s.creatableProjects(r); err != nil {
 			s.internalError(w, "list projects", err)

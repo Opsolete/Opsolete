@@ -1,9 +1,9 @@
 package httpserver
 
 import (
+	"cmp"
 	"maps"
 	"net/http"
-	"strconv"
 
 	"github.com/google/uuid"
 
@@ -28,23 +28,23 @@ func (s *Server) loadTemplateForm(w http.ResponseWriter, r *http.Request) (formP
 	if f.Current != nil {
 		inputs, page.Cur = f.Current.Inputs, templates.Module{Source: f.Current.ModuleSource, Ref: f.Current.ModuleRef}
 	}
-	page.Values, page.Set = app.FormDefaults(f.Template, inputs)
-	if from := foundParam(r); page.Adding && from != nil { // importing what a scan found: its values
-		c, err := s.App.ScanCandidate(r.Context(), actor(r), r.PathValue("name"), *from)
-		if err != nil {
+	own := inputs
+	if id, err := uuid.Parse(r.URL.Query().Get("found")); err == nil { // "Use found values" of import plan id
+		module := cmp.Or(r.PathValue("module"), r.URL.Query().Get("from"))
+		if page.Found, err = s.App.FoundValues(r.Context(), actor(r), r.PathValue("name"), id, module, f.Template); err != nil {
 			s.uiError(w, r, err)
 			return formPage{}, false
 		}
-		maps.Copy(page.Values, c.Inputs)
-		page.Found, page.Placeholder = &c, map[string]bool{}
-		for _, in := range c.Placeholder {
-			page.Placeholder[in] = true
+		own = maps.Clone(inputs)
+		if own == nil {
+			own = map[string]any{}
 		}
+		maps.Copy(own, page.Found)
+		own[app.ImportInput] = true // still importing what the plan didn't take over yet
+		page.FoundRun = id
 	}
-	own := inputs
-	if page.Found != nil {
-		own = app.FoundValues(page.Found)
-	}
+	page.Values, page.Set = app.FormDefaults(f.Template, own)
+	page.importChoice(r)
 	if err := s.lock(r, &page, storage.Project{ID: f.Workspace.ProjectID, Name: f.Workspace.ProjectName}, own); err != nil {
 		s.internalError(w, "environment values", err)
 		return formPage{}, false
@@ -70,11 +70,8 @@ func (s *Server) saveWorkspaceTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page.Values = formValues(f, page.T)
-	var from *app.Found
-	if page.Adding {
-		from = foundParam(r)
-	}
-	_, run, err := s.App.SaveTemplate(r.Context(), actor(r), r.PathValue("name"), r.PathValue("module"), page.T.ID, page.Values, from)
+	page.importChoice(r) // as posted
+	_, run, err := s.App.SaveTemplate(r.Context(), actor(r), r.PathValue("name"), r.PathValue("module"), page.T.ID, page.Values, page.Found)
 	if s.failed(w, r, err, "template", f, func(status int, fs *formState) {
 		fs.Labels, page.F = inputLabels(page.T), fs
 		maps.Copy(page.Values, page.Locked) // shown as before, not as posted
@@ -83,17 +80,6 @@ func (s *Server) saveWorkspaceTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, "/workspaces/"+page.Configure.Name+"/runs/"+run.ID.String(), http.StatusSeeOther)
-}
-
-// foundParam is the scan result the add form imports: ?scan=<run>&n=<index>; nil without.
-func foundParam(r *http.Request) *app.Found {
-	q := r.URL.Query()
-	id, err := uuid.Parse(q.Get("scan"))
-	n, nerr := strconv.Atoi(q.Get("n"))
-	if err != nil || nerr != nil {
-		return nil
-	}
-	return &app.Found{Run: id, N: n}
 }
 
 // removeWorkspaceTemplate removes an added template, and starts the plan that destroys its resources.

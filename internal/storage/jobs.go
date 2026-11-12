@@ -21,18 +21,16 @@ var ErrLeaseLost = errors.New("job lease lost")
 
 // Job is one phase of a run, as handed to a runner.
 type Job struct {
-	RunID             uuid.UUID
-	WorkspaceID       uuid.UUID
-	Phase             string // plan | apply
-	Action            string // apply | destroy | refresh | assess | plan
-	Replace           []string
-	Target            []string // -target: module.<name> of each template a destroy run removes
-	Imports           []runnerapi.Import
-	ScanResourceGroup string // action scan: the resource group it searches; "" the whole subscription
-	LeaseID           string
-	VCS               bool                // the root configuration comes from the workspace's VCS branch
-	VCSCommit         string              // commit pinned when the run was queued (VCS-triggered runs), or by an earlier phase
-	Modules           []WorkspaceTemplate // templates added to the workspace
+	RunID       uuid.UUID
+	WorkspaceID uuid.UUID
+	Phase       string // plan | apply
+	Action      string // apply | destroy | refresh | assess | plan
+	Replace     []string
+	Target      []string // -target: module.<name> of each template a destroy run removes
+	LeaseID     string
+	VCS         bool                // the root configuration comes from the workspace's VCS branch
+	VCSCommit   string              // commit pinned when the run was queued (VCS-triggered runs), or by an earlier phase
+	Modules     []WorkspaceTemplate // templates added to the workspace
 }
 
 // ClaimJob hands the longest-waiting queued phase (plan or confirmed apply) to runner, or returns
@@ -63,14 +61,9 @@ func (s *Store) ClaimJob(ctx context.Context, runner string, lease time.Duration
 		if err != nil {
 			return err
 		}
-		j.WorkspaceID, j.Action, j.VCSCommit, j.ScanResourceGroup = r.WorkspaceID, r.Action, r.VcsCommit, r.ScanResourceGroup
+		j.WorkspaceID, j.Action, j.VCSCommit = r.WorkspaceID, r.Action, r.VcsCommit
 		if r.Replace != nil {
 			if err := json.Unmarshal(r.Replace, &j.Replace); err != nil {
-				return err
-			}
-		}
-		if r.Imports != nil {
-			if err := json.Unmarshal(r.Imports, &j.Imports); err != nil {
 				return err
 			}
 		}
@@ -193,35 +186,19 @@ func (s *Store) CancelRun(ctx context.Context, id uuid.UUID, email string, force
 // FinishJob records the result of a phase, releases the lease and the workspace's state lock, and
 // returns the run's new status:
 //   - plan with changes: needs_confirmation, or apply_queued for apply runs of auto-apply workspaces
-//     (destroys, refresh-only runs and template rollouts always wait for a human), or drifted for assess runs and
-//     planned for speculative plans, which are never applied; without changes: no_changes
-//   - scan: planned, its candidates stored
-//   - plan of an adoption that imports a resource a state manages already (resources: this workspace's state as
-//     the plan read it; the index for the others): errored
-//   - plan of an adoption (runs.imports) that would replace or delete anything: errored, and the template
-//     change is undone like any run that ends before its apply (adoptions always wait for a human)
-//   - apply: applied
+//     (destroys, refresh-only runs, template rollouts and plans that import into a template always wait for a
+//     human), or drifted for assess runs and planned for speculative plans, which are never applied; without
+//     changes: no_changes
+//   - plan of an apply run that imports a resource a state manages already (resources: this workspace's state as
+//     the plan read it; the index for the others), or that imports into a template and would replace or delete
+//     anything: errored, and the template change is undone like any run that ends before its apply
+//   - apply: applied; the templates it imported into stop importing (ImportInput false)
 //   - failed / canceled: errored / canceled
 //
-// resources is the index of the workspace's current state version (apply phase only).
+// resources is the index of the workspace's current state version; found what a plan that imports found
+// (runnerapi.FinishRequest.Found), kept for the form's "Use found values".
 func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, message string, outputs map[string]any,
-	plan *runnerapi.Plan, resources []runnerapi.Resource) (string, error) {
-	return s.finishJob(ctx, runID, lease, result, message, outputs, plan, resources, nil)
-}
-
-// FinishScan is FinishJob for a scan, with what it found.
-func (s *Store) FinishScan(ctx context.Context, runID uuid.UUID, lease, result, message string, candidates []runnerapi.Candidate,
-	inventory []runnerapi.Found) (string, error) {
-	return s.finishJob(ctx, runID, lease, result, message, nil, nil, nil, &scanResult{candidates, inventory})
-}
-
-type scanResult struct {
-	candidates []runnerapi.Candidate
-	inventory  []runnerapi.Found
-}
-
-func (s *Store) finishJob(ctx context.Context, runID uuid.UUID, lease, result, message string, outputs map[string]any,
-	plan *runnerapi.Plan, resources []runnerapi.Resource, scan *scanResult) (string, error) {
+	plan *runnerapi.Plan, resources []runnerapi.Resource, found map[string]map[string]any) (string, error) {
 	var final string
 	var entry *AuditEntry
 	err := s.tx(ctx, func(q *db.Queries) error {
@@ -234,44 +211,41 @@ func (s *Store) finishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 			return err
 		}
 		final = map[string]string{"failed": Errored, "canceled": Canceled}[result]
+		// a template's module importing what exists: always a human's call (a VCS configuration's own import
+		// blocks are its authors' business, but no resource may be in two states either way)
+		var importing bool
 		var conflict string
-		if r.Adopting && r.Status == Planning && final == "" {
-			if conflict, err = adoptionConflict(ctx, q, runID, resources); err != nil {
+		if r.Status == Planning && r.Action == "apply" && plan != nil && len(plan.Imports) > 0 && final == "" {
+			if conflict, err = importConflict(ctx, q, plan.Imports, resources); err != nil {
 				return err
 			}
+			names, err := importedTemplates(ctx, q, r.WorkspaceID, plan.Imports)
+			if err != nil {
+				return err
+			}
+			importing = len(names) > 0
 		}
 		switch {
 		case final != "":
 		case r.Status == Applying:
 			final = Applied
+			if r.Action == "apply" {
+				if err := endImport(ctx, q, runID, r.WorkspaceID); err != nil {
+					return err
+				}
+			}
 		case conflict != "":
 			final, message = Errored, conflict
-		case r.Action == "scan": // never applied
-			final = Planned
-			if scan == nil {
-				scan = &scanResult{}
-			}
-			c, err := json.Marshal(scan.candidates)
-			if err != nil {
-				return err
-			}
-			inv, err := json.Marshal(scan.inventory)
-			if err != nil {
-				return err
-			}
-			if err := q.SetRunScanResult(ctx, db.SetRunScanResultParams{ID: runID, Candidates: c, Inventory: inv}); err != nil {
-				return err
-			}
-		case r.Adopting && plan != nil && plan.Destroy > 0: // the template doesn't fit what exists
-			final, message = Errored, "adoption refused: the plan would replace or delete existing resources, so the template's "+
-				"inputs or module don't match them; nothing was applied"
+		case importing && plan.Destroy > 0: // the template doesn't fit what exists
+			final, message = Errored, "import refused: the plan would replace or delete existing resources, so the template's "+
+				"inputs don't match them; nothing was applied"
 		case plan == nil:
 			final = NoChanges
 		case r.Action == "assess":
 			final = Drifted
 		case r.Action == "plan":
 			final = Planned
-		case r.AutoApply && r.Action == "apply" && !r.NeedsConfirmation:
+		case r.AutoApply && r.Action == "apply" && !r.NeedsConfirmation && !importing:
 			final = ApplyQueued
 		default:
 			final = NeedsConfirmation
@@ -281,7 +255,7 @@ func (s *Store) finishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 		if r.CancelRequested && (final == NeedsConfirmation || final == ApplyQueued) {
 			final, message = Canceled, "canceled: the plan finished before the cancel request reached the runner"
 		}
-		var planJSON, outJSON []byte
+		var planJSON, outJSON, foundJSON []byte
 		if plan != nil {
 			if planJSON, err = json.Marshal(plan); err != nil {
 				return err
@@ -292,8 +266,28 @@ func (s *Store) finishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 				return err
 			}
 		}
+		if len(found) > 0 { // with each module's template: a restore may remove the module
+			mods, err := workspaceTemplates(ctx, q, r.WorkspaceID)
+			if err != nil {
+				return err
+			}
+			byModule := map[string]Found{}
+			for _, m := range mods {
+				if in := found[m.Name]; len(in) > 0 {
+					byModule[m.Name] = Found{TemplateID: m.TemplateID, Inputs: in, Saved: unsealed(m.Inputs)}
+				}
+			}
+			if foundJSON, err = json.Marshal(byModule); err != nil {
+				return err
+			}
+		}
 		if final == ApplyQueued && message == "" {
 			message = "auto-apply: waiting for a runner"
+		}
+		if foundJSON != nil { // before the transition: one that undoes the run's template change adds what it was set to
+			if err := q.SetRunFound(ctx, db.SetRunFoundParams{ID: runID, Found: foundJSON}); err != nil {
+				return err
+			}
 		}
 		_, step, err := transition(ctx, q, runID, final, message)
 		if err != nil {
@@ -324,32 +318,59 @@ func (s *Store) finishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 	return final, nil
 }
 
-// adoptionConflict says which of run runID's imports a state manages already ("" none): this workspace's as
-// its plan phase read it (resources; nil: its index), the others' by their index. A resource in two states, or
-// twice in one, would be destroyed by removing either.
-func adoptionConflict(ctx context.Context, q *db.Queries, runID uuid.UUID, resources []runnerapi.Resource) (string, error) {
-	raw, err := q.RunImports(ctx, runID)
-	if err != nil {
-		return "", err
+// ImportInput is the input with which a template's module imports what exists instead of creating it (a bool;
+// docs: templates.md, "Writing modules that can import").
+const ImportInput = "existing"
+
+// importedTemplates are the added templates whose modules imports go into.
+func importedTemplates(ctx context.Context, q *db.Queries, workspaceID uuid.UUID, imports []runnerapi.Import) ([]string, error) {
+	mods, err := workspaceTemplates(ctx, q, workspaceID)
+	var names []string
+	for _, m := range mods {
+		if slices.ContainsFunc(imports, func(im runnerapi.Import) bool { return strings.HasPrefix(im.To, "module."+m.Name+".") }) {
+			names = append(names, m.Name)
+		}
 	}
-	var imports []runnerapi.Import
-	if err := json.Unmarshal(raw, &imports); err != nil {
-		return "", err
+	return names, err
+}
+
+// endImport switches ImportInput off in the templates applied run runID imported into: what they imported is in
+// the state, so their modules stop looking for it (a resource deleted outside Terraform later is created again,
+// not looked for), and a promotion doesn't copy the switch.
+func endImport(ctx context.Context, q *db.Queries, runID, workspaceID uuid.UUID) error {
+	raw, err := q.RunPlan(ctx, runID)
+	if err != nil || raw == nil {
+		return err
 	}
+	var plan runnerapi.Plan
+	if err := json.Unmarshal(raw, &plan); err != nil || len(plan.Imports) == 0 {
+		return err
+	}
+	names, err := importedTemplates(ctx, q, workspaceID, plan.Imports)
+	if err != nil || len(names) == 0 {
+		return err
+	}
+	return q.EndImport(ctx, db.EndImportParams{WorkspaceID: workspaceID, Names: names, Input: ImportInput})
+}
+
+// importConflict says which of a plan's imports a state manages already ("" none): this workspace's as its plan
+// read it (resources; nil: its index), the others' by their index. A resource in two states, or twice in one,
+// would be destroyed by removing either.
+func importConflict(ctx context.Context, q *db.Queries, imports []runnerapi.Import, resources []runnerapi.Resource) (string, error) {
 	ids := make([]string, len(imports))
 	for i, im := range imports {
 		ids[i] = strings.ToLower(im.ID)
 	}
 	for _, res := range resources {
 		if slices.Contains(ids, strings.ToLower(res.ID)) && res.ID != "" {
-			return "adoption refused: " + res.ID + " is managed already, by " + res.Address + " in this workspace; nothing was applied", nil
+			return "import refused: " + res.ID + " is managed already, by " + res.Address + " in this workspace; nothing was applied", nil
 		}
 	}
 	rows, err := q.ManagedResourceIDs(ctx, ids)
 	if err != nil || len(rows) == 0 {
 		return "", err
 	}
-	return "adoption refused: " + rows[0].ID + " is managed already, in workspace " + rows[0].Workspace + "; nothing was applied", nil
+	return "import refused: " + rows[0].ID + " is managed already, in workspace " + rows[0].Workspace + "; nothing was applied", nil
 }
 
 // Unclaimed is a job UnclaimJobs put back in the queue.

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage/db"
+	"github.com/opsolete/opsolete/internal/templates"
 )
 
 // Run statuses. A workspace has at most one active run (enforced by runs_one_active_idx).
@@ -103,7 +103,8 @@ type StatusEntry struct {
 //   - leaving planning or applying: the lease ends, and with it the state lock the run's Terraform
 //     may have left behind (never a rollback's or CLI's)
 //   - ending: config_changes is dropped; ended before its apply started (discarded, canceled,
-//     errored), the configuration the run changed goes back (see restoreConfig); a destroy run
+//     errored), the configuration the run changed goes back (see restoreConfig), what it was set to kept for
+//     Change settings (keepEntered); a destroy run
 //     removing templates that succeeded (applied, or no changes: nothing was left) removes them
 //   - a promotion's first run (a destroy carrying the pending promotion) that succeeded queues the
 //     promotion's apply run, after removing its templates (continuePromotion); one that ended any
@@ -149,6 +150,9 @@ func transition(ctx context.Context, q *db.Queries, runID uuid.UUID, to, message
 		}
 	}
 	if (to == Discarded || to == Canceled || to == Errored) && from != Applying && run.ConfigChanges != nil {
+		if err := keepEntered(ctx, q, runID, run.ConfigChanges); err != nil {
+			return from, nil, err
+		}
 		if err := restoreConfig(ctx, q, run.WorkspaceID, run.ConfigChanges); err != nil {
 			return from, nil, err
 		}
@@ -289,7 +293,7 @@ func (s *Store) PruneRunLogs(ctx context.Context, olderThan time.Duration) (int6
 	return logs, err
 }
 
-// PruneSpeculativeRuns deletes drift checks, speculative plans and scans that ended more than olderThan
+// PruneSpeculativeRuns deletes drift checks and speculative plans that ended more than olderThan
 // ago, except the latest ones their readers need (see the query). It returns how many it deleted.
 func (s *Store) PruneSpeculativeRuns(ctx context.Context, olderThan time.Duration) (int64, error) {
 	return prune(func(lim int32) (int64, error) {
@@ -309,55 +313,73 @@ func prune(batch func(lim int32) (int64, error), lim int32) (int64, error) {
 	}
 }
 
-// CreateScan queues a scan of the workspace for existing resources (runner.scan), in resourceGroup ("" the
-// whole subscription). ErrRunActive, ErrLocalExecution: as for CreateRun.
-func (s *Store) CreateScan(ctx context.Context, workspaceID uuid.UUID, resourceGroup string, createdBy uuid.UUID) (Run, error) {
-	var r Run
-	err := s.tx(ctx, func(q *db.Queries) error {
-		var err error
-		if r, err = createRun(ctx, q, workspaceID, "scan", createdBy); err != nil {
+// Found is, for one template module of a run that changed it and ended without applying (or whose plan imports),
+// what it was set to and what its plan found importing (runnerapi.FinishRequest.Found): Change settings starts the
+// form from it.
+type Found struct {
+	TemplateID string         `json:"template_id"`
+	Inputs     map[string]any `json:"inputs,omitempty"` // found by the plan
+	Saved      map[string]any `json:"saved,omitempty"`  // the module's inputs the run had, sensitive (sealed) ones left out
+}
+
+// unsealed is inputs without the sealed values: kept past their run, they'd escape rotate-key's re-sealing (it
+// re-seals stored inputs and refuses while a run is active), and the form never shows them anyway.
+func unsealed(inputs map[string]any) map[string]any {
+	out := map[string]any{}
+	for k, v := range inputs {
+		if !templates.IsSealed(v) {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// keepEntered records on run runID, ending without its apply, what it set its templates to (raw config_changes'
+// afters), beside what its plan found: config_changes goes, and a restore may remove a template it added.
+func keepEntered(ctx context.Context, q *db.Queries, runID uuid.UUID, raw []byte) error {
+	var changes []configChange
+	if err := json.Unmarshal(raw, &changes); err != nil {
+		return err
+	}
+	found := map[string]Found{}
+	if cur, err := q.RunFound(ctx, runID); err != nil {
+		return err
+	} else if cur != nil {
+		if err := json.Unmarshal(cur, &found); err != nil {
 			return err
 		}
-		return q.SetRunScanResourceGroup(ctx, db.SetRunScanResourceGroupParams{ID: r.ID, ResourceGroup: resourceGroup})
-	})
-	return r, err
-}
-
-// Scan is a scan run's resource group ("" the whole subscription) and what it found (nil until it finished):
-// what templates can import, and every resource it saw (nil: it couldn't take stock).
-type Scan struct {
-	ResourceGroup string
-	Candidates    []runnerapi.Candidate
-	Inventory     []runnerapi.Found
-}
-
-// RunScan loads scan run runID; ErrNotFound if it isn't a scan.
-func (s *Store) RunScan(ctx context.Context, runID uuid.UUID) (Scan, error) {
-	row, err := s.q.RunScan(ctx, runID)
+	}
+	for _, c := range changes {
+		var after struct {
+			TemplateID string         `json:"template_id"`
+			Inputs     map[string]any `json:"inputs"`
+		}
+		if c.After == nil || string(c.After) == "null" {
+			continue // a removal
+		}
+		if err := json.Unmarshal(c.After, &after); err != nil {
+			return err
+		}
+		f := found[c.Module]
+		f.TemplateID, f.Saved = after.TemplateID, unsealed(after.Inputs)
+		found[c.Module] = f
+	}
+	b, err := json.Marshal(found)
 	if err != nil {
-		return Scan{}, notFound(err)
+		return err
 	}
-	sc := Scan{ResourceGroup: row.ResourceGroup}
-	if row.Candidates != nil {
-		err = json.Unmarshal(row.Candidates, &sc.Candidates)
-	}
-	if row.Inventory != nil && err == nil {
-		err = json.Unmarshal(row.Inventory, &sc.Inventory)
-	}
-	return sc, err
+	return q.SetRunFound(ctx, db.SetRunFoundParams{ID: runID, Found: b})
 }
 
-// ManagedBy returns, for those of ids (any case) a workspace's current state manages, that workspace's name,
-// by lowercase ID.
-func (s *Store) ManagedBy(ctx context.Context, ids []string) (map[string]string, error) {
-	lower := make([]string, len(ids))
-	for i, id := range ids {
-		lower[i] = strings.ToLower(id)
+// RunFound is what run runID's plan found importing, by template module; nil none. ErrNotFound: no such run.
+func (s *Store) RunFound(ctx context.Context, runID uuid.UUID) (map[string]Found, error) {
+	raw, err := s.q.RunFound(ctx, runID)
+	if err != nil {
+		return nil, notFound(err)
 	}
-	rows, err := s.q.ManagedResourceIDs(ctx, lower)
-	out := map[string]string{}
-	for _, r := range rows {
-		out[r.ID] = r.Workspace
+	var found map[string]Found
+	if raw != nil {
+		err = json.Unmarshal(raw, &found)
 	}
-	return out, err
+	return found, err
 }

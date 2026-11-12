@@ -143,10 +143,8 @@ func (s *Store) createWorkspace(ctx context.Context, id uuid.UUID, e EmptyWorksp
 			ModuleSource: t.ModuleSource, ModuleRef: t.ModuleRef, Inputs: raw}); err != nil {
 			return err
 		}
-		if run, err = createRun(ctx, q, id, "apply", e.CreatedBy); err != nil {
-			return err
-		}
-		return setImports(ctx, q, run, t.Imports)
+		run, err = createRun(ctx, q, id, "apply", e.CreatedBy)
+		return err
 	})
 	if err != nil {
 		return Workspace{}, Run{}, err

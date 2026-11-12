@@ -78,7 +78,8 @@ func TestPageModels(t *testing.T) {
 			}),
 			tab("settings", "deletion", func(p *workspacePage) { p.settingsTab = &settingsTab{} }),
 		},
-		"run.html": {&runPage{}, &runPage{Page: workspaceNav("ws", "runs", "", true), W: ws, R: run, History: hist, Plan: plan, Apply: apply}},
+		"run.html": {&runPage{}, &runPage{Page: workspaceNav("ws", "runs", "", true), W: ws, R: run, History: hist, Plan: plan, Apply: apply,
+			Found: []app.FoundTemplate{{Module: "vm_1", TemplateID: "vm", Added: true, Read: true}, {Module: "vm_2", TemplateID: "vm"}}}},
 		"account.html": {&accountPage{}, &accountPage{Page: Page{Sub: "profile"}, Groups: []string{"g"}}, &accountPage{Page: Page{Sub: "tokens"}, Tokens: []storage.UserToken{{Name: "t"}}},
 			&accountPage{Page: Page{Sub: "sessions"}, Sessions: []storage.UserSession{{UserAgent: "ua"}}}},
 		"audit.html":     {&auditPage{}, &auditPage{Entries: []auditRow{{Summary: "x", StatusText: "ok"}}, Broken: 3, Access: true}},
@@ -132,6 +133,9 @@ func TestPageModels(t *testing.T) {
 		"form.html": {&formPage{}, &formPage{T: tpl, Editor: true, Values: map[string]string{"size": "s"}, Projects: []storage.Project{{Name: "p"}}},
 			&formPage{Page: workspaceNav("ws", "templates", "", true), T: tpl, Configure: &ws, Module: "vm_1", Set: map[string]bool{"pw": true}},
 			&formPage{T: tpl, Values: map[string]string{"size": "s"}, Projects: []storage.Project{{Name: "p"}, {Name: "q"}}, EnvReload: true,
+				Locked: map[string]string{"size": "s"}, LockedBy: "p"},
+			&formPage{T: tpl, Values: map[string]string{"size": "s"}, Projects: []storage.Project{{Name: "p"}}, ImportURL: "/x?import=1", CreateURL: "/x", Importing: true},
+			&formPage{Page: workspaceNav("ws", "templates", "", true), T: tpl, Configure: &ws, Adding: true, Found: map[string]any{"size": "m"},
 				Locked: map[string]string{"size": "s"}, LockedBy: "p"}},
 	}
 	for _, f := range must(views.ReadDir("views")) {

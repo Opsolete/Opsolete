@@ -201,12 +201,9 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	}
 
 	fmt.Fprintf(w, "==> runner %s: %s phase of %s run %s\n", r.Name, job.Phase, job.Action, job.RunID)
-	if !slices.Contains([]string{"apply", "destroy", "refresh", "assess", "plan", "scan"}, job.Action) {
+	if !slices.Contains([]string{"apply", "destroy", "refresh", "assess", "plan"}, job.Action) {
 		// a server newer than this runner: runners and servers run the same version
 		return fail("job", fmt.Errorf("this runner doesn't know the action %q: upgrade it to the server's version", job.Action))
-	}
-	if job.Action == "scan" {
-		return r.scan(ctx, tf, dir, job, w, fail)
 	}
 	if src != "" {
 		fmt.Fprintln(w, "==> terraform init (fetch module)")
@@ -217,11 +214,6 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	if len(job.Modules) > 0 {
 		if err := writeModules(dir, job.Modules); err != nil {
 			return fail("write templates", err)
-		}
-	}
-	if len(job.Imports) > 0 { // both phases: the apply's configuration must match the plan's
-		if err := writeImports(dir, job.Imports); err != nil {
-			return fail("write imports", err)
 		}
 	}
 	backend := "terraform {\n  backend \"http\" {}\n}\n"
@@ -259,8 +251,8 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	if job.Phase == "plan" {
 		res := r.plan(ctx, tf, run, dir, job, w, fail)
 		if res.Status == "succeeded" && job.Action != "plan" && job.Action != "assess" {
-			// Index the state as it is (the run holds its lock): the import guard (storage.adoptionConflict)
-			// checks the resources it holds, and scans mark them managed, without waiting for an apply.
+			// Index the state as it is (the run holds its lock): the import guard (storage.importConflict)
+			// checks the resources it holds without waiting for an apply.
 			res.Resources = inventory(ctx, tf)
 		}
 		return res
@@ -404,7 +396,11 @@ func (r *Runner) plan(ctx context.Context, tf *tfProc, run func(...string) (bool
 		}
 	}
 	fmt.Fprintf(w, "\n==> plan saved: %s\n", counts(sum))
-	return runnerapi.FinishRequest{Status: "succeeded", Plan: &sum}
+	res := runnerapi.FinishRequest{Status: "succeeded", Plan: &sum}
+	if sum.Import > 0 { // what the imported resources are, for the form's "Use found values"
+		res.Found = found(p, job.Modules, mask.New(job.Secrets))
+	}
+	return res
 }
 
 func sleep(ctx context.Context, d time.Duration) {
