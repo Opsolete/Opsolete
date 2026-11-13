@@ -33,7 +33,7 @@ func TestRolloutPlan(t *testing.T) {
 	busy.RunID = uuid.New()
 	ready.WorkspaceID, ready.Module = w2, "sa_c8ad"
 
-	rows, ups, err := a.rolloutPlan(tpl, []storage.TemplateUse{cur, local, busy, missing, ready}, nil)
+	rows, ups, err := a.rolloutPlan(tpl, []storage.TemplateUse{cur, local, busy, missing, ready}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,11 +188,11 @@ func TestRolloutPlanEnvironment(t *testing.T) {
 	}}
 	w := uuid.New()
 	use := storage.TemplateUse{WorkspaceID: w, ExecutionMode: "remote", ModuleSource: "git::x", ModuleRef: "v2", Inputs: map[string]any{"name": "a"}}
-	rows, _, err := a.rolloutPlan(tpl, []storage.TemplateUse{use}, nil)
+	rows, _, err := a.rolloutPlan(tpl, []storage.TemplateUse{use}, nil, nil)
 	if err != nil || rows[0].State != RolloutNeedsInput || len(rows[0].Missing) != 1 || rows[0].Missing[0] != "region" {
 		t.Fatalf("no project value: %+v %v", rows, err)
 	}
-	rows, ups, err := a.rolloutPlan(tpl, []storage.TemplateUse{use}, map[uuid.UUID]EnvironmentMap{w: {"sa": {"region": {Value: "west"}}}})
+	rows, ups, err := a.rolloutPlan(tpl, []storage.TemplateUse{use}, map[uuid.UUID]EnvironmentMap{w: {"sa": {"region": {Value: "west"}}}}, nil)
 	if err != nil || rows[0].State != RolloutReady || len(ups[w]) != 1 {
 		t.Fatalf("project value: %+v %v", rows, err)
 	}

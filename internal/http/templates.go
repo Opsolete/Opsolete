@@ -58,12 +58,13 @@ type formPage struct {
 	Drafts    map[string]string // a refused form's typed secrets, sealed (drafts.go)
 	Locked    map[string]string // per-environment inputs the project sets (canonical values by name): read-only, not posted
 	LockedBy  string            // that project
+	FromVars  map[string]string // inputs Terraform variables fill (app.VarInputs): read-only, not posted
 	EnvReload bool              // creating: picking another project posts the form with refresh, shown again with that project's values
 }
 
 // Form is the page's form (app.NewForm): its fields as they're drawn.
 func (p formPage) Form() app.Form {
-	f := app.NewForm(p.T, app.FormState{Values: p.Values, Locked: p.Locked, Project: p.LockedBy, Set: p.Set, Found: p.Found})
+	f := app.NewForm(p.T, app.FormState{Values: p.Values, Locked: p.Locked, Project: p.LockedBy, Set: p.Set, Found: p.Found, FromVars: p.FromVars})
 	for i, fd := range f.Fields {
 		f.Fields[i].Draft = p.Drafts[fd.ID]
 	}
@@ -93,21 +94,25 @@ func (p *formPage) importChoice(r *http.Request, importing bool) {
 
 // lock shows the inputs project sets read-only (app.EnvironmentMap.LockedForm: the module's stored inputs old and
 // follows, and the page's found values): their values are the project's, also for show_if, and the server ignores
-// what is posted for them.
-func (s *Server) lock(r *http.Request, page *formPage, project storage.Project, old map[string]any, follows []string) error {
+// what is posted for them. The inputs Terraform variables fill (of workspace; uuid.Nil a new one in project) too.
+func (s *Server) lock(r *http.Request, page *formPage, project storage.Project, workspace uuid.UUID, old map[string]any, follows []string) error {
 	env, err := s.App.ProjectEnvironment(r.Context(), project.ID)
 	page.Locked, page.LockedBy = env.LockedForm(page.T, old, follows, page.Found), project.Name
+	if err == nil {
+		page.FromVars, err = s.App.VarInputs(r.Context(), page.T, workspace, project.Name)
+	}
 	return err
 }
 
 // lockDeploy is lock for the deploy form, with the project picked (name, "" the default) if the user may create workspaces there.
 func (s *Server) lockDeploy(r *http.Request, page *formPage) error {
-	page.EnvReload = len(page.Projects) > 1 && slices.ContainsFunc(page.T.Inputs, func(in templates.Input) bool { return in.PerEnvironment })
+	page.EnvReload = len(page.Projects) > 1 && (!s.App.AsksAll(page.T) || // a project's variable sets may fill inputs
+		slices.ContainsFunc(page.T.Inputs, func(in templates.Input) bool { return in.PerEnvironment }))
 	i := slices.IndexFunc(page.Projects, func(p storage.Project) bool { return p.Name == page.Project || page.Project == "" && p.Default })
 	if i < 0 {
 		return nil
 	}
-	return s.lock(r, page, page.Projects[i], nil, nil)
+	return s.lock(r, page, page.Projects[i], uuid.Nil, nil, nil)
 }
 
 var nonNameChars = regexp.MustCompile(`[^a-z0-9]+`)

@@ -13,7 +13,12 @@ A workspace's runs get **variables**: **env** (environment variables, e.g. cloud
 
 ## Settings outside the template's form
 
-A template's form asks only what users must choose, but a project can still set other module variables: a terraform variable in a set attached to the [project]({{< relref "/docs/features/projects" >}}) (or on the workspace) reaches every template whose module declares it, with the precedence above. The module declares the variable with a safe default, so other projects keep the standard. Templates only get it from a [registry]({{< relref "/docs/features/module-registry" >}}) module (see [Add templates to a workspace]({{< relref "/docs/features/workspaces#add-templates-to-a-workspace" >}})).
+A template's form asks only what users must choose; a project can set the rest once. A **terraform variable** of the workspace, or of a variable set attached to its [project]({{< relref "/docs/features/projects" >}}) (or global, or attached to the workspace), fills every template input of that name that the **template's JSON doesn't list**, with the precedence above. Example: a subscription's standard network, `vnet_name = VNET` in a set attached to the project, for every template whose module declares `vnet_name`.
+
+- **The template decides:** an input listed in the template's JSON (in the builder: an input card) is asked as always. Remove the card of a variable a set should fill. A registry module's other variables still show in the form when no variable fills them, required if the module has no default.
+- **In the form**, a filled input shows its value read-only, *Set by a Terraform variable* (a sensitive one as `(sensitive)`); what's posted for it is ignored and nothing is stored, so changing the variable changes the next plan of every workspace using it. The deploy form shows the values of the picked project's sets.
+- **An import** shows such an input's found value next to the variable's, but never asks for another round for it: change the variable instead.
+- Only templates on [registry]({{< relref "/docs/features/module-registry" >}}) modules (see [Add templates to a workspace]({{< relref "/docs/features/workspaces#add-templates-to-a-workspace" >}})). For a value that differs per project but should show as the project's, use a [per-environment input]({{< relref "/docs/features/environments#per-environment-inputs" >}}) instead.
 
 Anyone who operates a workspace can set its terraform variables, so a variable the form doesn't show is not locked. Hard-code what must not change, or restrict the allowed values with a `validation` block.
 

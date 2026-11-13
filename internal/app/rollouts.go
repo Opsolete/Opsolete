@@ -58,8 +58,9 @@ type Rollouts struct {
 }
 
 // rolloutPlan sorts t's uses into rows, and the upgrades of the ready ones by workspace id.
-// env: each use's workspace's project values (useEnvironments): an input the project sets isn't missing.
-func (a *App) rolloutPlan(t templates.Template, uses []storage.TemplateUse, env map[uuid.UUID]EnvironmentMap) ([]RolloutRow, map[uuid.UUID][]storage.TemplateUpgrade, error) {
+// env: each use's workspace's project values (useEnvironments), vars what its Terraform variables fill (useVars): an
+// input the project or a variable sets isn't missing.
+func (a *App) rolloutPlan(t templates.Template, uses []storage.TemplateUse, env map[uuid.UUID]EnvironmentMap, vars map[uuid.UUID]map[string]string) ([]RolloutRow, map[uuid.UUID][]storage.TemplateUpgrade, error) {
 	rows, ups := make([]RolloutRow, len(uses)), map[uuid.UUID][]storage.TemplateUpgrade{}
 	for i, u := range uses {
 		rows[i] = RolloutRow{TemplateUse: u}
@@ -73,7 +74,7 @@ func (a *App) rolloutPlan(t templates.Template, uses []storage.TemplateUse, env 
 			continue
 		}
 		raw, _ := FormDefaults(t, u.Inputs)
-		sv, err := a.save(formSave{T: t, Raw: raw, Old: u.Inputs, Follows: u.Follows, Env: env[u.WorkspaceID],
+		sv, err := a.save(formSave{T: t, Raw: raw, Old: u.Inputs, Follows: u.Follows, Env: env[u.WorkspaceID], Vars: vars[u.WorkspaceID],
 			Workspace: u.WorkspaceID, Module: u.Module}) // as a configure form saves it
 		if err != nil {
 			return nil, nil, err
@@ -113,6 +114,21 @@ func (a *App) useEnvironments(ctx context.Context, uses []storage.TemplateUse) (
 	return out, nil
 }
 
+// useVars is what each use's workspace's Terraform variables fill of t's inputs (VarInputs), by workspace id.
+func (a *App) useVars(ctx context.Context, t templates.Template, uses []storage.TemplateUse) (map[uuid.UUID]map[string]string, error) {
+	out := map[uuid.UUID]map[string]string{}
+	for _, u := range uses {
+		if _, ok := out[u.WorkspaceID]; ok {
+			continue
+		}
+		var err error
+		if out[u.WorkspaceID], err = a.VarInputs(ctx, t, u.WorkspaceID, ""); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
 // rolloutProject is the id of the named project, uuid.Nil for "" (all projects); ErrNotFound.
 func (a *App) rolloutProject(ctx context.Context, actor Actor, name string) (uuid.UUID, error) {
 	if name == "" {
@@ -145,7 +161,11 @@ func (a *App) Rollouts(ctx context.Context, actor Actor, id, project string) (Ro
 	if err != nil {
 		return v, err
 	}
-	if v.Rows, _, err = a.rolloutPlan(v.Template, uses, env); err != nil {
+	vars, err := a.useVars(ctx, v.Template, uses)
+	if err != nil {
+		return v, err
+	}
+	if v.Rows, _, err = a.rolloutPlan(v.Template, uses, env, vars); err != nil {
 		return v, err
 	}
 	seen := map[uuid.UUID]bool{}
@@ -298,7 +318,11 @@ func (a *App) tickRollout(ctx context.Context, ro storage.Rollout) error {
 	if err != nil {
 		return err
 	}
-	rows, ups, err := a.rolloutPlan(t, uses, env)
+	vars, err := a.useVars(ctx, t, uses)
+	if err != nil {
+		return err
+	}
+	rows, ups, err := a.rolloutPlan(t, uses, env, vars)
 	if err != nil {
 		return err
 	}

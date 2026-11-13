@@ -109,6 +109,7 @@ type formSave struct {
 	Follows   []string           // its per-environment inputs that followed the project (storage.WorkspaceTemplate.Follows)
 	Found     map[string]any     // what an import plan found that the form took: the module's own
 	Env       EnvironmentMap     // its project's values
+	Vars      map[string]string  // the inputs Terraform variables fill (VarInputs): not asked, not stored
 	Workspace uuid.UUID          // sensitive inputs are sealed to the workspace and module
 	Module    string
 }
@@ -129,7 +130,20 @@ type saved struct {
 func (a *App) save(s formSave) (saved, error) {
 	locked := s.Env.LockedForm(s.T, s.Old, s.Follows, s.Found)
 	raw := lockInputs(s.Raw, locked)
-	vals, errs := validate(s.T, raw)
+	t := s.T
+	if len(s.Vars) > 0 { // filled by Terraform variables: what's posted for them is ignored, and nothing stored
+		t.Inputs, raw = slices.Clone(t.Inputs), maps.Clone(raw)
+		for i, in := range t.Inputs {
+			if _, ok := s.Vars[in.Name]; ok {
+				t.Inputs[i].Required = false
+				delete(raw, in.Name)
+			}
+		}
+	}
+	vals, errs := validate(t, raw)
+	for name := range s.Vars {
+		delete(vals, name)
+	}
 	if err := a.SealInputs(s.T, raw, vals, s.Old, errs, s.Workspace, s.Module); err != nil {
 		return saved{}, err
 	}

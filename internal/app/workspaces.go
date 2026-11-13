@@ -79,6 +79,9 @@ func (a *App) CreateWorkspace(ctx context.Context, actor Actor, in NewWorkspace)
 		if s.Env, err = a.ProjectEnvironment(ctx, p.ID); err != nil {
 			return storage.Workspace{}, storage.Run{}, err
 		}
+		if s.Vars, err = a.VarInputs(ctx, t, uuid.Nil, p.Name); err != nil {
+			return storage.Workspace{}, storage.Run{}, err
+		}
 	}
 	sv, err := a.save(s)
 	if err != nil {
