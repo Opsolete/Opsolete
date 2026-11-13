@@ -5,7 +5,7 @@
 <tr><th>Key</th><th>Value</th><th>Category</th><th>Actions</th></tr>
 {{range .}}
 <tr>
-  <td><code>{{.Key}}</code>{{if .Sensitive}} <span class="tag">Sensitive</span>{{end}}</td>
+  <td><code>{{.Key}}</code>{{if .Sensitive}} <span class="tag">Sensitive</span>{{end}}{{if .HCL}} <span class="tag">HCL</span>{{end}}</td>
   <td>{{if .Sensitive}}<span class="muted">Sensitive - write only</span>{{else}}<code>{{.Value}}</code>{{end}}</td>
   <td>{{.Category}}</td>
   <td>{{if $.CanEdit}}<form method="post" action="{{$.Base}}/variables/{{.ID}}/delete">
@@ -24,10 +24,11 @@
   <!-- the value isn't echoed back: it may be a secret -->
   <input name="value" type="password" aria-label="value" placeholder="value" autocomplete="off"{{aria $f "value"}}>
   <label class="plain"><input type="checkbox" name="sensitive"{{if checked $f "sensitive" true}} checked{{end}}> Sensitive</label>
+  <label class="plain" title="Terraform variables: the value is HCL, e.g. [&quot;a&quot;, &quot;b&quot;] or {size = 2}"><input type="checkbox" name="hcl"{{if checked $f "hcl" false}} checked{{end}}> HCL</label>
   <button type="submit">Save variable</button>
 </form>
-{{template "fielderror" (dict "F" $f "N" "category")}}{{template "fielderror" (dict "F" $f "N" "key")}}{{template "fielderror" (dict "F" $f "N" "value")}}
-<p class="hint">Saving a key that exists (same category) replaces it. Sensitive values can't be read back, only replaced.</p>
+{{template "fielderror" (dict "F" $f "N" "category")}}{{template "fielderror" (dict "F" $f "N" "key")}}{{template "fielderror" (dict "F" $f "N" "value")}}{{template "fielderror" (dict "F" $f "N" "hcl")}}
+<p class="hint">Saving a key that exists (same category) replaces it. Sensitive values can't be read back, only replaced. HCL: a Terraform variable's value is an HCL value (a list, map, object, number or bool) instead of a string.</p>
 </details>
 {{end}}
 {{end}}

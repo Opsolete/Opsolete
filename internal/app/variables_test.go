@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -165,5 +166,37 @@ func TestTemplateAt(t *testing.T) {
 	}
 	if _, ok, err := a.TemplateAt(ctx, "gone", src, "1.0.0"); ok || err != nil {
 		t.Fatalf("not in the catalog: %v %v", ok, err)
+	}
+}
+
+// An HCL Terraform variable reaches Terraform typed (HCP's "HCL" checkbox); its value is checked when saved: a
+// literal (no references, no functions), for Terraform variables only.
+func TestHCLVariables(t *testing.T) {
+	a, ctx := testApp(t), context.Background()
+	ws := emptyWorkspace(t, a, admin)
+	set := func(v VariableInput) error { return a.SetWorkspaceVariable(ctx, admin, ws.Name, v) }
+	if err := set(VariableInput{Category: "terraform", Key: "subnets", Value: `["a", "b"]`, HCL: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := set(VariableInput{Category: "terraform", Key: "tags", Value: `{env = "prd", n = 2}`, HCL: true, Sensitive: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := set(VariableInput{Category: "terraform", Key: "plain", Value: `["not", "parsed"]`}); err != nil {
+		t.Fatal(err)
+	}
+	for _, bad := range []VariableInput{
+		{Category: "terraform", Key: "x", Value: `[1,`, HCL: true},
+		{Category: "terraform", Key: "x", Value: `var.other`, HCL: true},
+		{Category: "terraform", Key: "x", Value: `file("/etc/passwd")`, HCL: true},
+		{Category: "env", Key: "X", Value: `1`, HCL: true},
+	} {
+		if err := set(bad); !isValidation(err) {
+			t.Errorf("%+v: %v", bad, err)
+		}
+	}
+	_, vars, _, err := a.runVariables(ctx, ws.ID)
+	if err != nil || !reflect.DeepEqual(vars["subnets"], []any{"a", "b"}) || !reflect.DeepEqual(vars["tags"], map[string]any{"env": "prd", "n": 2.0}) ||
+		vars["plain"] != `["not", "parsed"]` {
+		t.Fatalf("vars: %#v %v", vars, err)
 	}
 }

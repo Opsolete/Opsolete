@@ -17,6 +17,7 @@ type Variable struct {
 	Key       string
 	Value     []byte
 	Sensitive bool
+	HCL       bool     // a Terraform variable's value is an HCL expression, not a string
 	Owner     VarOwner // part of the value's seal (app.VariableAD)
 	UpdatedAt time.Time
 }
@@ -27,7 +28,7 @@ type VarOwner struct{ WorkspaceID, SetID uuid.UUID }
 func toVariables(rows []db.Variable, err error) ([]Variable, error) {
 	out := make([]Variable, 0, len(rows))
 	for _, v := range rows {
-		out = append(out, Variable{ID: v.ID, Category: v.Category, Key: v.Key, Value: v.Value, Sensitive: v.Sensitive,
+		out = append(out, Variable{ID: v.ID, Category: v.Category, Key: v.Key, Value: v.Value, Sensitive: v.Sensitive, HCL: v.Hcl,
 			Owner: VarOwner{WorkspaceID: v.WorkspaceID.UUID, SetID: v.SetID.UUID}, UpdatedAt: v.UpdatedAt})
 	}
 	return out, err
@@ -52,10 +53,10 @@ func (s *Store) ResealVariable(ctx context.Context, id uuid.UUID, old, sealed []
 // SetVariable adds a variable, or replaces the owner's variable with the same category and key.
 func (s *Store) SetVariable(ctx context.Context, o VarOwner, v Variable) error {
 	if o.SetID != uuid.Nil {
-		return s.q.SetSetVariable(ctx, db.SetSetVariableParams{SetID: o.SetID, Category: v.Category, Key: v.Key, Value: v.Value, Sensitive: v.Sensitive})
+		return s.q.SetSetVariable(ctx, db.SetSetVariableParams{SetID: o.SetID, Category: v.Category, Key: v.Key, Value: v.Value, Sensitive: v.Sensitive, Hcl: v.HCL})
 	}
 	return s.q.SetWorkspaceVariable(ctx, db.SetWorkspaceVariableParams{WorkspaceID: o.WorkspaceID, Category: v.Category, Key: v.Key,
-		Value: v.Value, Sensitive: v.Sensitive})
+		Value: v.Value, Sensitive: v.Sensitive, Hcl: v.HCL})
 }
 
 // DeleteVariable deletes one of the owner's variables; ids of other owners are ignored.

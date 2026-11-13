@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -14,9 +15,11 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	ctyjson "github.com/zclconf/go-cty/cty/json"
 
 	"github.com/opsolete/opsolete/internal/app"
 	"github.com/opsolete/opsolete/internal/auth"
+	"github.com/opsolete/opsolete/internal/mask"
 	"github.com/opsolete/opsolete/internal/storage"
 )
 
@@ -59,6 +62,8 @@ func (s *Server) cloudRoutes(mux routes) {
 			map[string]any{"operations": false, "state-storage": true}, nil})
 	}))
 	mux.HandleFunc("GET "+p+"/organizations/{org}/workspaces/{name}", s.cloudUser(s.cloudGetWorkspace))
+	// cloud { workspaces { tags = [...] } } and `terraform workspace list` list them
+	mux.HandleFunc("GET "+p+"/organizations/{org}/workspaces", s.cloudUser(s.cloudListWorkspaces))
 	mux.HandleFunc("POST "+p+"/organizations/{org}/workspaces", s.cloudUser(s.cloudCreateWorkspace))
 	// cloud { workspaces { project = "x" } }: Terraform looks the project up by name, creates it if
 	// it's missing and the workspace is too, then creates the workspace in it.
@@ -175,6 +180,30 @@ func (s *Server) cloudGetWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeWorkspace(w, http.StatusOK, st.Workspace, lock != nil)
+}
+
+// cloudListWorkspaces lists the workspaces the token's user sees, filtered by search[name] (a prefix, as HCP) and
+// search[tags]: Opsolete has no workspace tags, so a tag filter matches none. One page: no pagination.
+// shortcut: locked is false in the list (no per-workspace lock lookup); Terraform reads it from the workspace itself.
+func (s *Server) cloudListWorkspaces(w http.ResponseWriter, r *http.Request) {
+	list, err := s.App.ListWorkspaces(r.Context(), actor(r), "")
+	if err != nil {
+		s.apiError(w, r, err)
+		return
+	}
+	q := r.URL.Query()
+	out := []apiObject{}
+	for _, ws := range list {
+		if q.Get("search[tags]") != "" || q.Get("filter[tagged][0][key]") != "" || !strings.HasPrefix(ws.Name, q.Get("search[name]")) {
+			continue
+		}
+		out = append(out, apiObject{"workspaces", ws.ID.String(), map[string]any{"name": ws.Name, "locked": false,
+			"execution-mode": ws.ExecutionMode, "operations": false, "terraform-version": "latest"},
+			map[string]any{"project": apiRef("projects", ws.ProjectID.String())}})
+	}
+	w.Header().Set("Content-Type", "application/vnd.api+json")
+	json.NewEncoder(w).Encode(map[string]any{"data": out, "meta": map[string]any{"pagination": map[string]any{
+		"current-page": 1, "total-pages": 1, "next-page": nil, "prev-page": nil, "total-count": len(out)}}})
 }
 
 // cloudCreateWorkspace: terraform init creates the cloud block's workspace if it doesn't exist,
@@ -337,10 +366,12 @@ func (s *Server) cloudCurrentState(w http.ResponseWriter, r *http.Request) {
 	writeAPI(w, http.StatusOK, stateVersionObject(st.Workspace.ID, vs[0]))
 }
 
-// cloudOutputs lists the current outputs by name only. Without a detailed-type Terraform falls back
-// to reading the whole state for their values, so this needs no copy of them.
+// cloudOutputs lists the current outputs, as HCP does: with their values and detailed-type, so `terraform output`
+// and the tfe provider's tfe_outputs need only read access (HCP's "read outputs"). The values are the state
+// version's stored ones (secrets masked). If any output is sensitive or masked, Opsolete has no value to give for
+// it: names only, Terraform then reads the whole state, which needs operate, as before.
 func (s *Server) cloudOutputs(w http.ResponseWriter, r *http.Request) {
-	st, ok := s.cloudState(w, r, app.LevelOperate)
+	st, ok := s.cloudState(w, r, app.LevelRead)
 	if !ok {
 		return
 	}
@@ -349,9 +380,27 @@ func (s *Server) cloudOutputs(w http.ResponseWriter, r *http.Request) {
 		s.apiError(w, r, err)
 		return
 	}
+	typed := map[string]any{}
+	for name, v := range outputs {
+		b, _ := json.Marshal(v)
+		ty, err := ctyjson.ImpliedType(b)
+		if v == mask.Sensitive || err != nil {
+			typed = nil
+			break
+		}
+		typed[name], _ = ctyjson.MarshalType(ty)
+	}
+	if typed == nil && st.Level < app.LevelOperate {
+		writeAPIError(w, http.StatusForbidden, "an output is sensitive: reading outputs then needs operate access to the workspace")
+		return
+	}
 	list := []apiObject{}
-	for name := range outputs {
-		list = append(list, apiObject{"state-version-outputs", "wsout-" + name, map[string]any{"name": name}, nil})
+	for _, name := range slices.Sorted(maps.Keys(outputs)) {
+		attrs := map[string]any{"name": name}
+		if typed != nil {
+			attrs["value"], attrs["sensitive"], attrs["detailed-type"] = outputs[name], false, json.RawMessage(typed[name].([]byte))
+		}
+		list = append(list, apiObject{"state-version-outputs", "wsout-" + name, attrs, nil})
 	}
 	writeAPI(w, http.StatusOK, list)
 }

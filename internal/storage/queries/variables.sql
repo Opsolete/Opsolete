@@ -13,14 +13,14 @@ SELECT * FROM variables;
 UPDATE variables SET value = sqlc.arg(sealed)::bytea WHERE id = sqlc.arg(id)::uuid AND value = sqlc.arg(old)::bytea;
 
 -- name: SetWorkspaceVariable :exec
-INSERT INTO variables (workspace_id, category, key, value, sensitive)
-VALUES (sqlc.arg(workspace_id)::uuid, sqlc.arg(category)::text, sqlc.arg(key)::text, sqlc.arg(value)::bytea, sqlc.arg(sensitive)::boolean)
-ON CONFLICT (workspace_id, category, key) DO UPDATE SET value = EXCLUDED.value, sensitive = EXCLUDED.sensitive, updated_at = now();
+INSERT INTO variables (workspace_id, category, key, value, sensitive, hcl)
+VALUES (sqlc.arg(workspace_id)::uuid, sqlc.arg(category)::text, sqlc.arg(key)::text, sqlc.arg(value)::bytea, sqlc.arg(sensitive)::boolean, sqlc.arg(hcl)::boolean)
+ON CONFLICT (workspace_id, category, key) DO UPDATE SET value = EXCLUDED.value, sensitive = EXCLUDED.sensitive, hcl = EXCLUDED.hcl, updated_at = now();
 
 -- name: SetSetVariable :exec
-INSERT INTO variables (set_id, category, key, value, sensitive)
-VALUES (sqlc.arg(set_id)::uuid, sqlc.arg(category)::text, sqlc.arg(key)::text, sqlc.arg(value)::bytea, sqlc.arg(sensitive)::boolean)
-ON CONFLICT (set_id, category, key) DO UPDATE SET value = EXCLUDED.value, sensitive = EXCLUDED.sensitive, updated_at = now();
+INSERT INTO variables (set_id, category, key, value, sensitive, hcl)
+VALUES (sqlc.arg(set_id)::uuid, sqlc.arg(category)::text, sqlc.arg(key)::text, sqlc.arg(value)::bytea, sqlc.arg(sensitive)::boolean, sqlc.arg(hcl)::boolean)
+ON CONFLICT (set_id, category, key) DO UPDATE SET value = EXCLUDED.value, sensitive = EXCLUDED.sensitive, hcl = EXCLUDED.hcl, updated_at = now();
 
 -- name: DeleteVariable :exec
 -- ids of other owners are ignored

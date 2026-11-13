@@ -296,6 +296,7 @@ type Variable struct {
 	Value       []byte
 	Sensitive   bool
 	UpdatedAt   time.Time
+	Hcl         bool
 }
 
 type VariableSet struct {

@@ -7,6 +7,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -15,6 +16,9 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/hclsyntax"
+	ctyjson "github.com/zclconf/go-cty/cty/json"
 
 	"github.com/opsolete/opsolete/internal/mask"
 	"github.com/opsolete/opsolete/internal/storage"
@@ -37,9 +41,14 @@ func (a *App) runVariables(ctx context.Context, workspaceID uuid.UUID) (env map[
 		if v.Sensitive {
 			secrets = append(secrets, val)
 		}
-		if v.Category == "env" {
+		switch {
+		case v.Category == "env":
 			env[v.Key] = val
-		} else {
+		case v.HCL:
+			if vars[v.Key], err = hclValue(val); err != nil {
+				return nil, nil, nil, fmt.Errorf("variable %s: not a valid HCL value: %w", v.Key, err)
+			}
+		default:
 			vars[v.Key] = val
 		}
 	}
@@ -148,6 +157,7 @@ type VariableInput struct {
 	Key       string
 	Value     string
 	Sensitive bool
+	HCL       bool // a Terraform variable whose value is an HCL expression ([1, 2], {a = "b"}, true), not a string
 }
 
 // sealVariable checks a variable of o (ValidationError on category, key or value) and seals its value.
@@ -163,8 +173,15 @@ func (a *App) sealVariable(o storage.VarOwner, in VariableInput) (storage.Variab
 		return storage.Variable{}, invalid("key", "a Terraform variable name is letters, digits, _ and -, starting with a letter or _")
 	case len(val) > maxVariableValue:
 		return storage.Variable{}, invalid("value", fmt.Sprintf("values are limited to %d KB", maxVariableValue>>10))
+	case in.HCL && cat != "terraform":
+		return storage.Variable{}, invalid("hcl", "only Terraform variables are HCL; environment variables are strings")
 	}
-	v := storage.Variable{Category: cat, Key: key, Sensitive: in.Sensitive, Owner: o}
+	if in.HCL {
+		if _, err := hclValue(val); err != nil {
+			return storage.Variable{}, invalid("value", "not a valid HCL value: "+err.Error())
+		}
+	}
+	v := storage.Variable{Category: cat, Key: key, Sensitive: in.Sensitive, HCL: in.HCL, Owner: o}
 	var err error
 	v.Value, err = a.Secrets.Seal(val, VariableAD(v))
 	return v, err
@@ -176,6 +193,29 @@ type Variable struct {
 	Category, Key string
 	Value         string
 	Sensitive     bool
+	HCL           bool
+}
+
+// hclValue evaluates an HCL variable's value: a literal expression (no references, no functions), as JSON
+// for the variables file Terraform reads.
+func hclValue(src string) (any, error) {
+	expr, diags := hclsyntax.ParseExpression([]byte(src), "value", hcl.InitialPos)
+	if diags.HasErrors() {
+		return nil, errors.New(diags.Error())
+	}
+	val, diags := expr.Value(nil) // nil context: a reference or function call is an error, not evaluated
+	if diags.HasErrors() {
+		return nil, errors.New(diags.Error())
+	}
+	if !val.IsWhollyKnown() {
+		return nil, errors.New("the value isn't known")
+	}
+	b, err := ctyjson.Marshal(val, val.Type())
+	if err != nil {
+		return nil, err
+	}
+	var out any
+	return out, json.Unmarshal(b, &out)
 }
 
 // variables lists o's variables with their values opened, except sensitive ones: those are never shown again.
@@ -186,7 +226,7 @@ func (a *App) variables(ctx context.Context, o storage.VarOwner) ([]Variable, er
 	}
 	out := make([]Variable, 0, len(list))
 	for _, v := range list {
-		vv := Variable{ID: v.ID, Category: v.Category, Key: v.Key, Sensitive: v.Sensitive}
+		vv := Variable{ID: v.ID, Category: v.Category, Key: v.Key, Sensitive: v.Sensitive, HCL: v.HCL}
 		if !v.Sensitive {
 			if vv.Value, err = a.Secrets.Open(v.Value, VariableAD(v)); err != nil {
 				vv.Value = "(can't decrypt: SECRET_KEY changed? Set it again)"

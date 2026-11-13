@@ -12,7 +12,7 @@ import (
 )
 
 const allVariables = `-- name: AllVariables :many
-SELECT id, workspace_id, set_id, category, key, value, sensitive, updated_at FROM variables
+SELECT id, workspace_id, set_id, category, key, value, sensitive, updated_at, hcl FROM variables
 `
 
 func (q *Queries) AllVariables(ctx context.Context) ([]Variable, error) {
@@ -33,6 +33,7 @@ func (q *Queries) AllVariables(ctx context.Context) ([]Variable, error) {
 			&i.Value,
 			&i.Sensitive,
 			&i.UpdatedAt,
+			&i.Hcl,
 		); err != nil {
 			return nil, err
 		}
@@ -167,7 +168,7 @@ func (q *Queries) GetVariableSet(ctx context.Context, name string) (VariableSetL
 
 const listVariables = `-- name: ListVariables :many
 
-SELECT id, workspace_id, set_id, category, key, value, sensitive, updated_at FROM variables
+SELECT id, workspace_id, set_id, category, key, value, sensitive, updated_at, hcl FROM variables
 WHERE workspace_id IS NOT DISTINCT FROM $1::uuid AND set_id IS NOT DISTINCT FROM $2::uuid
 ORDER BY category, key
 `
@@ -197,6 +198,7 @@ func (q *Queries) ListVariables(ctx context.Context, arg ListVariablesParams) ([
 			&i.Value,
 			&i.Sensitive,
 			&i.UpdatedAt,
+			&i.Hcl,
 		); err != nil {
 			return nil, err
 		}
@@ -260,7 +262,7 @@ func (q *Queries) ResealVariable(ctx context.Context, arg ResealVariableParams) 
 }
 
 const runVariables = `-- name: RunVariables :many
-SELECT DISTINCT ON (v.category, v.key) v.id, v.workspace_id, v.set_id, v.category, v.key, v.value, v.sensitive, v.updated_at FROM variables v LEFT JOIN variable_sets vs ON vs.id = v.set_id
+SELECT DISTINCT ON (v.category, v.key) v.id, v.workspace_id, v.set_id, v.category, v.key, v.value, v.sensitive, v.updated_at, v.hcl FROM variables v LEFT JOIN variable_sets vs ON vs.id = v.set_id
 WHERE v.workspace_id = $1::uuid OR variable_set_rank($1::uuid, v.set_id) IS NOT NULL
 ORDER BY v.category, v.key, CASE WHEN v.workspace_id IS NOT NULL THEN 0 ELSE variable_set_rank($1::uuid, v.set_id) END, vs.name
 `
@@ -284,6 +286,7 @@ func (q *Queries) RunVariables(ctx context.Context, workspaceID uuid.UUID) ([]Va
 			&i.Value,
 			&i.Sensitive,
 			&i.UpdatedAt,
+			&i.Hcl,
 		); err != nil {
 			return nil, err
 		}
@@ -367,9 +370,9 @@ func (q *Queries) SelectSetWorkspaces(ctx context.Context, arg SelectSetWorkspac
 }
 
 const setSetVariable = `-- name: SetSetVariable :exec
-INSERT INTO variables (set_id, category, key, value, sensitive)
-VALUES ($1::uuid, $2::text, $3::text, $4::bytea, $5::boolean)
-ON CONFLICT (set_id, category, key) DO UPDATE SET value = EXCLUDED.value, sensitive = EXCLUDED.sensitive, updated_at = now()
+INSERT INTO variables (set_id, category, key, value, sensitive, hcl)
+VALUES ($1::uuid, $2::text, $3::text, $4::bytea, $5::boolean, $6::boolean)
+ON CONFLICT (set_id, category, key) DO UPDATE SET value = EXCLUDED.value, sensitive = EXCLUDED.sensitive, hcl = EXCLUDED.hcl, updated_at = now()
 `
 
 type SetSetVariableParams struct {
@@ -378,6 +381,7 @@ type SetSetVariableParams struct {
 	Key       string
 	Value     []byte
 	Sensitive bool
+	Hcl       bool
 }
 
 func (q *Queries) SetSetVariable(ctx context.Context, arg SetSetVariableParams) error {
@@ -387,14 +391,15 @@ func (q *Queries) SetSetVariable(ctx context.Context, arg SetSetVariableParams) 
 		arg.Key,
 		arg.Value,
 		arg.Sensitive,
+		arg.Hcl,
 	)
 	return err
 }
 
 const setWorkspaceVariable = `-- name: SetWorkspaceVariable :exec
-INSERT INTO variables (workspace_id, category, key, value, sensitive)
-VALUES ($1::uuid, $2::text, $3::text, $4::bytea, $5::boolean)
-ON CONFLICT (workspace_id, category, key) DO UPDATE SET value = EXCLUDED.value, sensitive = EXCLUDED.sensitive, updated_at = now()
+INSERT INTO variables (workspace_id, category, key, value, sensitive, hcl)
+VALUES ($1::uuid, $2::text, $3::text, $4::bytea, $5::boolean, $6::boolean)
+ON CONFLICT (workspace_id, category, key) DO UPDATE SET value = EXCLUDED.value, sensitive = EXCLUDED.sensitive, hcl = EXCLUDED.hcl, updated_at = now()
 `
 
 type SetWorkspaceVariableParams struct {
@@ -403,6 +408,7 @@ type SetWorkspaceVariableParams struct {
 	Key         string
 	Value       []byte
 	Sensitive   bool
+	Hcl         bool
 }
 
 func (q *Queries) SetWorkspaceVariable(ctx context.Context, arg SetWorkspaceVariableParams) error {
@@ -412,6 +418,7 @@ func (q *Queries) SetWorkspaceVariable(ctx context.Context, arg SetWorkspaceVari
 		arg.Key,
 		arg.Value,
 		arg.Sensitive,
+		arg.Hcl,
 	)
 	return err
 }

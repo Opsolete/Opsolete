@@ -27,7 +27,7 @@ func (s *Server) variableRoutes(mux routes) {
 
 // variableInput reads a posted variable.
 func variableInput(f url.Values) app.VariableInput {
-	return app.VariableInput{Category: f.Get("category"), Key: f.Get("key"), Value: f.Get("value"), Sensitive: f.Get("sensitive") != ""}
+	return app.VariableInput{Category: f.Get("category"), Key: f.Get("key"), Value: f.Get("value"), Sensitive: f.Get("sensitive") != "", HCL: f.Get("hcl") != ""}
 }
 
 // varsBlock is the data of the "variables" partial.
