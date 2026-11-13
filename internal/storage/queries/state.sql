@@ -4,7 +4,8 @@
 -- UI and the CLI). LockState, UnlockState and StateLockedBy compare it with their run_id, so a run
 -- can't take over or release a lock of another run, a rollback, the UI or the CLI whose ID it saw in a 423.
 
--- name: WorkingRun :one
+-- name: WorkingRuns :many
+-- a blocking run, and drift checks and pull request plans beside it
 SELECT id, status, (vcs_pull_request IS NOT NULL)::boolean AS pull_request FROM runs
 WHERE workspace_id = sqlc.arg(workspace_id)::uuid AND run_working(status) AND lease_acked_at IS NOT NULL;
 

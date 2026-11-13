@@ -7,7 +7,7 @@ SELECT w.id AS workspace_id, w.name AS workspace, p.name AS project_name, w.exec
 FROM workspace_templates u
 JOIN workspaces w ON w.id = u.workspace_id
 JOIN projects p ON p.id = w.project_id
-LEFT JOIN runs r ON r.workspace_id = w.id AND run_active(r.status)
+LEFT JOIN runs r ON r.workspace_id = w.id AND run_blocking(r.status, r.action, r.vcs_pull_request)
 WHERE u.template_id = sqlc.arg(template_id)::text AND (sqlc.narg(project_id)::uuid IS NULL OR w.project_id = sqlc.narg(project_id)::uuid)
 ORDER BY w.name, u.name;
 

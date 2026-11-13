@@ -84,8 +84,11 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 		req := httptest.NewRequest("POST", runnerapi.Prefix+"/jobs/claim", strings.NewReader(`{"runner":"r1"}`))
 		req.Header.Set("Authorization", "Bearer "+runnerTok)
 		var job runnerapi.Job
-		if rec := do(h, req); json.Unmarshal(rec.Body.Bytes(), &job) != nil || job.Action != wantAction {
+		if rec := do(h, req); json.Unmarshal(rec.Body.Bytes(), &job) != nil || wantAction != "" && job.Action != wantAction {
 			t.Fatalf("claim %s: %d %s", wantAction, rec.Code, rec.Body.String())
+		}
+		if wantAction == "" { // either: the push's apply at sha2, or the pull request's plan at pr9
+			wantTar = map[string]string{"apply": "# at sha2", "plan": "# at pr9"}[job.Action]
 		}
 		if tar := fetch(t, job.ModuleSource); !strings.Contains(tar, wantTar) {
 			t.Fatalf("%s run archive: %q, want %s", wantAction, tar, wantTar)
@@ -209,9 +212,9 @@ func TestBlankAndVCSWorkspaces(t *testing.T) {
 			t.Fatalf("turn on vcs triggers: %d %s", rec.Code, rec.Body.String())
 		}
 		lw, _ = store.GetWorkspace(ctx, linked)
-		claimVCS(t, "apply", "# at sha2")
+		claimVCS(t, "", "") // the push's apply and the pull request's plan, queued together: the plan runs beside
+		claimVCS(t, "", "") // (either first)
 		claimVCS(t, "apply", "# at sha3")
-		claimVCS(t, "plan", "# at pr9") // the branch's commits all had their run
 	})
 
 	// The version control page checks the connection: its "Connected to VCS" mark.
