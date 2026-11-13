@@ -305,6 +305,7 @@ type VariableSet struct {
 	Description string
 	Global      bool
 	CreatedAt   time.Time
+	Priority    bool
 }
 
 type VariableSetList struct {
@@ -315,6 +316,7 @@ type VariableSetList struct {
 	CreatedAt   time.Time
 	Workspaces  []string
 	Projects    []string
+	Priority    bool
 }
 
 type VariableSetProject struct {

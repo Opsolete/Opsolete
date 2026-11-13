@@ -17,6 +17,7 @@
   <label for="description">Description</label>
   <input id="description" name="description" value="{{value $sf "description" $v.Description}}" class="wide" maxlength="500">
   <label for="global"><input type="checkbox" id="global" name="global"{{if checked $sf "global" $v.Global}} checked{{end}}> Global: apply to every workspace not linked to a repository</label>
+  <label for="priority"><input type="checkbox" id="priority" name="priority"{{if checked $sf "priority" $v.Priority}} checked{{end}}> Priority: its variables win over the workspace's own and other sets' (for values you enforce)</label>
   <div class="actions"><button type="submit" class="secondary">Save</button></div>
 </form>
 

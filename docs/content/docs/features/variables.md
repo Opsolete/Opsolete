@@ -9,7 +9,7 @@ A workspace's runs get **variables**: **env** (environment variables, e.g. cloud
 
 - **Workspace variables:** a workspace's *Variables* page (anyone with read access sees them, sensitive values never; setting and deleting needs operate).
 - **Variable sets** (admins, *Settings › Variable sets*): a named group of variables that's **global** (every workspace not linked to a repository) or attached to chosen workspaces and [projects]({{< relref "/docs/features/projects" >}}) (every workspace of the project not linked to a repository). Use one per subscription or service principal, e.g. `azure-prod` with `ARM_TENANT_ID`, `ARM_SUBSCRIPTION_ID`, `ARM_CLIENT_ID` and a sensitive `ARM_CLIENT_SECRET`.
-- **Precedence** (same category and key): template inputs > workspace variables > sets attached to the workspace > sets attached to its project > global sets. Between sets of the same kind, the first by name wins. A workspace's *Variables* page lists the sets that apply to it.
+- **Precedence** (same category and key): template inputs > *priority* sets (as HCP: values an admin enforces; wherever the set applies) > workspace variables > sets attached to the workspace > sets attached to its project > global sets. Between sets of the same kind, the first by name wins. A workspace's *Variables* page lists the sets that apply to it.
 
 ## Settings outside the template's form
 

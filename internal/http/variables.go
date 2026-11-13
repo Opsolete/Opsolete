@@ -162,7 +162,7 @@ func (s *Server) updateVariableSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	set := r.PathValue("set")
-	err := s.App.UpdateVariableSet(r.Context(), actor(r), set, f.Get("description"), f.Get("global") != "")
+	err := s.App.UpdateVariableSet(r.Context(), actor(r), set, f.Get("description"), f.Get("global") != "", f.Get("priority") != "")
 	if s.failed(w, r, err, "set", f, s.onSetPage(w, r)) {
 		return
 	}

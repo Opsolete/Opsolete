@@ -29,10 +29,12 @@ WHERE workspace_id IS NOT DISTINCT FROM sqlc.narg(workspace_id)::uuid AND set_id
     AND id = sqlc.arg(id)::uuid;
 
 -- name: RunVariables :many
--- one per category and key: the workspace's own, then by variable_set_rank, then the first set by name
+-- one per category and key: a priority set's first (HCP), then the workspace's own, then by variable_set_rank,
+-- then the first set by name
 SELECT DISTINCT ON (v.category, v.key) v.* FROM variables v LEFT JOIN variable_sets vs ON vs.id = v.set_id
 WHERE v.workspace_id = sqlc.arg(workspace_id)::uuid OR variable_set_rank(sqlc.arg(workspace_id)::uuid, v.set_id) IS NOT NULL
-ORDER BY v.category, v.key, CASE WHEN v.workspace_id IS NOT NULL THEN 0 ELSE variable_set_rank(sqlc.arg(workspace_id)::uuid, v.set_id) END, vs.name;
+ORDER BY v.category, v.key, CASE WHEN vs.priority THEN -1 WHEN v.workspace_id IS NOT NULL THEN 0
+    ELSE variable_set_rank(sqlc.arg(workspace_id)::uuid, v.set_id) END, vs.name;
 
 -- name: CreateVariableSet :exec
 INSERT INTO variable_sets (name, description, global) VALUES (sqlc.arg(name)::text, sqlc.arg(description)::text, sqlc.arg(global)::boolean);
@@ -51,7 +53,8 @@ WHERE id IN (SELECT a.set_id FROM variable_set_projects a WHERE a.project_id = s
 SELECT * FROM variable_set_list WHERE name = sqlc.arg(name)::text;
 
 -- name: UpdateVariableSet :exec
-UPDATE variable_sets SET description = sqlc.arg(description)::text, global = sqlc.arg(global)::boolean WHERE id = sqlc.arg(id)::uuid;
+UPDATE variable_sets SET description = sqlc.arg(description)::text, global = sqlc.arg(global)::boolean,
+    priority = sqlc.arg(priority)::boolean WHERE id = sqlc.arg(id)::uuid;
 
 -- name: DeleteVariableSet :exec
 DELETE FROM variable_sets WHERE id = sqlc.arg(id)::uuid;

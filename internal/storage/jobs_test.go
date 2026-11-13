@@ -1179,3 +1179,50 @@ func TestCancelUnacknowledged(t *testing.T) {
 		t.Fatalf("status %s, want canceled", st)
 	}
 }
+
+// A priority set's variable wins over the workspace's own and every other set's, where the set applies (HCP).
+func TestPriorityVariableSet(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	w, _ := newWorkspace(t, s, false)
+	name := "prio-" + strings.ToLower(rand.Text()[:8])
+	for _, n := range []string{"a", "b"} {
+		if err := s.CreateVariableSet(ctx, name+n, "", true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, _ := s.GetVariableSet(ctx, name+"a")
+	b, _ := s.GetVariableSet(ctx, name+"b")
+	put := func(o VarOwner, v string) {
+		if err := s.SetVariable(ctx, o, Variable{Category: "terraform", Key: "region", Value: []byte(v)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put(VarOwner{WorkspaceID: w.ID}, "own")
+	put(VarOwner{SetID: a.ID}, "a")
+	put(VarOwner{SetID: b.ID}, "b")
+	region := func() string {
+		vars, err := s.RunVariables(ctx, w.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, v := range vars {
+			if v.Key == "region" {
+				return string(v.Value)
+			}
+		}
+		return ""
+	}
+	if got := region(); got != "own" {
+		t.Fatalf("without priority: %s, want the workspace's own", got)
+	}
+	if err := s.UpdateVariableSet(ctx, b.ID, "", true, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := region(); got != "b" {
+		t.Fatalf("with priority set b: %s", got)
+	}
+	if vs, _ := s.GetVariableSet(ctx, name+"b"); !vs.Priority {
+		t.Fatal("priority not stored")
+	}
+}

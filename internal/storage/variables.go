@@ -78,13 +78,14 @@ type VariableSet struct {
 	ID                uuid.UUID
 	Name, Description string
 	Global            bool
+	Priority          bool // its variables win over the workspace's own and other sets' (RunVariables)
 	Workspaces        []string
 	Projects          []string
 	CreatedAt         time.Time
 }
 
 func toSet(v db.VariableSetList) VariableSet {
-	return VariableSet{ID: v.ID, Name: v.Name, Description: v.Description, Global: v.Global, Workspaces: v.Workspaces,
+	return VariableSet{ID: v.ID, Name: v.Name, Description: v.Description, Global: v.Global, Priority: v.Priority, Workspaces: v.Workspaces,
 		Projects: v.Projects, CreatedAt: v.CreatedAt}
 }
 
@@ -126,8 +127,8 @@ func (s *Store) GetVariableSet(ctx context.Context, name string) (VariableSet, e
 	return toSet(v), notFound(err)
 }
 
-func (s *Store) UpdateVariableSet(ctx context.Context, id uuid.UUID, description string, global bool) error {
-	return s.q.UpdateVariableSet(ctx, db.UpdateVariableSetParams{ID: id, Description: description, Global: global})
+func (s *Store) UpdateVariableSet(ctx context.Context, id uuid.UUID, description string, global, priority bool) error {
+	return s.q.UpdateVariableSet(ctx, db.UpdateVariableSetParams{ID: id, Description: description, Global: global, Priority: priority})
 }
 
 // DeleteVariableSet deletes a set with its variables; workspaces keep their own.
