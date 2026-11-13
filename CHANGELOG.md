@@ -1,5 +1,63 @@
 # Changelog
 
+## [0.8.0](https://github.com/Opsolete/Opsolete/compare/v0.7.0...v0.8.0) (2026-11-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* **runner:** RUNNER_TOKEN is no longer read (the server warns when it is set). Register each runner's token before upgrading runners: e.g. `echo "$RUNNER_TOKEN" | opsolete runner-token -from-stdin <name>` keeps a runner's current OPS_RUNNER_TOKEN working. NixOS does this for runnerTokenFile; the Helm chart needs the same step.
+* **import:** the Import page and POST /workspaces/{name}/scans are gone; templates import through their module's `existing` input instead.
+
+### Features
+
+* **environments:** keep own, a project value workspaces with their own value don't take ([82d4be8](https://github.com/Opsolete/Opsolete/commit/82d4be84f8b10fd46138b02bef891738a0f16f02))
+* **environments:** keep own, and import fixes from a live check ([c2a94e2](https://github.com/Opsolete/Opsolete/commit/c2a94e21dca29f58365ff2d9f02609d039128a26))
+* **forms:** one input pipeline, templates at their pinned version, keep-own recorded ([ec90490](https://github.com/Opsolete/Opsolete/commit/ec9049037b421aabe5e8b616db06c70ad5b3de0d))
+* **forms:** one input pipeline, templates at their pinned version, keep-own recorded ([7ae4339](https://github.com/Opsolete/Opsolete/commit/7ae43395ea19e29eee99b07d63e5948bc27a8ad0))
+* **import:** an import is a session of plan rounds, then one adopted apply ([bab1129](https://github.com/Opsolete/Opsolete/commit/bab112952b68e18e9843aa069b8e8f10b657db56))
+* **import:** an import is a session of plan rounds, then one adopted apply ([abd9aac](https://github.com/Opsolete/Opsolete/commit/abd9aac3f112ae7b9d908d6a1d92ded96d97ca4d))
+* **import:** Change settings beside Confirm on an import plan ([8fc399d](https://github.com/Opsolete/Opsolete/commit/8fc399d56422362608e808d120afeb9146895fdd))
+* **import:** Create new / Import existing on the add and deploy forms ([3f39926](https://github.com/Opsolete/Opsolete/commit/3f39926d62d383ab88533b98e820890af43d36ca))
+* **import:** modules import what exists, the plan fills the form ([4924bb2](https://github.com/Opsolete/Opsolete/commit/4924bb22d9a40146fc1a4690993b16282616b76b))
+* plan diff on the run page, JSON API /api/v1, secrets kept when a form is refused ([dcd31b4](https://github.com/Opsolete/Opsolete/commit/dcd31b4a5496a09ccd2928b3d57a19f6a208cdf3))
+* plan diff on the run page, JSON API /api/v1, secrets kept when a form is refused ([0a0135b](https://github.com/Opsolete/Opsolete/commit/0a0135bb602dd0be5308338e02272d3657a8d0dd))
+* **registry:** a shorter module list with search; fix(builder): list fields as a table ([b3312ed](https://github.com/Opsolete/Opsolete/commit/b3312edb6b6a113e8001bcbec29f5e4be6df7f27))
+* **registry:** a shorter module list, the rest on each module's page ([837ed6b](https://github.com/Opsolete/Opsolete/commit/837ed6b0a133da851bbd6d997ddc6349bd8f1836))
+* **registry:** search the module list, and Sync now on it again ([d883544](https://github.com/Opsolete/Opsolete/commit/d8835443cd04183256ce46344be6f7449adba7cd))
+* **runner:** each runner has its own token, and projects pick a runner pool ([497b7c6](https://github.com/Opsolete/Opsolete/commit/497b7c6af5598161d3a7bc23ff7ec8a82447672c))
+* **runner:** one-shot runners and a queue endpoint for a pod per run phase ([51b2491](https://github.com/Opsolete/Opsolete/commit/51b24911aa1aff0e7e3adc061af055510698a1c2))
+* **runner:** one-shot runners and a queue endpoint for a pod per run phase ([b0055e7](https://github.com/Opsolete/Opsolete/commit/b0055e7df42299d9feef3a473871c42f318fc53d))
+* **runner:** opsolete runner-token -from-env registers a token from an environment variable ([24386fb](https://github.com/Opsolete/Opsolete/commit/24386fb61fe03ef5c2d37bd00fab34f82e3bbb59))
+* **runner:** opsolete runner-token -from-env registers a token from an environment variable ([b83c3dd](https://github.com/Opsolete/Opsolete/commit/b83c3dd12e5f6c8e98683dee382c139888546fb0))
+* **runner:** run each Terraform command in a per-job sandbox ([b449304](https://github.com/Opsolete/Opsolete/commit/b449304c2bb474400a30bd67ae1443507d49f81e))
+* **runner:** run each Terraform command in a per-job sandbox ([e117d45](https://github.com/Opsolete/Opsolete/commit/e117d455684dce817d4318072f0d27821bd43035))
+* **runs:** Change settings after a run that changed a template and ended without applying ([375ecc9](https://github.com/Opsolete/Opsolete/commit/375ecc9af8346cbf1c5ac5871875fdd4faf2fcf1))
+* **runs:** one confirmation rule, typed state machine, promotions as records ([dc50354](https://github.com/Opsolete/Opsolete/commit/dc5035431581dfd1ea1383dd67a563fe13c6158e))
+* **runs:** one confirmation rule, typed state machine, promotions as records ([b04b3ac](https://github.com/Opsolete/Opsolete/commit/b04b3acb8aafeaa354454431e76c96d6bcffb62e))
+* **ui:** a clearer promote flow ([bf47e8a](https://github.com/Opsolete/Opsolete/commit/bf47e8af61ef25a679fa9d200f704471ad9f3658))
+* **ui:** a clearer promote flow ([b53c863](https://github.com/Opsolete/Opsolete/commit/b53c8639f7365ac6ca1f27aad3bea47dda0b765a))
+* **workspaces:** configuration versions replace the run's undo ([734a0db](https://github.com/Opsolete/Opsolete/commit/734a0db35389904bd7b8fe26844fdab9e1e23c5f))
+* **workspaces:** configuration versions replace the run's undo ([aa4679c](https://github.com/Opsolete/Opsolete/commit/aa4679cbf9d503e20e7014d1ca81400a77112466))
+
+
+### Bug Fixes
+
+* **builder:** a list's fields as a table across the field card ([b7df86c](https://github.com/Opsolete/Opsolete/commit/b7df86c85af94c7237c1c9c1c8e99b3eae15df8e))
+* **forms:** a value that isn't an option is shown, not swapped for the first ([ecbdbd3](https://github.com/Opsolete/Opsolete/commit/ecbdbd3de70ee0bdd0d72d930be634e19793dd58))
+* **forms:** warn when importing would change what was found to a project's value ([e8e5f64](https://github.com/Opsolete/Opsolete/commit/e8e5f64fbf4fefec9d9745b764352e5d132131af))
+* **import:** a plan that only imports doesn't offer its found values ([bc24cff](https://github.com/Opsolete/Opsolete/commit/bc24cffaa3d16ae0add9b541dfedb79dab0b4e64))
+* **import:** adding a template again keeps what was entered for its import plan ([0a78514](https://github.com/Opsolete/Opsolete/commit/0a785144a2cfb5fc545084334c38d9408b3f4ef5))
+* **import:** an applied import switches the template's existing off ([c8233db](https://github.com/Opsolete/Opsolete/commit/c8233db0f15d0c924912909adeed5a30572d453f))
+* **import:** an ID segment equal to a form value keeps its case ([ea03316](https://github.com/Opsolete/Opsolete/commit/ea0331685f33aa6403ed46d378f58c1006647b4b))
+* **import:** Change settings keeps creating runs creating, and ends at the apply ([c4d508c](https://github.com/Opsolete/Opsolete/commit/c4d508c564aca55e550ee28b540d8999a117da68))
+* **import:** Change settings, found rows, applied runs ([5fcacc9](https://github.com/Opsolete/Opsolete/commit/5fcacc919412cc180f4fec30b216a189f4e53a2c))
+* **import:** found values go to the row of the field that keys every instance ([419654f](https://github.com/Opsolete/Opsolete/commit/419654fc3d9239e1aab98490e1464c447c42f7a6))
+* **runner:** keep the state an apply couldn't save sealed with the runner token ([cf99e3c](https://github.com/Opsolete/Opsolete/commit/cf99e3c2afcd6092a46664f4f72de5be7664817b))
+* **runner:** keep the state an apply couldn't save sealed with the runner token ([ed71197](https://github.com/Opsolete/Opsolete/commit/ed7119781ff8860ab87df957d6efa6407036c004))
+* **runner:** start the sandbox's namespaces from a dumpable helper ([0ca8948](https://github.com/Opsolete/Opsolete/commit/0ca8948b2e9eb92fa1644c4b4ed9268897042f6a))
+* **ui:** say why a workspace without configuration has no New run ([f9bdc46](https://github.com/Opsolete/Opsolete/commit/f9bdc46f89eb3df2b16849ba847fff750ea10e59))
+* **ui:** say why a workspace without configuration has no New run ([a9154c8](https://github.com/Opsolete/Opsolete/commit/a9154c855059ae2563f4935835191a3bf80bc07e))
+
 ## [0.7.0](https://github.com/Opsolete/Opsolete/compare/v0.6.0...v0.7.0) (2026-11-11)
 
 
