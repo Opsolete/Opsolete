@@ -197,8 +197,8 @@ finds and imports them itself, and must be able to describe them as they are:
   applied it's off, so the data sources aren't read anymore. Opsolete writes no import blocks and knows nothing
   about the cloud: the module does.
 - **The template is checked when it loads**: the `existing` input must be a `bool` without a `true` default, not
-  per environment, the key, sensitive or conditional, and the template needs a `key` input (what the import finds
-  the resource by). A template that breaks one of these is refused with a message saying which.
+  per environment, the key, sensitive or conditional. A template that breaks one of these is refused with a
+  message saying which.
 
   ```hcl
   variable "existing" {
