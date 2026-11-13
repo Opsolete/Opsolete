@@ -521,7 +521,7 @@ func TestConfigRestore(t *testing.T) {
 		r.finish(t, planChanges)
 		post(h, "/workspaces/"+ws+"/runs/"+id+"/discard", nil)
 		current(t, map[string]string{module: "v1 hello"})
-		pageHas(t, h, templatesTab, `<span class="tag">v1</span>`, "update: v2", "hello")
+		pageHas(t, h, templatesTab, `<span class="tag">v1</span>`, "update: v2")
 	})
 	step(t, "a failed plan puts it back", func(t *testing.T) {
 		id := configure(t)

@@ -70,9 +70,28 @@ func New(a *app.App, au *auth.Auth, f Features) *Server {
 	a.RegistryEnabled, a.VCSEnabled, a.TemplateEditor = f.Registry, f.VCS, f.Editor
 	pages := template.Must(template.New("").Funcs(template.FuncMap{"join": strings.Join, "json": toJSON, "dict": dict,
 		"duration": humanDuration, "ago": ago, "asset": asset, "confirmWhy": confirmWhy,
-		"provider": func(p string) string { return strings.TrimPrefix(p, "registry.terraform.io/") },
-		"status":   func(s string) string { return strings.ReplaceAll(s, "_", " ") }}).Funcs(formFuncs).ParseFS(views, "views/*.html"))
+		"provider": func(p string) string { return strings.TrimPrefix(p, "registry.terraform.io/") }, "moduleName": moduleName,
+		"status": func(s string) string { return strings.ReplaceAll(s, "_", " ") }}).Funcs(formFuncs).ParseFS(views, "views/*.html"))
 	return &Server{App: a, Auth: au, Features: f, ClaimWait: 20 * time.Second, Stopping: context.Background(), pages: pages}
+}
+
+// moduleName is a module source as a short name: a registry module's name (host/namespace/name/system), else the
+// last part of its path (git::https://host/repo.git//dir: dir; git::https://host/repo.git: repo).
+func moduleName(src string) string {
+	s, _, _ := strings.Cut(src, "?")
+	s = strings.TrimPrefix(s, "git::")
+	_, rest, scheme := strings.Cut(s, "://")
+	if scheme {
+		s = rest
+	}
+	if i := strings.LastIndex(s, "//"); i >= 0 {
+		s = s[i+2:]
+	}
+	parts := strings.Split(strings.Trim(s, "/"), "/")
+	if !scheme && len(parts) == 4 { // a registry address
+		return parts[2]
+	}
+	return strings.TrimSuffix(parts[len(parts)-1], ".git")
 }
 
 func (s *Server) Handler() http.Handler {

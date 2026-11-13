@@ -124,11 +124,11 @@
 {{if .Added}}
 <div class="card flush">
 <table>
-<tr><th>Name</th><th>Template</th><th>Module</th><th>Inputs</th>{{if $.CanOperate}}<th></th>{{end}}</tr>
+<tr><th>Name</th><th>Template</th><th>Module</th><th>Resources</th>{{if $.CanOperate}}<th></th>{{end}}</tr>
 {{$indexed := and .Versions (index .Versions 0).Indexed}}
-{{range .Added}}<tr><td><code>{{.Name}}</code>{{if $indexed}}{{template "deployed" index $.TemplateResources .Name}}{{end}}</td><td><a href="/templates/{{.TemplateID}}">{{or (index $.TemplateNames .TemplateID) .TemplateID}}</a></td>
-  <td><code>{{.ModuleSource}}</code> <span class="tag">{{.ModuleRef}}</span>{{with index $.Updates .Name}} <span class="tag">update: {{.}}</span>{{end}}</td>
-  <td>{{template "inputs" index $.AddedInputs .Name}}</td>
+{{range .Added}}<tr><td><code>{{.Name}}</code></td><td><a href="/templates/{{.TemplateID}}">{{or (index $.TemplateNames .TemplateID) .TemplateID}}</a></td>
+  <td><code title="{{.ModuleSource}}">{{moduleName .ModuleSource}}</code> <span class="tag">{{.ModuleRef}}</span>{{with index $.Updates .Name}} <span class="tag">update: {{.}}</span>{{end}}</td>
+  <td>{{if $indexed}}{{template "deployed" index $.TemplateResources .Name}}{{else}}<span class="muted">—</span>{{end}}</td>
   {{if $.CanOperate}}<td class="nowrap">{{if not $.Active}}<div class="inline"><a class="btn secondary small" href="/workspaces/{{$w.Name}}/templates/{{.Name}}">Configure…</a>
     <form method="post" action="/workspaces/{{$w.Name}}/templates/{{.Name}}/remove" class="inline"
       data-confirm="Remove {{.Name}}? This starts a plan that destroys its resources.">
@@ -488,6 +488,4 @@
   </span>
   <span class="end"><span class="status {{.Status}}">{{status .Status}}</span><small title="{{.CreatedAt.Format "2006-01-02 15:04"}}">{{ago .CreatedAt}}</small></span>
 </a>{{end}}
-{{define "deployed"}}<br><small class="muted" title="resources of this template in the current state">{{if .}}{{.}} resource{{if ne . 1}}s{{end}}{{else}}⚠ no resources in state{{end}}</small>{{end}}
-{{define "inputs"}}{{if .}}<details class="inputs"><summary>{{len .}} input{{if ne (len .) 1}}s{{end}}</summary>
-<dl>{{range .}}<dt title="{{.Name}}">{{.Title}}</dt><dd>{{if .Sensitive}}<span class="muted">(sensitive)</span>{{else}}<code>{{.Text}}</code>{{with .Project}} <small class="muted">Set by project <a href="/projects/{{.}}/environment">{{.}}</a></small>{{end}}{{end}}</dd>{{end}}</dl></details>{{else}}<span class="muted">none</span>{{end}}{{end}}
+{{define "deployed"}}<span title="resources of this template in the current state">{{if .}}{{.}}{{else}}⚠ none in state{{end}}</span>{{end}}

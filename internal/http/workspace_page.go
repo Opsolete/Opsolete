@@ -38,9 +38,8 @@ type workspacePage struct {
 
 type overviewTab struct {
 	Added             []storage.WorkspaceTemplate
-	Updates           map[string]string                  // added template name -> module version its template pins now
-	TemplateNames     map[string]string                  // template id -> display name; a deleted template shows its id
-	AddedInputs       map[string][]templates.StoredValue // added template name -> its inputs as its form asks them
+	Updates           map[string]string // added template name -> module version its template pins now
+	TemplateNames     map[string]string // template id -> display name; a deleted template shows its id
 	ResourceGroups    []resourceGroup
 	TemplateResources map[string]int // module call ("" = root) -> resources in the current state
 	LatestPlan        phase
@@ -158,13 +157,7 @@ func (s *Server) renderWorkspace(w http.ResponseWriter, r *http.Request, tab, su
 			s.internalError(w, "workspace templates", err)
 			return
 		}
-		o := &overviewTab{Added: added, Updates: map[string]string{}, TemplateNames: map[string]string{},
-			AddedInputs: map[string][]templates.StoredValue{}, Show: r.URL.Query().Get("show")}
-		env, err := s.App.ProjectEnvironment(ctx, ws.ProjectID)
-		if err != nil {
-			s.internalError(w, "environment values", err)
-			return
-		}
+		o := &overviewTab{Added: added, Updates: map[string]string{}, TemplateNames: map[string]string{}, Show: r.URL.Query().Get("show")}
 		for _, a := range added {
 			cur, ok := s.App.Templates.Get(a.TemplateID)
 			if ok {
@@ -173,12 +166,6 @@ func (s *Server) renderWorkspace(w http.ResponseWriter, r *http.Request, tab, su
 			if ok && (cur.Module.Source != a.ModuleSource || cur.Module.Ref != a.ModuleRef) {
 				o.Updates[a.Name] = cur.Module.Ref
 			}
-			t, _, err := s.App.TemplateAt(ctx, a.TemplateID, a.ModuleSource, a.ModuleRef) // what it runs
-			if err != nil {
-				s.internalError(w, "template", err)
-				return
-			}
-			o.AddedInputs[a.Name] = env.Describe(t, a.Inputs, a.Follows, ws.ProjectName)
 		}
 		if len(runs) > 0 {
 			d, err := s.App.Run(ctx, actor(r), ws.Name, runs[0].ID, app.LevelRead)

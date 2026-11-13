@@ -48,7 +48,7 @@ func TestPageModels(t *testing.T) {
 	overview := func(show string) *workspacePage {
 		return tab("overview", "", func(p *workspacePage) {
 			p.overviewTab = &overviewTab{Added: []storage.WorkspaceTemplate{{Name: "vm_1", TemplateID: "vm"}}, Updates: map[string]string{"vm_1": "v2"},
-				TemplateNames: map[string]string{"vm": "VM"}, AddedInputs: map[string][]templates.StoredValue{"vm_1": {{Name: "size", Title: "Size", Text: "s", Project: "p"}}},
+				TemplateNames:  map[string]string{"vm": "VM"},
 				ResourceGroups: groupResources(p.Resources, nil, nil), TemplateResources: map[string]int{"vm_1": 1}, LatestPlan: plan, LatestApply: apply, Show: show}
 		})
 	}
@@ -197,6 +197,19 @@ func TestRenderShowIf(t *testing.T) {
 		}
 		if got := strings.Count(body, " hidden disabled"); got != map[bool]int{true: 1, false: 0}[hidden] {
 			t.Errorf("%s: %d hidden, want hidden=%v", osv, got, hidden)
+		}
+	}
+}
+
+func TestModuleName(t *testing.T) {
+	for src, want := range map[string]string{
+		"opsolete.localhost:8080/terraform-modules-examples/storage-account/azurerm":     "storage-account",
+		"git::https://github.com/Opsolete/terraform-modules-examples.git//resourcegroup": "resourcegroup",
+		"git::https://dev.azure.com/org/infra/_git/modules?ref=v1":                       "modules",
+		"git::https://github.com/org/repo.git":                                           "repo",
+	} {
+		if got := moduleName(src); got != want {
+			t.Errorf("moduleName(%q) = %q, want %q", src, got, want)
 		}
 	}
 }
