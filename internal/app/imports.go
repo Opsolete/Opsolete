@@ -104,9 +104,9 @@ func (a *App) session(ctx context.Context, rd round) (ImportSession, error) {
 			if p, ok := m.Inputs[in.Name]; ok && p != nil {
 				iv.Planned = templates.FormatValue(p)
 			}
-			switch _, isLocked := locked[in.Name]; {
+			switch pv, isLocked := locked[in.Name]; {
 			case isLocked:
-				iv.Fixed = "set by the project"
+				iv.Planned, iv.Fixed = pv, "set by the project" // the run planned with the project's value, not the workspace's own
 			case !t.Match(in.ShowIf, shown):
 				iv.Fixed = "hidden by the other settings"
 			}
