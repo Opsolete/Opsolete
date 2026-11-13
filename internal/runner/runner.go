@@ -423,6 +423,11 @@ func (r *Runner) plan(ctx context.Context, tf *tfProc, run func(...string) (bool
 		rcs = p.ResourceDrift
 	}
 	sum := summarize(rcs)
+	if refresh && len(sum.Changes) == 0 && !outputsChange(p) {
+		// Terraform calls a refresh-only plan with data sources applyable (exit code 2) though nothing drifted
+		fmt.Fprintln(w, "\n==> no changes (only data sources were read again)")
+		return runnerapi.FinishRequest{Status: "succeeded"}
+	}
 	diff := planDiff(rcs, mask.New(job.Secrets))
 	var imported map[string]map[string]any
 	if sum.Import > 0 { // what the imported resources are: an import's next round plans with it
