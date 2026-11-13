@@ -202,15 +202,24 @@ func (a *App) ShareState(ctx context.Context, actor Actor, workspace string, glo
 	if err != nil {
 		return err
 	}
+	if global && !ws.GlobalRemoteState && !actor.Admin { // every workspace's runs could read it, secrets and all
+		return reason{ErrForbidden, "only admins share a workspace's state with all workspaces"}
+	}
 	return a.Store.ShareState(ctx, ws.ID, global, consumers)
 }
 
 // DeleteWorkspace deletes a workspace that manages no resources, then its state files; force deletes
 // it anyway, leaving any real resources unmanaged. Conflicts: an active run, resources, a lock.
+//
+// Force is admins': it deletes every state version for good and orphans real
+// resources, too much for anyone who may run the workspace.
 func (a *App) DeleteWorkspace(ctx context.Context, actor Actor, workspace string, force bool) error {
 	ws, _, err := a.Workspace(ctx, actor, workspace, LevelOperate)
 	if err != nil {
 		return err
+	}
+	if force && !actor.Admin {
+		return reason{ErrForbidden, "only admins delete a workspace that may still manage resources"}
 	}
 	keys, err := a.Store.DeleteWorkspace(ctx, ws.ID, force)
 	if err != nil {

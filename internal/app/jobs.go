@@ -110,14 +110,20 @@ func (a *App) assembleJob(ctx context.Context, j storage.Job) ([]byte, error) {
 	var mods []runnerapi.Module
 	for _, m := range j.Modules {
 		in, sec, oerr := a.OpenInputs(m.Inputs, j.WorkspaceID, m.Name)
-		err, secrets = cmp.Or(err, oerr), append(secrets, sec...)
+		err, secrets = cmp.Or(err, oerr), append(append(secrets, sec...), a.plainSecrets(m)...)
 		var t templates.Template // what the module runs: the template at its pinned version
 		var known bool
 		if err == nil {
 			t, known, err = a.TemplateAt(ctx, m.TemplateID, m.ModuleSource, m.ModuleRef)
 		}
+		if err == nil && !known && len(envValues[m.TemplateID]) > 0 {
+			// without the template, which inputs the project sets is unknown: running with the workspace's own
+			// values instead could, in production, replace what the project's values made
+			err = fmt.Errorf("template %s is no longer in the catalog, but the workspace's project sets values for it: put the template back, or clear the project's environment values for it",
+				m.TemplateID)
+		}
 		if err == nil {
-			in, err = withEnvironmentValues(t, known, in, m.Follows, envValues)
+			in, err = withEnvironmentValues(t, known, a.exactInputs(ctx, m), in, m.Follows, envValues)
 		}
 		if err == nil && m.Import && known && CanImport(t) { // the module imports what exists: its switch on
 			in = maps.Clone(in)
@@ -194,11 +200,16 @@ func (a *App) FinishJob(ctx context.Context, runID uuid.UUID, lease string, req 
 	if req.Status != "succeeded" && req.Status != "failed" && req.Status != "canceled" {
 		return "", invalid("status", "status must be succeeded, failed or canceled")
 	}
-	if len(req.Outputs) > 0 { // the runner masks them too; the server is the trust boundary, so again here
-		req.Outputs = a.maskRunOutputs(ctx, runID, req.Outputs)
+	// the runner masks them too; the server is the trust boundary, so again here, with one masker for the job
+	var m runMasker
+	if len(req.Outputs)+len(req.Found)+len(req.Diff) > 0 {
+		m = a.runMasker(ctx, runID)
+	}
+	if len(req.Outputs) > 0 {
+		req.Outputs = m.outputs(req.Outputs)
 	}
 	for mod, in := range req.Found { // form values: one holding a workspace secret is dropped, as the runner does
-		masked := a.maskRunOutputs(ctx, runID, in)
+		masked := m.outputs(in)
 		for k, v := range in {
 			if !reflect.DeepEqual(masked[k], v) {
 				delete(in, k)
@@ -209,7 +220,7 @@ func (a *App) FinishJob(ctx context.Context, runID uuid.UUID, lease string, req 
 		}
 	}
 	if len(req.Diff) > 0 {
-		req.Diff = a.maskDiff(ctx, runID, req.Diff)
+		req.Diff = m.diff(req.Diff)
 	}
 	// not canceled with the request: a job's result must survive a server restart
 	finish := func(ctx context.Context) (string, error) {
@@ -289,6 +300,10 @@ func (a *App) ReapLeases(ctx context.Context) {
 		a.Log.Error("unclaim jobs", "err", err)
 	}
 	for _, u := range unclaimed {
+		if u.Canceled { // canceled while nobody had started it: it ended, clean up after it
+			a.runEnded(ctx, u.RunID)
+			continue
+		}
 		// a runner whose claims keep showing up here never acknowledges: an old or broken runner
 		a.Log.Warn("job not acknowledged by its runner, queued again", "run", u.RunID, "runner", u.Runner)
 	}
@@ -318,42 +333,45 @@ func (a *App) QueueDriftChecks(ctx context.Context) {
 	}
 }
 
-// maskRunOutputs hides outputs that contain a sensitive value of the run's workspace, as saveState
-// does for state files; if the secrets can't be opened, every output is hidden (the result is kept).
-func (a *App) maskRunOutputs(ctx context.Context, runID uuid.UUID, outputs map[string]any) map[string]any {
+// runMasker hides a run's workspace's secrets in what its job reports (outputs, found values, the diff), as
+// saveState does for state files. err: the secrets couldn't be opened, so nothing is safe to show.
+type runMasker struct {
+	secrets mask.Masker
+	err     error
+}
+
+func (a *App) runMasker(ctx context.Context, runID uuid.UUID) runMasker {
+	var m runMasker
 	run, _, err := a.Store.GetRun(ctx, runID)
-	var secrets mask.Masker
 	if err == nil {
-		secrets, err = a.workspaceMasker(ctx, run.WorkspaceID)
+		m.secrets, err = a.workspaceMasker(ctx, run.WorkspaceID)
 	}
+	if m.err = err; err != nil {
+		a.Log.Error("open workspace secrets to mask the job's result; outputs hidden, diff dropped", "run", runID, "err", err)
+	}
+	return m
+}
+
+// outputs masks values holding a secret; without the secrets, all of them (the result is kept).
+func (m runMasker) outputs(outputs map[string]any) map[string]any {
 	out := make(map[string]any, len(outputs))
 	for k, v := range outputs {
-		out[k] = secrets.Value(v)
-		if err != nil {
+		out[k] = m.secrets.Value(v)
+		if m.err != nil {
 			out[k] = mask.Sensitive
 		}
-	}
-	if err != nil {
-		a.Log.Error("open workspace secrets to mask outputs; all outputs hidden", "run", runID, "err", err)
 	}
 	return out
 }
 
-// maskDiff hides the diff's values that hold one of the run's workspace's secrets, as the runner does: the server
-// is the trust boundary. Without the secrets the diff is dropped (the log still has Terraform's plan).
-func (a *App) maskDiff(ctx context.Context, runID uuid.UUID, diff []runnerapi.ResourceDiff) []runnerapi.ResourceDiff {
-	run, _, err := a.Store.GetRun(ctx, runID)
-	var secrets mask.Masker
-	if err == nil {
-		secrets, err = a.workspaceMasker(ctx, run.WorkspaceID)
-	}
-	if err != nil {
-		a.Log.Error("open workspace secrets to mask the plan's diff; diff dropped", "run", runID, "err", err)
+// diff hides values holding a secret; without the secrets the diff is dropped (the log still has Terraform's plan).
+func (m runMasker) diff(diff []runnerapi.ResourceDiff) []runnerapi.ResourceDiff {
+	if m.err != nil {
 		return nil
 	}
 	for i := range diff {
 		for j, at := range diff[i].Attrs {
-			if secrets.Hides(at.Before) || secrets.Hides(at.After) {
+			if m.secrets.Hides(at.Before) || m.secrets.Hides(at.After) {
 				diff[i].Attrs[j].Before, diff[i].Attrs[j].After, diff[i].Attrs[j].Sensitive = "", "", true
 			}
 		}

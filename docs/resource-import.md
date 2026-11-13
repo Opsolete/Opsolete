@@ -120,6 +120,23 @@ A plan round that has nothing to change leaves the workspace's version alone (on
 Decision (November 2026): the scan (inventory, matching, Import page) is removed, not kept as a picker. A picker
 can come back on `terraform query` if wanted.
 
+### Rules that keep a session safe (November 2026)
+
+- **A round is pending** (`storage.RunPending`) while its configuration isn't applied and is the workspace's current
+  version or was made from it. Only a pending round offers Plan again, Change settings and Adopt, and storage checks
+  it again inside the transaction (`ErrChanged`): going on from a round older than another applied change would undo
+  that change (a removed template back, another template's settings reverted, importing switched on again).
+- **Adopt** takes the latest round: a later run that plans another configuration supersedes it. Drift checks, pull
+  request plans and the runs of the same version (a failed adopt) don't, so they never block the session.
+- **The guard compares the imported object's own `id`** (the plan's `before.id`, else the import id): what state
+  indexes hold. An import Terraform names no id for (by identity) is refused, as is the same id imported twice in one
+  plan: Opsolete can't otherwise promise one resource, one state.
+- **Inputs the project sets** (per environment, not keep-own), or hidden by `show_if`, show what was found but never
+  ask for another round: planning again would set them back (a loop).
+- **Retention** keeps pending rounds: the session lives on them.
+- `internal/e2e` runs a real session: a module that imports itself (`examples/modules/importable`, `terraform_data`,
+  offline), a round, adopt, confirm, apply, and a second workspace refused for the same resource.
+
 ### Live check (November 2026, `test-vm`, Terraform 1.17.1, azurerm 4.81, reader credentials, plans only)
 
 | Plan | Inputs | Result |

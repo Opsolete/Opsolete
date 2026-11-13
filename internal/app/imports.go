@@ -34,45 +34,56 @@ type ImportModule struct {
 }
 
 // ImportValue is an input whose real value the plan found: as the form shows it, and what the round planned with.
+// Fixed: the input can't take the found value from here (its project sets it, or it's hidden), so it never asks
+// for another round.
 type ImportValue struct {
 	Input, Title   string
 	Found, Planned string
 	Differs        bool
+	Fixed          string
+}
+
+// round is an import's plan round, loaded once: the run, its templates, what its plan found.
+type round struct {
+	d          RunDetail
+	superseded bool // a later run plans another configuration
+	mods       []storage.WorkspaceTemplate
+	found      map[string]storage.Found
+	env        EnvironmentMap
 }
 
 // importRound loads run id of the workspace as an import's plan round (operate): ErrNotFound unless it's a plan
-// run whose templates include one that imports.
-func (a *App) importRound(ctx context.Context, actor Actor, workspace string, id uuid.UUID) (RunDetail, []storage.WorkspaceTemplate, error) {
-	d, err := a.Run(ctx, actor, workspace, id, LevelOperate)
-	if err != nil {
-		return d, nil, err
+// run whose templates include one that imports, and still pending (storage.RunPending: not applied, and nothing
+// else applied since, so going on from it undoes nothing).
+func (a *App) importRound(ctx context.Context, actor Actor, workspace string, id uuid.UUID) (round, error) {
+	var rd round
+	var err error
+	if rd.d, err = a.Run(ctx, actor, workspace, id, LevelOperate); err != nil {
+		return rd, err
 	}
-	mods, err := a.Store.RunTemplates(ctx, id)
-	if err != nil {
-		return d, nil, err
+	if rd.mods, err = a.Store.RunTemplates(ctx, id); err != nil {
+		return rd, err
 	}
-	if d.Run.Action != "plan" || !slices.ContainsFunc(mods, func(m storage.WorkspaceTemplate) bool { return m.Import }) {
-		return d, nil, ErrNotFound
+	if rd.d.Run.Action != "plan" || !slices.ContainsFunc(rd.mods, func(m storage.WorkspaceTemplate) bool { return m.Import }) {
+		return rd, ErrNotFound
 	}
-	if applied, err := a.Store.RunVersionApplied(ctx, id); err != nil || applied { // adopted: the import is done
-		return d, nil, cmp.Or(err, ErrNotFound)
+	if pending, err := a.Store.RunPending(ctx, id); err != nil || !pending {
+		return rd, cmp.Or(err, ErrNotFound)
 	}
-	return d, mods, nil
+	if rd.superseded, err = a.Store.RunSuperseded(ctx, id); err != nil {
+		return rd, err
+	}
+	if rd.found, err = a.Store.RunFound(ctx, id); err != nil {
+		return rd, err
+	}
+	rd.env, err = a.ProjectEnvironment(ctx, rd.d.Workspace.ProjectID)
+	return rd, err
 }
 
-// ImportRound is run id as an import's plan round: what it found per importing module, and whether it can be
-// planned again or adopted. ErrNotFound: not an import's round.
-func (a *App) ImportRound(ctx context.Context, actor Actor, workspace string, id uuid.UUID) (ImportSession, error) {
-	d, mods, err := a.importRound(ctx, actor, workspace, id)
-	if err != nil {
-		return ImportSession{}, err
-	}
-	found, err := a.Store.RunFound(ctx, id)
-	if err != nil {
-		return ImportSession{}, err
-	}
-	s := ImportSession{Plan: d.Run.Plan}
-	for _, m := range mods {
+// session is what round rd found per importing module, and whether it can be planned again or adopted.
+func (a *App) session(ctx context.Context, rd round) (ImportSession, error) {
+	s := ImportSession{Plan: rd.d.Run.Plan}
+	for _, m := range rd.mods {
 		if !m.Import {
 			continue
 		}
@@ -80,9 +91,12 @@ func (a *App) ImportRound(ctx context.Context, actor Actor, workspace string, id
 		if err != nil {
 			return s, err
 		}
+		found := rd.found[m.Name].Inputs
+		locked := rd.env.LockedForm(t, m.Inputs, m.Follows, found)
+		shown, _ := FormDefaults(t, m.Inputs)
 		im := ImportModule{Module: m.Name, TemplateID: m.TemplateID}
 		for _, in := range t.Inputs {
-			v, ok := found[m.Name].Inputs[in.Name]
+			v, ok := found[in.Name]
 			if !ok || in.Sensitive || !fits(in, v) {
 				continue
 			}
@@ -90,34 +104,56 @@ func (a *App) ImportRound(ctx context.Context, actor Actor, workspace string, id
 			if p, ok := m.Inputs[in.Name]; ok && p != nil {
 				iv.Planned = templates.FormatValue(p)
 			}
+			switch _, isLocked := locked[in.Name]; {
+			case isLocked:
+				iv.Fixed = "set by the project"
+			case !t.Match(in.ShowIf, shown):
+				iv.Fixed = "hidden by the other settings"
+			}
 			iv.Differs = iv.Found != iv.Planned
-			s.CanReplan = s.CanReplan || iv.Differs
+			s.CanReplan = s.CanReplan || iv.Differs && iv.Fixed == ""
 			im.Values = append(im.Values, iv)
 		}
 		s.Modules = append(s.Modules, im)
 	}
-	s.Why = a.whyNotAdopt(ctx, d)
+	s.Why = whyNotAdopt(rd)
 	s.CanAdopt = s.Why == ""
-	s.CanReplan = s.CanReplan && d.Run.Status != storage.Errored && !d.Run.Active()
+	s.CanReplan = s.CanReplan && rd.d.Run.Status != storage.Errored && !rd.d.Run.Active()
 	return s, nil
 }
 
-// whyNotAdopt says why round d can't be applied as it is; "" when it can.
-func (a *App) whyNotAdopt(ctx context.Context, d RunDetail) string {
+// ImportRound is run id as an import's plan round: what it found per importing module, and whether it can be
+// planned again or adopted. ErrNotFound: not an import's round, or not pending anymore.
+func (a *App) ImportRound(ctx context.Context, actor Actor, workspace string, id uuid.UUID) (ImportSession, error) {
+	rd, err := a.importRound(ctx, actor, workspace, id)
+	if err != nil {
+		return ImportSession{}, err
+	}
+	return a.session(ctx, rd)
+}
+
+// whyNotAdopt says why round rd can't be applied as it is; "" when it can.
+func whyNotAdopt(rd round) string {
+	d := rd.d
 	p := d.Run.Plan
 	switch {
+	case rd.superseded:
+		return "a newer run plans another configuration: go on from the latest round"
 	case d.Run.Active():
 		return "the plan hasn't finished"
+	case d.Run.Status == storage.Errored || d.Run.Status == storage.Canceled:
+		for i := len(d.History) - 1; i >= 0; i-- { // the reason, e.g. an import conflict
+			if m := d.History[i].Message; m != nil && *m != "" {
+				return "the plan " + d.Run.Status + ": " + *m
+			}
+		}
+		return "the plan " + d.Run.Status
 	case d.Run.Status != storage.Planned || p == nil:
 		return "only a plan that finished with changes can be applied"
 	case p.Import == 0:
 		return "the plan imports nothing: the module found nothing to import"
 	case p.Destroy > 0:
 		return "the plan would replace or delete existing resources: the inputs don't match them yet"
-	}
-	latest, err := a.Store.Runs(ctx, d.Workspace.ID, 1)
-	if err == nil && len(latest) == 1 && latest[0].ID != d.Run.ID {
-		return "a newer run exists: adopt the latest plan"
 	}
 	return ""
 }
@@ -126,21 +162,18 @@ func (a *App) whyNotAdopt(ctx context.Context, d RunDetail) string {
 // ones its inputs take) over the importing modules' inputs, as their forms would save them. ValidationError: a
 // found value its input rejects (set it in Change settings); conflicts: not a round that can go on, a run active.
 func (a *App) PlanImportAgain(ctx context.Context, actor Actor, workspace string, id uuid.UUID) (storage.Run, error) {
-	s, err := a.ImportRound(ctx, actor, workspace, id)
+	rd, err := a.importRound(ctx, actor, workspace, id)
+	if err != nil {
+		return storage.Run{}, err
+	}
+	s, err := a.session(ctx, rd)
 	if err != nil {
 		return storage.Run{}, err
 	}
 	if !s.CanReplan {
-		return storage.Run{}, reason{ErrNotImport, "the plan found nothing that differs from what it planned with: change the settings by hand instead"}
+		return storage.Run{}, reason{ErrNotImport, "the plan found nothing it can take that differs from what it planned with: change the settings by hand instead"}
 	}
-	d, mods, err := a.importRound(ctx, actor, workspace, id)
-	if err != nil {
-		return storage.Run{}, err
-	}
-	env, err := a.ProjectEnvironment(ctx, d.Workspace.ProjectID)
-	if err != nil {
-		return storage.Run{}, err
-	}
+	mods := slices.Clone(rd.mods)
 	for i, m := range mods {
 		if !m.Import {
 			continue
@@ -149,12 +182,12 @@ func (a *App) PlanImportAgain(ctx context.Context, actor Actor, workspace string
 		if err != nil {
 			return storage.Run{}, err
 		}
-		found, err := a.FoundValues(ctx, actor, workspace, id, m.Name, t)
-		if err != nil {
-			return storage.Run{}, err
+		found, ok := foundValues(rd.found[m.Name], t)
+		if !ok {
+			continue // found nothing for this module: it keeps its inputs
 		}
 		raw, _ := FormDefaults(t, found)
-		sv, err := a.save(formSave{T: t, Raw: raw, Old: m.Inputs, Follows: m.Follows, Found: found, Env: env, Workspace: d.Workspace.ID, Module: m.Name})
+		sv, err := a.save(formSave{T: t, Raw: raw, Old: m.Inputs, Follows: m.Follows, Found: found, Env: rd.env, Workspace: rd.d.Workspace.ID, Module: m.Name})
 		if err != nil {
 			return storage.Run{}, err
 		}
@@ -163,22 +196,23 @@ func (a *App) PlanImportAgain(ctx context.Context, actor Actor, workspace string
 		}
 		mods[i].Inputs, mods[i].Follows, mods[i].Import = sv.Vals, sv.Follows, true
 	}
-	run, err := a.Store.QueueConfiguration(ctx, d.Workspace.ID, mods, storage.SourceImport, "plan", actor.UserID)
+	run, err := a.Store.QueueConfiguration(ctx, rd.d.Workspace.ID, id, mods, storage.SourceForm, "plan", actor.UserID)
 	if err == nil {
-		a.Log.Info("import planned again", "workspace", d.Workspace.Name, "after", id, "run", run.ID, "user", actor.Email)
+		a.Log.Info("import planned again", "workspace", rd.d.Workspace.Name, "after", id, "run", run.ID, "user", actor.Email)
 	}
 	return run, err
 }
 
 // AdoptImport applies exactly what round id planned: an apply run of its version, which waits for confirmation and
-// is refused if its plan replaces or deletes anything. Conflicts: why it can't (ImportSession.Why), a run active.
+// is refused if its plan replaces or deletes anything. Conflicts: why it can't (ImportSession.Why), a run active,
+// ErrChanged: another change was applied meanwhile.
 func (a *App) AdoptImport(ctx context.Context, actor Actor, workspace string, id uuid.UUID) (storage.Run, error) {
-	s, err := a.ImportRound(ctx, actor, workspace, id)
+	rd, err := a.importRound(ctx, actor, workspace, id)
 	if err != nil {
 		return storage.Run{}, err
 	}
-	if !s.CanAdopt {
-		return storage.Run{}, reason{ErrNotImport, "can't apply this import plan: " + s.Why}
+	if why := whyNotAdopt(rd); why != "" {
+		return storage.Run{}, reason{ErrNotImport, "can't apply this import plan: " + why}
 	}
 	run, err := a.Store.AdoptRun(ctx, id, actor.UserID)
 	if err == nil {

@@ -245,7 +245,7 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 	if err != nil {
 		return fail("encode variables", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "opsolete.auto.tfvars.json"), vars, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, varsFile), vars, 0o600); err != nil {
 		return fail("write variables", err)
 	}
 	if job.Phase == "apply" {
@@ -403,7 +403,9 @@ func (r *Runner) plan(ctx context.Context, tf *tfProc, run func(...string) (bool
 		flags = append(flags, "-target="+a)
 	}
 	fmt.Fprintf(w, "\n==> terraform %s\n", strings.Join(append([]string{"plan"}, flags...), " "))
-	changes, err := run(append([]string{"plan", "-input=false", "-detailed-exitcode", "-out=" + planFile,
+	// -var-file, not an .auto.tfvars file: a repository's own *.auto.tfvars must not override the workspace's
+	// variables (Terraform reads auto files in name order, the last wins; -var-file beats them all)
+	changes, err := run(append([]string{"plan", "-input=false", "-detailed-exitcode", "-out=" + planFile, "-var-file=" + varsFile,
 		"-lock=" + strconv.FormatBool(!readOnly)}, flags...)...)
 	if err != nil {
 		return fail("plan", err)

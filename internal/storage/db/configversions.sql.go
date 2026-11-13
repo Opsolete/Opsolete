@@ -188,21 +188,30 @@ const runConfig = `-- name: RunConfig :one
 SELECT r.cv_id, cv.parent_id, run_active(r.status)::boolean AS active,
     (cv.id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM runs x WHERE x.cv_id = r.cv_id AND x.created_at < r.created_at))::boolean AS changed,
     EXISTS (SELECT 1 FROM runs x JOIN run_status_history h ON h.run_id = x.id WHERE x.cv_id = r.cv_id
-        AND x.action NOT IN ('plan', 'assess') AND h.status IN ('applying', 'no_changes'))::boolean AS applied
-FROM runs r LEFT JOIN configuration_versions cv ON cv.id = r.cv_id WHERE r.id = $1::uuid
+        AND x.action NOT IN ('plan', 'assess') AND h.status IN ('applying', 'no_changes'))::boolean AS applied,
+    (cv.id IS NOT NULL AND (r.cv_id = w.current_cv_id OR cv.parent_id IS NOT DISTINCT FROM w.current_cv_id))::boolean AS live,
+    EXISTS (SELECT 1 FROM runs x WHERE x.workspace_id = r.workspace_id AND x.created_at > r.created_at
+        AND x.action <> 'assess' AND x.vcs_pull_request IS NULL AND x.cv_id IS DISTINCT FROM r.cv_id)::boolean AS superseded
+FROM runs r JOIN workspaces w ON w.id = r.workspace_id LEFT JOIN configuration_versions cv ON cv.id = r.cv_id
+WHERE r.id = $1::uuid
 `
 
 type RunConfigRow struct {
-	CvID     uuid.NullUUID
-	ParentID uuid.NullUUID
-	Active   bool
-	Changed  bool
-	Applied  bool
+	CvID       uuid.NullUUID
+	ParentID   uuid.NullUUID
+	Active     bool
+	Changed    bool
+	Applied    bool
+	Live       bool
+	Superseded bool
 }
 
 // A run's version and its parent; changed: the run is the first to plan it (it made the change, the runs after
 // it re-plan it); applied: the version's apply started (this run's, or a later one's: an adopted import round), or
-// an applying run had nothing to change (the workspace took the version).
+// an applying run had nothing to change (the workspace took the version); live: the version is the workspace's
+// current one or was made from it, so going on from it (adopt, plan again, change settings) changes nothing else;
+// superseded: a later run plans another configuration (drift checks, pull request plans and the runs of this
+// same version, a failed adopt, don't count): go on from the latest instead.
 func (q *Queries) RunConfig(ctx context.Context, id uuid.UUID) (RunConfigRow, error) {
 	row := q.db.QueryRow(ctx, runConfig, id)
 	var i RunConfigRow
@@ -212,6 +221,8 @@ func (q *Queries) RunConfig(ctx context.Context, id uuid.UUID) (RunConfigRow, er
 		&i.Active,
 		&i.Changed,
 		&i.Applied,
+		&i.Live,
+		&i.Superseded,
 	)
 	return i, err
 }

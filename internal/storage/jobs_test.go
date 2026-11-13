@@ -159,8 +159,14 @@ func TestRunLifecycle(t *testing.T) {
 	if _, ok, _ := s.ClaimJob(ctx, Runner{Name: "r", Pool: DefaultPool}, time.Minute); ok {
 		t.Fatal("a plan waiting for confirmation must not be claimed")
 	}
-	if _, err := s.CreateRun(ctx, w.ID, "apply", uuid.Nil, nil); !errors.Is(err, ErrRunActive) {
-		t.Fatalf("second run while one is active: %v", err)
+	// a second run waits as pending: not claimable, and canceled it never ran
+	if p, err := s.CreateRun(ctx, w.ID, "apply", uuid.Nil, nil); err != nil || p.Status != Pending {
+		t.Fatalf("second run while one is active: %+v %v", p, err)
+	} else if _, err := s.CancelRun(ctx, p.ID, "test", false); err != nil || status(t, s, p.ID) != Canceled {
+		t.Fatalf("cancel a pending run: %v", err)
+	}
+	if _, err := s.CreateRun(ctx, w.ID, "assess", uuid.Nil, nil); !errors.Is(err, ErrRunActive) {
+		t.Fatalf("a drift check doesn't wait in line: %v", err)
 	}
 	if err := s.ConfirmRun(ctx, run.ID, uuid.Nil, "alice@example.com"); err != nil {
 		t.Fatal(err)
@@ -349,6 +355,7 @@ func TestStateWriteFenced(t *testing.T) {
 	if err := s.AddStateVersion(ctx, w.ID, run.ID, "", v); err != nil {
 		t.Fatalf("applying run: %v", err)
 	}
+	s.CancelRun(ctx, run.ID, "a@b.c", false) // asked first: force is for a runner that doesn't stop
 	if _, err := s.CancelRun(ctx, run.ID, "a@b.c", true); err != nil {
 		t.Fatal(err)
 	}
@@ -822,6 +829,10 @@ func TestCancel(t *testing.T) {
 	run3, _ := s.CreateRun(ctx, w.ID, "apply", uuid.Nil, nil)
 	j = claim(t, s, "plan")
 	s.LockState(ctx, w.ID, "l1", run3.ID, []byte(`{"ID":"l1"}`))
+	if _, err := s.CancelRun(ctx, run3.ID, "a@b.c", true); !errors.Is(err, ErrForceFirst) {
+		t.Fatalf("force cancel before a cancel was asked: %v", err)
+	}
+	s.CancelRun(ctx, run3.ID, "a@b.c", false)
 	if st, err := s.CancelRun(ctx, run3.ID, "a@b.c", true); err != nil || st != Canceled {
 		t.Fatalf("force cancel: %q %v", st, err)
 	}
@@ -991,28 +1002,31 @@ func TestConcurrentTriggers(t *testing.T) {
 	if _, err := s.CancelRun(ctx, run.ID, "test", false); err != nil { // free the workspace
 		t.Fatal(err)
 	}
-	// Many users trigger at once: runs_one_active_idx lets exactly one run in.
+	// Many users trigger at once: runs_one_active_idx lets exactly one run in, the others wait as pending
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	won := 0
+	won, waiting := 0, 0
 	for range 8 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := s.CreateRun(ctx, w.ID, "apply", uuid.Nil, nil)
-			if err != nil && !errors.Is(err, ErrRunActive) {
+			r, err := s.CreateRun(ctx, w.ID, "apply", uuid.Nil, nil)
+			if err != nil {
 				t.Error(err)
+				return
 			}
-			if err == nil {
-				mu.Lock()
+			mu.Lock()
+			if r.Status == Pending {
+				waiting++
+			} else {
 				won++
-				mu.Unlock()
 			}
+			mu.Unlock()
 		}()
 	}
 	wg.Wait()
-	if won != 1 {
-		t.Fatalf("%d runs created, want 1", won)
+	if won != 1 || waiting != 7 {
+		t.Fatalf("%d runs queued and %d pending, want 1 and 7", won, waiting)
 	}
 }
 
@@ -1143,5 +1157,113 @@ func putTemplates(t *testing.T, s *Store, workspaceID uuid.UUID, mods ...Workspa
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A cancel asked while a claim isn't acknowledged yet ends the run when the claim goes back: nothing ran, and
+// queuing it again would let the next runner start it.
+func TestCancelUnacknowledged(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	_, run := newWorkspace(t, s, false)
+	if _, _, err := s.ClaimJob(ctx, Runner{Name: "r", Pool: DefaultPool}, -time.Second); err != nil { // never acknowledged
+		t.Fatal(err)
+	}
+	if _, err := s.CancelRun(ctx, run.ID, "a@b.c", false); err != nil {
+		t.Fatal(err)
+	}
+	if u, err := s.UnclaimJobs(ctx); err != nil || len(u) != 1 || !u[0].Canceled {
+		t.Fatalf("unclaim: %+v %v", u, err)
+	}
+	if st := status(t, s, run.ID); st != Canceled {
+		t.Fatalf("status %s, want canceled", st)
+	}
+}
+
+// A priority set's variable wins over the workspace's own and every other set's, where the set applies.
+func TestPriorityVariableSet(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	w, _ := newWorkspace(t, s, false)
+	name := "prio-" + strings.ToLower(rand.Text()[:8])
+	for _, n := range []string{"a", "b"} {
+		if err := s.CreateVariableSet(ctx, name+n, "", true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	a, _ := s.GetVariableSet(ctx, name+"a")
+	b, _ := s.GetVariableSet(ctx, name+"b")
+	put := func(o VarOwner, v string) {
+		if err := s.SetVariable(ctx, o, Variable{Category: "terraform", Key: "region", Value: []byte(v)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put(VarOwner{WorkspaceID: w.ID}, "own")
+	put(VarOwner{SetID: a.ID}, "a")
+	put(VarOwner{SetID: b.ID}, "b")
+	region := func() string {
+		vars, err := s.RunVariables(ctx, w.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, v := range vars {
+			if v.Key == "region" {
+				return string(v.Value)
+			}
+		}
+		return ""
+	}
+	if got := region(); got != "own" {
+		t.Fatalf("without priority: %s, want the workspace's own", got)
+	}
+	if err := s.UpdateVariableSet(ctx, b.ID, "", true, true); err != nil {
+		t.Fatal(err)
+	}
+	if got := region(); got != "b" {
+		t.Fatalf("with priority set b: %s", got)
+	}
+	if vs, _ := s.GetVariableSet(ctx, name+"b"); !vs.Priority {
+		t.Fatal("priority not stored")
+	}
+}
+
+// A push while a run is active waits as pending; only the newest pending push stays, and it runs when the
+// active run ends.
+func TestPendingPush(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	w, active := newWorkspace(t, s, false)
+	pendingPush := func() []uuid.UUID {
+		var ids []uuid.UUID
+		rows, _ := s.Pool.Query(ctx, `SELECT id FROM runs WHERE workspace_id = $1 AND status = 'pending' ORDER BY created_at`, w.ID)
+		for rows.Next() {
+			var id uuid.UUID
+			rows.Scan(&id)
+			ids = append(ids, id)
+		}
+		return ids
+	}
+	for _, c := range []string{"c1", "c1", "c2"} {
+		if _, err := s.QueueVCSRun(ctx, w.ID, c, 0, "push "+c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := pendingPush()
+	if len(p) != 1 {
+		t.Fatalf("pending pushes: %v, want only the newest", p)
+	}
+	var commit string
+	s.Pool.QueryRow(ctx, `SELECT vcs_commit FROM runs WHERE id = $1`, p[0]).Scan(&commit)
+	if commit != "c2" {
+		t.Fatalf("the pending push is %s, want c2", commit)
+	}
+	if _, err := s.CancelRun(ctx, active.ID, "x", false); err != nil {
+		t.Fatal(err)
+	}
+	if st := status(t, s, p[0]); st != PlanQueued {
+		t.Fatalf("the push after the active run ended: %s", st)
+	}
+	if ok, err := s.QueueVCSRun(ctx, w.ID, "c2", 0, "push c2 again"); err != nil || ok {
+		t.Fatalf("a commit with a run gets another: %v %v", ok, err)
 	}
 }

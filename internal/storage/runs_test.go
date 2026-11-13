@@ -66,11 +66,13 @@ func TestEffects(t *testing.T) {
 		{all, Planning, ApplyQueued, []effect{effNotifyJobs, effReleaseStateLock}},
 		{all, ApplyQueued, Applying, []effect{effTakeVersion}},
 		{runFacts{}, ApplyQueued, Applying, nil}, // no version (a VCS-only workspace)
-		{all, Applying, Applied, []effect{effReleaseStateLock, effRemoveTemplates, effContinuePromotion}},
-		{all, Planning, NoChanges, []effect{effReleaseStateLock, effTakeVersion, effRemoveTemplates, effContinuePromotion}},
-		{all, NeedsConfirmation, Discarded, []effect{effDropPromotion}},
-		{all, Applying, Errored, []effect{effReleaseStateLock, effDropPromotion}},
-		{runFacts{Version: true}, NeedsConfirmation, Discarded, nil}, // nothing to undo
+		{all, Applying, Applied, []effect{effReleaseStateLock, effRemoveTemplates, effContinuePromotion, effPromotePending}},
+		{all, Planning, NoChanges, []effect{effReleaseStateLock, effTakeVersion, effRemoveTemplates, effContinuePromotion, effPromotePending}},
+		{all, NeedsConfirmation, Discarded, []effect{effDropPromotion, effPromotePending}},
+		{all, Applying, Errored, []effect{effReleaseStateLock, effDropPromotion, effPromotePending}},
+		{runFacts{Version: true}, NeedsConfirmation, Discarded, []effect{effPromotePending}}, // nothing to undo; the next one may go
+		{runFacts{}, Pending, PlanQueued, []effect{effNotifyJobs}},
+		{runFacts{}, Pending, Canceled, nil}, // it never held the workspace: the active run still does
 	} {
 		if got := effects(c.f, c.from, c.to); !slices.Equal(got, c.want) {
 			t.Errorf("%+v %s → %s: %v, want %v", c.f, c.from, c.to, got, c.want)
@@ -115,7 +117,7 @@ func TestRunActiveSQL(t *testing.T) {
 			}
 		}
 	}
-	if len(statuses) != 12 {
+	if len(statuses) != 13 {
 		t.Fatalf("statuses: %v", statuses)
 	}
 	for st := range statuses {
@@ -123,7 +125,7 @@ func TestRunActiveSQL(t *testing.T) {
 		if err := s.Pool.QueryRow(t.Context(), `SELECT run_active($1), run_working($1)`, st).Scan(&active, &working); err != nil {
 			t.Fatal(err)
 		}
-		if active != !Ended(st) || working != (st == Planning || st == Applying) {
+		if active != (!Ended(st) && st != Pending) || working != (st == Planning || st == Applying) { // pending waits, it doesn't hold the workspace
 			t.Errorf("%s: run_active %v, run_working %v", st, active, working)
 		}
 	}

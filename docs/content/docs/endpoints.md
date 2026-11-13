@@ -204,6 +204,7 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 | `POST /oauth/token` | public (code + PKCE) | Exchanges the code for a token (30 days) |
 | `GET /api/v2/ping` | public | API check |
 | `GET /api/v2/organizations/{org}/entitlement-set` | token | Entitlements |
+| `GET /api/v2/organizations/{org}/workspaces` | login | The workspaces the user sees (`search[name]` prefix; a tag filter matches none) |
 | `GET /api/v2/organizations/{org}/workspaces/{name}` | read | A workspace |
 | `POST /api/v2/organizations/{org}/workspaces` | operate on the project | Creates a local-execution workspace (`422` without access to the project) |
 | `GET /api/v2/organizations/{org}/projects` | token | Projects you can see (`filter[names]`) |
@@ -211,7 +212,7 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 | `PATCH /api/v2/workspaces/{id}` | operate | Terraform's workspace update: returns the workspace, changes nothing |
 | `POST /api/v2/workspaces/{id}/actions/{action}` | operate | `lock`, `unlock`, `force-unlock` (local-execution workspaces) |
 | `GET /api/v2/workspaces/{id}/current-state-version` | operate | Current state version |
-| `GET /api/v2/workspaces/{id}/current-state-version-outputs` | operate | Its outputs |
+| `GET /api/v2/workspaces/{id}/current-state-version-outputs` | read | Its outputs, with values and types (names only, operate, when one is sensitive) |
 | `GET /api/v2/workspaces/{id}/state-versions/{version}/download` | operate | The state file |
 | `POST /api/v2/workspaces/{id}/state-versions` | operate | Saves a state version (local execution, while holding the lock) |
 

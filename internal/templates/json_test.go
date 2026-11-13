@@ -104,7 +104,7 @@ func TestSchema(t *testing.T) {
 		{"unknown type", `{"name": "s", "type": "text"}`, "input type enum", `unknown type "text"`},
 		{"select without options", `{"name": "o", "type": "select"}`, "input allOf[3] then required options", "select needs options"},
 		{"option without a value", `{"name": "o", "type": "select", "options": [{"label": "A"}]}`, "option oneOf[1] required value", "an option needs a value"},
-		{"bad input name", `{"name": "Size", "type": "string"}`, "input name pattern", "invalid input name"},
+		{"bad input name", `{"name": "vm-size", "type": "string"}`, "input name pattern", "invalid input name"},
 		{"reserved input name", `{"name": "count", "type": "string"}`, "input name not enum", "invalid input name"},
 		{"sensitive bool", `{"name": "b", "type": "bool", "sensitive": true}`, "input allOf[2] then sensitive const false", "only string and number"},
 		{"per_environment sensitive", `{"name": "p", "type": "string", "sensitive": true, "per_environment": true}`,
@@ -177,6 +177,24 @@ func TestJSONRoundTrip(t *testing.T) {
 		}
 		if json.Unmarshal(b, &s); s.Schema != SchemaURL {
 			t.Errorf("catalog/%s.json: $schema %q", f, s.Schema)
+		}
+	}
+}
+
+// A template that claims import support: its switch is a bool that starts off, the same everywhere, and the
+// template has a key.
+func TestImportSwitch(t *testing.T) {
+	key := `{"name": "name", "type": "string", "key": true}`
+	for in, want := range map[string]string{
+		`{"name": "existing", "type": "string"}, ` + key:                        "is a bool",
+		`{"name": "existing", "type": "bool", "default": true}, ` + key:         "starts off",
+		`{"name": "existing", "type": "bool", "per_environment": true}, ` + key: "can't be per environment",
+		`{"name": "existing", "type": "bool"}`:                                  "needs a key input",
+		`{"name": "existing", "type": "bool", "default": false}, ` + key:        "",
+	} {
+		_, _, err := Parse(map[string][]byte{"t.json": []byte(`{"id": "t", "name": "T", "module": {"source": "s", "ref": "r"}, "inputs": [` + in + `]}`)})
+		if want == "" && err != nil || want != "" && (err == nil || !strings.Contains(err.Error(), want)) {
+			t.Errorf("%s: %v, want %q", in, err, want)
 		}
 	}
 }

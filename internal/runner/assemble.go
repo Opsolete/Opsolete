@@ -18,6 +18,7 @@ import (
 )
 
 const (
+	varsFile    = "opsolete.tfvars.json" // the workspace's Terraform variables, passed with -var-file
 	planFile    = "opsolete.tfplan"
 	lockFile    = ".terraform.lock.hcl"
 	modulesFile = "opsolete_templates.tf.json" // module blocks of the workspace's added templates
@@ -45,7 +46,7 @@ func dropRemoved(ctx context.Context, tf *tfProc, run func(...string) (bool, err
 	}
 	const cleanupPlan = "opsolete-cleanup.tfplan"
 	fmt.Fprintln(w, "\n==> terraform plan -refresh=false (without the removed templates, to drop their outputs)")
-	changes, err := run("plan", "-input=false", "-detailed-exitcode", "-out="+cleanupPlan, "-refresh=false")
+	changes, err := run("plan", "-input=false", "-detailed-exitcode", "-out="+cleanupPlan, "-refresh=false", "-var-file="+varsFile)
 	if err != nil || !changes {
 		return err
 	}

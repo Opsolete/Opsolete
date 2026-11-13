@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/opsolete/opsolete/internal/storage"
 	"github.com/opsolete/opsolete/internal/templates"
 )
 
@@ -136,4 +137,23 @@ func (a *App) save(s formSave) (saved, error) {
 	imp := Importing(s.T, raw)
 	delete(vals, ImportInput) // a property of the module (storage.WorkspaceTemplate.Import); the runner gets it
 	return saved{Vals: vals, Follows: slices.Sorted(maps.Keys(locked)), Raw: raw, Locked: locked, Errs: errs, Import: imp}, nil
+}
+
+// plainSecrets are the values of m's inputs its template now marks sensitive but that were stored before it
+// did, in plain text: they mask like sealed ones until the form saves them sealed.
+func (a *App) plainSecrets(m storage.WorkspaceTemplate) []string {
+	if a.Templates == nil {
+		return nil
+	}
+	t, ok := a.Templates.Get(m.TemplateID)
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, in := range t.Inputs {
+		if v, set := m.Inputs[in.Name]; set && in.Sensitive && v != nil && !IsSealed(v) {
+			out = append(out, templates.FormatValue(v))
+		}
+	}
+	return out
 }

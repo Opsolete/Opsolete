@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -168,7 +169,7 @@ func TestEnvironmentValuesInJobs(t *testing.T) {
 	if err != nil || len(added) != 1 {
 		t.Fatal(added, err)
 	}
-	_, run, err := a.SaveTemplate(ctx, admin, ws.Name, added[0].Name, "", map[string]string{"size": "l", "region": "Not Valid", "name": "n2"}, nil)
+	_, run, err := a.SaveTemplate(ctx, admin, ws.Name, added[0].Name, "", map[string]string{"size": "l", "region": "Not Valid", "name": "n2"}, nil, "")
 	if err != nil {
 		t.Fatalf("save with a locked input: %v", err)
 	}
@@ -240,7 +241,7 @@ func TestEnvironmentValueShowIf(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := withEnvironmentValues(tpl, true, map[string]any{"public": public}, nil, env)
+		got, err := withEnvironmentValues(tpl, true, true, map[string]any{"public": public}, nil, env)
 		if _, set := got["ip"]; err != nil || got["ip"] != want || set != public {
 			t.Errorf("public=%v: ip %v, want %v (%v)", public, got["ip"], want, err)
 		}
@@ -291,6 +292,7 @@ func TestFollowsKeepOwn(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		a.Store.CancelRun(ctx, run.ID, "x", false)
 		a.Store.CancelRun(ctx, run.ID, "x", true)
 		return job.Modules[0].Inputs["region"]
 	}
@@ -307,5 +309,48 @@ func TestFollowsKeepOwn(t *testing.T) {
 	}
 	if got := region(before); got != "prd" {
 		t.Errorf("a workspace with its own value: %v, want its own", got)
+	}
+}
+
+// A git template moved on: its inputs are today's, the workspace runs an older version that may lack a new
+// one. Only inputs the module had take project values then (Terraform would refuse an unknown argument).
+func TestEnvironmentValuesPinned(t *testing.T) {
+	tpl := templates.Template{ID: "t", Inputs: []templates.Input{{Name: "region", Type: "string", PerEnvironment: true},
+		{Name: "zone", Type: "string", PerEnvironment: true}}}
+	env := EnvironmentMap{"t": {"region": {Value: "prd"}, "zone": {Value: "z1"}}}
+	in := map[string]any{"region": "own"}
+	exact, err := withEnvironmentValues(tpl, true, true, in, nil, env)
+	if err != nil || exact["region"] != "prd" || exact["zone"] != "z1" {
+		t.Fatalf("exact: %v %v", exact, err)
+	}
+	moved, err := withEnvironmentValues(tpl, true, false, in, nil, env)
+	if err != nil || moved["region"] != "prd" || moved["zone"] != nil {
+		t.Fatalf("moved on: %v %v", moved, err)
+	}
+}
+
+// A template deleted while a project sets values for it: its workspaces' jobs fail rather than run without them.
+func TestDeletedTemplateWithProjectValues(t *testing.T) {
+	a, ctx := envApp(t), context.Background()
+	prd := uniq("prd-")
+	if _, err := a.CreateProject(ctx, admin, prd, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SetEnvironmentValue(ctx, admin, prd, "env", "region", "prd", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := a.CreateWorkspace(ctx, admin, NewWorkspace{Name: uniq("env-"), Project: prd, TemplateID: "env",
+		Inputs: map[string]string{"size": "s", "name": "n"}}); err != nil {
+		t.Fatal(err)
+	}
+	j, ok, err := a.Store.ClaimJob(ctx, storage.Runner{Name: "r", Pool: storage.DefaultPool}, time.Minute)
+	if err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	if a.Templates, err = templates.Open(t.TempDir()); err != nil { // the catalog without it
+		t.Fatal(err)
+	}
+	if _, err := a.assembleJob(ctx, j); err == nil || !strings.Contains(err.Error(), "no longer in the catalog") {
+		t.Fatalf("job of a deleted template with project values: %v", err)
 	}
 }

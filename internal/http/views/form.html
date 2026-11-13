@@ -32,9 +32,9 @@
   <a href="{{$.CreateURL}}"{{if not $form.Importing}} aria-current="true"{{end}}>Create new</a>
   <a href="{{.}}"{{if $form.Importing}} aria-current="true"{{end}}>Import existing</a>
 </nav>
-{{if and $form.Importing (not $.Found)}}<div class="alert" role="status">Importing: fill in {{with $.T.KeyInput}}<strong>{{.Title}}</strong>{{end}} and what tells the module where it is (a resource group, say); the other settings may stay empty. The plan finds what exists and imports it instead of creating it, shows where these settings differ, and waits for your confirmation. Discard it, and its page offers <em>Use found values</em> for the next plan.</div>{{end}}
+{{if and $form.Importing (not $.Found)}}<div class="alert" role="status">Importing: fill in {{with $.T.KeyInput}}<strong>{{.Title}}</strong>{{end}} and what tells the module where it is (a resource group, say); the other settings may stay empty. The plan is a round, never applied by itself: it finds what exists and imports it instead of creating it, and shows what it found where these settings differ. Its page offers <em>Plan again with the found values</em>, <em>Change settings</em>, and <em>Apply the import</em> once it only imports (that apply waits for your confirmation).</div>{{end}}
 {{end}}
-{{if .Found}}<div class="alert" role="status">Filled in with what <a href="/workspaces/{{.Configure.Name}}/runs/{{.FoundRun}}">the import plan</a> found, over what you entered for it. Set what that plan still changes, then start the plan again: it imports what exists instead of creating it, and waits for your confirmation.</div>{{end}}
+{{if .Found}}<div class="alert" role="status">Filled in with what <a href="/workspaces/{{.Configure.Name}}/runs/{{.FoundRun}}">the import plan</a> found, over what you entered for it. Set what that plan still changes, then plan again: a new round, which imports what exists instead of creating it.</div>{{end}}
 <form method="post" class="card form-rows" id="template-form">
 {{if $form.Importing}}<input type="hidden" name="existing" value="on">{{end}}
 {{if not .Configure}}
@@ -140,7 +140,10 @@ fields, named Prefix.<field>, Row their values (nil: a new row, the defaults) */
     {{if eq .Type "bool"}}
     <input type="checkbox" id="{{$id}}" name="{{$id}}"{{if eq $val "true" "on"}} checked{{end}}>
     {{else if eq .Type "select"}}
-    <select id="{{$id}}" name="{{$id}}">{{range .Options}}<option value="{{.Value}}"{{if eq .Value $val}} selected{{end}}>{{.Text}}</option>{{end}}</select>
+    <select id="{{$id}}" name="{{$id}}">{{$known := not $val}}{{range .Options}}{{if eq .Value $val}}{{$known = true}}{{end}}{{end}}
+      {{if not $known}}<option value="{{$val}}" selected>{{$val}} (not an option: choose one)</option>{{end}}
+      {{if and (not .Required) $known}}<option value=""{{if not $val}} selected{{end}}></option>{{end}}
+      {{range .Options}}<option value="{{.Value}}"{{if eq .Value $val}} selected{{end}}>{{.Text}}</option>{{end}}</select>
     {{else}}
     <input id="{{$id}}" name="{{$id}}" value="{{$val}}" autocomplete="off" spellcheck="false"{{if eq .Type "number"}} type="number" step="any" inputmode="decimal"{{end}}
       {{if .Pattern}} pattern="{{.Pattern}}"{{with .Help}} title="{{.}}"{{end}}{{end}}{{if .Required}} required{{end}}>

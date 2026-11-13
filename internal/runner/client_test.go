@@ -36,3 +36,22 @@ func TestClaimLargeJob(t *testing.T) {
 		t.Fatalf("oversized claim: err = %v", err)
 	}
 }
+
+// A result survives a short server outage (a restart): the runner keeps reporting it.
+func TestFinishRetries(t *testing.T) {
+	calls := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if calls++; calls < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer ts.Close()
+	u, _ := url.Parse(ts.URL)
+	r := New(config.Runner{ServerURL: u, Token: "tok"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	r.finish(r.Log, runnerapi.Job{RunID: "r1", LeaseID: "l", LeaseSeconds: 120}, runnerapi.FinishRequest{Status: "succeeded"})
+	if calls != 3 {
+		t.Fatalf("finish posted %d times, want 3 (two refused, then accepted)", calls)
+	}
+}

@@ -357,13 +357,14 @@ func accessRows() []accessRow {
 		// where only admins (and groups with operate on it) create workspaces; state reads need operate (the state holds secrets). 409: past the access check, nothing to do.
 		{"GET " + org + "/entitlement-set", acc + "/entitlement-set", "", onAPI, []int{401, 200, 200, 200, 200}, false},
 		{"GET " + org + "/workspaces/{name}", acc + "/workspaces/{cws}", "", onAPI, []int{401, 404, 200, 200, 200}, false},
+		{"GET " + org + "/workspaces", acc + "/workspaces", "", onAPI, []int{401, 200, 200, 200, 200}, false}, // what each one sees
 		{"POST " + org + "/workspaces", acc + "/workspaces", `{"data":{"attributes":{"name":"{cws}-new"}}}`, onAPI, []int{401, 422, 422, 422, 201}, true},
 		{"GET " + org + "/projects", acc + "/projects", "", onAPI, []int{401, 200, 200, 200, 200}, false},
 		{"POST " + org + "/projects", acc + "/projects", `{"data":{"attributes":{"name":"{proj}-new"}}}`, onAPI, []int{401, 403, 403, 403, 201}, true},
 		{"PATCH " + cw, cid, `{"data":{"attributes":{"terraform-version":"1.14.0"}}}`, onAPI, []int{401, 404, 403, 200, 200}, false},
 		{"POST " + cw + "/actions/{action}", cid + "/actions/lock", "", onAPI, []int{401, 404, 403, 200, 200}, true},
 		{"GET " + cw + "/current-state-version", cid + "/current-state-version", "", onAPI, []int{401, 404, 403, 200, 200}, false},
-		{"GET " + cw + "/current-state-version-outputs", cid + "/current-state-version-outputs", "", onAPI, []int{401, 404, 403, 200, 200}, false},
+		{"GET " + cw + "/current-state-version-outputs", cid + "/current-state-version-outputs", "", onAPI, []int{401, 404, 200, 200, 200}, false},
 		{"GET " + cw + "/state-versions/{version}/download", cid + "/state-versions/{sv}/download", "", onAPI, []int{401, 404, 403, 200, 200}, false},
 		{"POST " + cw + "/state-versions", cid + "/state-versions", `{"data":{"attributes":{"state":"eyJ2ZXJzaW9uIjo0fQ=="}}}`, onAPI, []int{401, 404, 403, 409, 409}, true},
 

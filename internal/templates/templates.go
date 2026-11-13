@@ -147,8 +147,10 @@ func hasValue(opts []Option, v string) bool {
 }
 
 var (
-	idRe   = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`) // safe for use in state keys
-	nameRe = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)        // valid Terraform variable name
+	idRe    = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`) // safe for use in state keys
+	wholeRe = regexp.MustCompile(`^-?[0-9]+$`)
+	// a Terraform variable name (vmSize too), without "-": form fields of Opsolete's own have one, so never collide
+	nameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	// Terraform forbids these as variable names; as inputs they'd set a module block's meta-arguments
 	// (source: run other code with the workspace's credentials).
 	reserved = []string{"source", "version", "providers", "count", "for_each", "lifecycle", "depends_on", "locals"}
@@ -356,6 +358,18 @@ func (c *Catalog) Delete(id string) error {
 }
 
 func (t Template) check() error {
+	if err := t.checkInputs(); err != nil {
+		return err
+	}
+	for _, in := range t.Inputs { // the template's own switch; a list's rows may have switches of their own
+		if in.Name == ImportInput {
+			return t.checkImport(in)
+		}
+	}
+	return nil
+}
+
+func (t Template) checkInputs() error {
 	if !idRe.MatchString(t.ID) || t.ID == "new" { // "new" is the builder route
 		return fmt.Errorf("invalid id %q (lowercase letters, digits and dashes)", t.ID)
 	}
@@ -401,6 +415,9 @@ func (t Template) check() error {
 		if in.Sensitive && in.Default != "" { // the template file is plain text
 			return fmt.Errorf("input %q: a sensitive input can't have a default", in.Name)
 		}
+		if in.Pattern != "" && !slices.Contains([]string{"string", "string_list", "map", ""}, in.Type) { // Validate applies it to these only
+			return fmt.Errorf("input %q: a pattern is for text (string, string_list, map values), not %s", in.Name, in.Type)
+		}
 		if in.Pattern != "" { // compiled as Validate does: near the size limits, the anchored form may fail alone
 			if _, err := regexp.Compile(anchored(in.Pattern)); err != nil {
 				return fmt.Errorf("input %q: %w", in.Name, err)
@@ -432,6 +449,40 @@ func (t Template) check() error {
 	return nil
 }
 
+// patterns caches compiled input patterns: Validate runs per input, per row, per form post and rollout check.
+// shortcut: never evicted; templates bound it (a pattern per input), fine unless templates churn for months.
+var patterns sync.Map // pattern → *regexp.Regexp
+
+// pattern is p compiled anchored. check compiled it when the template loaded, so it compiles.
+func pattern(p string) *regexp.Regexp {
+	if re, ok := patterns.Load(p); ok {
+		return re.(*regexp.Regexp)
+	}
+	re := regexp.MustCompile(anchored(p))
+	patterns.Store(p, re)
+	return re
+}
+
+// ImportInput is the input with which a template's module imports what exists instead of creating it
+// (docs/resource-import.md): a bool that switches on the module's own import blocks.
+const ImportInput = "existing"
+
+// checkImport checks the import switch: the form chooses between creating and importing with it, so it is a
+// bool that starts off, the same for every workspace, and the template has a key (what an import is found by).
+func (t Template) checkImport(in Input) error {
+	switch {
+	case in.Type != "bool":
+		return fmt.Errorf("input %q: the import switch is a bool (a module that imports what exists when it's true)", in.Name)
+	case in.Default == "true":
+		return fmt.Errorf("input %q: the import switch starts off (no default, or false): the form chooses create or import", in.Name)
+	case in.PerEnvironment || in.Key || in.Sensitive || in.ShowIf != nil:
+		return fmt.Errorf("input %q: the import switch can't be per environment, the key, sensitive or conditional", in.Name)
+	case t.KeyInput() == nil:
+		return fmt.Errorf("input %q: a template that imports needs a key input (what the module finds the resource by)", in.Name)
+	}
+	return nil
+}
+
 // checkList checks a complex input: its fields (a list's or object's), and that it's none of what it can't be (yet).
 func (in Input) checkList() error {
 	hasFields := in.Type == "list" || in.Type == "object"
@@ -458,7 +509,7 @@ func (in Input) checkList() error {
 			return fmt.Errorf("input %q, field %q: a field can't be sensitive, the key, per-environment, shown conditionally or a list", in.Name, f.Name)
 		}
 		names[f.Name] = true
-		if err := (Template{ID: "x", Name: "x", Module: Module{"x", "x"}, Inputs: []Input{f}}).check(); err != nil {
+		if err := (Template{ID: "x", Name: "x", Module: Module{"x", "x"}, Inputs: []Input{f}}).checkInputs(); err != nil {
 			return fmt.Errorf("input %q, field %s", in.Name, strings.TrimPrefix(err.Error(), "input "))
 		}
 	}
@@ -472,6 +523,9 @@ func (c *ShowIf) check(before map[string]Input) error {
 	in, ok := before[c.Input]
 	if !ok || in.Type != "select" && in.Type != "bool" {
 		return fmt.Errorf("show when: %q is not a dropdown or yes / no field above this field", c.Input)
+	}
+	if c.Input == ImportInput { // not a field: the form's create or import choice, which the browser can't see as one
+		return fmt.Errorf("show when: %q is the import switch, not a field", c.Input)
 	}
 	if len(c.Equals) == 0 {
 		return fmt.Errorf("show when %s: pick at least one value", c.Input)
@@ -525,6 +579,11 @@ func (t Template) Describe(stored map[string]any) []StoredValue {
 	var out []StoredValue
 	add := func(in Input, v any) {
 		sv := StoredValue{Name: in.Name, Title: in.Title()}
+		if in.Sensitive { // also a value stored in plain text before the input became sensitive: never shown
+			sv.Sensitive = true
+			out = append(out, sv)
+			return
+		}
 		switch x := v.(type) {
 		case bool:
 			sv.Text = map[bool]string{true: "Yes", false: "No"}[x]
@@ -644,6 +703,10 @@ func (t Template) Validate(raw map[string]string) (map[string]any, map[string]st
 				errs[in.Name] = "Enter a number, e.g. 42."
 				continue
 			}
+			if wholeRe.MatchString(v) && strconv.FormatFloat(math.Abs(n), 'f', -1, 64) != cmp.Or(strings.TrimLeft(strings.TrimPrefix(v, "-"), "0"), "0") { // float64 rounded it: 12345678901234567890 → …168
+				errs[in.Name] = "This number is too large to keep exactly; an id this long belongs in a text field."
+				continue
+			}
 			vals[in.Name] = n
 		case "select":
 			if !hasValue(in.Options, v) {
@@ -653,7 +716,7 @@ func (t Template) Validate(raw map[string]string) (map[string]any, map[string]st
 			vals[in.Name] = v
 		default:
 			// anchored like the browser's pattern attribute: the whole value must match
-			if in.Pattern != "" && !regexp.MustCompile(anchored(in.Pattern)).MatchString(v) {
+			if in.Pattern != "" && !pattern(in.Pattern).MatchString(v) {
 				errs[in.Name] = cmp.Or(in.Help, "Doesn't have the expected format: "+in.Pattern) // the help says it in words
 				continue
 			}
@@ -714,12 +777,12 @@ func (in Input) validateComplex(v string) (any, string) {
 			list = append(list, val)
 		case in.Type == "string_list" && val["value"] != nil:
 			list = append(list, val["value"])
-		case in.Type == "map" && val["value"] != nil:
+		case in.Type == "map" && (val["key"] != nil || val["value"] != nil): // a key with an empty value is ""
 			k, _ := val["key"].(string)
 			if _, dup := m[k]; dup {
 				return nil, fmt.Sprintf("Row %d, Key: %s is there already.", i+1, k)
 			}
-			m[k] = val["value"]
+			m[k] = cmp.Or(val["value"], any(""))
 		}
 	}
 	if in.Type == "map" {

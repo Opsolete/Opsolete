@@ -124,9 +124,31 @@ func nilIfEmpty(s []string) []string {
 	return s
 }
 
-// RunVersionApplied reports whether the configuration version run runID planned was applied (its apply started), by
-// it or a later run: what it found or was set to is then the workspace's, and nothing to go back to.
-func (s *Store) RunVersionApplied(ctx context.Context, runID uuid.UUID) (bool, error) {
+// RunPending reports whether run runID's configuration is still something to go on from (adopt it, plan it
+// again, change its settings): not applied, and the workspace's current version or made from it. A version
+// applied (its apply started, by it or a later run) or overtaken (another change applied since) is not: going on
+// from it would undo that.
+func (s *Store) RunPending(ctx context.Context, runID uuid.UUID) (bool, error) {
+	return runPending(ctx, s.q, runID)
+}
+
+func runPending(ctx context.Context, q *db.Queries, runID uuid.UUID) (bool, error) {
+	rc, err := q.RunConfig(ctx, runID)
+	return rc.Live && !rc.Applied, notFound(err)
+}
+
+// RunSuperseded reports whether a later run plans another configuration than run runID (drift checks, pull
+// request plans and runs of the same version don't count).
+func (s *Store) RunSuperseded(ctx context.Context, runID uuid.UUID) (bool, error) {
 	rc, err := s.q.RunConfig(ctx, runID)
-	return rc.Applied, notFound(err)
+	return rc.Superseded, notFound(err)
+}
+
+// requirePending is runPending as a check, inside a transaction holding the workspace's configuration lock.
+func requirePending(ctx context.Context, q *db.Queries, runID uuid.UUID) error {
+	ok, err := runPending(ctx, q, runID)
+	if err == nil && !ok {
+		err = ErrChanged
+	}
+	return err
 }

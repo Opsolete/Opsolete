@@ -66,6 +66,9 @@ func (r *Runner) ack(ctx context.Context, job runnerapi.Job) bool {
 
 func (r *Runner) finish(log *slog.Logger, job runnerapi.Job, res runnerapi.FinishRequest) {
 	body, _ := json.Marshal(res)
+	// Until the server would have failed the run for its lease (lease plus its reaper's grace): a server restart
+	// during that time must not turn a successful apply into an errored run. The lease id fences a late report.
+	until := time.Now().Add(time.Duration(max(job.LeaseSeconds, 30))*time.Second + time.Minute)
 	for attempt := 1; ; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		code, resp, err := r.call(ctx, "/jobs/"+job.RunID+"/finish", job.LeaseID, "application/json", body)
@@ -78,12 +81,13 @@ func (r *Runner) finish(log *slog.Logger, job runnerapi.Job, res runnerapi.Finis
 			log.Error("finish rejected", "code", code, "body", string(resp))
 			return
 		}
-		if attempt == 5 {
-			// The server fails the job itself once the lease expires.
-			log.Error("could not report result", "err", err, "code", code)
+		wait := min(time.Duration(attempt)*2*time.Second, 10*time.Second)
+		if time.Now().Add(wait).After(until) {
+			log.Error("could not report the result; the server fails the run when its lease expires", "err", err, "code", code)
 			return
 		}
-		time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		log.Warn("reporting the result failed, retrying", "err", err, "code", code, "in", wait)
+		time.Sleep(wait)
 	}
 }
 

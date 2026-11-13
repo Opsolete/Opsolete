@@ -90,6 +90,7 @@ func TestStateRunCredential(t *testing.T) {
 	}
 
 	// ended: the credential is gone
+	a.CancelRun(ctx, admin, ws.Name, run.ID, false)
 	if _, err := a.CancelRun(ctx, admin, ws.Name, run.ID, true); err != nil {
 		t.Fatal(err)
 	}

@@ -15,7 +15,7 @@
 <tr>
   <td><a href="/variable-sets/{{.Name}}"><strong>{{.Name}}</strong></a></td>
   <td>{{.Description}}</td>
-  <td>{{if .Global}}<span class="tag">global</span> all but repository-linked workspaces{{else}}{{len .Projects}} project(s), {{len .Workspaces}} workspace(s){{end}}</td>
+  <td>{{if .Priority}}<span class="tag">priority</span> {{end}}{{if .Global}}<span class="tag">global</span> all but repository-linked workspaces{{else}}{{len .Projects}} project(s), {{len .Workspaces}} workspace(s){{end}}</td>
 </tr>
 {{else}}
 <tr><td colspan="3" class="empty">No variable sets yet.</td></tr>

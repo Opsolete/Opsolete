@@ -12,7 +12,7 @@ import (
 )
 
 const allVariables = `-- name: AllVariables :many
-SELECT id, workspace_id, set_id, category, key, value, sensitive, updated_at FROM variables
+SELECT id, workspace_id, set_id, category, key, value, sensitive, updated_at, hcl FROM variables
 `
 
 func (q *Queries) AllVariables(ctx context.Context) ([]Variable, error) {
@@ -33,6 +33,7 @@ func (q *Queries) AllVariables(ctx context.Context) ([]Variable, error) {
 			&i.Value,
 			&i.Sensitive,
 			&i.UpdatedAt,
+			&i.Hcl,
 		); err != nil {
 			return nil, err
 		}
@@ -147,7 +148,7 @@ func (q *Queries) DetachSetWorkspace(ctx context.Context, arg DetachSetWorkspace
 }
 
 const getVariableSet = `-- name: GetVariableSet :one
-SELECT id, name, description, global, created_at, workspaces, projects FROM variable_set_list WHERE name = $1::text
+SELECT id, name, description, global, created_at, workspaces, projects, priority FROM variable_set_list WHERE name = $1::text
 `
 
 func (q *Queries) GetVariableSet(ctx context.Context, name string) (VariableSetList, error) {
@@ -161,13 +162,14 @@ func (q *Queries) GetVariableSet(ctx context.Context, name string) (VariableSetL
 		&i.CreatedAt,
 		&i.Workspaces,
 		&i.Projects,
+		&i.Priority,
 	)
 	return i, err
 }
 
 const listVariables = `-- name: ListVariables :many
 
-SELECT id, workspace_id, set_id, category, key, value, sensitive, updated_at FROM variables
+SELECT id, workspace_id, set_id, category, key, value, sensitive, updated_at, hcl FROM variables
 WHERE workspace_id IS NOT DISTINCT FROM $1::uuid AND set_id IS NOT DISTINCT FROM $2::uuid
 ORDER BY category, key
 `
@@ -197,6 +199,7 @@ func (q *Queries) ListVariables(ctx context.Context, arg ListVariablesParams) ([
 			&i.Value,
 			&i.Sensitive,
 			&i.UpdatedAt,
+			&i.Hcl,
 		); err != nil {
 			return nil, err
 		}
@@ -209,7 +212,7 @@ func (q *Queries) ListVariables(ctx context.Context, arg ListVariablesParams) ([
 }
 
 const projectVariableSets = `-- name: ProjectVariableSets :many
-SELECT id, name, description, global, created_at, workspaces, projects FROM variable_set_list
+SELECT id, name, description, global, created_at, workspaces, projects, priority FROM variable_set_list
 WHERE id IN (SELECT a.set_id FROM variable_set_projects a WHERE a.project_id = $1::uuid) ORDER BY name
 `
 
@@ -230,6 +233,7 @@ func (q *Queries) ProjectVariableSets(ctx context.Context, projectID uuid.UUID) 
 			&i.CreatedAt,
 			&i.Workspaces,
 			&i.Projects,
+			&i.Priority,
 		); err != nil {
 			return nil, err
 		}
@@ -260,12 +264,14 @@ func (q *Queries) ResealVariable(ctx context.Context, arg ResealVariableParams) 
 }
 
 const runVariables = `-- name: RunVariables :many
-SELECT DISTINCT ON (v.category, v.key) v.id, v.workspace_id, v.set_id, v.category, v.key, v.value, v.sensitive, v.updated_at FROM variables v LEFT JOIN variable_sets vs ON vs.id = v.set_id
+SELECT DISTINCT ON (v.category, v.key) v.id, v.workspace_id, v.set_id, v.category, v.key, v.value, v.sensitive, v.updated_at, v.hcl FROM variables v LEFT JOIN variable_sets vs ON vs.id = v.set_id
 WHERE v.workspace_id = $1::uuid OR variable_set_rank($1::uuid, v.set_id) IS NOT NULL
-ORDER BY v.category, v.key, CASE WHEN v.workspace_id IS NOT NULL THEN 0 ELSE variable_set_rank($1::uuid, v.set_id) END, vs.name
+ORDER BY v.category, v.key, CASE WHEN vs.priority THEN -1 WHEN v.workspace_id IS NOT NULL THEN 0
+    ELSE variable_set_rank($1::uuid, v.set_id) END, vs.name
 `
 
-// one per category and key: the workspace's own, then by variable_set_rank, then the first set by name
+// one per category and key: a priority set's first, then the workspace's own, then by variable_set_rank,
+// then the first set by name
 func (q *Queries) RunVariables(ctx context.Context, workspaceID uuid.UUID) ([]Variable, error) {
 	rows, err := q.db.Query(ctx, runVariables, workspaceID)
 	if err != nil {
@@ -284,6 +290,7 @@ func (q *Queries) RunVariables(ctx context.Context, workspaceID uuid.UUID) ([]Va
 			&i.Value,
 			&i.Sensitive,
 			&i.UpdatedAt,
+			&i.Hcl,
 		); err != nil {
 			return nil, err
 		}
@@ -367,9 +374,9 @@ func (q *Queries) SelectSetWorkspaces(ctx context.Context, arg SelectSetWorkspac
 }
 
 const setSetVariable = `-- name: SetSetVariable :exec
-INSERT INTO variables (set_id, category, key, value, sensitive)
-VALUES ($1::uuid, $2::text, $3::text, $4::bytea, $5::boolean)
-ON CONFLICT (set_id, category, key) DO UPDATE SET value = EXCLUDED.value, sensitive = EXCLUDED.sensitive, updated_at = now()
+INSERT INTO variables (set_id, category, key, value, sensitive, hcl)
+VALUES ($1::uuid, $2::text, $3::text, $4::bytea, $5::boolean, $6::boolean)
+ON CONFLICT (set_id, category, key) DO UPDATE SET value = EXCLUDED.value, sensitive = EXCLUDED.sensitive, hcl = EXCLUDED.hcl, updated_at = now()
 `
 
 type SetSetVariableParams struct {
@@ -378,6 +385,7 @@ type SetSetVariableParams struct {
 	Key       string
 	Value     []byte
 	Sensitive bool
+	Hcl       bool
 }
 
 func (q *Queries) SetSetVariable(ctx context.Context, arg SetSetVariableParams) error {
@@ -387,14 +395,15 @@ func (q *Queries) SetSetVariable(ctx context.Context, arg SetSetVariableParams) 
 		arg.Key,
 		arg.Value,
 		arg.Sensitive,
+		arg.Hcl,
 	)
 	return err
 }
 
 const setWorkspaceVariable = `-- name: SetWorkspaceVariable :exec
-INSERT INTO variables (workspace_id, category, key, value, sensitive)
-VALUES ($1::uuid, $2::text, $3::text, $4::bytea, $5::boolean)
-ON CONFLICT (workspace_id, category, key) DO UPDATE SET value = EXCLUDED.value, sensitive = EXCLUDED.sensitive, updated_at = now()
+INSERT INTO variables (workspace_id, category, key, value, sensitive, hcl)
+VALUES ($1::uuid, $2::text, $3::text, $4::bytea, $5::boolean, $6::boolean)
+ON CONFLICT (workspace_id, category, key) DO UPDATE SET value = EXCLUDED.value, sensitive = EXCLUDED.sensitive, hcl = EXCLUDED.hcl, updated_at = now()
 `
 
 type SetWorkspaceVariableParams struct {
@@ -403,6 +412,7 @@ type SetWorkspaceVariableParams struct {
 	Key         string
 	Value       []byte
 	Sensitive   bool
+	Hcl         bool
 }
 
 func (q *Queries) SetWorkspaceVariable(ctx context.Context, arg SetWorkspaceVariableParams) error {
@@ -412,27 +422,35 @@ func (q *Queries) SetWorkspaceVariable(ctx context.Context, arg SetWorkspaceVari
 		arg.Key,
 		arg.Value,
 		arg.Sensitive,
+		arg.Hcl,
 	)
 	return err
 }
 
 const updateVariableSet = `-- name: UpdateVariableSet :exec
-UPDATE variable_sets SET description = $1::text, global = $2::boolean WHERE id = $3::uuid
+UPDATE variable_sets SET description = $1::text, global = $2::boolean,
+    priority = $3::boolean WHERE id = $4::uuid
 `
 
 type UpdateVariableSetParams struct {
 	Description string
 	Global      bool
+	Priority    bool
 	ID          uuid.UUID
 }
 
 func (q *Queries) UpdateVariableSet(ctx context.Context, arg UpdateVariableSetParams) error {
-	_, err := q.db.Exec(ctx, updateVariableSet, arg.Description, arg.Global, arg.ID)
+	_, err := q.db.Exec(ctx, updateVariableSet,
+		arg.Description,
+		arg.Global,
+		arg.Priority,
+		arg.ID,
+	)
 	return err
 }
 
 const variableSets = `-- name: VariableSets :many
-SELECT id, name, description, global, created_at, workspaces, projects FROM variable_set_list ORDER BY name
+SELECT id, name, description, global, created_at, workspaces, projects, priority FROM variable_set_list ORDER BY name
 `
 
 func (q *Queries) VariableSets(ctx context.Context) ([]VariableSetList, error) {
@@ -452,6 +470,7 @@ func (q *Queries) VariableSets(ctx context.Context) ([]VariableSetList, error) {
 			&i.CreatedAt,
 			&i.Workspaces,
 			&i.Projects,
+			&i.Priority,
 		); err != nil {
 			return nil, err
 		}
@@ -464,7 +483,7 @@ func (q *Queries) VariableSets(ctx context.Context) ([]VariableSetList, error) {
 }
 
 const workspaceVariableSets = `-- name: WorkspaceVariableSets :many
-SELECT id, name, description, global, created_at, workspaces, projects FROM variable_set_list WHERE variable_set_rank($1::uuid, id) IS NOT NULL ORDER BY name
+SELECT id, name, description, global, created_at, workspaces, projects, priority FROM variable_set_list WHERE variable_set_rank($1::uuid, id) IS NOT NULL ORDER BY name
 `
 
 func (q *Queries) WorkspaceVariableSets(ctx context.Context, workspaceID uuid.UUID) ([]VariableSetList, error) {
@@ -484,6 +503,7 @@ func (q *Queries) WorkspaceVariableSets(ctx context.Context, workspaceID uuid.UU
 			&i.CreatedAt,
 			&i.Workspaces,
 			&i.Projects,
+			&i.Priority,
 		); err != nil {
 			return nil, err
 		}

@@ -93,12 +93,12 @@ func (a *App) CreateVariableSet(ctx context.Context, actor Actor, in NewVariable
 }
 
 // UpdateVariableSet sets a set's description and whether it applies to all workspaces. Admins only.
-func (a *App) UpdateVariableSet(ctx context.Context, actor Actor, name, description string, global bool) error {
+func (a *App) UpdateVariableSet(ctx context.Context, actor Actor, name, description string, global, priority bool) error {
 	set, err := a.variableSet(ctx, actor, name)
 	if err != nil {
 		return err
 	}
-	if err := a.Store.UpdateVariableSet(ctx, set.ID, strings.TrimSpace(description), global); err != nil {
+	if err := a.Store.UpdateVariableSet(ctx, set.ID, strings.TrimSpace(description), global, priority); err != nil {
 		return err
 	}
 	a.Log.Info("variable set updated", "set", set.Name, "global", global, "user", actor.Email)

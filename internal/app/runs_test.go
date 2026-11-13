@@ -157,10 +157,18 @@ func TestStartRun(t *testing.T) {
 	if _, _, err := a.StartRun(ctx, reader, ws.Name, NewRun{Action: "apply"}); !errors.Is(err, ErrForbidden) {
 		t.Errorf("a reader starts a run: %v", err)
 	}
-	if _, _, err := a.StartRun(ctx, admin, ws.Name, NewRun{Action: "apply"}); !IsConflict(err) || !errors.Is(err, storage.ErrRunActive) {
-		t.Errorf("with an active run: %v", err)
+	// with an active run it waits as pending, and is queued (with the configuration of then) when that one ends
+	_, pending, err := a.StartRun(ctx, admin, ws.Name, NewRun{Action: "apply"})
+	if err != nil || pending.Status != storage.Pending {
+		t.Fatalf("with an active run: %+v %v", pending, err)
 	}
 	if _, err := a.CancelRun(ctx, admin, ws.Name, queued.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if r, _, _ := a.Store.GetRun(ctx, pending.ID); r.Status != storage.PlanQueued {
+		t.Fatalf("the pending run when the one before ended: %s", r.Status)
+	}
+	if _, err := a.CancelRun(ctx, admin, ws.Name, pending.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	for _, in := range []NewRun{{Action: "bogus"}, {Action: "destroy", Replace: []string{"a.b"}}, {Action: "apply", Replace: []string{"a.b"}}} {
@@ -270,6 +278,7 @@ func TestPutArtifactRace(t *testing.T) {
 	if b, err := a.ReadBlob(ctx, ArtifactKey(run.ID, runnerapi.ArtifactPlan)); err != nil || string(b) != "plan" {
 		t.Fatalf("stored: %q %v", b, err)
 	}
+	a.CancelRun(ctx, admin, ws.Name, run.ID, false)
 	if _, err := a.CancelRun(ctx, admin, ws.Name, run.ID, true); err != nil {
 		t.Fatal(err)
 	}

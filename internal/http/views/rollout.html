@@ -50,7 +50,7 @@
 <div class="card flush">
 <table>
 <tr><th>Workspace</th><th>Project</th><th>Module</th><th>Version</th><th>Status</th></tr>
-{{range .Rows}}
+{{range $row := .Rows}}
 <tr>
   <td><a href="/workspaces/{{.Workspace}}"><strong>{{.Workspace}}</strong></a></td>
   <td><a href="/projects/{{.ProjectName}}">{{.ProjectName}}</a></td>
@@ -59,7 +59,7 @@
   <td>
     {{if eq .State "current"}}Up to date
     {{else if eq .State "ready"}}Ready to roll out
-    {{else if eq .State "needs_input"}}Needs input: {{range $i, $n := .Missing}}{{if $i}}, {{end}}<code>{{$n}}</code>{{end}}.
+    {{else if eq .State "needs_input"}}Needs input: {{range $i, $n := .Missing}}{{if $i}}, {{end}}<code>{{$n}}</code> ({{index $row.Why $i}}){{end}}.
       <a href="/workspaces/{{.Workspace}}/templates/{{.Module}}">Update by hand →</a>
     {{else if eq .State "busy"}}Busy: retried once its active run ends
     {{else}}Local execution: runs can't start here; switch it to remote execution first{{end}}

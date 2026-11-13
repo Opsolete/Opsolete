@@ -113,7 +113,20 @@ func TestCloudLoginAndState(t *testing.T) {
 		t.Fatalf("download: %d %s", rec.Code, rec.Body)
 	}
 	if out := api("GET", "/workspaces/"+id+"/current-state-version-outputs", "").Body.String(); !strings.Contains(out, `"name":"pw"`) || strings.Contains(out, `"x"`) {
-		t.Fatalf("outputs must list names, not values: %s", out)
+		t.Fatalf("with a sensitive output, outputs list names, not values: %s", out)
+	}
+	// without one, the values and their types: `terraform output` needs no state download then
+	state2 := `{"version":4,"serial":2,"lineage":"l-1","outputs":{"ids":{"value":["a","b"],"type":["list","string"]},"n":{"value":2,"type":"number"}},"resources":[]}`
+	m2 := md5.Sum([]byte(state2))
+	api("POST", "/workspaces/"+id+"/actions/lock", "")
+	if rec := api("POST", "/workspaces/"+id+"/state-versions", fmt.Sprintf(`{"data":{"type":"state-versions","attributes":{"serial":2,"md5":%q,"state":%q}}}`,
+		hex.EncodeToString(m2[:]), base64.StdEncoding.EncodeToString([]byte(state2)))); rec.Code != 201 {
+		t.Fatalf("save state 2: %d %s", rec.Code, rec.Body)
+	}
+	api("POST", "/workspaces/"+id+"/actions/unlock", "")
+	if out := api("GET", "/workspaces/"+id+"/current-state-version-outputs", "").Body.String(); !strings.Contains(out, `"value":["a","b"]`) ||
+		!strings.Contains(out, `"detailed-type":["tuple",["string","string"]]`) || !strings.Contains(out, `"detailed-type":"number"`) {
+		t.Fatalf("outputs with values: %s", out)
 	}
 
 	// Local execution starts no runs; remote execution gives the CLI no lock.

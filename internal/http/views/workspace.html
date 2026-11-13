@@ -418,7 +418,8 @@
 </ul>
 {{end}}
 </div>
-<button type="button" class="danger"{{if .Active}} disabled{{end}} data-show-dialog="delete-workspace">Delete workspace{{if or .Resources $unindexed}} anyway{{end}}</button>
+{{if and (or .Resources $unindexed) (not $.User.Admin)}}<p class="hint">Destroy its resources first: only an admin deletes a workspace that may still manage resources (its state history goes for good).</p>
+{{else}}<button type="button" class="danger"{{if .Active}} disabled{{end}} data-show-dialog="delete-workspace">Delete workspace{{if or .Resources $unindexed}} anyway{{end}}</button>
 <dialog id="delete-workspace" class="danger-dialog" aria-labelledby="delete-workspace-title">
   <form method="post" action="/workspaces/{{$w.Name}}/delete">
     <header><h3 id="delete-workspace-title">⚠ Delete workspace</h3>
@@ -435,6 +436,7 @@
       <button type="button" class="secondary" data-close-dialog>Cancel</button></footer>
   </form>
 </dialog>
+{{end}}
 {{end}}
 {{end}}
 

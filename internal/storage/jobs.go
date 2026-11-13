@@ -156,15 +156,18 @@ func (s *Store) AppendLog(ctx context.Context, runID uuid.UUID, lease, chunk str
 func (s *Store) CancelRun(ctx context.Context, id uuid.UUID, email string, force bool) (string, error) {
 	var status string
 	err := s.tx(ctx, func(q *db.Queries) error {
-		var err error
-		status, err = q.LockRunStatus(ctx, id)
+		run, err := q.LockRunStatus(ctx, id)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotCancelable
 		}
 		if err != nil {
 			return err
 		}
+		status = run.Status
 		busy := status == Planning || status == Applying
+		if busy && force && !run.CancelRequested { // ask Terraform to stop first, cut it off only if it doesn't
+			return ErrForceFirst
+		}
 		if busy && !force {
 			if err := q.RequestCancel(ctx, id); err != nil {
 				return err
@@ -236,9 +239,6 @@ func (s *Store) FinishJob(ctx context.Context, runID uuid.UUID, lease, result, m
 				return err
 			}
 			names := importedTemplates(mods, plan.Imports)
-			if err != nil {
-				return err
-			}
 			importing = len(names) > 0
 		}
 		var ev Event
@@ -407,6 +407,12 @@ func importConflict(ctx context.Context, q *db.Queries, imports []runnerapi.Impo
 	ids := make([]string, len(imports))
 	for i, im := range imports {
 		ids[i] = strings.ToLower(im.ID)
+		if ids[i] == "" { // nothing to check it against: it could be in another state already
+			return "import refused: Terraform reported no id for " + im.To + ", so Opsolete can't check that no other state manages it; nothing was applied", nil
+		}
+		if slices.Index(ids, ids[i]) < i {
+			return "import refused: " + im.ID + " is imported twice in this plan (" + imports[slices.Index(ids, ids[i])].To + " and " + im.To + "); nothing was applied", nil
+		}
 	}
 	for _, res := range resources {
 		if slices.Contains(ids, strings.ToLower(res.ID)) && res.ID != "" {
@@ -422,8 +428,9 @@ func importConflict(ctx context.Context, q *db.Queries, imports []runnerapi.Impo
 
 // Unclaimed is a job UnclaimJobs put back in the queue.
 type Unclaimed struct {
-	RunID  uuid.UUID
-	Runner string // the runner that claimed it and never acknowledged it
+	RunID    uuid.UUID
+	Runner   string // the runner that claimed it and never acknowledged it
+	Canceled bool   // a cancel was asked meanwhile: it ended canceled instead of queued again
 }
 
 // UnclaimJobs puts claimed jobs whose runner didn't acknowledge them within their claim's lease (the
@@ -438,6 +445,18 @@ func (s *Store) UnclaimJobs(ctx context.Context) ([]Unclaimed, error) {
 			return err
 		}
 		for _, r := range rows {
+			if run, err := q.LockRunStatus(ctx, r.ID); err != nil {
+				return err
+			} else if run.CancelRequested { // canceled before any runner started it: nothing ran, nothing to stop
+				if _, err := setStatus(ctx, q, r.ID, EvCancel, Canceled, "canceled before a runner started it"); err != nil {
+					return err
+				}
+				if err := q.ClearRunner(ctx, r.ID); err != nil {
+					return err
+				}
+				out = append(out, Unclaimed{RunID: r.ID, Runner: r.Runner, Canceled: true})
+				continue
+			}
 			queued := map[string]string{Planning: PlanQueued, Applying: ApplyQueued}[r.Status]
 			if _, err := setStatus(ctx, q, r.ID, EvUnclaim, queued, "not acknowledged by runner "+r.Runner+": queued again"); err != nil {
 				return err

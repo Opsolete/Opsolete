@@ -89,7 +89,7 @@ UPDATE runs SET found = sqlc.arg(found)::jsonb WHERE id = sqlc.arg(id)::uuid;
 SELECT found FROM runs WHERE id = sqlc.arg(id)::uuid;
 
 -- name: LockRunStatus :one
-SELECT status FROM runs WHERE id = sqlc.arg(id)::uuid FOR UPDATE;
+SELECT status, cancel_requested FROM runs WHERE id = sqlc.arg(id)::uuid FOR UPDATE;
 
 -- name: LockRun :one
 -- promotes: a promotion's destroy run whose apply run isn't queued yet (storage.continuePromotion).
@@ -136,8 +136,9 @@ RETURNING (runs.log_bytes > 0)::boolean AS had_log;
 -- name: PruneSpeculativeRuns :execrows
 -- Drift checks and speculative plans, history and logs with them (cascade), except what readers
 -- need: a workspace's latest drift check (LatestAssessment) and latest one that found drift or none
--- (workspace_list.drifted), and a pull request's latest plan (QueueVCSRun's dedupe). Plans run by
--- hand (no pull request) have no exception.
+-- (workspace_list.drifted), a pull request's latest plan (QueueVCSRun's dedupe), and an import's plan
+-- rounds still pending (storage.RunPending: their configuration imports, isn't applied, and is the current one
+-- or made from it): the import session lives on them. Other plans run by hand have no exception.
 DELETE FROM runs WHERE id IN (
     SELECT r.id FROM runs r WHERE r.action IN ('assess', 'plan') AND NOT run_active(r.status)
         AND r.updated_at < now() - make_interval(secs => sqlc.arg(older_secs)::float8)
@@ -145,8 +146,13 @@ DELETE FROM runs WHERE id IN (
                 EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = r.workspace_id AND a.action = 'assess' AND a.created_at > r.created_at)
                 AND (r.status NOT IN ('no_changes', 'drifted') OR EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = r.workspace_id
                     AND a.action = 'assess' AND a.status IN ('no_changes', 'drifted') AND a.created_at > r.created_at))
-            ELSE r.vcs_pull_request IS NULL OR EXISTS (SELECT 1 FROM runs p WHERE p.workspace_id = r.workspace_id
-                AND p.action = 'plan' AND p.vcs_pull_request = r.vcs_pull_request AND p.created_at > r.created_at) END
+            ELSE (r.vcs_pull_request IS NULL OR EXISTS (SELECT 1 FROM runs p WHERE p.workspace_id = r.workspace_id
+                AND p.action = 'plan' AND p.vcs_pull_request = r.vcs_pull_request AND p.created_at > r.created_at))
+                AND NOT EXISTS (SELECT 1 FROM configuration_modules m JOIN configuration_versions cv ON cv.id = m.cv_id
+                    JOIN workspaces w ON w.id = cv.workspace_id
+                    WHERE m.cv_id = r.cv_id AND m.importing AND (cv.id = w.current_cv_id OR cv.parent_id IS NOT DISTINCT FROM w.current_cv_id)
+                    AND NOT EXISTS (SELECT 1 FROM runs x JOIN run_status_history h ON h.run_id = x.id WHERE x.cv_id = cv.id
+                        AND x.action NOT IN ('plan', 'assess') AND h.status IN ('applying', 'no_changes'))) END
     LIMIT sqlc.arg(lim)::integer FOR UPDATE OF r SKIP LOCKED
 );
 
@@ -159,3 +165,47 @@ UPDATE runs SET plan_diff = sqlc.arg(plan_diff)::jsonb WHERE id = sqlc.arg(id)::
 
 -- name: RunDiff :one
 SELECT plan_diff FROM runs WHERE id = sqlc.arg(id)::uuid;
+
+-- name: InsertPendingRun :one
+-- A run of a remote workspace that has an active run: it waits (storage.promotePending gives it the workspace's
+-- configuration of then). cv_id now is the current one, replaced when it's queued.
+WITH r AS (
+    INSERT INTO runs (workspace_id, action, status, created_by, cv_id)
+    SELECT w.id, sqlc.arg(action)::text, 'pending', sqlc.narg(created_by)::uuid, w.current_cv_id
+    FROM workspaces w WHERE w.id = sqlc.arg(workspace_id)::uuid AND w.execution_mode = 'remote'
+    RETURNING runs.id, runs.workspace_id, runs.action, runs.created_at
+), h AS (
+    INSERT INTO run_status_history (run_id, status, message) SELECT r.id, 'pending', sqlc.arg(message)::text FROM r
+)
+SELECT r.id, r.workspace_id, r.action, r.created_at FROM r;
+
+-- name: NextPendingRun :one
+-- The workspace's oldest pending run, if it has no active one.
+SELECT r.id FROM runs r WHERE r.workspace_id = sqlc.arg(workspace_id)::uuid AND r.status = 'pending'
+    AND NOT EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = r.workspace_id AND run_active(a.status))
+ORDER BY r.created_at LIMIT 1 FOR UPDATE;
+
+-- name: TakeCurrentConfig :exec
+-- A pending run about to be queued runs the workspace's configuration of now.
+UPDATE runs SET cv_id = w.current_cv_id FROM workspaces w WHERE runs.id = sqlc.arg(id)::uuid AND w.id = runs.workspace_id;
+
+-- name: InsertPendingVCSRun :one
+-- A push's apply run while the workspace has an active run: it waits (storage.QueueVCSRun), unless a run of
+-- this commit exists already.
+WITH r AS (
+    INSERT INTO runs (workspace_id, action, status, vcs_commit, cv_id)
+    SELECT w.id, 'apply', 'pending', sqlc.arg(commit)::text, w.current_cv_id FROM workspaces w
+    WHERE w.id = sqlc.arg(workspace_id)::uuid AND w.execution_mode = 'remote'
+        AND EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = w.id AND run_active(a.status))
+        AND NOT EXISTS (SELECT 1 FROM runs x WHERE x.workspace_id = w.id AND x.vcs_commit = sqlc.arg(commit)::text
+            AND x.action NOT IN ('assess', 'plan'))
+    RETURNING runs.id, runs.workspace_id, runs.action, runs.created_at
+), h AS (
+    INSERT INTO run_status_history (run_id, status, message) SELECT r.id, 'pending', sqlc.arg(message)::text FROM r
+)
+SELECT r.id, r.workspace_id, r.action, r.created_at FROM r;
+
+-- name: OlderPendingVCSRuns :many
+-- The workspace's pending push runs but run id: a newer commit makes them moot.
+SELECT id FROM runs WHERE workspace_id = sqlc.arg(workspace_id)::uuid AND status = 'pending' AND vcs_commit IS NOT NULL
+    AND id <> sqlc.arg(id)::uuid FOR UPDATE;

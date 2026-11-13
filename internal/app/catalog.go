@@ -202,6 +202,13 @@ func (a *App) checkTemplate(ctx context.Context, t *templates.Template, editing 
 	if _, err := templates.Encode(*t); err != nil {
 		return &ValidationError{Message: err.Error()}
 	}
+	// as users get it: merged with the module version's variables, which may break what the file alone passes
+	// (a show_if source the module dropped or retyped, a per-environment input the module makes a list)
+	if r, err := a.Resolve(ctx, *t); err != nil {
+		return err
+	} else if _, err := templates.Encode(r); err != nil {
+		return &ValidationError{Message: "with the module's variables: " + err.Error()}
+	}
 	return nil
 }
 

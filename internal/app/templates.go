@@ -16,6 +16,16 @@ import (
 	"github.com/opsolete/opsolete/internal/templates"
 )
 
+// TemplateFile returns template id as its file has it, unresolved: what the builder edits (resolving would bake
+// the module version's current variables into the file). ErrNotFound if the catalog lacks it.
+func (a *App) TemplateFile(id string) (templates.Template, error) {
+	t, ok := a.Templates.Get(id)
+	if !ok {
+		return t, ErrNotFound
+	}
+	return t, nil
+}
+
 // Template returns template id with its inputs resolved (Resolve); ErrNotFound if the catalog lacks it.
 func (a *App) Template(ctx context.Context, id string) (templates.Template, error) {
 	t, ok := a.Templates.Get(id)
@@ -34,6 +44,20 @@ func (a *App) TemplateAt(ctx context.Context, id, source, ref string) (t templat
 	t.Module = templates.Module{Source: source, Ref: ref}
 	t, err = a.Resolve(ctx, t)
 	return t, true, err
+}
+
+// exactInputs reports whether TemplateAt gives m's inputs as its pinned module version has them: resolved from
+// the registry version, or the catalog template pins that same version. Otherwise (a git source moved on) they
+// are today's, and may name variables the pinned version lacks.
+func (a *App) exactInputs(ctx context.Context, m storage.WorkspaceTemplate) bool {
+	if cur, ok := a.Templates.Get(m.TemplateID); ok && cur.Module == (templates.Module{Source: m.ModuleSource, Ref: m.ModuleRef}) {
+		return true
+	}
+	if ns, name, sys, isReg := a.Registry.ParseSource(m.ModuleSource); a.RegistryEnabled && isReg {
+		_, err := a.Store.GetModule(ctx, ns, name, sys, m.ModuleRef)
+		return err == nil
+	}
+	return false
 }
 
 // Resolve returns t with its inputs resolved from the variables of the registry module version it
@@ -95,17 +119,22 @@ func (a *App) TemplateForm(ctx context.Context, actor Actor, workspace, module, 
 // inputs (raw: as typed, by input name) and the template's current module version, and queues the
 // plan that applies it. found (nil: none) is what an import plan found that the form took (FoundValues): those
 // values count as the workspace's own, so a project's keep-own value doesn't replace them. It returns the module
-// name. ValidationError: the inputs (Fields by input name).
-func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, templateID string, raw map[string]string, found map[string]any) (string, storage.Run, error) {
+// name. keep: adding again a module a round added (Change settings), its name, so the module keeps it across
+// rounds (with found only; "" none). ValidationError: the inputs (Fields by input name).
+func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, templateID string, raw map[string]string, found map[string]any, keep string) (string, storage.Run, error) {
 	f, err := a.TemplateForm(ctx, actor, workspace, module, templateID)
 	if err != nil {
 		return module, storage.Run{}, err
 	}
 	t, adding := f.Template, f.Current == nil
 	s := formSave{T: t, Raw: raw, Found: found, Workspace: f.Workspace.ID, Module: module}
-	if adding {
+	switch {
+	case adding && found != nil && keep != "" && moduleName(keep) == keep &&
+		!slices.ContainsFunc(f.Added, func(m storage.WorkspaceTemplate) bool { return m.Name == keep }):
+		s.Module = keep
+	case adding:
 		s.Module = defaultModule(t, raw, f.Added)
-	} else {
+	default:
 		s.Old, s.Follows = f.Current.Inputs, f.Current.Follows
 	}
 	module = s.Module
@@ -143,7 +172,7 @@ func runAction(importing bool) string {
 
 // ImportInput is the input with which a template's module imports what exists instead of creating it (a bool);
 // an applied import switches it off again (storage.FinishJob).
-const ImportInput = "existing"
+const ImportInput = templates.ImportInput
 
 // CanImport reports whether t's module imports what exists when asked (ImportInput, a bool input).
 func CanImport(t templates.Template) bool {
@@ -189,16 +218,29 @@ func (a *App) FoundValues(ctx context.Context, actor Actor, workspace string, ru
 	if _, err := a.Run(ctx, actor, workspace, runID, LevelOperate); err != nil {
 		return nil, err
 	}
-	if applied, err := a.Store.RunVersionApplied(ctx, runID); err != nil || applied { // an old link would undo endImport
+	if pending, err := a.Store.RunPending(ctx, runID); err != nil || !pending { // an old link would undo what was applied since
 		return nil, cmp.Or(err, ErrNotFound)
 	}
 	all, err := a.Store.RunFound(ctx, runID)
 	if err != nil {
 		return nil, err
 	}
-	f, ok := all[module]
-	if !ok || f.TemplateID != t.ID || len(f.Inputs)+len(f.Saved) == 0 {
+	f := all[module]
+	found, ok := foundValues(f, t)
+	if !ok {
 		return nil, ErrNotFound
+	}
+	if f.Import && CanImport(t) { // the run imported: the form goes on importing
+		found[ImportInput] = true
+	}
+	return found, nil
+}
+
+// foundValues are the values of t's inputs in f (what a plan found for a module from t): what it found where the
+// input takes it, else what the plan ran with; sensitive inputs never. ok false: f isn't from t, or holds nothing.
+func foundValues(f storage.Found, t templates.Template) (map[string]any, bool) {
+	if f.TemplateID != t.ID || len(f.Inputs)+len(f.Saved) == 0 {
+		return nil, false
 	}
 	found := map[string]any{}
 	for _, in := range t.Inputs {
@@ -213,10 +255,7 @@ func (a *App) FoundValues(ctx context.Context, actor Actor, workspace string, ru
 			found[in.Name] = v
 		}
 	}
-	if f.Import && CanImport(t) { // the run imported: the form goes on importing
-		found[ImportInput] = true
-	}
-	return found, nil
+	return found, true
 }
 
 // fits: v (a decoded JSON value an import plan found) is of the kind input in takes: a value the form can show
@@ -246,13 +285,15 @@ func (a *App) ChangeSettings(ctx context.Context, actor Actor, workspace string,
 	if err != nil {
 		return nil, err
 	}
-	if found, err := a.FoundTemplates(ctx, d); err != nil || len(found) == 0 {
+	found, err := a.FoundTemplates(ctx, d)
+	if err != nil || len(found) == 0 {
 		return nil, cmp.Or(err, ErrNotFound)
 	}
-	if d.Run.Active() {
-		if err := a.DiscardRun(ctx, actor, workspace, id); err != nil {
-			return nil, err
-		}
+	if !d.Run.Active() {
+		return found, nil
+	}
+	if err := a.DiscardRun(ctx, actor, workspace, id); err != nil { // reverts a template it added: list again
+		return nil, err
 	}
 	return a.FoundTemplates(ctx, d)
 }
@@ -268,7 +309,7 @@ type FoundTemplate struct {
 // FoundTemplates lists the template modules run d (RunDetail checked the actor's access) can go back to the form of
 // (storage.Found), by name; none once it applied.
 func (a *App) FoundTemplates(ctx context.Context, d RunDetail) ([]FoundTemplate, error) {
-	if applied, err := a.Store.RunVersionApplied(ctx, d.Run.ID); err != nil || applied {
+	if pending, err := a.Store.RunPending(ctx, d.Run.ID); err != nil || !pending {
 		return nil, err
 	}
 	all, err := a.Store.RunFound(ctx, d.Run.ID)
@@ -276,12 +317,15 @@ func (a *App) FoundTemplates(ctx context.Context, d RunDetail) ([]FoundTemplate,
 		return nil, err
 	}
 	added, err := a.Store.WorkspaceTemplates(ctx, d.Workspace.ID)
+	if err != nil {
+		return nil, err
+	}
 	var out []FoundTemplate
 	for _, m := range slices.Sorted(maps.Keys(all)) {
 		out = append(out, FoundTemplate{Module: m, TemplateID: all[m].TemplateID, Read: len(all[m].Inputs) > 0,
 			Added: slices.ContainsFunc(added, func(t storage.WorkspaceTemplate) bool { return t.Name == m && t.TemplateID == all[m].TemplateID })})
 	}
-	return out, err
+	return out, nil
 }
 
 // RemoveTemplate removes an added template and queues the plan that destroys its resources; with

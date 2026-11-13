@@ -129,15 +129,17 @@ func TestImportFlow(t *testing.T) {
 	if rec := get(h, "/workspaces/"+ws+"/templates/new?template=vm&found="+uuid.NewString()+"&from="+mod); rec.Code != http.StatusNotFound {
 		t.Fatalf("another run's found values: %d", rec.Code)
 	}
-	// applied: nothing to go back to, from the apply or from the round it applied, also by an old link (it would turn
-	// the import on again)
-	for _, id := range []string{apply, round2} {
+	// applied: nothing to go back to, from the apply, the round it applied or an older round, also by an old link (it
+	// would turn the import on again, and put back the other templates as they were then)
+	for _, id := range []string{apply, round2, run} {
 		u := "/workspaces/" + ws + "/runs/" + id
 		if page := get(h, u).Body.String(); strings.Contains(page, `/change"`) || strings.Contains(page, `/adopt"`) {
 			t.Fatalf("%s: an applied import still offers to go on:\n%s", id, page)
 		}
-		if rec := post(h, u+"/change", nil); rec.Code != http.StatusNotFound {
-			t.Fatalf("change %s: %d", id, rec.Code)
+		for _, op := range []string{"/change", "/plan-again", "/adopt"} {
+			if rec := post(h, u+op, nil); rec.Code != http.StatusNotFound {
+				t.Fatalf("%s %s: %d", op, id, rec.Code)
+			}
 		}
 		if rec := get(h, "/workspaces/"+ws+"/templates/"+mod+"?found="+id); rec.Code != http.StatusNotFound {
 			t.Fatalf("found values of %s: %d", id, rec.Code)
@@ -189,6 +191,13 @@ func TestChangeSettings(t *testing.T) {
 	if page := get(h, loc).Body.String(); !strings.Contains(page, `value="typo"`) || !strings.Contains(page, `name="existing" value="on"`) {
 		t.Fatalf("the form after a failed round:\n%s", page)
 	}
+	// planned again from there, the module keeps its name: rounds of one import are one module
+	from := regexp.MustCompile(`from=([a-z0-9_]+)`).FindStringSubmatch(loc)
+	again := runID(t, post(h, loc, url.Values{"name": {"vm1"}, "existing": {"on"}, "nic": {"fixed"}}))
+	if j := r.claim(t, again, "plan"); from == nil || j.Modules[len(j.Modules)-1].Name != from[1] && j.Modules[0].Name != from[1] {
+		t.Fatalf("the next round's module %+v, want %v", j.Modules, from)
+	}
+	r.finish(t, `{"status": "failed", "message": "plan: exit status 1"}`)
 	// a plan that fails creating: back to the form creating, not importing
 	_, u = failed(url.Values{"name": {"vm1"}, "subnet": {"/subnets/x"}}, "")
 	if page := get(h, u).Body.String(); !strings.Contains(page, "Not applied") {
@@ -218,4 +227,39 @@ func TestChangeSettings(t *testing.T) {
 		!strings.Contains(page, "found="+second+"&amp;from=") {
 		t.Fatalf("a run with two templates: no link per template:\n%s", page)
 	}
+}
+
+// A template that imports still can stop importing (the resource turns out not to exist): its form offers
+// Create new, and saving that plans it creating.
+func TestImportSwitchOff(t *testing.T) {
+	store := testStore(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "vm.json"), []byte(`{"id": "vm", "name": "VM", "module": {"source": "git::https://x//m", "ref": "v1"},
+		"inputs": [{"name": "name", "type": "string", "required": true, "key": true},
+		{"name": "subnet", "type": "string", "required": true},
+		{"name": "existing", "type": "bool"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := newServer(t, dir, false, store)
+	r := &fakeRunner{h: h}
+	ws := "off-" + strings.ToLower(newID()[:8])
+	run := runID(t, post(h, "/templates/vm", url.Values{fieldWorkspace: {ws}, "name": {"vm1"}, "existing": {"on"}}))
+	j := r.claim(t, run, "plan")
+	mod := j.Modules[0].Name
+	r.finish(t, `{"status": "failed", "message": "plan: no such vm"}`)
+
+	form := "/workspaces/" + ws + "/templates/" + mod
+	page := get(h, form).Body.String()
+	if !strings.Contains(page, `name="existing" value="on"`) || !strings.Contains(page, `href="`+form+`?import=0"`) {
+		t.Fatalf("an importing template's form: importing, with Create new:\n%s", page)
+	}
+	if page := get(h, form+"?import=0").Body.String(); strings.Contains(page, `name="existing" value="on"`) {
+		t.Fatalf("Create new still imports:\n%s", page)
+	}
+	run = runID(t, post(h, form+"?import=0", url.Values{"name": {"vm1"}, "subnet": {"/subnets/a"}}))
+	if j := r.claim(t, run, "plan"); j.Action != "apply" || j.Modules[0].Inputs["existing"] != nil {
+		t.Fatalf("after switching it off: %s %+v", j.Action, j.Modules[0].Inputs)
+	}
+	r.finish(t, `{"status": "failed", "message": "x"}`)
+
 }

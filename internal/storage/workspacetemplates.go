@@ -134,12 +134,16 @@ func (s *Store) RemoveWorkspaceTemplate(ctx context.Context, workspaceID uuid.UU
 }
 
 // QueueConfiguration makes mods the workspace's templates in a new version (made from the current one) and queues
-// an action run of it: an import's next round, with what its plan found. ErrRunActive, ErrLocalExecution.
-func (s *Store) QueueConfiguration(ctx context.Context, workspaceID uuid.UUID, mods []WorkspaceTemplate, source, action string, createdBy uuid.UUID) (Run, error) {
+// an action run of it: an import's next round, with what round after's plan found. ErrRunActive,
+// ErrLocalExecution; ErrChanged: after isn't pending anymore (RunPending).
+func (s *Store) QueueConfiguration(ctx context.Context, workspaceID, after uuid.UUID, mods []WorkspaceTemplate, source, action string, createdBy uuid.UUID) (Run, error) {
 	var r Run
 	err := s.tx(ctx, func(q *db.Queries) error {
 		cur, _, err := currentConfig(ctx, q, workspaceID)
 		if err != nil {
+			return err
+		}
+		if err := requirePending(ctx, q, after); err != nil {
 			return err
 		}
 		r, err = queueVersion(ctx, q, workspaceID, cur, mods, source, action, createdBy)
@@ -148,14 +152,20 @@ func (s *Store) QueueConfiguration(ctx context.Context, workspaceID uuid.UUID, m
 	return r, err
 }
 
-// AdoptRun queues an apply run of the configuration version run runID planned (an import's last plan round):
-// exactly what was planned. ErrRunActive, ErrLocalExecution; ErrNotFound: no such run.
+// AdoptRun queues an apply run of the configuration version run runID planned (an import's plan round): exactly
+// what was planned. ErrRunActive, ErrLocalExecution; ErrNotFound: no such run; ErrChanged: not pending anymore.
 func (s *Store) AdoptRun(ctx context.Context, runID, createdBy uuid.UUID) (Run, error) {
 	var r Run
 	err := s.tx(ctx, func(q *db.Queries) error {
 		run, err := q.LockRun(ctx, runID)
 		if err != nil {
 			return notFound(err)
+		}
+		if _, _, err := currentConfig(ctx, q, run.WorkspaceID); err != nil { // its lock: no change meanwhile
+			return err
+		}
+		if err := requirePending(ctx, q, runID); err != nil {
+			return err
 		}
 		r, err = queueRun(ctx, q, run.WorkspaceID, "apply", createdBy, run.CvID)
 		return err

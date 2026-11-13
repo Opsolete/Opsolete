@@ -9,14 +9,17 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/opsolete/opsolete/internal/runnerapi"
 	"github.com/opsolete/opsolete/internal/storage/db"
 	"github.com/opsolete/opsolete/internal/templates"
 )
 
-// Run statuses. A workspace has at most one active run (enforced by runs_one_active_idx).
+// Run statuses. A workspace has at most one active run (enforced by runs_one_active_idx); pending runs wait
+// for it to end, the oldest first (promotePending): a run queue.
 const (
+	Pending           = "pending" // started while another run is active: waits, doesn't hold the workspace
 	PlanQueued        = "plan_queued"
 	Planning          = "planning"
 	NeedsConfirmation = "needs_confirmation"
@@ -45,6 +48,7 @@ const (
 	EvApplied Event = "applied" // the apply finished
 	EvFail    Event = "fail"    // the runner reported a failure, the lease expired, or the server failed the job or plan
 	EvCancel  Event = "cancel"  // a user canceled it, or the runner reported it canceled
+	EvPromote Event = "promote" // the active run before it ended: a pending run is queued
 )
 
 // machine is the run state machine: per event, each status it moves a run from and the statuses it may move it
@@ -57,7 +61,8 @@ var machine = map[Event]map[string][]string{
 	EvDiscard: {NeedsConfirmation: {Discarded}},
 	EvApplied: {Applying: {Applied}},
 	EvFail:    {Planning: {Errored}, Applying: {Errored}},
-	EvCancel:  {PlanQueued: {Canceled}, Planning: {Canceled}, ApplyQueued: {Canceled}, Applying: {Canceled}},
+	EvCancel:  {Pending: {Canceled}, PlanQueued: {Canceled}, Planning: {Canceled}, ApplyQueued: {Canceled}, Applying: {Canceled}},
+	EvPromote: {Pending: {PlanQueued}},
 }
 
 // ErrTransition: a status change the state machine doesn't allow. It means a bug, or a race the
@@ -158,7 +163,7 @@ func (r Run) Active() bool { return !Ended(r.Status) }
 
 // Working: a runner is on it or about to be, so its log is still growing.
 func (r Run) Working() bool {
-	return r.Status == PlanQueued || r.Status == Planning || r.Status == ApplyQueued || r.Status == Applying
+	return r.Status == Pending || r.Status == PlanQueued || r.Status == Planning || r.Status == ApplyQueued || r.Status == Applying
 }
 
 type StatusEntry struct {
@@ -187,6 +192,7 @@ const (
 	effRemoveTemplates   effect = "remove templates"   // a destroy removing templates succeeded: a version without them
 	effContinuePromotion effect = "continue promotion" // a promotion's destroy succeeded: queue its apply run
 	effDropPromotion     effect = "drop promotion"     // a promotion's destroy ended otherwise: noted, nothing else changes
+	effPromotePending    effect = "promote pending"    // the workspace's active run ended: its oldest pending run is queued (last: after what may queue one itself)
 )
 
 // runFacts is what of a run decides its effects, besides the statuses.
@@ -218,6 +224,9 @@ func effects(f runFacts, from, to string) []effect {
 		out = append(out, effContinuePromotion)
 	case f.Promotes && Ended(to):
 		out = append(out, effDropPromotion)
+	}
+	if from != Pending && Ended(to) {
+		out = append(out, effPromotePending)
 	}
 	return out
 }
@@ -259,12 +268,32 @@ func transition(ctx context.Context, q *db.Queries, runID uuid.UUID, ev Event, t
 			step, err = continuePromotion(ctx, q, runID, run.WorkspaceID, to)
 		case effDropPromotion:
 			err = addHistory(ctx, q, runID, to, "promotion not continued: "+to)
+		case effPromotePending:
+			err = promotePending(ctx, q, run.WorkspaceID)
 		}
 		if err != nil {
 			return from, nil, err
 		}
 	}
 	return from, step, nil
+}
+
+// promotePending queues the workspace's oldest pending run if no run is active (an effect may have queued one,
+// e.g. a promotion's next step: then the pending ones wait for that too). It runs the configuration of now: a
+// change applied while it waited isn't undone by it.
+func promotePending(ctx context.Context, q *db.Queries, workspaceID uuid.UUID) error {
+	id, err := q.NextPendingRun(ctx, workspaceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := q.TakeCurrentConfig(ctx, id); err != nil {
+		return err
+	}
+	_, err = setStatus(ctx, q, id, EvPromote, PlanQueued, "the run before it ended: plan queued, waiting for a runner")
+	return err
 }
 
 // removeTemplates makes the workspace's current version one without the templates names.

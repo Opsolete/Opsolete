@@ -70,14 +70,18 @@ func (p formPage) Form() app.Form {
 	return f
 }
 
-// importChoice offers creating or importing, when the form adds or deploys a template whose module can import, and
-// opens it importing when ?import=1 asks (the form then marks only the key input required, as the server checks it).
-func (p *formPage) importChoice(r *http.Request) {
-	if !app.CanImport(p.T) || p.Configure != nil && !p.Adding {
+// importChoice offers creating or importing, when the form adds or deploys a template whose module can import, or
+// configures one that imports still (importing: it can stop, when the resource turns out not to exist), and opens it
+// importing when ?import=1 asks (the form then marks only the key input required, as the server checks it).
+func (p *formPage) importChoice(r *http.Request, importing bool) {
+	if !app.CanImport(p.T) || p.Configure != nil && !p.Adding && !importing {
 		return
 	}
 	q := r.URL.Query()
 	q.Del("import")
+	if importing { // its form imports unless asked not to
+		q.Set("import", "0")
+	}
 	p.CreateURL = r.URL.Path + "?" + q.Encode()
 	q.Set("import", "1")
 	p.ImportURL = r.URL.Path + "?" + q.Encode()
@@ -129,7 +133,7 @@ func (s *Server) form(w http.ResponseWriter, r *http.Request) {
 	}
 	page := formPage{Page: Page{Section: "templates"}, T: t, Editor: s.canEditTemplates(r), Values: vals,
 		Project: r.URL.Query().Get("project"), Projects: projects}
-	page.importChoice(r)
+	page.importChoice(r, false)
 	if err := s.lockDeploy(r, &page); err != nil {
 		s.internalError(w, "environment values", err)
 		return

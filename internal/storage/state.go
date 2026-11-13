@@ -94,7 +94,7 @@ func addStateVersion(ctx context.Context, q *db.Queries, id, runID uuid.UUID, cl
 }
 
 // DropIntermediateStates deletes the state versions a run saved before its last one: Terraform's
-// intermediate snapshots, superseded once the run ended (as HCP Terraform does). It returns their
+// intermediate snapshots, superseded once the run ended. It returns their
 // blob keys, for the caller to delete.
 func (s *Store) DropIntermediateStates(ctx context.Context, runID uuid.UUID) ([]string, error) {
 	return s.q.DropIntermediateStates(ctx, runID)
@@ -130,6 +130,13 @@ func (s *Store) LockState(ctx context.Context, id uuid.UUID, lockID string, runI
 	}
 	if !r.Taken && r.Held == "" { // lost a race: the statement's snapshot predates the winner's commit
 		r.Held, err = s.q.CurrentStateLock(ctx, id)
+		if err == nil && r.Held == "" { // and the winner released it meanwhile: free again, so try once more
+			// (a 423 needs the holder's LockInfo: Terraform can't read an empty one and fails instead of retrying)
+			r, err = s.q.LockState(ctx, db.LockStateParams{ID: id, Info: info, RunID: optID(runID), LockID: lockID})
+			if err == nil && !r.Taken && r.Held == "" {
+				r.Held, err = s.q.CurrentStateLock(ctx, id)
+			}
+		}
 	}
 	if r.Held == "" {
 		return nil, r.Taken, err

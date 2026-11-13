@@ -271,3 +271,22 @@ variable "counts" { type = map(number) }
 		t.Fatalf("resolved: %+v", got[0])
 	}
 }
+
+// A module's sensitive variables: strings and numbers are sensitive inputs without their default; complex ones
+// (stored and shown in plain text otherwise) can't be form fields. An untyped variable with a map default isn't a
+// string field; Terraform's mixed-case names are kept.
+func TestInputsSensitiveAndUntyped(t *testing.T) {
+	v := func(name, typ string, def any, sensitive bool) Variable {
+		var x Variable
+		x.Name, x.Type, x.Default, x.Sensitive = name, typ, def, sensitive
+		return x
+	}
+	in, skipped := Inputs([]Variable{v("adminPassword", "string", "changeme", true), v("settings", "map(string)", nil, true),
+		v("tags", "", map[string]any{}, false), v("size", "", "small", false)})
+	if len(in) != 2 || in[0].Name != "adminPassword" || !in[0].Sensitive || in[0].Default != "" || in[1].Name != "size" || in[1].Type != "string" {
+		t.Fatalf("inputs %+v", in)
+	}
+	if len(skipped) != 2 || !strings.Contains(skipped[0], "settings") || !strings.Contains(skipped[1], "tags") {
+		t.Fatalf("skipped %v", skipped)
+	}
+}

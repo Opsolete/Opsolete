@@ -281,7 +281,11 @@ func (a *App) ProjectEnvironment(ctx context.Context, projectID uuid.UUID) (Envi
 // evaluated with the project's values) isn't set, as the form wouldn't send it. A project value that
 // version's rules reject fails the job: deploying the workspace's own value instead in, say,
 // production would be worse than not running.
-func withEnvironmentValues(t templates.Template, ok bool, in map[string]any, follows []string, env EnvironmentMap) (map[string]any, error) {
+//
+// exact false: t's inputs are the catalog's today, not those of the module version the workspace pins (a git
+// source the server can't read): only inputs the module had when it was saved take project values, since a
+// new one may not exist at the pinned version (Terraform: "Unsupported argument").
+func withEnvironmentValues(t templates.Template, ok, exact bool, in map[string]any, follows []string, env EnvironmentMap) (map[string]any, error) {
 	if !ok || len(env[t.ID]) == 0 {
 		return in, nil
 	}
@@ -300,7 +304,7 @@ func withEnvironmentValues(t templates.Template, ok bool, in map[string]any, fol
 	}
 	for _, input := range t.Inputs {
 		v, ok := locked[input.Name]
-		if !ok || !t.Match(input.ShowIf, raw) {
+		if _, had := in[input.Name]; !ok || !t.Match(input.ShowIf, raw) || !exact && !had && !slices.Contains(follows, input.Name) {
 			continue
 		}
 		input.ShowIf, input.Required = nil, false
