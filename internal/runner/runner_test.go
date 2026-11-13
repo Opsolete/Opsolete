@@ -378,4 +378,15 @@ resource "terraform_data" "x" { input = data.terraform_remote_state.o.outputs.a 
 		!strings.Contains(logs, "only data sources were read again") {
 		t.Fatalf("assess: %+v\n%s", res, logs)
 	}
+	// an output the configuration added but no apply saved yet (a template whose apply failed) isn't drift either
+	added := f.module(t, `data "terraform_remote_state" "o" {
+  backend = "local"
+  config  = { path = "`+other+`" }
+}
+resource "terraform_data" "x" { input = data.terraform_remote_state.o.outputs.a }
+output "new" { value = "n" }
+`)
+	if res, logs := f.do(t, r, job("assess2", "plan", "assess", added, nil)); res.Status != "succeeded" || res.Plan != nil {
+		t.Fatalf("assess with a new output: %+v\n%s", res, logs)
+	}
 }
