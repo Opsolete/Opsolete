@@ -42,11 +42,11 @@ Go comes prebuilt from cache.nixos.org (nixpkgs' `go`), so no job compiles a too
 
 [Conventional Commits](https://www.conventionalcommits.org) → SemVer, via [release-please](https://github.com/googleapis/release-please). Every commit counts, so write them as you'd want them in the changelog:
 
-| Commit | Next version from 0.8.x | Once ≥ 1.0.0 |
+| Commit | Next version from 0.9.x | Once ≥ 1.0.0 |
 |---|---|---|
-| `fix: …`, `perf: …` | patch (0.8.x+1) | patch |
-| `feat: …` | 0.9.0 | minor |
-| `feat!: …` or a `BREAKING CHANGE:` footer | 0.9.0 (pre-1.0, breaking bumps minor) | major |
+| `fix: …`, `perf: …` | patch (0.9.x+1) | patch |
+| `feat: …` | 0.10.0 | minor |
+| `feat!: …` or a `BREAKING CHANGE:` footer | 0.10.0 (pre-1.0, breaking bumps minor) | major |
 | `docs:`, `chore:`, `ci:`, `test:`, `refactor:`, … | no release | no release |
 
 On each push to `master`, once every check passed, the `release-please` job at the end of `ci.yml` runs release-please, which keeps a **release PR** open. It holds the next version and the [`CHANGELOG.md`](https://github.com/Opsolete/Opsolete/blob/master/CHANGELOG.md) entries. Merging that PR tags `vX.Y.Z`, creates the GitHub release, and pushes `ghcr.io/opsolete/opsolete-app` and `-runner` (linux/amd64) tagged `X.Y.Z`, `X.Y`, `latest` and the commit's `sha-…`.

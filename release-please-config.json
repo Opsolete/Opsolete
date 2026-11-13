@@ -6,7 +6,12 @@
       "initial-version": "0.1.0",
       "bump-minor-pre-major": true,
       "prerelease": true,
-      "extra-files": ["flake.nix"]
+      "extra-files": [
+        "flake.nix",
+        "README.md",
+        "docs/content/docs/about.md",
+        "docs/content/docs/install/docker.md"
+      ]
     }
   }
 }
