@@ -351,8 +351,18 @@ func Inputs(vars []Variable) (inputs []templates.Input, skipped []string) {
 		in := templates.Input{Name: v.Name, Required: v.Required}
 		// descriptions often read "VM name: 1-64 letters…": the label, then help for the form
 		in.Label, in.Help, _ = strings.Cut(v.Description, ": ")
+		_, complexDefault := v.Default.(map[string]any)
+		if _, list := v.Default.([]any); list {
+			complexDefault = true
+		}
 		switch v.Type {
-		case "", "string":
+		case "":
+			if complexDefault { // a string field would send "{}" where the module expects a map or list
+				skipped = append(skipped, fmt.Sprintf("%s (no type, a %T default: give it a type)", v.Name, v.Default))
+				continue
+			}
+			in.Type = "string"
+		case "string":
 			in.Type = "string"
 		case "number":
 			in.Type = "number"
@@ -366,13 +376,20 @@ func Inputs(vars []Variable) (inputs []templates.Input, skipped []string) {
 			}
 			in.Type, in.Fields = typ, fields
 		}
+		if v.Sensitive {
+			if in.Type != "string" && in.Type != "number" { // only those are sealed: a complex one would be stored and shown in plain text
+				skipped = append(skipped, fmt.Sprintf("%s (sensitive %s: only sensitive strings and numbers can be form fields)", v.Name, in.Type))
+				continue
+			}
+			in.Sensitive = true
+		}
 		if in.Type == "string" {
 			in.Pattern = v.Pattern
 		}
 		if in.Label == "" {
 			in.Label = v.Name
 		}
-		if v.Default != nil {
+		if v.Default != nil && !in.Sensitive { // a sensitive input has no default: never echoed into the form
 			in.Default = templates.FormatValue(v.Default)
 		}
 		inputs = append(inputs, in)

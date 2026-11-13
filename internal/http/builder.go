@@ -68,7 +68,7 @@ func (s *Server) renderBuilder(w http.ResponseWriter, r *http.Request, status in
 func (s *Server) builder(w http.ResponseWriter, r *http.Request) {
 	var p builderPage
 	if id := r.PathValue("id"); id != "" {
-		t, err := s.App.Template(r.Context(), id)
+		t, err := s.App.TemplateFile(id) // the file, not resolved: the module's variables stay the module's
 		if err != nil {
 			s.uiError(w, r, err)
 			return

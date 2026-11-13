@@ -107,9 +107,9 @@ func TestComplexInputs(t *testing.T) {
 	// stored (and default) JSON
 	ok(map[string]string{"dns": `["10.0.0.4","10.0.0.5"]`, "tags": `{"env":"prod","team":"x"}`, "network": `{"cidr":"10.1.0.0/16","dns":true}`},
 		map[string]any{"dns": []any{"10.0.0.4", "10.0.0.5"}, "tags": map[string]any{"env": "prod", "team": "x"}, "network": map[string]any{"cidr": "10.1.0.0/16", "dns": true}})
-	// the form's rows; an empty value row and a key without a value are dropped
+	// the form's rows; an empty list row is dropped, a key without a value is "" (a map's value may be empty)
 	ok(map[string]string{"dns": `[{"value":"10.0.0.4"},{"value":""}]`, "tags": `[{"key":"env","value":"dev"},{"key":"x","value":""}]`, "network": `{"cidr":"10.2.0.0/16","size":"3"}`},
-		map[string]any{"dns": []any{"10.0.0.4"}, "tags": map[string]any{"env": "dev"}, "network": map[string]any{"cidr": "10.2.0.0/16", "dns": false, "size": 3.0}})
+		map[string]any{"dns": []any{"10.0.0.4"}, "tags": map[string]any{"env": "dev", "x": ""}, "network": map[string]any{"cidr": "10.2.0.0/16", "dns": false, "size": 3.0}})
 	for raw, want := range map[string]map[string]string{
 		`dns`:     {"dns": `[{"value":"abc"}]`, "network": `{"cidr":"x"}`},
 		`tags`:    {"tags": `[{"key":"a","value":"1"},{"key":"a","value":"2"}]`, "network": `{"cidr":"x"}`},

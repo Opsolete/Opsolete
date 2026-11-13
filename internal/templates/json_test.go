@@ -104,7 +104,7 @@ func TestSchema(t *testing.T) {
 		{"unknown type", `{"name": "s", "type": "text"}`, "input type enum", `unknown type "text"`},
 		{"select without options", `{"name": "o", "type": "select"}`, "input allOf[3] then required options", "select needs options"},
 		{"option without a value", `{"name": "o", "type": "select", "options": [{"label": "A"}]}`, "option oneOf[1] required value", "an option needs a value"},
-		{"bad input name", `{"name": "Size", "type": "string"}`, "input name pattern", "invalid input name"},
+		{"bad input name", `{"name": "vm-size", "type": "string"}`, "input name pattern", "invalid input name"},
 		{"reserved input name", `{"name": "count", "type": "string"}`, "input name not enum", "invalid input name"},
 		{"sensitive bool", `{"name": "b", "type": "bool", "sensitive": true}`, "input allOf[2] then sensitive const false", "only string and number"},
 		{"per_environment sensitive", `{"name": "p", "type": "string", "sensitive": true, "per_environment": true}`,

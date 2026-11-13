@@ -37,7 +37,7 @@
         "name": {
           "description": "The Terraform variable it sets.",
           "type": "string",
-          "pattern": "^[a-z_][a-z0-9_]*$",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
           "not": { "enum": ["source", "version", "providers", "count", "for_each", "lifecycle", "depends_on", "locals"] }
         },
         "label": { "description": "The question end users see; empty: the name.", "type": "string" },

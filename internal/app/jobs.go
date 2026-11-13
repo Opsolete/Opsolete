@@ -110,14 +110,20 @@ func (a *App) assembleJob(ctx context.Context, j storage.Job) ([]byte, error) {
 	var mods []runnerapi.Module
 	for _, m := range j.Modules {
 		in, sec, oerr := a.OpenInputs(m.Inputs, j.WorkspaceID, m.Name)
-		err, secrets = cmp.Or(err, oerr), append(secrets, sec...)
+		err, secrets = cmp.Or(err, oerr), append(append(secrets, sec...), a.plainSecrets(m)...)
 		var t templates.Template // what the module runs: the template at its pinned version
 		var known bool
 		if err == nil {
 			t, known, err = a.TemplateAt(ctx, m.TemplateID, m.ModuleSource, m.ModuleRef)
 		}
+		if err == nil && !known && len(envValues[m.TemplateID]) > 0 {
+			// without the template, which inputs the project sets is unknown: running with the workspace's own
+			// values instead could, in production, replace what the project's values made
+			err = fmt.Errorf("template %s is no longer in the catalog, but the workspace's project sets values for it: put the template back, or clear the project's environment values for it",
+				m.TemplateID)
+		}
 		if err == nil {
-			in, err = withEnvironmentValues(t, known, in, m.Follows, envValues)
+			in, err = withEnvironmentValues(t, known, a.exactInputs(ctx, m), in, m.Follows, envValues)
 		}
 		if err == nil && m.Import && known && CanImport(t) { // the module imports what exists: its switch on
 			in = maps.Clone(in)

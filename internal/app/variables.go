@@ -62,7 +62,7 @@ func (a *App) workspaceMasker(ctx context.Context, workspaceID uuid.UUID) (mask.
 		if err != nil {
 			return mask.Masker{}, err
 		}
-		secrets = append(secrets, sec...)
+		secrets = append(append(secrets, sec...), a.plainSecrets(m)...)
 	}
 	return mask.New(secrets), nil
 }

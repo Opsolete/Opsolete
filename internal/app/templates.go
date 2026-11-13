@@ -16,6 +16,16 @@ import (
 	"github.com/opsolete/opsolete/internal/templates"
 )
 
+// TemplateFile returns template id as its file has it, unresolved: what the builder edits (resolving would bake
+// the module version's current variables into the file). ErrNotFound if the catalog lacks it.
+func (a *App) TemplateFile(id string) (templates.Template, error) {
+	t, ok := a.Templates.Get(id)
+	if !ok {
+		return t, ErrNotFound
+	}
+	return t, nil
+}
+
 // Template returns template id with its inputs resolved (Resolve); ErrNotFound if the catalog lacks it.
 func (a *App) Template(ctx context.Context, id string) (templates.Template, error) {
 	t, ok := a.Templates.Get(id)
@@ -34,6 +44,20 @@ func (a *App) TemplateAt(ctx context.Context, id, source, ref string) (t templat
 	t.Module = templates.Module{Source: source, Ref: ref}
 	t, err = a.Resolve(ctx, t)
 	return t, true, err
+}
+
+// exactInputs reports whether TemplateAt gives m's inputs as its pinned module version has them: resolved from
+// the registry version, or the catalog template pins that same version. Otherwise (a git source moved on) they
+// are today's, and may name variables the pinned version lacks.
+func (a *App) exactInputs(ctx context.Context, m storage.WorkspaceTemplate) bool {
+	if cur, ok := a.Templates.Get(m.TemplateID); ok && cur.Module == (templates.Module{Source: m.ModuleSource, Ref: m.ModuleRef}) {
+		return true
+	}
+	if ns, name, sys, isReg := a.Registry.ParseSource(m.ModuleSource); a.RegistryEnabled && isReg {
+		_, err := a.Store.GetModule(ctx, ns, name, sys, m.ModuleRef)
+		return err == nil
+	}
+	return false
 }
 
 // Resolve returns t with its inputs resolved from the variables of the registry module version it

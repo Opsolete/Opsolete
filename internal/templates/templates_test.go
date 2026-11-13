@@ -198,3 +198,21 @@ func TestParseLimits(t *testing.T) {
 		}
 	}
 }
+
+// A value stored in plain text before its input became sensitive is never shown.
+func TestDescribeNowSensitive(t *testing.T) {
+	tpl := Template{Inputs: []Input{{Name: "pw", Type: "string", Sensitive: true}}}
+	if d := tpl.Describe(map[string]any{"pw": "hunter2"}); len(d) != 1 || !d[0].Sensitive || d[0].Text != "" {
+		t.Fatalf("%+v", d)
+	}
+}
+
+// A whole number float64 can't hold exactly is refused, not rounded; one it holds passes.
+func TestNumberPrecision(t *testing.T) {
+	tpl := Template{Inputs: []Input{{Name: "n", Type: "number"}}}
+	for v, ok := range map[string]bool{"12345678901234567890": false, "-12345678901234567890": false, "1000000000000000000000": true, "9007199254740993": false, "42": true, "1.5": true, "0": true, "-0": true, "007": true} {
+		if _, errs := tpl.Validate(map[string]string{"n": v}); (errs["n"] == "") != ok {
+			t.Errorf("%s: %q", v, errs["n"])
+		}
+	}
+}
