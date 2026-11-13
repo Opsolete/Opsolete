@@ -1226,3 +1226,44 @@ func TestPriorityVariableSet(t *testing.T) {
 		t.Fatal("priority not stored")
 	}
 }
+
+// A push while a run is active waits as pending; only the newest pending push stays, and it runs when the
+// active run ends.
+func TestPendingPush(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	w, active := newWorkspace(t, s, false)
+	pendingPush := func() []uuid.UUID {
+		var ids []uuid.UUID
+		rows, _ := s.Pool.Query(ctx, `SELECT id FROM runs WHERE workspace_id = $1 AND status = 'pending' ORDER BY created_at`, w.ID)
+		for rows.Next() {
+			var id uuid.UUID
+			rows.Scan(&id)
+			ids = append(ids, id)
+		}
+		return ids
+	}
+	for _, c := range []string{"c1", "c1", "c2"} {
+		if _, err := s.QueueVCSRun(ctx, w.ID, c, 0, "push "+c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := pendingPush()
+	if len(p) != 1 {
+		t.Fatalf("pending pushes: %v, want only the newest", p)
+	}
+	var commit string
+	s.Pool.QueryRow(ctx, `SELECT vcs_commit FROM runs WHERE id = $1`, p[0]).Scan(&commit)
+	if commit != "c2" {
+		t.Fatalf("the pending push is %s, want c2", commit)
+	}
+	if _, err := s.CancelRun(ctx, active.ID, "x", false); err != nil {
+		t.Fatal(err)
+	}
+	if st := status(t, s, p[0]); st != PlanQueued {
+		t.Fatalf("the push after the active run ended: %s", st)
+	}
+	if ok, err := s.QueueVCSRun(ctx, w.ID, "c2", 0, "push c2 again"); err != nil || ok {
+		t.Fatalf("a commit with a run gets another: %v %v", ok, err)
+	}
+}

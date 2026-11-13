@@ -415,6 +415,21 @@ func (s *Store) QueueVCSRun(ctx context.Context, workspaceID uuid.UUID, commit s
 	err := s.tx(ctx, func(q *db.Queries) error {
 		r, err := q.QueueVCSRun(ctx, db.QueueVCSRunParams{WorkspaceID: workspaceID, Action: action, Commit: commit,
 			PullRequest: int32(pullRequest), Message: message})
+		if errors.Is(err, pgx.ErrNoRows) && pullRequest == 0 { // a run is active: a push waits as pending (HCP's run queue)
+			var p db.InsertPendingVCSRunRow
+			p, err = q.InsertPendingVCSRun(ctx, db.InsertPendingVCSRunParams{WorkspaceID: workspaceID, Commit: commit,
+				Message: message + "; pending: it starts when the run before it ends"})
+			r = db.QueueVCSRunRow(p)
+			if err == nil { // only the newest commit is worth applying: older pending pushes are canceled
+				older, oerr := q.OlderPendingVCSRuns(ctx, db.OlderPendingVCSRunsParams{WorkspaceID: workspaceID, ID: p.ID})
+				for _, id := range older {
+					if oerr == nil {
+						_, oerr = setStatus(ctx, q, id, EvCancel, Canceled, "superseded by a newer commit ("+commit+")")
+					}
+				}
+				err = oerr
+			}
+		}
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}

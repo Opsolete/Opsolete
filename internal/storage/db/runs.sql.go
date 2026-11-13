@@ -72,6 +72,48 @@ func (q *Queries) InsertPendingRun(ctx context.Context, arg InsertPendingRunPara
 	return i, err
 }
 
+const insertPendingVCSRun = `-- name: InsertPendingVCSRun :one
+WITH r AS (
+    INSERT INTO runs (workspace_id, action, status, vcs_commit, cv_id)
+    SELECT w.id, 'apply', 'pending', $1::text, w.current_cv_id FROM workspaces w
+    WHERE w.id = $2::uuid AND w.execution_mode = 'remote'
+        AND EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = w.id AND run_active(a.status))
+        AND NOT EXISTS (SELECT 1 FROM runs x WHERE x.workspace_id = w.id AND x.vcs_commit = $1::text
+            AND x.action NOT IN ('assess', 'plan'))
+    RETURNING runs.id, runs.workspace_id, runs.action, runs.created_at
+), h AS (
+    INSERT INTO run_status_history (run_id, status, message) SELECT r.id, 'pending', $3::text FROM r
+)
+SELECT r.id, r.workspace_id, r.action, r.created_at FROM r
+`
+
+type InsertPendingVCSRunParams struct {
+	Commit      string
+	WorkspaceID uuid.UUID
+	Message     string
+}
+
+type InsertPendingVCSRunRow struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	Action      string
+	CreatedAt   time.Time
+}
+
+// A push's apply run while the workspace has an active run: it waits (storage.QueueVCSRun), unless a run of
+// this commit exists already.
+func (q *Queries) InsertPendingVCSRun(ctx context.Context, arg InsertPendingVCSRunParams) (InsertPendingVCSRunRow, error) {
+	row := q.db.QueryRow(ctx, insertPendingVCSRun, arg.Commit, arg.WorkspaceID, arg.Message)
+	var i InsertPendingVCSRunRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Action,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listWorkspaceTemplates = `-- name: ListWorkspaceTemplates :many
 SELECT name, template_id, module_source, module_ref, inputs, follows, importing FROM workspace_templates
 WHERE workspace_id = $1::uuid ORDER BY name
@@ -188,6 +230,37 @@ type NotifyParams struct {
 func (q *Queries) Notify(ctx context.Context, arg NotifyParams) error {
 	_, err := q.db.Exec(ctx, notify, arg.Channel, arg.Payload)
 	return err
+}
+
+const olderPendingVCSRuns = `-- name: OlderPendingVCSRuns :many
+SELECT id FROM runs WHERE workspace_id = $1::uuid AND status = 'pending' AND vcs_commit IS NOT NULL
+    AND id <> $2::uuid FOR UPDATE
+`
+
+type OlderPendingVCSRunsParams struct {
+	WorkspaceID uuid.UUID
+	ID          uuid.UUID
+}
+
+// The workspace's pending push runs but run id: a newer commit makes them moot.
+func (q *Queries) OlderPendingVCSRuns(ctx context.Context, arg OlderPendingVCSRunsParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, olderPendingVCSRuns, arg.WorkspaceID, arg.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const pruneRunLogs = `-- name: PruneRunLogs :many

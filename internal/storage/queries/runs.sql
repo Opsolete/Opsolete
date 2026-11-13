@@ -188,3 +188,24 @@ ORDER BY r.created_at LIMIT 1 FOR UPDATE;
 -- name: TakeCurrentConfig :exec
 -- A pending run about to be queued runs the workspace's configuration of now.
 UPDATE runs SET cv_id = w.current_cv_id FROM workspaces w WHERE runs.id = sqlc.arg(id)::uuid AND w.id = runs.workspace_id;
+
+-- name: InsertPendingVCSRun :one
+-- A push's apply run while the workspace has an active run: it waits (storage.QueueVCSRun), unless a run of
+-- this commit exists already.
+WITH r AS (
+    INSERT INTO runs (workspace_id, action, status, vcs_commit, cv_id)
+    SELECT w.id, 'apply', 'pending', sqlc.arg(commit)::text, w.current_cv_id FROM workspaces w
+    WHERE w.id = sqlc.arg(workspace_id)::uuid AND w.execution_mode = 'remote'
+        AND EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = w.id AND run_active(a.status))
+        AND NOT EXISTS (SELECT 1 FROM runs x WHERE x.workspace_id = w.id AND x.vcs_commit = sqlc.arg(commit)::text
+            AND x.action NOT IN ('assess', 'plan'))
+    RETURNING runs.id, runs.workspace_id, runs.action, runs.created_at
+), h AS (
+    INSERT INTO run_status_history (run_id, status, message) SELECT r.id, 'pending', sqlc.arg(message)::text FROM r
+)
+SELECT r.id, r.workspace_id, r.action, r.created_at FROM r;
+
+-- name: OlderPendingVCSRuns :many
+-- The workspace's pending push runs but run id: a newer commit makes them moot.
+SELECT id FROM runs WHERE workspace_id = sqlc.arg(workspace_id)::uuid AND status = 'pending' AND vcs_commit IS NOT NULL
+    AND id <> sqlc.arg(id)::uuid FOR UPDATE;
