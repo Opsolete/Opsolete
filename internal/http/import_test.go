@@ -191,6 +191,13 @@ func TestChangeSettings(t *testing.T) {
 	if page := get(h, loc).Body.String(); !strings.Contains(page, `value="typo"`) || !strings.Contains(page, `name="existing" value="on"`) {
 		t.Fatalf("the form after a failed round:\n%s", page)
 	}
+	// planned again from there, the module keeps its name: rounds of one import are one module
+	from := regexp.MustCompile(`from=([a-z0-9_]+)`).FindStringSubmatch(loc)
+	again := runID(t, post(h, loc, url.Values{"name": {"vm1"}, "existing": {"on"}, "nic": {"fixed"}}))
+	if j := r.claim(t, again, "plan"); from == nil || j.Modules[len(j.Modules)-1].Name != from[1] && j.Modules[0].Name != from[1] {
+		t.Fatalf("the next round's module %+v, want %v", j.Modules, from)
+	}
+	r.finish(t, `{"status": "failed", "message": "plan: exit status 1"}`)
 	// a plan that fails creating: back to the form creating, not importing
 	_, u = failed(url.Values{"name": {"vm1"}, "subnet": {"/subnets/x"}}, "")
 	if page := get(h, u).Body.String(); !strings.Contains(page, "Not applied") {

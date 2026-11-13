@@ -95,17 +95,22 @@ func (a *App) TemplateForm(ctx context.Context, actor Actor, workspace, module, 
 // inputs (raw: as typed, by input name) and the template's current module version, and queues the
 // plan that applies it. found (nil: none) is what an import plan found that the form took (FoundValues): those
 // values count as the workspace's own, so a project's keep-own value doesn't replace them. It returns the module
-// name. ValidationError: the inputs (Fields by input name).
-func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, templateID string, raw map[string]string, found map[string]any) (string, storage.Run, error) {
+// name. keep: adding again a module a round added (Change settings), its name, so the module keeps it across
+// rounds (with found only; "" none). ValidationError: the inputs (Fields by input name).
+func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, templateID string, raw map[string]string, found map[string]any, keep string) (string, storage.Run, error) {
 	f, err := a.TemplateForm(ctx, actor, workspace, module, templateID)
 	if err != nil {
 		return module, storage.Run{}, err
 	}
 	t, adding := f.Template, f.Current == nil
 	s := formSave{T: t, Raw: raw, Found: found, Workspace: f.Workspace.ID, Module: module}
-	if adding {
+	switch {
+	case adding && found != nil && keep != "" && moduleName(keep) == keep &&
+		!slices.ContainsFunc(f.Added, func(m storage.WorkspaceTemplate) bool { return m.Name == keep }):
+		s.Module = keep
+	case adding:
 		s.Module = defaultModule(t, raw, f.Added)
-	} else {
+	default:
 		s.Old, s.Follows = f.Current.Inputs, f.Current.Follows
 	}
 	module = s.Module
@@ -256,13 +261,15 @@ func (a *App) ChangeSettings(ctx context.Context, actor Actor, workspace string,
 	if err != nil {
 		return nil, err
 	}
-	if found, err := a.FoundTemplates(ctx, d); err != nil || len(found) == 0 {
+	found, err := a.FoundTemplates(ctx, d)
+	if err != nil || len(found) == 0 {
 		return nil, cmp.Or(err, ErrNotFound)
 	}
-	if d.Run.Active() {
-		if err := a.DiscardRun(ctx, actor, workspace, id); err != nil {
-			return nil, err
-		}
+	if !d.Run.Active() {
+		return found, nil
+	}
+	if err := a.DiscardRun(ctx, actor, workspace, id); err != nil { // reverts a template it added: list again
+		return nil, err
 	}
 	return a.FoundTemplates(ctx, d)
 }
@@ -286,12 +293,15 @@ func (a *App) FoundTemplates(ctx context.Context, d RunDetail) ([]FoundTemplate,
 		return nil, err
 	}
 	added, err := a.Store.WorkspaceTemplates(ctx, d.Workspace.ID)
+	if err != nil {
+		return nil, err
+	}
 	var out []FoundTemplate
 	for _, m := range slices.Sorted(maps.Keys(all)) {
 		out = append(out, FoundTemplate{Module: m, TemplateID: all[m].TemplateID, Read: len(all[m].Inputs) > 0,
 			Added: slices.ContainsFunc(added, func(t storage.WorkspaceTemplate) bool { return t.Name == m && t.TemplateID == all[m].TemplateID })})
 	}
-	return out, err
+	return out, nil
 }
 
 // RemoveTemplate removes an added template and queues the plan that destroys its resources; with

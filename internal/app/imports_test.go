@@ -172,7 +172,7 @@ func TestImport(t *testing.T) {
 	}
 
 	// a round whose plan would replace something can't be adopted; adding one more template plans it, never applies it
-	two, run3, err := a.SaveTemplate(ctx, admin, ws.Name, "", "vm", map[string]string{"name": "vm2", "existing": "on"}, nil)
+	two, run3, err := a.SaveTemplate(ctx, admin, ws.Name, "", "vm", map[string]string{"name": "vm2", "existing": "on"}, nil, "")
 	if err != nil || run3.Action != "plan" {
 		t.Fatalf("add importing: %v %v", run3, err)
 	}

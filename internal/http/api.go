@@ -408,7 +408,7 @@ func (s *Server) apiSaveTemplate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) apiSave(w http.ResponseWriter, r *http.Request, module string, in apiTemplateInputs, status int) {
-	module, run, err := s.App.SaveTemplate(r.Context(), actor(r), r.PathValue("name"), module, in.Template, formRaw(in.Inputs), nil)
+	module, run, err := s.App.SaveTemplate(r.Context(), actor(r), r.PathValue("name"), module, in.Template, formRaw(in.Inputs), nil, "")
 	if err != nil {
 		s.v1Error(w, r, bodyFields(err, nil))
 		return

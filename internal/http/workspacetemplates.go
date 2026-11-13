@@ -74,7 +74,7 @@ func (s *Server) saveWorkspaceTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page.Values = formValues(f, page.T, func(n string) string { return s.draft(r, f, n) })
-	_, run, err := s.App.SaveTemplate(r.Context(), actor(r), r.PathValue("name"), r.PathValue("module"), page.T.ID, page.Values, page.Found)
+	_, run, err := s.App.SaveTemplate(r.Context(), actor(r), r.PathValue("name"), r.PathValue("module"), page.T.ID, page.Values, page.Found, r.URL.Query().Get("from"))
 	if s.failed(w, r, err, "template", f, func(status int, fs *formState) {
 		fs.Labels, page.F = inputLabels(page.T), fs
 		page.Drafts = s.drafts(r, page.Values, sensitiveNames(page.T))

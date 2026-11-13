@@ -168,7 +168,7 @@ func TestEnvironmentValuesInJobs(t *testing.T) {
 	if err != nil || len(added) != 1 {
 		t.Fatal(added, err)
 	}
-	_, run, err := a.SaveTemplate(ctx, admin, ws.Name, added[0].Name, "", map[string]string{"size": "l", "region": "Not Valid", "name": "n2"}, nil)
+	_, run, err := a.SaveTemplate(ctx, admin, ws.Name, added[0].Name, "", map[string]string{"size": "l", "region": "Not Valid", "name": "n2"}, nil, "")
 	if err != nil {
 		t.Fatalf("save with a locked input: %v", err)
 	}
