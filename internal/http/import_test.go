@@ -162,6 +162,11 @@ func TestChangeSettings(t *testing.T) {
 	if rec := post(h, "/workspaces/new", url.Values{fieldWorkspace: {ws}}); rec.Code != http.StatusSeeOther {
 		t.Fatalf("create: %d", rec.Code)
 	}
+	// no configuration: no New run (it would fail), but why and where to add one
+	if page := get(h, "/workspaces/"+ws).Body.String(); strings.Contains(page, `data-show-dialog="new-run"`) ||
+		!strings.Contains(page, `href="/workspaces/`+ws+`/deploy">Deploy a template</a>`) {
+		t.Fatalf("a workspace without configuration:\n%s", page)
+	}
 	add := "/workspaces/" + ws + "/templates/new?template=vm"
 	failed := func(form url.Values, found string) (string, string) {
 		t.Helper()
@@ -197,6 +202,9 @@ func TestChangeSettings(t *testing.T) {
 	// one template applied, a second one's plan fails finding for both: a link per template
 	first := runID(t, post(h, add, url.Values{"name": {"vm1"}, "subnet": {"/s"}}))
 	r.applied(t, ws, first, 1)
+	if page := get(h, "/workspaces/"+ws).Body.String(); !strings.Contains(page, `data-show-dialog="new-run"`) || strings.Contains(page, "Deploy a template</a>") {
+		t.Fatalf("a workspace with a template: no New run:\n%s", page)
+	}
 	mods, _ := store.WorkspaceTemplates(context.Background(), mustWorkspace(t, store, ws).ID)
 	if len(mods) != 1 {
 		t.Fatalf("templates: %+v", mods)
