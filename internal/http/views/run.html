@@ -49,7 +49,7 @@
   {{range .Modules}}{{if .Values}}
   <table class="attrs"><caption><code>{{.Module}}</code>: what the plan found</caption>
     <tr><th>Input</th><th>Found</th><th>Planned with</th></tr>
-    {{range .Values}}<tr><td>{{.Title}}</td><td><code>{{.Found}}</code></td><td>{{with .Planned}}<code>{{.}}</code>{{else}}<span class="muted">—</span>{{end}}{{if .Differs}} <span class="change update">differs</span>{{end}}</td></tr>{{end}}
+    {{range .Values}}<tr><td>{{.Title}}</td><td><code>{{.Found}}</code></td><td>{{with .Planned}}<code>{{.}}</code>{{else}}<span class="muted">—</span>{{end}}{{if .Differs}} <span class="change update">differs</span>{{with .Fixed}} <span class="muted">({{.}}: change it there)</span>{{end}}{{end}}</td></tr>{{end}}
   </table>{{end}}{{end}}
   <div class="actions">
     {{if .CanReplan}}<form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/plan-again"><button type="submit">Plan again with the found values</button></form>{{end}}

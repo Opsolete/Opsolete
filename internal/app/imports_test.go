@@ -185,3 +185,40 @@ func TestImport(t *testing.T) {
 		t.Fatalf("a planned round added the template: %+v", added)
 	}
 }
+
+// An input the project sets (per environment, not keep-own) can't take what an import plan found: it shows why,
+// and it never asks for another round (planning again would set it back to the project's value: a loop).
+func TestImportProjectValue(t *testing.T) {
+	a, ctx := importApp(t), context.Background()
+	prd := uniq("prd-")
+	if _, err := a.CreateProject(ctx, admin, prd, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SetEnvironmentValue(ctx, admin, prd, "vm", "subnet", "/subnets/project", false); err != nil {
+		t.Fatal(err)
+	}
+	ws, run, err := a.CreateWorkspace(ctx, admin, NewWorkspace{Name: uniq("vm-"), Project: prd, TemplateID: "vm",
+		Inputs: map[string]string{"name": "vm1", "existing": "on"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	added, _ := a.Store.WorkspaceTemplates(ctx, ws.ID)
+	mod := added[0].Name
+	j, ok, err := a.Store.ClaimJob(ctx, storage.Runner{Name: "r", Pool: storage.DefaultPool}, time.Minute)
+	if err != nil || !ok {
+		t.Fatal(err)
+	}
+	a.Store.AckJob(ctx, j.RunID, j.LeaseID, time.Minute)
+	if _, err := a.FinishJob(ctx, run.ID, j.LeaseID, runnerapi.FinishRequest{Status: "succeeded",
+		Plan:  &runnerapi.Plan{Import: 1, Imports: []runnerapi.Import{{To: "module." + mod + ".x.y", ID: "/vm1"}}, Change: 1},
+		Found: map[string]map[string]any{mod: {"subnet": "/subnets/a"}}}); err != nil {
+		t.Fatal(err)
+	}
+	s, err := a.ImportRound(ctx, admin, ws.Name, run.ID)
+	if err != nil || s.CanReplan || len(s.Modules) != 1 || len(s.Modules[0].Values) != 1 || s.Modules[0].Values[0].Fixed != "set by the project" {
+		t.Fatalf("round: %+v %v", s, err)
+	}
+	if _, err := a.PlanImportAgain(ctx, admin, ws.Name, run.ID); !IsConflict(err) {
+		t.Fatalf("planning again with nothing it can take: %v", err)
+	}
+}

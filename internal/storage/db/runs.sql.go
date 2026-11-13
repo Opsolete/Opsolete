@@ -175,8 +175,13 @@ DELETE FROM runs WHERE id IN (
                 EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = r.workspace_id AND a.action = 'assess' AND a.created_at > r.created_at)
                 AND (r.status NOT IN ('no_changes', 'drifted') OR EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = r.workspace_id
                     AND a.action = 'assess' AND a.status IN ('no_changes', 'drifted') AND a.created_at > r.created_at))
-            ELSE r.vcs_pull_request IS NULL OR EXISTS (SELECT 1 FROM runs p WHERE p.workspace_id = r.workspace_id
-                AND p.action = 'plan' AND p.vcs_pull_request = r.vcs_pull_request AND p.created_at > r.created_at) END
+            ELSE (r.vcs_pull_request IS NULL OR EXISTS (SELECT 1 FROM runs p WHERE p.workspace_id = r.workspace_id
+                AND p.action = 'plan' AND p.vcs_pull_request = r.vcs_pull_request AND p.created_at > r.created_at))
+                AND NOT EXISTS (SELECT 1 FROM configuration_modules m JOIN configuration_versions cv ON cv.id = m.cv_id
+                    JOIN workspaces w ON w.id = cv.workspace_id
+                    WHERE m.cv_id = r.cv_id AND m.importing AND (cv.id = w.current_cv_id OR cv.parent_id IS NOT DISTINCT FROM w.current_cv_id)
+                    AND NOT EXISTS (SELECT 1 FROM runs x JOIN run_status_history h ON h.run_id = x.id WHERE x.cv_id = cv.id
+                        AND x.action NOT IN ('plan', 'assess') AND h.status IN ('applying', 'no_changes'))) END
     LIMIT $2::integer FOR UPDATE OF r SKIP LOCKED
 )
 `
@@ -188,8 +193,9 @@ type PruneSpeculativeRunsParams struct {
 
 // Drift checks and speculative plans, history and logs with them (cascade), except what readers
 // need: a workspace's latest drift check (LatestAssessment) and latest one that found drift or none
-// (workspace_list.drifted), and a pull request's latest plan (QueueVCSRun's dedupe). Plans run by
-// hand (no pull request) have no exception.
+// (workspace_list.drifted), a pull request's latest plan (QueueVCSRun's dedupe), and an import's plan
+// rounds still pending (storage.RunPending: their configuration imports, isn't applied, and is the current one
+// or made from it): the import session lives on them. Other plans run by hand have no exception.
 func (q *Queries) PruneSpeculativeRuns(ctx context.Context, arg PruneSpeculativeRunsParams) (int64, error) {
 	result, err := q.db.Exec(ctx, pruneSpeculativeRuns, arg.OlderSecs, arg.Lim)
 	if err != nil {

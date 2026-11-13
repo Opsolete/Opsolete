@@ -189,16 +189,29 @@ func (a *App) FoundValues(ctx context.Context, actor Actor, workspace string, ru
 	if _, err := a.Run(ctx, actor, workspace, runID, LevelOperate); err != nil {
 		return nil, err
 	}
-	if applied, err := a.Store.RunVersionApplied(ctx, runID); err != nil || applied { // an old link would undo endImport
+	if pending, err := a.Store.RunPending(ctx, runID); err != nil || !pending { // an old link would undo what was applied since
 		return nil, cmp.Or(err, ErrNotFound)
 	}
 	all, err := a.Store.RunFound(ctx, runID)
 	if err != nil {
 		return nil, err
 	}
-	f, ok := all[module]
-	if !ok || f.TemplateID != t.ID || len(f.Inputs)+len(f.Saved) == 0 {
+	f := all[module]
+	found, ok := foundValues(f, t)
+	if !ok {
 		return nil, ErrNotFound
+	}
+	if f.Import && CanImport(t) { // the run imported: the form goes on importing
+		found[ImportInput] = true
+	}
+	return found, nil
+}
+
+// foundValues are the values of t's inputs in f (what a plan found for a module from t): what it found where the
+// input takes it, else what the plan ran with; sensitive inputs never. ok false: f isn't from t, or holds nothing.
+func foundValues(f storage.Found, t templates.Template) (map[string]any, bool) {
+	if f.TemplateID != t.ID || len(f.Inputs)+len(f.Saved) == 0 {
+		return nil, false
 	}
 	found := map[string]any{}
 	for _, in := range t.Inputs {
@@ -213,10 +226,7 @@ func (a *App) FoundValues(ctx context.Context, actor Actor, workspace string, ru
 			found[in.Name] = v
 		}
 	}
-	if f.Import && CanImport(t) { // the run imported: the form goes on importing
-		found[ImportInput] = true
-	}
-	return found, nil
+	return found, true
 }
 
 // fits: v (a decoded JSON value an import plan found) is of the kind input in takes: a value the form can show
@@ -268,7 +278,7 @@ type FoundTemplate struct {
 // FoundTemplates lists the template modules run d (RunDetail checked the actor's access) can go back to the form of
 // (storage.Found), by name; none once it applied.
 func (a *App) FoundTemplates(ctx context.Context, d RunDetail) ([]FoundTemplate, error) {
-	if applied, err := a.Store.RunVersionApplied(ctx, d.Run.ID); err != nil || applied {
+	if pending, err := a.Store.RunPending(ctx, d.Run.ID); err != nil || !pending {
 		return nil, err
 	}
 	all, err := a.Store.RunFound(ctx, d.Run.ID)

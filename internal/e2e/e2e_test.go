@@ -89,7 +89,11 @@ func TestRealRunner(t *testing.T) {
 	}
 	// a template whose module calls another module of the registry, as a VM module composes its building blocks
 	nested := `{"id": "nested", "name": "Nested", "module": {"source": "opsolete.localhost:8080/examples/nested/terraform", "ref": "1.0.0"}, "inputs": []}`
-	for name, body := range map[string]string{"greeting.json": string(greeting), "greeting-secret.json": secret, "nested.json": nested} {
+	// a template whose module imports itself (examples/modules/importable)
+	importable := `{"id": "importable", "name": "Importable", "module": {"source": "opsolete.localhost:8080/examples/importable/terraform", "ref": "1.0.0"},
+		"inputs": [{"name": "name", "type": "string", "required": true, "key": true}, {"name": "size", "type": "string", "required": true},
+		{"name": "existing", "type": "bool"}]}`
+	for name, body := range map[string]string{"greeting.json": string(greeting), "greeting-secret.json": secret, "nested.json": nested, "importable.json": importable} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -525,6 +529,51 @@ output "message" { value = module.inner.message }
 		}
 		if out := page(t, "/workspaces/"+ws+"?show=outputs"); strings.Contains(out, "third__") || !strings.Contains(out, "hi, Dev!") || !strings.Contains(out, "hey, Two!") {
 			t.Fatalf("outputs: %s", out)
+		}
+	})
+	t.Run("import: a module that imports itself; a plan round, adopted, confirmed, applied; the resource in one state only", func(t *testing.T) {
+		var body bytes.Buffer
+		mw := multipart.NewWriter(&body)
+		for k, v := range map[string]string{"namespace": "examples", "name": "importable", "system": "terraform", "version": "1.0.0"} {
+			mw.WriteField(k, v)
+		}
+		fw, _ := mw.CreateFormFile("archive", "importable.tar.gz")
+		fw.Write(tarGz(t, "../../examples/modules/importable/1.0.0"))
+		mw.Close()
+		send(t, "/registry", mw.FormDataContentType(), &body)
+
+		ws = "e2e-import"
+		runOf(postForm(t, "/templates/importable", url.Values{"ops-workspace": {ws}, "name": {"vm-17"}, "size": {"large"}, "existing": {"on"}}))
+		round := runID
+		await(t, storage.Planned) // a round: planned, never applied by itself
+		run, _, _ := store.GetRun(ctx, round)
+		if run.Plan == nil || run.Plan.Import != 1 || run.Plan.Destroy != 0 || len(run.Plan.Imports) != 1 || run.Plan.Imports[0].ID != "vm-17" {
+			t.Fatalf("round plan: %+v", run.Plan)
+		}
+		roundURL := "/workspaces/" + ws + "/runs/" + round.String()
+		if p := page(t, roundURL); !strings.Contains(p, `action="`+roundURL+`/adopt"`) {
+			t.Fatalf("the round offers no adopt:\n%s", p)
+		}
+		runOf(postForm(t, roundURL+"/adopt", nil))
+		await(t, storage.NeedsConfirmation) // an import always asks
+		confirm(t)
+		await(t, storage.Applied)
+		w, _ := store.GetWorkspace(ctx, ws)
+		mods, _ := store.WorkspaceTemplates(ctx, w.ID)
+		res, _ := store.Resources(ctx, w.ID)
+		if len(mods) != 1 || mods[0].Import || len(res) != 1 || res[0].Address != "module."+mods[0].Name+".terraform_data.this" {
+			t.Fatalf("after the import: templates %+v, resources %+v", mods, res)
+		}
+		if rec, _ := client.Post(ts.URL+roundURL+"/adopt", "", nil); rec.StatusCode != http.StatusNotFound {
+			t.Fatalf("adopting the applied round again: %d", rec.StatusCode)
+		}
+
+		// the same resource into another workspace: refused, in one state only
+		ws = "e2e-import-twice"
+		runOf(postForm(t, "/templates/importable", url.Values{"ops-workspace": {ws}, "name": {"vm-17"}, "size": {"large"}, "existing": {"on"}}))
+		await(t, storage.Errored)
+		if hist := page(t, "/workspaces/"+ws+"/runs/"+runID.String()); !strings.Contains(hist, "managed already, in workspace e2e-import") {
+			t.Fatalf("the second import isn't refused for the right reason:\n%s", hist)
 		}
 	})
 	t.Logf("the runs took %s", time.Since(start).Round(time.Millisecond))

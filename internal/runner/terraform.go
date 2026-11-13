@@ -2,6 +2,7 @@ package runner
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -113,7 +114,11 @@ func summarize(rcs []*tfjson.ResourceChange) runnerapi.Plan {
 		}
 		if rc.Change.Importing != nil {
 			sum.Import++
-			sum.Imports = append(sum.Imports, runnerapi.Import{To: rc.Address, ID: rc.Change.Importing.ID})
+			// The imported object's own id: what state indexes hold, to compare. The import id may differ (an
+			// AWS association imports as "subnet/rtb", its id is "rtbassoc-…"), and an import by identity has none.
+			before, _ := rc.Change.Before.(map[string]any)
+			id, _ := before["id"].(string)
+			sum.Imports = append(sum.Imports, runnerapi.Import{To: rc.Address, ID: cmp.Or(id, rc.Change.Importing.ID)})
 		}
 		action, ok := actionOf(rc)
 		switch action {

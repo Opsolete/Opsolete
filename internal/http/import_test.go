@@ -129,15 +129,17 @@ func TestImportFlow(t *testing.T) {
 	if rec := get(h, "/workspaces/"+ws+"/templates/new?template=vm&found="+uuid.NewString()+"&from="+mod); rec.Code != http.StatusNotFound {
 		t.Fatalf("another run's found values: %d", rec.Code)
 	}
-	// applied: nothing to go back to, from the apply or from the round it applied, also by an old link (it would turn
-	// the import on again)
-	for _, id := range []string{apply, round2} {
+	// applied: nothing to go back to, from the apply, the round it applied or an older round, also by an old link (it
+	// would turn the import on again, and put back the other templates as they were then)
+	for _, id := range []string{apply, round2, run} {
 		u := "/workspaces/" + ws + "/runs/" + id
 		if page := get(h, u).Body.String(); strings.Contains(page, `/change"`) || strings.Contains(page, `/adopt"`) {
 			t.Fatalf("%s: an applied import still offers to go on:\n%s", id, page)
 		}
-		if rec := post(h, u+"/change", nil); rec.Code != http.StatusNotFound {
-			t.Fatalf("change %s: %d", id, rec.Code)
+		for _, op := range []string{"/change", "/plan-again", "/adopt"} {
+			if rec := post(h, u+op, nil); rec.Code != http.StatusNotFound {
+				t.Fatalf("%s %s: %d", op, id, rec.Code)
+			}
 		}
 		if rec := get(h, "/workspaces/"+ws+"/templates/"+mod+"?found="+id); rec.Code != http.StatusNotFound {
 			t.Fatalf("found values of %s: %d", id, rec.Code)
