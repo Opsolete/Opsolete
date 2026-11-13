@@ -7,14 +7,6 @@
   {{if or .VCS .Upload}}<a class="btn" href="/registry/publish">Publish module</a>{{end}}
 </div>
 
-<div class="card">
-  <p>Use a module from Terraform, authenticated with <code>TF_TOKEN_…</code> (create a token with <code>just token &lt;name&gt;</code>):</p>
-  <pre class="code">module "example" {
-  source  = "{{.Host}}/&lt;namespace&gt;/&lt;name&gt;/&lt;system&gt;"
-  version = "1.0.0"
-}</pre>
-</div>
-
 {{if .Modules}}
 <div class="inline mb-1">
   <input type="search" id="module-search" placeholder="Search by name, namespace, system or repository" aria-label="Search modules"
