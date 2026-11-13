@@ -93,7 +93,7 @@
 <input type="search" placeholder="Filter resources" aria-label="filter resources" class="mw-20" data-filter-resources>
 <form method="post" action="/workspaces/{{$w.Name}}/runs" id="resources"><input type="hidden" name="action" value="apply">
 {{range .}}
-<details class="section" open>
+<details class="section">
   <summary>{{with .Module}}<code>{{.}}</code>{{else}}<span class="muted">root</span>{{end}}{{with .Template}} · {{.}}{{end}}{{with .Ref}} <span class="tag">{{.}}</span>{{end}}
     <span class="end muted">{{len .Rows}} resource{{if ne (len .Rows) 1}}s{{end}}</span></summary>
   <table>
