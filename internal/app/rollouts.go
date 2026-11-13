@@ -44,7 +44,8 @@ var (
 type RolloutRow struct {
 	storage.TemplateUse
 	State   string
-	Missing []string // RolloutNeedsInput: the inputs without a value, in the form's order
+	Missing []string // RolloutNeedsInput: the inputs whose stored value the new version rejects or lacks, in the form's order
+	Why     []string // why, for each of Missing (e.g. a value that no longer matches a pattern)
 }
 
 // Rollouts is a template's rollout page: its uses in a project (or all) and its latest rollout.
@@ -79,7 +80,7 @@ func (a *App) rolloutPlan(t templates.Template, uses []storage.TemplateUse, env 
 		}
 		for _, in := range t.Inputs { // in the form's order
 			if sv.Errs[in.Name] != "" {
-				row.Missing = append(row.Missing, in.Name)
+				row.Missing, row.Why = append(row.Missing, in.Name), append(row.Why, sv.Errs[in.Name])
 			}
 		}
 		switch {

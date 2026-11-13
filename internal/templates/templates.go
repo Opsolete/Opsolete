@@ -449,6 +449,20 @@ func (t Template) checkInputs() error {
 	return nil
 }
 
+// patterns caches compiled input patterns: Validate runs per input, per row, per form post and rollout check.
+// shortcut: never evicted; templates bound it (a pattern per input), fine unless templates churn for months.
+var patterns sync.Map // pattern → *regexp.Regexp
+
+// pattern is p compiled anchored. check compiled it when the template loaded, so it compiles.
+func pattern(p string) *regexp.Regexp {
+	if re, ok := patterns.Load(p); ok {
+		return re.(*regexp.Regexp)
+	}
+	re := regexp.MustCompile(anchored(p))
+	patterns.Store(p, re)
+	return re
+}
+
 // ImportInput is the input with which a template's module imports what exists instead of creating it
 // (docs/resource-import.md): a bool that switches on the module's own import blocks.
 const ImportInput = "existing"
@@ -702,7 +716,7 @@ func (t Template) Validate(raw map[string]string) (map[string]any, map[string]st
 			vals[in.Name] = v
 		default:
 			// anchored like the browser's pattern attribute: the whole value must match
-			if in.Pattern != "" && !regexp.MustCompile(anchored(in.Pattern)).MatchString(v) {
+			if in.Pattern != "" && !pattern(in.Pattern).MatchString(v) {
 				errs[in.Name] = cmp.Or(in.Help, "Doesn't have the expected format: "+in.Pattern) // the help says it in words
 				continue
 			}

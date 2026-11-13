@@ -140,7 +140,10 @@ fields, named Prefix.<field>, Row their values (nil: a new row, the defaults) */
     {{if eq .Type "bool"}}
     <input type="checkbox" id="{{$id}}" name="{{$id}}"{{if eq $val "true" "on"}} checked{{end}}>
     {{else if eq .Type "select"}}
-    <select id="{{$id}}" name="{{$id}}">{{range .Options}}<option value="{{.Value}}"{{if eq .Value $val}} selected{{end}}>{{.Text}}</option>{{end}}</select>
+    <select id="{{$id}}" name="{{$id}}">{{$known := not $val}}{{range .Options}}{{if eq .Value $val}}{{$known = true}}{{end}}{{end}}
+      {{if not $known}}<option value="{{$val}}" selected>{{$val}} (not an option: choose one)</option>{{end}}
+      {{if and (not .Required) $known}}<option value=""{{if not $val}} selected{{end}}></option>{{end}}
+      {{range .Options}}<option value="{{.Value}}"{{if eq .Value $val}} selected{{end}}>{{.Text}}</option>{{end}}</select>
     {{else}}
     <input id="{{$id}}" name="{{$id}}" value="{{$val}}" autocomplete="off" spellcheck="false"{{if eq .Type "number"}} type="number" step="any" inputmode="decimal"{{end}}
       {{if .Pattern}} pattern="{{.Pattern}}"{{with .Help}} title="{{.}}"{{end}}{{end}}{{if .Required}} required{{end}}>

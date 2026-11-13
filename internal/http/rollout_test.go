@@ -24,7 +24,7 @@ func TestRenderRollout(t *testing.T) {
 	s.render(w, httptest.NewRequest("GET", "/", nil), 200, "rollout.html", &rolloutPage{T: templates.Template{ID: "sa", Name: "SA"},
 		Pending: 1, Rollout: ro, OpenRuns: 1, Rows: []app.RolloutRow{
 			{TemplateUse: storage.TemplateUse{Workspace: "a", Module: "m", RunID: r1, RunStatus: "needs_confirmation"}, State: app.RolloutCurrent},
-			{TemplateUse: storage.TemplateUse{Workspace: "b", Module: "n"}, State: app.RolloutNeedsInput, Missing: []string{"x", "y"}},
+			{TemplateUse: storage.TemplateUse{Workspace: "b", Module: "n"}, State: app.RolloutNeedsInput, Missing: []string{"x", "y"}, Why: []string{"Required.", "Doesn't match."}},
 		}})
 	body := w.Body.String()
 	for _, want := range []string{"/workspaces/a/runs/" + r1.String(), "/workspaces/b/templates/n", "<code>y</code>", "/rollout/resume", "2 workspace(s) at a time",
