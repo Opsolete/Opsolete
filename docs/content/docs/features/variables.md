@@ -5,7 +5,7 @@ aliases:
   - /docs/usage/variables/
 ---
 
-A workspace's runs get **variables**: **env** (environment variables, e.g. cloud credentials) and **terraform** (Terraform input variables, passed as strings). Any runner runs any workspace; the server sends the variables with each claimed job.
+A workspace's runs get **variables**: **env** (environment variables, e.g. cloud credentials) and **terraform** (Terraform input variables, passed as strings, or as typed values when marked **HCL**). Any runner runs any workspace; the server sends the variables with each claimed job.
 
 - **Workspace variables:** a workspace's *Variables* page (anyone with read access sees them, sensitive values never; setting and deleting needs operate).
 - **Variable sets** (admins, *Settings › Variable sets*): a named group of variables that's **global** (every workspace not linked to a repository) or attached to chosen workspaces and [projects]({{< relref "/docs/features/projects" >}}) (every workspace of the project not linked to a repository). Use one per subscription or service principal, e.g. `azure-prod` with `ARM_TENANT_ID`, `ARM_SUBSCRIPTION_ID`, `ARM_CLIENT_ID` and a sensitive `ARM_CLIENT_SECRET`.
@@ -19,7 +19,9 @@ Anyone who operates a workspace can set its terraform variables, so a variable t
 
 ### Maps, lists and objects
 
-Terraform variables are passed as strings, and Terraform doesn't parse a string into a `map`, `list` or `object` variable: the run fails with `map of string required, but have string`. A variable of type `any` accepts it, but stays a string. Declare such a variable as a `string` holding JSON instead, and decode it in the module:
+Tick **HCL** and set the value as HCL: `{env = "prd"}` for a `map`, `["10.0.0.1"]` for a `list`, an object the same way; Terraform checks it against the variable's type. Without **HCL** the value is a string, which Terraform doesn't parse into a `map`, `list` or `object` (`map of string required, but have string`).
+
+An alternative that works without HCL: declare the variable as a `string` holding JSON and decode it in the module:
 
 ```hcl
 variable "tags_json" {

@@ -38,7 +38,7 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 | `GET /templates/{id}/rollout` | admin | Workspaces using the template and its open rollout; `?project=` filters |
 | `POST /templates/{id}/rollout` | admin | Starts a rollout: `project` (empty: all), `batch` (`0`: all at once), and the template's current `source` and `ref` (`409` if the template moved meanwhile) |
 | `POST /templates/{id}/rollout/{action}` | admin | `pause`, `resume` or `stop` the open rollout |
-| `GET /catalog` | admin | Settings → Templates: the Git catalog |
+| `GET /catalog` | admin | Settings → Template catalog: the Git catalog |
 | `POST /catalog` | admin | Sets its connection, repository, branch, folder and save mode |
 | `POST /catalog/sync` | admin | Sync now |
 | `POST /catalog/delete` | admin | Disconnect: back to `TEMPLATES_DIR` |
@@ -56,7 +56,7 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 | `GET /workspaces/{name}/states/{version}` | operate | A state version and its diff (values) |
 | `POST /workspaces/{name}/state-versions/{version}/rollback` | operate | Roll back state to this version |
 | `GET /workspaces/{name}/variables` | read | Variables and the variable sets that apply |
-| `POST /workspaces/{name}/variables` | operate | Sets a variable: `category` (`env` or `terraform`), `key`, `value`, `sensitive` |
+| `POST /workspaces/{name}/variables` | operate | Sets a variable: `category` (`env` or `terraform`), `key`, `value`, `sensitive`, `hcl` (terraform only: the value is HCL) |
 | `POST /workspaces/{name}/variables/{id}/delete` | operate | Deletes a variable |
 | `GET /workspaces/{name}/deploy` | read | Templates to add |
 | `GET /workspaces/{name}/templates/new` | operate | Form to add `?template={id}`; with `&found={run}&from={module}`, filled in with what that import plan found for the module (`404` if nothing) |
@@ -72,25 +72,25 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 | `GET /workspaces/{name}/settings` | operate | Settings › General |
 | `GET /workspaces/{name}/settings/{page}` | operate | Settings pages: `health`, `lock`, `access`, `deletion` |
 | `POST /workspaces/{name}/settings` | operate | General: `name`, `execution_mode` (`remote` or `local`), `auto_apply` |
-| `POST /workspaces/{name}/settings/remote-state` | operate | Remote state sharing: `remote_state=all\|specific`, `remote_state_consumers` |
+| `POST /workspaces/{name}/settings/remote-state` | operate | Remote state sharing: `remote_state=all\|specific` (`all`: admins), `remote_state_consumers` |
 | `POST /workspaces/{name}/settings/health` | operate | Health: `drift_detection` |
 | `POST /workspaces/{name}/lock` | operate | `action=lock` (optional `reason`, at most 300 characters), `unlock` or `force-unlock` |
 | `POST /workspaces/{name}/access` | admin | Grants a group `read` or `operate` (`group`, `level`; empty level revokes) |
 | `POST /workspaces/{name}/project` | admin | Moves the workspace to `project` |
-| `POST /workspaces/{name}/delete` | operate | Deletes the workspace; refused while its state manages resources unless `force=1` |
+| `POST /workspaces/{name}/delete` | operate | Deletes the workspace; refused while its state manages resources unless `force=1` (admins) |
 
 ## Runs
 
 | Endpoint | Access | Purpose |
 |---|---|---|
-| `POST /workspaces/{name}/runs` | operate | Starts a run: `action=apply\|plan\|destroy\|refresh\|assess`, `replace=<address>` (apply only, repeatable); `409` while another run is active |
+| `POST /workspaces/{name}/runs` | operate | Starts a run: `action=apply\|plan\|destroy\|refresh\|assess`, `replace=<address>` (apply only, repeatable). While another run is active, apply, destroy and refresh wait as `pending`; `plan` gets `409`, and `assess` only while another drift check is active |
 | `GET /workspaces/{name}/runs/{run}` | read | Plan, confirm / discard / cancel, live log, history; an import plan's found values (operate) |
 | `POST /workspaces/{name}/runs/{run}/confirm` | operate | Queues the apply of a plan waiting for confirmation |
 | `POST /workspaces/{name}/runs/{run}/discard` | operate | Ends it without applying |
 | `POST /workspaces/{name}/runs/{run}/change` | operate | Change settings: discards an import plan waiting for confirmation, and redirects to the run's template's form (configure, or add again when the run's end removed it) with what was entered for it and what its plan found; for an import plan, or a run that changed a template and ended without applying; `404` otherwise, `409` while planning |
 | `POST /workspaces/{name}/runs/{run}/plan-again` | operate | An import's plan round: plans a new version with what it found (`409` if it found nothing new) |
 | `POST /workspaces/{name}/runs/{run}/adopt` | operate | An import's plan round: queues the apply run of exactly its version (`409` if it can't: the reason says why) |
-| `POST /workspaces/{name}/runs/{run}/cancel` | operate | Cancels; `force=1` cuts off a runner that doesn't react |
+| `POST /workspaces/{name}/runs/{run}/cancel` | operate | Cancels; `force=1` cuts off a runner that doesn't react, once a cancel was requested (`409` before) |
 | `GET /workspaces/{name}/runs/{run}/logs` | read | Raw log |
 | `GET /workspaces/{name}/runs/{run}/logs/stream` | read | Live log (Server-Sent Events); at most 8 streams per user per replica, else `429` |
 
@@ -118,7 +118,7 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 | `GET /variable-sets` | admin | List |
 | `POST /variable-sets` | admin | Creates one (`name`, `description`, `global`; optionally attached to `workspace` or `project`) |
 | `GET /variable-sets/{set}` | admin | A set: variables, workspaces, projects |
-| `POST /variable-sets/{set}` | admin | `description`, `global` |
+| `POST /variable-sets/{set}` | admin | `description`, `global`, `priority` |
 | `POST /variable-sets/{set}/variables` | admin | Sets a variable |
 | `POST /variable-sets/{set}/variables/{id}/delete` | admin | Deletes a variable |
 | `POST /variable-sets/{set}/workspaces` | admin | The workspaces it's attached to (`workspace`, repeated) |
@@ -165,7 +165,7 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 | `POST /account/tokens/{id}/revoke` | user | Revokes one of your `terraform login` tokens |
 | `POST /account/tokens/revoke` | user | Revokes all of them |
 | `POST /users/{id}/sessions/revoke` | admin | Ends a user's sessions and revokes their `terraform login` tokens (from the audit log) |
-| `GET /organization` | admin | Settings → Organization |
+| `GET /organization` | admin | Settings → General |
 | `POST /organization` | admin | `currency` (Infracost), `module_uploads` |
 | `GET /organization/runners` | admin | Settings → Runners (with deployments) |
 | `POST /organization/runners` | admin | Creates a runner (`name`, `pool`) and shows its token once |
@@ -187,7 +187,7 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 | `GET /api/v1/workspaces/{name}/templates/{module}` | operate | An added template's configure form, its stored values |
 | `PUT /api/v1/workspaces/{name}/templates/{module}` | operate | Saves its inputs (`inputs`) and the template's module version, queues the plan |
 | `GET /api/v1/workspaces/{name}/runs` | read | The latest 25 runs |
-| `POST /api/v1/workspaces/{name}/runs` | operate | Queues a run (`action`, `replace`): `201` |
+| `POST /api/v1/workspaces/{name}/runs` | operate | Queues a run (`action`, `replace`): `201`, with status `pending` while another run is active (as above) |
 | `GET /api/v1/workspaces/{name}/runs/{run}` | read | A run with its history and its plan's attribute changes (`diff`, values that are sensitive or hold a secret hidden) |
 | `POST /api/v1/workspaces/{name}/runs/{run}/confirm` | operate | Confirms a plan that waits: `204` |
 | `POST /api/v1/workspaces/{name}/runs/{run}/discard` | operate | Discards it: `204` |
@@ -231,6 +231,6 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 | `GET /api/state/v1/{id}` | run's state credential | Terraform `http` backend: read state (also a shared workspace's) |
 | `POST /api/state/v1/{id}` | run's state credential | Write state (apply phase, holding the lock) |
 | `LOCK /api/state/v1/{id}` | run's state credential | Take the state lock (`423` with the holder if taken) |
-| `UNLOCK /api/state/v1/{id}` | run's state credential | Release it |
+| `UNLOCK /api/state/v1/{id}` | run's state credential | Release it (refused while someone else holds the lock) |
 
 `METRICS_ADDR` serves Prometheus metrics on its own listener, outside these routes.

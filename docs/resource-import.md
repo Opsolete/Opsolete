@@ -93,7 +93,7 @@ the example modules 1.1.0 already have them.
 ### Flow (an import session, November 2026; replaces rounds of discarded apply plans)
 
 1. **Import existing.** The add (or deploy) form's *Create new* / *Import existing* chips set the form's mode
-   (`app.Importing`, posted as the hidden `existing`); only the key input is required (`app.ForImport`, a required
+   (`app.Importing`, posted as the hidden `existing`); only the key input (if the template has one) and required sensitive inputs stay required (`app.ForImport`, a required
    input left empty is stored as `null`). Saving makes a configuration version whose module **imports**
    (`configuration_modules.importing`, migration 014; the switch is never stored as an input) and queues a **plan
    round**: a run with action `plan` (`app.runAction`), never applied, no state lock, the workspace unchanged. The

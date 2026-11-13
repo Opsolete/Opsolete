@@ -86,7 +86,7 @@ can be sensitive, the key or per-environment, nor be what `show_if` refers to; a
 `sealed` is refused (that's how sealed values are stored). Other complex types (lists of lists, maps of objects,
 `map(number)`) aren't form fields yet.
 
-**Strict parsing.** Every object accepts only the fields above: an unknown field (a typo such as `"lable"`) is an error, as is a value of the wrong JSON type. Any invalid file fails the whole catalog: from Git, the last good commit stays loaded and **Settings → Templates** shows the error; from `TEMPLATES_DIR`, the server doesn't start. The error names the file, template, input and field:
+**Strict parsing.** Every object accepts only the fields above: an unknown field (a typo such as `"lable"`) is an error, as is a value of the wrong JSON type. Any invalid file fails the whole catalog: from Git, the last good commit stays loaded and **Settings → Template catalog** shows the error; from `TEMPLATES_DIR`, the server doesn't start. The error names the file, template, input and field:
 
 ```text
 storage-account.json: template storage-account, input retention_days: default must be a JSON number (7, not "7")
@@ -179,7 +179,7 @@ A template's module is deployed by people who never write Terraform, so it has t
 - **No credentials in the module.** Pass them as environment variables (`ARM_CLIENT_ID`, `AWS_ACCESS_KEY_ID`, …) through a [variable set]({{< relref "/docs/features/variables" >}}). Environment variables reach every template in the workspace.
 - **Resources in the module's root directory**, in the standard module structure (`main.tf`, `variables.tf`, `outputs.tf`), so the [registry]({{< relref "/docs/features/module-registry" >}}) can generate the docs and the form from it.
 - **One specific use case, few decisions.** Hard-code what your standards fix (SKU, region list, logging, network rules) and expose only what users must choose.
-- **Settings outside the form:** a variable the form doesn't ask can still be set per project with a variable set. Give it a safe default, and take maps as a JSON string (see [Settings outside the template's form]({{< relref "/docs/features/variables#settings-outside-the-templates-form" >}})).
+- **Settings outside the form:** a variable the form doesn't ask can still be set per project with a variable set. Give it a safe default; maps, lists and objects are set as HCL variables (see [Settings outside the template's form]({{< relref "/docs/features/variables#settings-outside-the-templates-form" >}})).
 - **Defaults wherever possible**, and a `select` input for variables that have no default, so users pick from approved values instead of typing them.
 - **Pin an approved version** in the template's `ref`. Moving the template to a newer one offers existing workspaces a module update, which admins can [roll out]({{< relref "/docs/features/workspaces#update-to-a-new-module-version" >}}) to all of them, in batches and per project. Give inputs that are new and required a `default`, or each workspace needs its update form.
 
@@ -189,7 +189,7 @@ To [import existing resources]({{< relref "/docs/features/workspaces#import-exis
 finds and imports them itself, and must be able to describe them as they are:
 
 - **An `existing` input** (a `bool`, default `false`) that switches on `import` blocks in the module (Terraform ≥
-  1.16). Their IDs come from the inputs that identify the resource (name, resource group) and from data sources
+  1.16.1). Their IDs come from the inputs that identify the resource (name, resource group) and from data sources
   for what the user doesn't know (a VM's network interface); `azurerm_resources` finds any type by name without
   the feature-frozen `azurerm_virtual_machine` family, and its postcondition says clearly when nothing is there. The
   template lists the input like any other; the form doesn't show it as a field (its *Create new* / *Import existing*
@@ -197,7 +197,7 @@ finds and imports them itself, and must be able to describe them as they are:
   applied it's off, so the data sources aren't read anymore. Opsolete writes no import blocks and knows nothing
   about the cloud: the module does.
 - **The template is checked when it loads**: the `existing` input must be a `bool` without a `true` default, not
-  per environment, the key, sensitive or conditional. A template that breaks one of these is refused with a
+  per environment, the key, sensitive or conditional, and no `show_if` may refer to it. A template that breaks one of these is refused with a
   message saying which.
 
   ```hcl
@@ -228,7 +228,7 @@ finds and imports them itself, and must be able to describe them as they are:
   ```
 
 - **Pass inputs straight through** (`attr = var.x`, or `coalesce(var.x, "default")`), also through module calls and
-  a list's rows (`each.value.<field>`): then **Use found values** fills the input in from the plan. A value the
+  a list's rows (`each.value.<field>`): then **Plan again with the found values** fills the input in from the plan. A value the
   module builds (`"${var.name}-nic"`, several inputs) is set by hand.
 - Make every setting people choose differently, and that forces replacement when changed (names of sub-resources,
   image, disk type, security settings), an optional input whose default is the module's usual behavior, so new
@@ -264,13 +264,13 @@ Things to know:
 In production, in a Git repository, so the app keeps no data on its disk:
 
 1. Add a [VCS provider]({{< relref "/docs/features/vcs-providers" >}}) whose token can read the repository.
-2. In **Settings → Templates** (admins), choose the connection, repository, branch and folder. The `*.json` files directly in that folder are the catalog.
+2. In **Settings → Template catalog** (admins), choose the connection, repository, branch and folder. The `*.json` files directly in that folder are the catalog.
 3. Choose what the [template builder]({{< relref "/docs/features/template-builder" >}}) does on save:
    - **Open a pull request:** a new branch `opsolete/template-<id>-…` with the file and a pull request into the branch. The template changes once it's merged. Saving the template again while its pull request is open adds a commit to that pull request instead of opening another, replacing any change made to the file on its branch (it stays in the pull request's history). Removing a template always opens its own pull request. Works with branch protection.
    - **Commit to the branch:** live right away. The branch must allow direct pushes.
    - **Off:** templates are only edited in Git; a read-only token is enough.
 
-   Saving needs a token with write access: GitHub fine-grained *Contents: read and write* (plus *Pull requests: read and write* for pull requests), Azure DevOps *Code: read & write*. A read-only token fails at the first save, with the provider's error. To give the connection a token with more (or fewer) permissions, use *Change access token* in **Settings → Templates** (the connection's settings): it replaces the token of the whole connection, so its modules and workspaces use it too. If the connection is also open to workspaces, consider a separate connection with its own write token for the catalog.
+   Saving needs a token with write access: GitHub fine-grained *Contents: read and write* (plus *Pull requests: read and write* for pull requests), Azure DevOps *Code: read & write*. A read-only token fails at the first save, with the provider's error. To give the connection a token with more (or fewer) permissions, use *Change access token* in **Settings → Template catalog** (the connection's settings): it replaces the token of the whole connection, so its modules and workspaces use it too. If the connection is also open to workspaces, consider a separate connection with its own write token for the catalog.
 
 One app replica checks the branch every minute (GitHub: a conditional request, free when nothing changed), and any on **Sync now**; every replica loads each new commit from Postgres within 10 seconds. A commit with an invalid template isn't loaded: the page shows why, and the last good commit stays. The last loaded files are kept in Postgres, so an instance starts with the templates even while the provider is down.
 

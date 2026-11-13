@@ -25,7 +25,7 @@ The server checks the branch every minute (no webhooks, so Opsolete can stay int
 - **Start a run on every new commit** (on by default for new links) queues an apply run of each new commit that has no run yet, applied with auto-apply or after confirmation.
 - **Speculative plans for pull requests** (opt-in) queue a plan-only run, never applied, for each new commit of an open pull request into the branch; pull requests from forks are skipped.
 
-A workspace still has one active run at a time, so VCS runs wait their turn; if several commits land meanwhile, only the newest gets a run. Both settings are on the workspace's **Version control** page, which also shows whether the link works (**Connected to VCS**: the connection allows the workspace and the branch or tags can be read).
+A push waits as pending while another run is active; if several commits land meanwhile, only the newest gets a run. Pull request plans run beside it (one per pull request). Both settings are on the workspace's **Version control** page, which also shows whether the link works (**Connected to VCS**: the connection allows the workspace and the branch or tags can be read).
 
 **Tag-based** triggers replace both: a new tag in a chosen format (semantic version `1.2.3`, with a prefix `v1.2.3`, with a suffix `1.2.3-rc`, or a custom regular expression) queues an apply run of its commit, manual runs plan the newest matching tag (by the version number in its name; tags without one are never picked), and pull requests get no plans.
 
@@ -47,8 +47,8 @@ with any template whose module can import (an `existing` input; see
 [Writing modules that can import]({{< relref "/docs/features/templates#writing-modules-that-can-import" >}})):
 
 1. **Import existing** (operate access): at the top of the template's add form (*Deploy…*), or of its deploy form
-   for a new workspace, offered for templates whose module can import. Then only the template's key input is
-   required: fill in what identifies the resource (its name, its resource group); the module finds the rest.
+   for a new workspace, offered for templates whose module can import. Then only the key input (if the template has
+   one) and required sensitive inputs are required: fill in what identifies the resource (its name, its resource group); the module finds the rest.
 2. **A plan round.** Saving plans the template with its module importing (its `existing` input on), as a plan that
    is never applied: it takes no state lock, and the workspace doesn't change. The run page's **Import** section
    shows `N to import · add · change · destroy`, the plan's attribute changes, and for each input one setting
@@ -102,7 +102,7 @@ A workspace's *Settings* need `operate`:
 - **Health:** [drift detection]({{< relref "/docs/features/runs#drift-detection" >}}).
 - **Locking:** lock the workspace's state by hand, with an optional reason; see [Locking]({{< relref "/docs/features/state#locking" >}}).
 - **Team access:** the grants below (admins change them).
-- **Destruction and deletion:** **Queue destroy plan** destroys the infrastructure (confirmed as usual). **Delete workspace** removes its runs, variables, grants and state files; it's refused while a run is active or the state is locked. Destroy the resources first: if its state still lists resources (or isn't indexed), the button says **Delete workspace anyway**, and any resources that still exist are no longer managed by Terraform and must be cleaned up by hand.
+- **Destruction and deletion:** **Queue destroy plan** destroys the infrastructure (confirmed as usual). **Delete workspace** removes its runs, variables, grants and state files; it's refused while a run is active or the state is locked. Destroy the resources first: if its state still lists resources (or isn't indexed), the button says **Delete workspace anyway** (admins only), and any resources that still exist are no longer managed by Terraform and must be cleaned up by hand.
 
 ## Access
 

@@ -29,7 +29,7 @@ A run's state password is an HMAC of the workspace and the run. It works only fo
 
 ## Remote state sharing
 
-Under *Settings › General*, a workspace shares its state with all workspaces or with specific ones (default: none). A run of a workspace it is shared with reads it with:
+Under *Settings › General*, a workspace shares its state with all workspaces (admins only) or with specific ones (default: none). A run of a workspace it is shared with reads it with:
 
 ```hcl
 data "terraform_remote_state" "x" {

@@ -19,7 +19,7 @@ All pages require login. Health checks, the registry protocol (`/v1/…`, which 
 
 Teams are your IdP's groups. At every login Opsolete records the ID token's `groups` claim for the user, in Postgres because it can be too large for a cookie.
 
-- On a workspace page, an admin grants a group `read` (see the workspace, its runs, logs, outputs and resources) or `operate` (also runs, confirm/discard, destroy, cancel, variables, settings, locking, rename and delete). If a user is in several granted groups, the strongest grant wins.
+- On a workspace page, an admin grants a group `read` (see the workspace, its runs, logs, outputs and resources) or `operate` (also runs, confirm/discard, destroy, cancel, variables, settings, locking, rename and delete; deleting a workspace whose state still manages resources is for admins). If a user is in several granted groups, the strongest grant wins.
 - On a [project]({{< relref "/docs/features/projects#access" >}}), a grant reaches all of its workspaces; a user gets the higher of the workspace and project levels. `operate` on a project also allows creating workspaces in it.
 - *Account settings › Profile* (click your email at the top) shows the groups recorded at your last login.
 - Workspaces and their runs only show what the user may see.

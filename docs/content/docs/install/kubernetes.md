@@ -52,3 +52,7 @@ The chart does all of the below, so you need this only to check it or to deploy 
 - Optionally mount a volume at `TF_PLUGIN_CACHE_DIR` (`/home/runner/.terraform.d/plugin-cache` in the image) to keep providers between restarts.
 - Set the runner pods' `terminationGracePeriodSeconds` to at least `OPS_JOB_TIMEOUT` + `OPS_JOB_GRACE` + 5 minutes (see [Shutdown]({{< relref "/docs/config/runners#how-it-works" >}})).
 - Scale the app with `replicas` too; background work runs on one of them (see [Operations]({{< relref "/docs/operations" >}})).
+
+## Next
+
+[First steps]({{< relref "/docs/first-steps" >}}): connect your repositories, publish a module, create a template, add cloud credentials and deploy or import a first resource.

@@ -51,3 +51,7 @@ Then open http://localhost:8080. The schema is created on startup. For a runner,
 - `empty` and `credentials-only`: only variables.
 
 The module uses Terraform's built-in `terraform_data`, so a local runner applies it without cloud credentials or provider downloads. All credentials in the examples are fake. `seed` expects an empty database, so use `just reseed` to start over.
+
+## Next
+
+[First steps]({{< relref "/docs/first-steps" >}}): connect your repositories, publish a module, create a template, add cloud credentials and deploy or import a first resource.

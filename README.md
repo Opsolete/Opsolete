@@ -32,7 +32,7 @@ Working on Opsolete itself? `just check` runs the tests and a smoke test, and `j
 
 ## Where it's at
 
-Opsolete is at 0.6 and heading for 1.0. Version 0.6 was a rebuild and needs a fresh install: see [Upgrading to 0.6](https://opsolete.github.io/Opsolete/docs/install/upgrading/). What changed in each release is in [CHANGELOG.md](CHANGELOG.md).
+Opsolete is at 0.8 and heading for 1.0. Version 0.6 was a rebuild and needs a fresh install: see [Upgrading](https://opsolete.github.io/Opsolete/docs/install/upgrading/). What changed in each release is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Documentation
 

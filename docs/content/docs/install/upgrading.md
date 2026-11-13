@@ -1,9 +1,21 @@
 ---
-title: Upgrading to 0.6
+title: Upgrading
 weight: 5
 aliases:
   - /docs/operations/upgrading/
 ---
+
+## To 0.8
+
+Each runner has its own token now, and the server no longer reads `RUNNER_TOKEN` (it warns when it's set). Before upgrading the runners, register each one's token with the new server, so its current `OPS_RUNNER_TOKEN` keeps working:
+
+```sh
+echo "$RUNNER_TOKEN" | opsolete runner-token -from-stdin <runner-name>   # or -from-env <VAR>; -pool <pool> for another pool
+```
+
+Then remove `RUNNER_TOKEN` from the server's environment. NixOS does this for `runnerTokenFile`; with Helm or Docker, run it once with the app's settings (e.g. `kubectl exec` / `docker exec` into the app). New runners get a token under **Settings → Runners** or with `opsolete runner-token <name>`. See the [changelog](https://github.com/Opsolete/Opsolete/blob/master/CHANGELOG.md) for the other changes.
+
+## To 0.6 (from 0.5 or older)
 
 0.6.0 is a rebuild with one new database schema and encryption format. There is no upgrade path from 0.5 or older: install it next to the old one, starting empty.
 
