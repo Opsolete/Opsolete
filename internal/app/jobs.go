@@ -300,6 +300,10 @@ func (a *App) ReapLeases(ctx context.Context) {
 		a.Log.Error("unclaim jobs", "err", err)
 	}
 	for _, u := range unclaimed {
+		if u.Canceled { // canceled while nobody had started it: it ended, clean up after it
+			a.runEnded(ctx, u.RunID)
+			continue
+		}
 		// a runner whose claims keep showing up here never acknowledges: an old or broken runner
 		a.Log.Warn("job not acknowledged by its runner, queued again", "run", u.RunID, "runner", u.Runner)
 	}

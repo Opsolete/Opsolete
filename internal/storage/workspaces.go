@@ -17,6 +17,7 @@ var (
 	ErrRunActive      = errors.New("the workspace already has an active run: confirm or discard it, or wait for it to finish")
 	ErrNotConfirmable = errors.New("the run isn't waiting for confirmation")
 	ErrNotCancelable  = errors.New("the run can't be canceled: it isn't queued or running")
+	ErrForceFirst     = errors.New("cancel it first: force cancel is for a runner that doesn't stop after that")
 	ErrHasResources   = errors.New("the workspace's state still manages resources: destroy them first")
 	ErrStateLocked    = errors.New("the workspace's state is locked: wait for whoever holds the lock, or unlock it")
 	ErrLocalExecution = errors.New("the workspace uses local execution: Terraform runs on your machine, so runs can't start here (change it in the workspace's settings)")

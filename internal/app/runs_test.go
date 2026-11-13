@@ -270,6 +270,7 @@ func TestPutArtifactRace(t *testing.T) {
 	if b, err := a.ReadBlob(ctx, ArtifactKey(run.ID, runnerapi.ArtifactPlan)); err != nil || string(b) != "plan" {
 		t.Fatalf("stored: %q %v", b, err)
 	}
+	a.CancelRun(ctx, admin, ws.Name, run.ID, false)
 	if _, err := a.CancelRun(ctx, admin, ws.Name, run.ID, true); err != nil {
 		t.Fatal(err)
 	}

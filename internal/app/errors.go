@@ -49,7 +49,7 @@ func (r reason) Unwrap() error { return r.kind }
 
 // conflicts are the errors that mean "not now, the current state refuses it". A name the user typed
 // that is taken is not one: it is a ValidationError on that field (the input must change, not the state).
-var conflicts = []error{storage.ErrRunActive, storage.ErrNotConfirmable, storage.ErrNotCancelable,
+var conflicts = []error{storage.ErrRunActive, storage.ErrNotConfirmable, storage.ErrNotCancelable, storage.ErrForceFirst,
 	storage.ErrHasResources, storage.ErrStateLocked, storage.ErrLocalExecution, storage.ErrExists,
 	storage.ErrProjectNotEmpty, storage.ErrDefaultProject, storage.ErrInUse,
 	storage.ErrLeaseLost, storage.ErrNotCloudLocked, storage.ErrLockLost, storage.ErrRolloutClosed, ErrNoConfig, ErrStateConflict, ErrRemoteExecution, ErrChanged, ErrNotPromotable, ErrNotImport}

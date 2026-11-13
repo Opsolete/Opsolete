@@ -89,7 +89,7 @@ UPDATE runs SET found = sqlc.arg(found)::jsonb WHERE id = sqlc.arg(id)::uuid;
 SELECT found FROM runs WHERE id = sqlc.arg(id)::uuid;
 
 -- name: LockRunStatus :one
-SELECT status FROM runs WHERE id = sqlc.arg(id)::uuid FOR UPDATE;
+SELECT status, cancel_requested FROM runs WHERE id = sqlc.arg(id)::uuid FOR UPDATE;
 
 -- name: LockRun :one
 -- promotes: a promotion's destroy run whose apply run isn't queued yet (storage.continuePromotion).

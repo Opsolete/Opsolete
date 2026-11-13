@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/opsolete/opsolete/internal/config"
+	"github.com/opsolete/opsolete/internal/registry/registrytest"
 	"github.com/opsolete/opsolete/internal/runnerapi"
 )
 
@@ -327,5 +328,26 @@ func TestOnce(t *testing.T) {
 	}
 	if err := r.Run(context.Background(), context.Background()); err != nil || claims != 1 || f.finish == nil || f.finish.Status != "failed" {
 		t.Fatalf("one job: %v, claims %d, result %+v", err, claims, f.finish)
+	}
+}
+
+// The workspace's variables win over a repository's own *.auto.tfvars, as in HCP: a later-named auto file would
+// otherwise override them silently.
+func TestWorkspaceVarsBeatAutoTfvars(t *testing.T) {
+	f := &fakeServer{}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	r := testRunner(t, srv)
+	src := f.module(t, helloModule)
+	f.mu.Lock()
+	path := src[:strings.Index(src, "?")]
+	f.modules[path] = registrytest.TarGz(t, map[string]string{"main.tf": helloModule, "zz.auto.tfvars": `greeting = "from the repo"`})
+	f.mu.Unlock()
+	vars := map[string]any{"greeting": "from the workspace"}
+	if res, logs := f.do(t, r, job("run1", "plan", "apply", src, vars)); res.Status != "succeeded" {
+		t.Fatalf("plan: %+v\n%s", res, logs)
+	}
+	if res, logs := f.do(t, r, job("run1", "apply", "apply", src, vars)); res.Status != "succeeded" || res.Outputs["msg"] != "from the workspace" {
+		t.Fatalf("apply: %+v\n%s", res.Outputs, logs)
 	}
 }

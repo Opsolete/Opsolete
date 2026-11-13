@@ -101,14 +101,19 @@ func (q *Queries) LockRun(ctx context.Context, id uuid.UUID) (LockRunRow, error)
 }
 
 const lockRunStatus = `-- name: LockRunStatus :one
-SELECT status FROM runs WHERE id = $1::uuid FOR UPDATE
+SELECT status, cancel_requested FROM runs WHERE id = $1::uuid FOR UPDATE
 `
 
-func (q *Queries) LockRunStatus(ctx context.Context, id uuid.UUID) (string, error) {
+type LockRunStatusRow struct {
+	Status          string
+	CancelRequested bool
+}
+
+func (q *Queries) LockRunStatus(ctx context.Context, id uuid.UUID) (LockRunStatusRow, error) {
 	row := q.db.QueryRow(ctx, lockRunStatus, id)
-	var status string
-	err := row.Scan(&status)
-	return status, err
+	var i LockRunStatusRow
+	err := row.Scan(&i.Status, &i.CancelRequested)
+	return i, err
 }
 
 const notify = `-- name: Notify :exec

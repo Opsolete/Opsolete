@@ -51,6 +51,7 @@ func TestWorkspaceLock(t *testing.T) {
 	if j, ok, err := store.ClaimJob(ctx, storage.Runner{Name: "r", Pool: storage.DefaultPool}, time.Minute); err != nil || !ok || j.RunID != assess.ID {
 		t.Fatalf("a drift check must run in a locked workspace: %+v %v %v", j, ok, err)
 	}
+	store.CancelRun(ctx, assess.ID, "t", false)
 	if _, err := store.CancelRun(ctx, assess.ID, "t", true); err != nil {
 		t.Fatal(err)
 	}

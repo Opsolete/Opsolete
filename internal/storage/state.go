@@ -130,6 +130,13 @@ func (s *Store) LockState(ctx context.Context, id uuid.UUID, lockID string, runI
 	}
 	if !r.Taken && r.Held == "" { // lost a race: the statement's snapshot predates the winner's commit
 		r.Held, err = s.q.CurrentStateLock(ctx, id)
+		if err == nil && r.Held == "" { // and the winner released it meanwhile: free again, so try once more
+			// (a 423 needs the holder's LockInfo: Terraform can't read an empty one and fails instead of retrying)
+			r, err = s.q.LockState(ctx, db.LockStateParams{ID: id, Info: info, RunID: optID(runID), LockID: lockID})
+			if err == nil && !r.Taken && r.Held == "" {
+				r.Held, err = s.q.CurrentStateLock(ctx, id)
+			}
+		}
 	}
 	if r.Held == "" {
 		return nil, r.Taken, err

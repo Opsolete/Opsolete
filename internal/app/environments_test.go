@@ -292,6 +292,7 @@ func TestFollowsKeepOwn(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		a.Store.CancelRun(ctx, run.ID, "x", false)
 		a.Store.CancelRun(ctx, run.ID, "x", true)
 		return job.Modules[0].Inputs["region"]
 	}

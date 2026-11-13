@@ -349,6 +349,7 @@ func TestStateWriteFenced(t *testing.T) {
 	if err := s.AddStateVersion(ctx, w.ID, run.ID, "", v); err != nil {
 		t.Fatalf("applying run: %v", err)
 	}
+	s.CancelRun(ctx, run.ID, "a@b.c", false) // asked first: force is for a runner that doesn't stop
 	if _, err := s.CancelRun(ctx, run.ID, "a@b.c", true); err != nil {
 		t.Fatal(err)
 	}
@@ -822,6 +823,10 @@ func TestCancel(t *testing.T) {
 	run3, _ := s.CreateRun(ctx, w.ID, "apply", uuid.Nil, nil)
 	j = claim(t, s, "plan")
 	s.LockState(ctx, w.ID, "l1", run3.ID, []byte(`{"ID":"l1"}`))
+	if _, err := s.CancelRun(ctx, run3.ID, "a@b.c", true); !errors.Is(err, ErrForceFirst) {
+		t.Fatalf("force cancel before a cancel was asked: %v", err)
+	}
+	s.CancelRun(ctx, run3.ID, "a@b.c", false)
 	if st, err := s.CancelRun(ctx, run3.ID, "a@b.c", true); err != nil || st != Canceled {
 		t.Fatalf("force cancel: %q %v", st, err)
 	}
@@ -1143,5 +1148,25 @@ func putTemplates(t *testing.T, s *Store, workspaceID uuid.UUID, mods ...Workspa
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A cancel asked while a claim isn't acknowledged yet ends the run when the claim goes back: nothing ran, and
+// queuing it again would let the next runner start it.
+func TestCancelUnacknowledged(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	_, run := newWorkspace(t, s, false)
+	if _, _, err := s.ClaimJob(ctx, Runner{Name: "r", Pool: DefaultPool}, -time.Second); err != nil { // never acknowledged
+		t.Fatal(err)
+	}
+	if _, err := s.CancelRun(ctx, run.ID, "a@b.c", false); err != nil {
+		t.Fatal(err)
+	}
+	if u, err := s.UnclaimJobs(ctx); err != nil || len(u) != 1 || !u[0].Canceled {
+		t.Fatalf("unclaim: %+v %v", u, err)
+	}
+	if st := status(t, s, run.ID); st != Canceled {
+		t.Fatalf("status %s, want canceled", st)
 	}
 }

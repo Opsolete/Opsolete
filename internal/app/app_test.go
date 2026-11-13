@@ -167,3 +167,27 @@ func TestDeleteWorkspaceRemovesBlobs(t *testing.T) {
 		t.Fatalf("deleted workspace: %v", err)
 	}
 }
+
+// What would lose state for good or expose it to everyone is admins', as HCP's workspace admin: deleting a
+// workspace that may still manage resources (force), and sharing its state with all workspaces.
+func TestAdminOnlyWorkspaceActions(t *testing.T) {
+	a, ctx := testApp(t), context.Background()
+	owner := user(t, a)
+	admin := Actor{Email: "admin@example.com", Admin: true}
+	ws := emptyWorkspace(t, a, owner)
+	if err := a.ShareState(ctx, owner, ws.Name, true, nil); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("an operator shares the state with everyone: %v", err)
+	}
+	if err := a.ShareState(ctx, admin, ws.Name, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.ShareState(ctx, owner, ws.Name, true, nil); err != nil { // already shared: saving the page again
+		t.Fatalf("saving a shared workspace's settings: %v", err)
+	}
+	if err := a.DeleteWorkspace(ctx, owner, ws.Name, true); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("an operator force-deletes: %v", err)
+	}
+	if err := a.DeleteWorkspace(ctx, owner, ws.Name, false); err != nil { // nothing deployed: anyone who operates it
+		t.Fatal(err)
+	}
+}
