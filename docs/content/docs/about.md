@@ -19,4 +19,4 @@ Opsolete is one Go binary (server and runner modes) that needs PostgreSQL and, f
 
 ## Where it's at
 
-Opsolete is at 0.6 and heading for 1.0. Version 0.6 was a rebuild and needs a fresh install: see [Upgrading to 0.6]({{< relref "/docs/install/upgrading" >}}). What's planned is on the [roadmap]({{< relref "/docs/roadmap" >}}), and what changed in each release in the [release notes]({{< relref "/docs/install/release-notes" >}}).
+Opsolete is at 0.8 and heading for 1.0. Version 0.6 was a rebuild and needs a fresh install: see [Upgrading]({{< relref "/docs/install/upgrading" >}}). What's planned is on the [roadmap]({{< relref "/docs/roadmap" >}}), and what changed in each release in the [release notes]({{< relref "/docs/install/release-notes" >}}).

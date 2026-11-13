@@ -70,4 +70,4 @@ With `OPS_INFRACOST_API_KEY` set, every plan with changes (except refresh-only a
 - It's an estimate: usage-based charges are left out, and resources Infracost doesn't support count as 0.
 - Infracost runs on the runner with the plan's JSON and only its own key in its environment, never the job's variables. It sends price-relevant resource attributes (type, region, SKU, size) to Infracost's Cloud Pricing API, not the plan.
 - If it fails, the run goes on without an estimate and the log says why.
-- Admins choose the currency (US dollar or euro) under **Settings → Organization**. A change applies to plans run after it.
+- Admins choose the currency (US dollar or euro) under **Settings → General**. A change applies to plans run after it.

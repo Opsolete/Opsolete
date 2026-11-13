@@ -9,7 +9,7 @@ The example uses Azure and a storage account behind a private endpoint, from [te
 
 ## 1. Connect your repositories
 
-**Settings → Version control → Add VCS provider**: pick GitHub or Azure DevOps and paste an access token (for Azure DevOps also the organization URL, `https://dev.azure.com/<org>`). Opsolete checks the token by listing its repositories.
+**Settings → Providers** (under Version control) **→ Add VCS provider**: pick GitHub or Azure DevOps and paste an access token (for Azure DevOps also the organization URL, `https://dev.azure.com/<org>`). Opsolete checks the token by listing its repositories.
 
 - The module repository needs **read** access (GitHub: *Contents: read*; Azure DevOps: *Code: read*).
 - The template repository needs **write** access if the template builder should commit to it (*Contents: read and write*, or *Code: read & write*). Use a separate connection for it if you'd rather keep the module token read-only.
