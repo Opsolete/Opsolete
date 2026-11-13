@@ -185,13 +185,21 @@ func insertWorkspace(ctx context.Context, q *db.Queries, id uuid.UUID, e EmptyWo
 	return id, nil
 }
 
-// CreateRun queues a new plan (action apply, destroy, refresh or assess) on a workspace without an
-// active run; replace lists resource addresses an apply run replaces.
+// CreateRun queues a new plan (action apply, destroy, refresh or assess); replace lists resource addresses an
+// apply run replaces. While another run is active, a run a user starts (apply, destroy, refresh) waits as
+// pending, as in HCP's run queue (promotePending queues it when that run ends); others: ErrRunActive.
 func (s *Store) CreateRun(ctx context.Context, workspaceID uuid.UUID, action string, createdBy uuid.UUID, replace []string) (Run, error) {
 	var r Run
 	err := s.tx(ctx, func(q *db.Queries) error {
 		var err error
-		if r, err = createRun(ctx, q, workspaceID, action, createdBy); err != nil || len(replace) == 0 {
+		r, err = createRun(ctx, q, workspaceID, action, createdBy)
+		if errors.Is(err, ErrRunActive) && action != "assess" && action != "plan" {
+			var p db.InsertPendingRunRow
+			p, err = q.InsertPendingRun(ctx, db.InsertPendingRunParams{WorkspaceID: workspaceID, Action: action, CreatedBy: optID(createdBy),
+				Message: action + " run pending: it starts when the run before it ends"})
+			r = Run{ID: p.ID, WorkspaceID: p.WorkspaceID, Action: p.Action, Status: Pending, CreatedAt: p.CreatedAt}
+		}
+		if err != nil || len(replace) == 0 {
 			return err
 		}
 		b, err := json.Marshal(replace)

@@ -27,6 +27,51 @@ func (q *Queries) AddRunHistory(ctx context.Context, arg AddRunHistoryParams) er
 	return err
 }
 
+const insertPendingRun = `-- name: InsertPendingRun :one
+WITH r AS (
+    INSERT INTO runs (workspace_id, action, status, created_by, cv_id)
+    SELECT w.id, $1::text, 'pending', $2::uuid, w.current_cv_id
+    FROM workspaces w WHERE w.id = $3::uuid AND w.execution_mode = 'remote'
+    RETURNING runs.id, runs.workspace_id, runs.action, runs.created_at
+), h AS (
+    INSERT INTO run_status_history (run_id, status, message) SELECT r.id, 'pending', $4::text FROM r
+)
+SELECT r.id, r.workspace_id, r.action, r.created_at FROM r
+`
+
+type InsertPendingRunParams struct {
+	Action      string
+	CreatedBy   uuid.NullUUID
+	WorkspaceID uuid.UUID
+	Message     string
+}
+
+type InsertPendingRunRow struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	Action      string
+	CreatedAt   time.Time
+}
+
+// A run of a remote workspace that has an active run: it waits (storage.promotePending gives it the workspace's
+// configuration of then). cv_id now is the current one, replaced when it's queued.
+func (q *Queries) InsertPendingRun(ctx context.Context, arg InsertPendingRunParams) (InsertPendingRunRow, error) {
+	row := q.db.QueryRow(ctx, insertPendingRun,
+		arg.Action,
+		arg.CreatedBy,
+		arg.WorkspaceID,
+		arg.Message,
+	)
+	var i InsertPendingRunRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Action,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listWorkspaceTemplates = `-- name: ListWorkspaceTemplates :many
 SELECT name, template_id, module_source, module_ref, inputs, follows, importing FROM workspace_templates
 WHERE workspace_id = $1::uuid ORDER BY name
@@ -114,6 +159,20 @@ func (q *Queries) LockRunStatus(ctx context.Context, id uuid.UUID) (LockRunStatu
 	var i LockRunStatusRow
 	err := row.Scan(&i.Status, &i.CancelRequested)
 	return i, err
+}
+
+const nextPendingRun = `-- name: NextPendingRun :one
+SELECT r.id FROM runs r WHERE r.workspace_id = $1::uuid AND r.status = 'pending'
+    AND NOT EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = r.workspace_id AND run_active(a.status))
+ORDER BY r.created_at LIMIT 1 FOR UPDATE
+`
+
+// The workspace's oldest pending run, if it has no active one.
+func (q *Queries) NextPendingRun(ctx context.Context, workspaceID uuid.UUID) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, nextPendingRun, workspaceID)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const notify = `-- name: Notify :exec
@@ -512,6 +571,16 @@ type SetRunRolloutParams struct {
 
 func (q *Queries) SetRunRollout(ctx context.Context, arg SetRunRolloutParams) error {
 	_, err := q.db.Exec(ctx, setRunRollout, arg.RolloutID, arg.ID)
+	return err
+}
+
+const takeCurrentConfig = `-- name: TakeCurrentConfig :exec
+UPDATE runs SET cv_id = w.current_cv_id FROM workspaces w WHERE runs.id = $1::uuid AND w.id = runs.workspace_id
+`
+
+// A pending run about to be queued runs the workspace's configuration of now.
+func (q *Queries) TakeCurrentConfig(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, takeCurrentConfig, id)
 	return err
 }
 

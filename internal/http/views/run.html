@@ -175,7 +175,7 @@
   <button type="button" class="secondary small" data-log="top">Top</button>
   <button type="button" class="secondary small" data-log="bottom">Bottom</button>
   <button type="button" class="secondary small" data-log="fullscreen">Full screen</button></div>
-<pre id="log" class="log" aria-live="polite">{{with .R.LogRemoved}}{{.}}{{else}}{{if eq .R.Status "plan_queued" "apply_queued"}}Waiting for a runner…{{end}}{{end}}</pre>
+<pre id="log" class="log" aria-live="polite">{{with .R.LogRemoved}}{{.}}{{else}}{{if eq .R.Status "plan_queued" "apply_queued"}}Waiting for a runner…{{else if eq .R.Status "pending"}}Pending: it starts when the workspace's current run ends.{{end}}{{end}}</pre>
 {{end}}
 
 {{/* change: back to the form of each template the run set, with what was entered and found (one: a button) */}}

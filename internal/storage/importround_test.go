@@ -83,3 +83,42 @@ func TestImportGuardRefusals(t *testing.T) {
 		}
 	}
 }
+
+// A pending run waits for the active one and then runs the workspace's configuration of then: a change applied
+// while it waited isn't undone by it.
+func TestPendingTakesCurrentConfig(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+	w, first := newWorkspace(t, s, false)
+	if _, err := s.FinishJob(ctx, first.ID, claim(t, s, "plan").LeaseID, "succeeded", "", nil, nil, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	change, err := s.SetWorkspaceTemplate(ctx, w.ID, WorkspaceTemplate{Name: "extra", TemplateID: "job-test", ModuleSource: "git::x",
+		ModuleRef: "v1", Inputs: map[string]any{}}, true, uuid.Nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := s.CreateRun(ctx, w.ID, "apply", uuid.Nil, nil)
+	if err != nil || pending.Status != Pending {
+		t.Fatalf("pending: %+v %v", pending, err)
+	}
+	plan := &runnerapi.Plan{Add: 1}
+	if st, err := s.FinishJob(ctx, change.ID, claim(t, s, "plan").LeaseID, "succeeded", "", nil, plan, nil, nil, nil); err != nil || st != NeedsConfirmation {
+		t.Fatalf("change: %s %v", st, err)
+	}
+	if status(t, s, pending.ID) != Pending {
+		t.Fatal("the pending run started while the change waits")
+	}
+	if err := s.ConfirmRun(ctx, change.ID, uuid.Nil, "a@b.c"); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := s.FinishJob(ctx, change.ID, claim(t, s, "apply").LeaseID, "succeeded", "", nil, nil, []runnerapi.Resource{}, nil, nil); err != nil || st != Applied {
+		t.Fatalf("apply: %s %v", st, err)
+	}
+	if status(t, s, pending.ID) != PlanQueued {
+		t.Fatalf("the pending run after the change applied: %s", status(t, s, pending.ID))
+	}
+	if mods, _ := s.RunTemplates(ctx, pending.ID); len(mods) != 2 {
+		t.Fatalf("the pending run's configuration: %+v, want the applied change's", mods)
+	}
+}

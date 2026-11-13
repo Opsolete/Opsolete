@@ -44,7 +44,7 @@ var (
 	runsDesc    = prometheus.NewDesc("opsolete_runs", "Runs by status, all time (final statuses only grow).", []string{"status"}, nil)
 	queueDesc   = prometheus.NewDesc("opsolete_run_queue_oldest_seconds", "Age of the oldest queued plan or apply job; 0 when the queue is empty.", nil, nil)
 	wsDesc      = prometheus.NewDesc("opsolete_workspaces", "Workspaces.", nil, nil)
-	runStatuses = []string{storage.PlanQueued, storage.Planning, storage.NeedsConfirmation, storage.ApplyQueued, storage.Applying,
+	runStatuses = []string{storage.Pending, storage.PlanQueued, storage.Planning, storage.NeedsConfirmation, storage.ApplyQueued, storage.Applying,
 		storage.Applied, storage.NoChanges, storage.Drifted, storage.Planned, storage.Discarded, storage.Errored, storage.Canceled}
 )
 

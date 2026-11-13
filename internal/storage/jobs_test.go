@@ -159,8 +159,14 @@ func TestRunLifecycle(t *testing.T) {
 	if _, ok, _ := s.ClaimJob(ctx, Runner{Name: "r", Pool: DefaultPool}, time.Minute); ok {
 		t.Fatal("a plan waiting for confirmation must not be claimed")
 	}
-	if _, err := s.CreateRun(ctx, w.ID, "apply", uuid.Nil, nil); !errors.Is(err, ErrRunActive) {
-		t.Fatalf("second run while one is active: %v", err)
+	// a second run waits as pending (HCP's run queue): not claimable, and canceled it never ran
+	if p, err := s.CreateRun(ctx, w.ID, "apply", uuid.Nil, nil); err != nil || p.Status != Pending {
+		t.Fatalf("second run while one is active: %+v %v", p, err)
+	} else if _, err := s.CancelRun(ctx, p.ID, "test", false); err != nil || status(t, s, p.ID) != Canceled {
+		t.Fatalf("cancel a pending run: %v", err)
+	}
+	if _, err := s.CreateRun(ctx, w.ID, "assess", uuid.Nil, nil); !errors.Is(err, ErrRunActive) {
+		t.Fatalf("a drift check doesn't wait in line: %v", err)
 	}
 	if err := s.ConfirmRun(ctx, run.ID, uuid.Nil, "alice@example.com"); err != nil {
 		t.Fatal(err)
@@ -996,28 +1002,31 @@ func TestConcurrentTriggers(t *testing.T) {
 	if _, err := s.CancelRun(ctx, run.ID, "test", false); err != nil { // free the workspace
 		t.Fatal(err)
 	}
-	// Many users trigger at once: runs_one_active_idx lets exactly one run in.
+	// Many users trigger at once: runs_one_active_idx lets exactly one run in, the others wait as pending
 	var wg sync.WaitGroup
 	var mu sync.Mutex
-	won := 0
+	won, waiting := 0, 0
 	for range 8 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := s.CreateRun(ctx, w.ID, "apply", uuid.Nil, nil)
-			if err != nil && !errors.Is(err, ErrRunActive) {
+			r, err := s.CreateRun(ctx, w.ID, "apply", uuid.Nil, nil)
+			if err != nil {
 				t.Error(err)
+				return
 			}
-			if err == nil {
-				mu.Lock()
+			mu.Lock()
+			if r.Status == Pending {
+				waiting++
+			} else {
 				won++
-				mu.Unlock()
 			}
+			mu.Unlock()
 		}()
 	}
 	wg.Wait()
-	if won != 1 {
-		t.Fatalf("%d runs created, want 1", won)
+	if won != 1 || waiting != 7 {
+		t.Fatalf("%d runs queued and %d pending, want 1 and 7", won, waiting)
 	}
 }
 

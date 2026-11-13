@@ -72,7 +72,7 @@ func runGroup(status string) string {
 		return "attention"
 	case storage.Errored:
 		return "errored"
-	case storage.PlanQueued, storage.Planning, storage.ApplyQueued, storage.Applying:
+	case storage.Pending, storage.PlanQueued, storage.Planning, storage.ApplyQueued, storage.Applying:
 		return "running"
 	case storage.Applied, storage.NoChanges, storage.Planned:
 		return "success"
@@ -149,7 +149,7 @@ func runPhases(r storage.Run, hist []storage.StatusEntry) (plan, apply phase) {
 	}
 	plan, next := span(storage.Planning)
 	switch {
-	case plan.Start.IsZero() && r.Status == storage.PlanQueued:
+	case plan.Start.IsZero() && (r.Status == storage.PlanQueued || r.Status == storage.Pending):
 		plan.State = "queued"
 	case plan.Start.IsZero(): // ended before a runner picked it up
 		plan.State = r.Status

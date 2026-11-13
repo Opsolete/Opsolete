@@ -165,3 +165,26 @@ UPDATE runs SET plan_diff = sqlc.arg(plan_diff)::jsonb WHERE id = sqlc.arg(id)::
 
 -- name: RunDiff :one
 SELECT plan_diff FROM runs WHERE id = sqlc.arg(id)::uuid;
+
+-- name: InsertPendingRun :one
+-- A run of a remote workspace that has an active run: it waits (storage.promotePending gives it the workspace's
+-- configuration of then). cv_id now is the current one, replaced when it's queued.
+WITH r AS (
+    INSERT INTO runs (workspace_id, action, status, created_by, cv_id)
+    SELECT w.id, sqlc.arg(action)::text, 'pending', sqlc.narg(created_by)::uuid, w.current_cv_id
+    FROM workspaces w WHERE w.id = sqlc.arg(workspace_id)::uuid AND w.execution_mode = 'remote'
+    RETURNING runs.id, runs.workspace_id, runs.action, runs.created_at
+), h AS (
+    INSERT INTO run_status_history (run_id, status, message) SELECT r.id, 'pending', sqlc.arg(message)::text FROM r
+)
+SELECT r.id, r.workspace_id, r.action, r.created_at FROM r;
+
+-- name: NextPendingRun :one
+-- The workspace's oldest pending run, if it has no active one.
+SELECT r.id FROM runs r WHERE r.workspace_id = sqlc.arg(workspace_id)::uuid AND r.status = 'pending'
+    AND NOT EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = r.workspace_id AND run_active(a.status))
+ORDER BY r.created_at LIMIT 1 FOR UPDATE;
+
+-- name: TakeCurrentConfig :exec
+-- A pending run about to be queued runs the workspace's configuration of now.
+UPDATE runs SET cv_id = w.current_cv_id FROM workspaces w WHERE runs.id = sqlc.arg(id)::uuid AND w.id = runs.workspace_id;
