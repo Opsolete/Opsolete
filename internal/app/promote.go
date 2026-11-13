@@ -176,7 +176,7 @@ func (a *App) PreviewPromotion(ctx context.Context, actor Actor, source string, 
 		if i := slices.IndexFunc(p.read, func(t storage.WorkspaceTemplate) bool { return t.Name == s.Name }); i >= 0 {
 			cur = &p.read[i]
 		}
-		m, err := a.promoteModule(ctx, s, cur, env, p.Target.ID, values)
+		m, err := a.promoteModule(ctx, s, cur, env, p.Target, p.New, values)
 		if err != nil {
 			return p, err
 		}
@@ -266,9 +266,10 @@ func (a *App) promoteTarget(ctx context.Context, actor Actor, source storage.Wor
 
 // promoteModule works out source template s as the target gets it, next to the target's module of
 // the same name (cur; nil none), with the target's project values env. Sensitive inputs are sealed to
-// the target (targetID) and the module.
+// the target (newTarget: not created yet) and the module.
 func (a *App) promoteModule(ctx context.Context, s storage.WorkspaceTemplate, cur *storage.WorkspaceTemplate, env EnvironmentMap,
-	targetID uuid.UUID, values map[string]string) (PromoteModule, error) {
+	target storage.Workspace, newTarget bool, values map[string]string) (PromoteModule, error) {
+	targetID := target.ID
 	m := PromoteModule{Module: s.Name, Template: s.TemplateID, ToRef: s.ModuleRef, ToSrc: s.ModuleSource, fieldErrs: map[string]string{}}
 	ct, ok := a.Templates.Get(s.TemplateID)
 	if !ok {
@@ -280,6 +281,14 @@ func (a *App) promoteModule(ctx context.Context, s storage.WorkspaceTemplate, cu
 		return m, err
 	}
 	m.Template, m.template = t.Name, t
+	varsOf := target.ID
+	if newTarget {
+		varsOf = uuid.Nil
+	}
+	vars, err := a.VarInputs(ctx, t, varsOf, target.ProjectName) // the target's Terraform variables fill these
+	if err != nil {
+		return m, err
+	}
 	own := map[string]any{} // the target's values a promotion keeps: of the same template only
 	var follows []string
 	switch {
@@ -293,6 +302,9 @@ func (a *App) promoteModule(ctx context.Context, s storage.WorkspaceTemplate, cu
 	locked := env.Locked(t, own, follows)
 	raw, asked := map[string]string{}, map[string]bool{}
 	for _, in := range t.Inputs {
+		if _, filled := vars[in.Name]; filled {
+			continue
+		}
 		v, has := s.Inputs[in.Name]
 		o, hasOwn := own[in.Name]
 		_, isLocked := locked[in.Name]
@@ -318,7 +330,7 @@ func (a *App) promoteModule(ctx context.Context, s storage.WorkspaceTemplate, cu
 			}
 		}
 	}
-	sv, err := a.save(formSave{T: t, Raw: raw, Old: own, Follows: follows, Env: env, Workspace: targetID, Module: s.Name})
+	sv, err := a.save(formSave{T: t, Raw: raw, Old: own, Follows: follows, Env: env, Vars: vars, Workspace: targetID, Module: s.Name})
 	if err != nil {
 		return m, err
 	}

@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"maps"
 	"regexp"
-	"slices"
 	"strings"
 
 	"github.com/google/uuid"
@@ -79,7 +78,7 @@ func (a *App) workspaceMasker(ctx context.Context, workspaceID uuid.UUID) (mask.
 // An added template's module argument comes from, strongest first: the workspace's project's value
 // for a per-environment input (withEnvironmentValues), the workspace's stored input (its form), the
 // workspace's Terraform variables (own, then workspace sets, project sets, global sets: SQL's
-// variable_set_rank) for variables the template doesn't ask, then the module's default.
+// variable_set_rank) for variables the template's JSON doesn't list (VarInputs), then the module's default.
 //
 // withWorkspaceVars adds to an added template's inputs the workspace's Terraform variables (vars, from
 // the workspace and its variable sets) that its module declares, under its own inputs: as a root module
@@ -88,9 +87,9 @@ func (a *App) workspaceMasker(ctx context.Context, workspaceID uuid.UUID) (mask.
 // none, as the server can't read their variables. Publish them to the registry (e.g. via VCS) to get
 // them. To upgrade: the runner has every module on disk
 // after init (writeOutputs reads them there) and could add the declared ones itself, if the job also
-// lists the inputs each template's form asks, which keep winning. Inputs t (the template at the module version it
-// runs, generated inputs included; zero if it's no longer in the catalog) asks for are left alone, also when
-// hidden or empty: its form decided those, and the module's default applies.
+// lists the inputs each template's form asks, which keep winning. Inputs t's JSON lists (what its form asks) are
+// left alone, also when hidden or empty: its form decided those, and the module's default applies. A stored value
+// of an input it doesn't list (saved before a variable filled it) wins over the variable, unless empty.
 func (a *App) withWorkspaceVars(ctx context.Context, t templates.Template, source, ref string, in, vars map[string]any) (map[string]any, error) {
 	if !a.RegistryEnabled || len(vars) == 0 {
 		return in, nil
@@ -110,10 +109,10 @@ func (a *App) withWorkspaceVars(ctx context.Context, t templates.Template, sourc
 	if out == nil {
 		out = map[string]any{}
 	}
+	listed := a.listedInputs(t.ID)
 	for _, v := range m.Variables {
-		if val, ok := vars[v.Name]; ok {
-			asked := slices.ContainsFunc(t.Inputs, func(in templates.Input) bool { return in.Name == v.Name })
-			if _, own := out[v.Name]; !own && !asked {
+		if val, ok := vars[v.Name]; ok && !listed[v.Name] {
+			if own, set := out[v.Name]; !set || own == nil || own == "" {
 				out[v.Name] = val
 			}
 		}

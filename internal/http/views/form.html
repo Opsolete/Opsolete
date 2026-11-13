@@ -90,12 +90,16 @@ label, control, hint and error, in a fieldset that show_if hides and disables (s
     <!-- importing: the plan changes it in place (e.g. moves the NIC to the project's subnet), which the replace guard doesn't stop -->
     <p class="alert warn" role="status">The import plan found <code>{{.}}</code>: importing changes it to the project's value. Tick <em>Keep own</em> on the project's value to keep it.</p>
     {{end}}{{end}}
+  {{else if $x.FromVar}}
+    <!-- a Terraform variable fills it (the template doesn't ask it): shown, not posted -->
+    <label>{{$x.Label}}</label>
+    <p><code>{{$x.FromVar}}</code> <span class="hint">Set by a Terraform variable (the workspace's or a variable set's)</span></p>
   {{else if or $x.RowFields (eq $x.Type "object")}}
     <p class="field" id="{{$x.ID}}-label">{{$x.Label}}</p>
   {{else}}
     <label for="{{$x.ID}}">{{$x.Label}}{{if $x.Required}} <span class="req" aria-hidden="true">*</span>{{end}}</label>
   {{end}}
-  {{if $x.Locked}}{{else if $x.RowFields}}
+  {{if or $x.Locked $x.FromVar}}{{else if $x.RowFields}}
     <!-- rows of fields, posted as <list>.<row>.<field>; "+ Add row" copies the template below (the fields' defaults) -->
     <div class="list-input" role="group" aria-labelledby="{{$x.ID}}-label"{{aria .F $x.ID $help}}>
       <div class="list-rows">{{range $i, $r := rows $x.Value}}{{template "fieldgroup" (dict "In" $x.Input "Fields" $x.RowFields "Prefix" (print $x.ID "." $i) "Row" $r "I" (print $i))}}{{end}}</div>

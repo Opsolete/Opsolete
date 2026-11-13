@@ -49,7 +49,7 @@ func (s *Server) loadTemplateForm(w http.ResponseWriter, r *http.Request) (formP
 		page.Values[app.ImportInput] = "true"
 	}
 	page.importChoice(r, importing)
-	if err := s.lock(r, &page, storage.Project{ID: f.Workspace.ProjectID, Name: f.Workspace.ProjectName}, inputs, follows); err != nil {
+	if err := s.lock(r, &page, storage.Project{ID: f.Workspace.ProjectID, Name: f.Workspace.ProjectName}, f.Workspace.ID, inputs, follows); err != nil {
 		s.internalError(w, "environment values", err)
 		return formPage{}, false
 	}

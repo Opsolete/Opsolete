@@ -17,6 +17,7 @@ type Field struct {
 	Value   string // as the form shows it: posted, stored, the default, or the project's (canonical); "" sensitive
 	Visible bool   // show_if holds with the form's values; a hidden field is rendered hidden and disabled
 	Locked  string // the project's value as the form says it, when the project sets it (read-only, not posted)
+	FromVar string // the Terraform variable's value that fills it (VarInputs), when one does (read-only, not posted)
 	Set     bool   // sensitive: a value is stored; left empty, it's kept
 	Found   string // what an import plan found for it, as the form shows it; "" none
 	Hint    string // what the surface says under it instead of the sensitive default; "" none
@@ -36,11 +37,12 @@ type Form struct {
 // project's values for its locked inputs (EnvironmentMap.Locked, canonical) and that project's name, the
 // sensitive inputs with a stored value, and what an import plan found (FoundValues).
 type FormState struct {
-	Values  map[string]string
-	Locked  map[string]string
-	Project string
-	Set     map[string]bool
-	Found   map[string]any
+	Values   map[string]string
+	Locked   map[string]string
+	Project  string
+	Set      map[string]bool
+	Found    map[string]any
+	FromVars map[string]string // what Terraform variables fill (VarInputs)
 }
 
 // NewForm works out t's form in state s.
@@ -60,6 +62,8 @@ func NewForm(t templates.Template, s FormState) Form {
 		fd := Field{Input: in, ID: in.Name, Label: in.Title(), Value: f.Values[in.Name], Visible: f.T.Match(in.ShowIf, f.Values), Set: s.Set[in.Name]}
 		if v, ok := s.Locked[in.Name]; ok {
 			fd.Locked = ValueText(in, v)
+		} else if v, ok := s.FromVars[in.Name]; ok {
+			fd.FromVar, fd.Required = v, false
 		}
 		if v, ok := s.Found[in.Name]; ok {
 			fd.Found = templates.FormatValue(v)

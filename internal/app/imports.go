@@ -34,8 +34,8 @@ type ImportModule struct {
 }
 
 // ImportValue is an input whose real value the plan found: as the form shows it, and what the round planned with.
-// Fixed: the input can't take the found value from here (its project sets it, or it's hidden), so it never asks
-// for another round.
+// Fixed: the input can't take the found value from here (its project or a Terraform variable sets it, or it's
+// hidden), so it never asks for another round.
 type ImportValue struct {
 	Input, Title   string
 	Found, Planned string
@@ -93,6 +93,10 @@ func (a *App) session(ctx context.Context, rd round) (ImportSession, error) {
 		}
 		found := rd.found[m.Name].Inputs
 		locked := rd.env.LockedForm(t, m.Inputs, m.Follows, found)
+		vars, err := a.VarInputs(ctx, t, rd.d.Workspace.ID, "")
+		if err != nil {
+			return s, err
+		}
 		shown, _ := FormDefaults(t, m.Inputs)
 		im := ImportModule{Module: m.Name, TemplateID: m.TemplateID}
 		for _, in := range t.Inputs {
@@ -104,9 +108,13 @@ func (a *App) session(ctx context.Context, rd round) (ImportSession, error) {
 			if p, ok := m.Inputs[in.Name]; ok && p != nil {
 				iv.Planned = templates.FormatValue(p)
 			}
-			switch pv, isLocked := locked[in.Name]; {
+			pv, isLocked := locked[in.Name]
+			vv, isVar := vars[in.Name]
+			switch {
 			case isLocked:
 				iv.Planned, iv.Fixed = pv, "set by the project" // the run planned with the project's value, not the workspace's own
+			case isVar:
+				iv.Planned, iv.Fixed = vv, "set by a Terraform variable"
 			case !t.Match(in.ShowIf, shown):
 				iv.Fixed = "hidden by the other settings"
 			}
@@ -187,7 +195,11 @@ func (a *App) PlanImportAgain(ctx context.Context, actor Actor, workspace string
 			continue // found nothing for this module: it keeps its inputs
 		}
 		raw, _ := FormDefaults(t, found)
-		sv, err := a.save(formSave{T: t, Raw: raw, Old: m.Inputs, Follows: m.Follows, Found: found, Env: rd.env, Workspace: rd.d.Workspace.ID, Module: m.Name})
+		vars, err := a.VarInputs(ctx, t, rd.d.Workspace.ID, "")
+		if err != nil {
+			return storage.Run{}, err
+		}
+		sv, err := a.save(formSave{T: t, Raw: raw, Old: m.Inputs, Follows: m.Follows, Found: found, Env: rd.env, Vars: vars, Workspace: rd.d.Workspace.ID, Module: m.Name})
 		if err != nil {
 			return storage.Run{}, err
 		}

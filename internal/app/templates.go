@@ -141,6 +141,9 @@ func (a *App) SaveTemplate(ctx context.Context, actor Actor, workspace, module, 
 	if s.Env, err = a.ProjectEnvironment(ctx, f.Workspace.ProjectID); err != nil {
 		return module, storage.Run{}, err
 	}
+	if s.Vars, err = a.VarInputs(ctx, t, f.Workspace.ID, ""); err != nil {
+		return module, storage.Run{}, err
+	}
 	sv, err := a.save(s)
 	if err != nil {
 		return module, storage.Run{}, err
