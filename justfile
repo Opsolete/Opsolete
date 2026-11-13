@@ -197,3 +197,12 @@ down: db-stop
 # preview the documentation site (docs/) on http://localhost:1313/Opsolete/
 docs:
     hugo server -s docs
+
+# end-to-end tests against real Azure (free resources only), GitHub and Azure DevOps (read-only); credentials in
+# .devdata/azure.env (ARM_*) and .devdata/vcs.env (OPS_E2E_*), which git never sees
+e2e-real: db-start
+    #!/usr/bin/env bash
+    set -euo pipefail
+    . "$PGHOST/azure.env"
+    . "$PGHOST/vcs.env"
+    OPS_AZURE_E2E=1 OPS_VCS_E2E=1 go test -count=1 -timeout 30m -run 'TestAzureImport|TestRealVCS|TestTerraformCLI' -v ./internal/e2e
