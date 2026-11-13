@@ -1,8 +1,9 @@
 -- Runs: queueing and the state machine's writes (storage/runs.go).
 --
 -- The Queue* queries share one shape: s selects at most one row per workspace, r inserts each in
--- plan_queued unless the workspace has an active run (runs_one_active_idx: the ON CONFLICT predicate
--- must match it exactly), h records the first history entry. They return the new runs.
+-- plan_queued unless a unique index refuses it (ON CONFLICT DO NOTHING, any of them): runs_one_active_idx (a
+-- blocking run is active), runs_one_assess_idx (a drift check is), runs_one_pull_request_idx (a plan of that pull
+-- request is); h records the first history entry. They return the new runs.
 
 -- name: QueueRun :one
 -- A run of a remote workspace, queued by a user: of configuration version cv_id, else the workspace's current one.
@@ -13,7 +14,7 @@ WITH s AS (
 ), r AS (
     INSERT INTO runs (workspace_id, action, status, created_by, vcs_commit, vcs_pull_request, cv_id)
     SELECT s.workspace_id, s.action, 'plan_queued', s.created_by, s.vcs_commit, s.vcs_pull_request, s.cv_id FROM s
-    ON CONFLICT (workspace_id) WHERE run_active(status) DO NOTHING
+    ON CONFLICT DO NOTHING
     RETURNING runs.id, runs.workspace_id, runs.action, runs.created_at
 ), h AS (
     INSERT INTO run_status_history (run_id, status, message) SELECT r.id, 'plan_queued', sqlc.arg(message)::text FROM r
@@ -35,7 +36,7 @@ WITH s AS (
 ), r AS (
     INSERT INTO runs (workspace_id, action, status, created_by, vcs_commit, vcs_pull_request, cv_id)
     SELECT s.workspace_id, s.action, 'plan_queued', s.created_by, s.vcs_commit, s.vcs_pull_request, s.cv_id FROM s
-    ON CONFLICT (workspace_id) WHERE run_active(status) DO NOTHING
+    ON CONFLICT DO NOTHING
     RETURNING runs.id, runs.workspace_id, runs.action, runs.created_at
 ), h AS (
     INSERT INTO run_status_history (run_id, status, message) SELECT r.id, 'plan_queued', sqlc.arg(message)::text FROM r
@@ -56,10 +57,12 @@ WITH s AS (
             (SELECT max(v.id) FROM state_versions v WHERE v.workspace_id = w.id))
         AND NOT EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = w.id AND a.action = 'assess'
             AND a.created_at > now() - make_interval(secs => sqlc.arg(every_secs)::float8))
+        -- not while a run that changes it holds the workspace: a half-applied state isn't drift (the next tick)
+        AND NOT EXISTS (SELECT 1 FROM runs b WHERE b.workspace_id = w.id AND run_blocking(b.status, b.action, b.vcs_pull_request))
 ), r AS (
     INSERT INTO runs (workspace_id, action, status, created_by, vcs_commit, vcs_pull_request, cv_id)
     SELECT s.workspace_id, s.action, 'plan_queued', s.created_by, s.vcs_commit, s.vcs_pull_request, s.cv_id FROM s
-    ON CONFLICT (workspace_id) WHERE run_active(status) DO NOTHING
+    ON CONFLICT DO NOTHING
     RETURNING runs.id, runs.workspace_id, runs.action, runs.created_at
 ), h AS (
     INSERT INTO run_status_history (run_id, status, message)
@@ -182,7 +185,7 @@ SELECT r.id, r.workspace_id, r.action, r.created_at FROM r;
 -- name: NextPendingRun :one
 -- The workspace's oldest pending run, if it has no active one.
 SELECT r.id FROM runs r WHERE r.workspace_id = sqlc.arg(workspace_id)::uuid AND r.status = 'pending'
-    AND NOT EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = r.workspace_id AND run_active(a.status))
+    AND NOT EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = r.workspace_id AND run_blocking(a.status, a.action, a.vcs_pull_request))
 ORDER BY r.created_at LIMIT 1 FOR UPDATE;
 
 -- name: TakeCurrentConfig :exec
@@ -196,7 +199,7 @@ WITH r AS (
     INSERT INTO runs (workspace_id, action, status, vcs_commit, cv_id)
     SELECT w.id, 'apply', 'pending', sqlc.arg(commit)::text, w.current_cv_id FROM workspaces w
     WHERE w.id = sqlc.arg(workspace_id)::uuid AND w.execution_mode = 'remote'
-        AND EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = w.id AND run_active(a.status))
+        AND EXISTS (SELECT 1 FROM runs a WHERE a.workspace_id = w.id AND run_blocking(a.status, a.action, a.vcs_pull_request))
         AND NOT EXISTS (SELECT 1 FROM runs x WHERE x.workspace_id = w.id AND x.vcs_commit = sqlc.arg(commit)::text
             AND x.action NOT IN ('assess', 'plan'))
     RETURNING runs.id, runs.workspace_id, runs.action, runs.created_at

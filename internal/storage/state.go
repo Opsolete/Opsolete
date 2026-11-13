@@ -30,11 +30,22 @@ type StateVersion struct {
 	CreatedAt time.Time
 }
 
-// WorkingRun returns the id and status (planning or applying) of the run a runner is working on
-// in a workspace, and whether it's a pull request's speculative plan; ErrNotFound if none is.
-func (s *Store) WorkingRun(ctx context.Context, workspaceID uuid.UUID) (run uuid.UUID, status string, pullRequest bool, err error) {
-	r, err := s.q.WorkingRun(ctx, workspaceID)
-	return r.ID, r.Status, r.PullRequest, notFound(err)
+// WorkingRun is a run a runner works on (planning or applying, acknowledged).
+type WorkingRun struct {
+	ID          uuid.UUID
+	Status      string
+	PullRequest bool // a pull request's speculative plan
+}
+
+// WorkingRuns lists the runs runners work on in a workspace: its blocking run, and drift checks and pull request
+// plans beside it.
+func (s *Store) WorkingRuns(ctx context.Context, workspaceID uuid.UUID) ([]WorkingRun, error) {
+	rows, err := s.q.WorkingRuns(ctx, workspaceID)
+	out := make([]WorkingRun, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, WorkingRun{ID: r.ID, Status: r.Status, PullRequest: r.PullRequest})
+	}
+	return out, err
 }
 
 // StateVersions lists a workspace's state versions, newest first.
@@ -170,9 +181,19 @@ func (s *Store) ReleaseOrphanedLocks(ctx context.Context, timeout time.Duration)
 }
 
 // UnlockState releases the lock if lockID holds it and runID (uuid.Nil none) took it.
+//
+// Not holding it: ErrStateLocked while someone else does (Terraform reports the mismatch instead of believing it
+// unlocked); nil if nothing is locked (an unlock retried after it went through).
 func (s *Store) UnlockState(ctx context.Context, id uuid.UUID, lockID string, runID uuid.UUID) error {
 	return s.tx(ctx, func(q *db.Queries) error {
 		n, err := q.UnlockState(ctx, db.UnlockStateParams{ID: id, LockID: lockID, RunID: optID(runID)})
+		if err == nil && n == 0 {
+			if held, herr := q.CurrentStateLock(ctx, id); herr != nil {
+				return herr
+			} else if held != "" {
+				return ErrStateLocked
+			}
+		}
 		return locksReleased(ctx, q, n, err)
 	})
 }

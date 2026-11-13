@@ -123,17 +123,19 @@ func (a *App) StateRun(ctx context.Context, workspace uuid.UUID, username, passw
 	if err != nil {
 		return StateRun{}, errNoWorkingRun // not an id: no run works on it, as for an unknown one
 	}
-	run, status, pullRequest, err := a.Store.WorkingRun(ctx, user)
-	if errors.Is(err, storage.ErrNotFound) {
-		return StateRun{}, errNoWorkingRun
-	}
+	runs, err := a.Store.WorkingRuns(ctx, user) // a drift check or pull request plan may work beside the blocking run
 	if err != nil {
 		return StateRun{}, err
 	}
-	if !hmac.Equal([]byte(password), []byte(a.StateToken(user, run))) {
-		return StateRun{}, errBadStateToken
+	if len(runs) == 0 {
+		return StateRun{}, errNoWorkingRun
 	}
-	return StateRun{a: a, Workspace: workspace, Run: run, runWorkspace: user, status: status, pullRequest: pullRequest}, nil
+	for _, r := range runs { // the password is the run's: it says which one this is
+		if hmac.Equal([]byte(password), []byte(a.StateToken(user, r.ID))) {
+			return StateRun{a: a, Workspace: workspace, Run: r.ID, runWorkspace: user, status: r.Status, pullRequest: r.PullRequest}, nil
+		}
+	}
+	return StateRun{}, errBadStateToken
 }
 
 // own: terraform_remote_state of another workspace's run reads the state, never writes or locks it.

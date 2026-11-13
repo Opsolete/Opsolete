@@ -565,13 +565,13 @@ func (q *Queries) UnlockState(ctx context.Context, arg UnlockStateParams) (int64
 	return result.RowsAffected(), nil
 }
 
-const workingRun = `-- name: WorkingRun :one
+const workingRuns = `-- name: WorkingRuns :many
 
 SELECT id, status, (vcs_pull_request IS NOT NULL)::boolean AS pull_request FROM runs
 WHERE workspace_id = $1::uuid AND run_working(status) AND lease_acked_at IS NOT NULL
 `
 
-type WorkingRunRow struct {
+type WorkingRunsRow struct {
 	ID          uuid.UUID
 	Status      string
 	PullRequest bool
@@ -582,9 +582,23 @@ type WorkingRunRow struct {
 // Lock ownership: a lock belongs to the run in state_lock->>'OpsoleteRun' (none for rollbacks, the
 // UI and the CLI). LockState, UnlockState and StateLockedBy compare it with their run_id, so a run
 // can't take over or release a lock of another run, a rollback, the UI or the CLI whose ID it saw in a 423.
-func (q *Queries) WorkingRun(ctx context.Context, workspaceID uuid.UUID) (WorkingRunRow, error) {
-	row := q.db.QueryRow(ctx, workingRun, workspaceID)
-	var i WorkingRunRow
-	err := row.Scan(&i.ID, &i.Status, &i.PullRequest)
-	return i, err
+// a blocking run, and drift checks and pull request plans beside it
+func (q *Queries) WorkingRuns(ctx context.Context, workspaceID uuid.UUID) ([]WorkingRunsRow, error) {
+	rows, err := q.db.Query(ctx, workingRuns, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []WorkingRunsRow
+	for rows.Next() {
+		var i WorkingRunsRow
+		if err := rows.Scan(&i.ID, &i.Status, &i.PullRequest); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

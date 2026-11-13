@@ -311,3 +311,23 @@ func TestCLIStateMasksSecrets(t *testing.T) {
 		t.Fatalf("stored outputs: %s %v", got, err)
 	}
 }
+
+// A drift check works beside the workspace's blocking run: each authenticates with its own run's token, and
+// only the one applying may write.
+func TestStateRunBeside(t *testing.T) {
+	a, ctx := testApp(t), context.Background()
+	a.Registry = &registry.Registry{Key: []byte("state-test")}
+	ws, run := configured(t, a)
+	leased(t, a, run.ID, "l")
+	drift, err := a.Store.CreateRun(ctx, ws.ID, "assess", uuid.Nil, nil)
+	if err != nil {
+		t.Fatalf("a drift check beside a run: %v", err)
+	}
+	leased(t, a, drift.ID, "d")
+	for _, id := range []uuid.UUID{run.ID, drift.ID} {
+		sr, err := a.StateRun(ctx, ws.ID, ws.ID.String(), a.StateToken(ws.ID, id))
+		if err != nil || sr.Run != id {
+			t.Fatalf("token of %s: %+v %v", id, sr.Run, err)
+		}
+	}
+}
