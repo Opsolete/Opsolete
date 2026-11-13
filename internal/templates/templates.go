@@ -468,7 +468,8 @@ func pattern(p string) *regexp.Regexp {
 const ImportInput = "existing"
 
 // checkImport checks the import switch: the form chooses between creating and importing with it, so it is a
-// bool that starts off, the same for every workspace, and the template has a key (what an import is found by).
+// bool that starts off and the same for every workspace. A key input isn't needed: the module may find what
+// it imports by other inputs (a VM by its name and resource group).
 func (t Template) checkImport(in Input) error {
 	switch {
 	case in.Type != "bool":
@@ -477,8 +478,6 @@ func (t Template) checkImport(in Input) error {
 		return fmt.Errorf("input %q: the import switch starts off (no default, or false): the form chooses create or import", in.Name)
 	case in.PerEnvironment || in.Key || in.Sensitive || in.ShowIf != nil:
 		return fmt.Errorf("input %q: the import switch can't be per environment, the key, sensitive or conditional", in.Name)
-	case t.KeyInput() == nil:
-		return fmt.Errorf("input %q: a template that imports needs a key input (what the module finds the resource by)", in.Name)
 	}
 	return nil
 }

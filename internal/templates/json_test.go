@@ -189,7 +189,7 @@ func TestImportSwitch(t *testing.T) {
 		`{"name": "existing", "type": "string"}, ` + key:                        "is a bool",
 		`{"name": "existing", "type": "bool", "default": true}, ` + key:         "starts off",
 		`{"name": "existing", "type": "bool", "per_environment": true}, ` + key: "can't be per environment",
-		`{"name": "existing", "type": "bool"}`:                                  "needs a key input",
+		`{"name": "existing", "type": "bool"}`:                                  "", // no key: the module finds it by other inputs (a VM by name and resource group)
 		`{"name": "existing", "type": "bool", "default": false}, ` + key:        "",
 	} {
 		_, _, err := Parse(map[string][]byte{"t.json": []byte(`{"id": "t", "name": "T", "module": {"source": "s", "ref": "r"}, "inputs": [` + in + `]}`)})
