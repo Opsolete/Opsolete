@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.9.0](https://github.com/Opsolete/Opsolete/compare/v0.8.0...v0.9.0) (2026-11-13)
+
+
+### Features
+
+* HCL Terraform variables; cloud API outputs with values for readers, workspace list ([5b96286](https://github.com/Opsolete/Opsolete/commit/5b9628600877c4bbe0ac50c5d3259a2bd0729aa7))
+* **import:** check templates that import; stop importing from the form; clearer import texts ([809900d](https://github.com/Opsolete/Opsolete/commit/809900d5a8f1d81e33233bf1219cdb242c51b7e3))
+* **runs:** a run queue: runs started while one is active wait as pending ([fd8bbe6](https://github.com/Opsolete/Opsolete/commit/fd8bbe660d5a518eb273336e69197a89e859b79d))
+* **runs:** drift checks and pull request plans run beside the workspace's runs ([a0125cb](https://github.com/Opsolete/Opsolete/commit/a0125cb129e45ffc28365b868a2242ef66a35766))
+* **runs:** drift checks and pull request plans run beside the workspace's runs ([8db704c](https://github.com/Opsolete/Opsolete/commit/8db704c9a7ed7c3383ac017c72fa7ddee56fde1b))
+* **ui:** a workspace's resources start collapsed per module ([6fa2c8e](https://github.com/Opsolete/Opsolete/commit/6fa2c8eaf87441919ec3764fc22ed8ad52c38294))
+* **ui:** a workspace's resources start collapsed per module ([8ff3a74](https://github.com/Opsolete/Opsolete/commit/8ff3a7460910b4aacec38a4c60fddb9bbd0429d9))
+* **ui:** a workspace's templates as a plain table, without their inputs ([e4f507a](https://github.com/Opsolete/Opsolete/commit/e4f507a907bfa28ccb18d0fa623ba4ced836dc46))
+* **ui:** a workspace's templates as a plain table, without their inputs ([fa4330c](https://github.com/Opsolete/Opsolete/commit/fa4330c21df4f622a4db8dc7a78b93c4adecd24e))
+* **ui:** the registry page lists modules without a usage block ([76d683e](https://github.com/Opsolete/Opsolete/commit/76d683e8a09f0c63b6761a20034b2a74a7ff8895))
+* **ui:** the registry page lists modules without a usage block ([2156ac2](https://github.com/Opsolete/Opsolete/commit/2156ac2c2abdb0689fd6d78b6044e83d0605ee37))
+* **variables:** priority variable sets ([165d5f7](https://github.com/Opsolete/Opsolete/commit/165d5f7f0803dbc015de8fa95a9ca6dfb1bdbbf7))
+* **variables:** Terraform variables fill the inputs a template doesn't list ([c9c57c7](https://github.com/Opsolete/Opsolete/commit/c9c57c72cbaee752f07dbed63a4b251e0da3e0a3))
+* **variables:** Terraform variables fill the inputs a template doesn't list ([1ce0607](https://github.com/Opsolete/Opsolete/commit/1ce06077ff7c22acbf0e222a31c1ba9193a7e1dd))
+* **vcs:** a push while a run is active waits as pending; only the newest push stays ([a3ca436](https://github.com/Opsolete/Opsolete/commit/a3ca4367ba29704333c8d41242d3576abbe60cdd))
+
+
+### Bug Fixes
+
+* harden import and templates; run queue, HCL and priority variables ([acbd46c](https://github.com/Opsolete/Opsolete/commit/acbd46cd37138bba19575b37f17e285c8e0c2294))
+* **import:** a round shows the project's value as what it planned with ([4dac980](https://github.com/Opsolete/Opsolete/commit/4dac98066e1ee9c1f5f147060f9caaf6a2655ec3))
+* **import:** a round shows the project's value as what it planned with ([daf37f5](https://github.com/Opsolete/Opsolete/commit/daf37f5e10b59edb76f060dec27d191fc44a697f))
+* **import:** only pending rounds go on; a stricter one-state guard; retention keeps rounds ([a28bd68](https://github.com/Opsolete/Opsolete/commit/a28bd68ed9d2ee05b07e88ecfd38dfe1c9dea604))
+* **runner:** a drift check isn't drift when only data sources were read again ([049a37e](https://github.com/Opsolete/Opsolete/commit/049a37efe8321f0bbe368d1643df7138b78e6004))
+* **runner:** a drift check isn't drift when only data sources were read again ([bfedafa](https://github.com/Opsolete/Opsolete/commit/bfedafa4abfa254e429b784af697d41db44ceca2))
+* **runner:** an output that isn't saved yet isn't drift ([5ffc95c](https://github.com/Opsolete/Opsolete/commit/5ffc95c72c37b5a2b602beacf3f9a9acb8412262))
+* **state:** unlocking a lock someone else holds is an error, not OK ([6455eee](https://github.com/Opsolete/Opsolete/commit/6455eeecfe74a834ff750fcb67f6babe75a81c7c))
+* **templates:** an import switch doesn't need a key input ([3ff388a](https://github.com/Opsolete/Opsolete/commit/3ff388abe4db6dae9565527e173b08942f71ebe7))
+* **templates:** an import switch doesn't need a key input ([a937e39](https://github.com/Opsolete/Opsolete/commit/a937e3951df1eb8db8bdc18798e02c37b186e520))
+* **templates:** check templates as users get them; rollouts say why; stale row selects shown ([33c0f54](https://github.com/Opsolete/Opsolete/commit/33c0f548da630f97c9f473d05cb5ffd63671b72b))
+* **templates:** no silent deploy changes or plain secrets when templates change ([05e62ab](https://github.com/Opsolete/Opsolete/commit/05e62ab8f65cd417d427e130682c8d245ba33cab))
+* workspace variables beat *.auto.tfvars; admin-only force delete; safer cancel and reporting ([5395132](https://github.com/Opsolete/Opsolete/commit/539513262acd5a29426efe58e33a7ed45eee811b))
+
+
+### Performance Improvements
+
+* **import:** one masker per finished job; a round's module keeps its name ([53e83e0](https://github.com/Opsolete/Opsolete/commit/53e83e0b215fa76ba0aee9c2ec0a1aade4bbce2f))
+
 ## [0.8.0](https://github.com/Opsolete/Opsolete/compare/v0.7.0...v0.8.0) (2026-11-13)
 
 
