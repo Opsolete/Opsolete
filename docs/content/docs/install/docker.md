@@ -47,3 +47,7 @@ docker run -e DATABASE_URL=… -e PUBLIC_URL=https://opsolete.example.com -e OID
 # a runner's token: Settings → Runners, or opsolete runner-token <name> with the app's settings; keep it with your other secrets
 docker run -e OPS_SERVER_URL=http://opsolete:8080 -e OPS_RUNNER_TOKEN=… opsolete-runner
 ```
+
+## Next
+
+[First steps]({{< relref "/docs/first-steps" >}}): connect your repositories, publish a module, create a template, add cloud credentials and deploy or import a first resource.

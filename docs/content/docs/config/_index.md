@@ -1,6 +1,6 @@
 ---
 title: Configuration
-weight: 3
+weight: 4
 ---
 
 The server and the runner are configured with environment variables, the same with every way to [install]({{< relref "/docs/install" >}}) them. Everything else, such as projects, access, variables and VCS connections, is set in the web UI.
