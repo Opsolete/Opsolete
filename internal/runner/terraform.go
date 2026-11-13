@@ -139,6 +139,17 @@ func summarize(rcs []*tfjson.ResourceChange) runnerapi.Plan {
 	return sum
 }
 
+// outputsChange: the plan changes or removes an output's value. A new output (a template added but not
+// applied yet) isn't drift: the configuration changed, not what it manages.
+func outputsChange(p *tfjson.Plan) bool {
+	for _, c := range p.OutputChanges {
+		if c != nil && !c.Actions.NoOp() && !c.Actions.Create() {
+			return true
+		}
+	}
+	return false
+}
+
 // actionOf is what a plan does to a resource, as the run page says it; ok false: nothing (no-op, read, forget).
 func actionOf(rc *tfjson.ResourceChange) (action string, ok bool) {
 	if rc.Change == nil {

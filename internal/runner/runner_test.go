@@ -351,3 +351,44 @@ func TestWorkspaceVarsBeatAutoTfvars(t *testing.T) {
 		t.Fatalf("apply: %+v\n%s", res.Outputs, logs)
 	}
 }
+
+// TestDriftIgnoresDataSources: a refresh-only plan of a configuration with a data source exits 2 ("applyable")
+// though Terraform says "No changes": a drift check must not call that drift.
+func TestDriftIgnoresDataSources(t *testing.T) {
+	f := &fakeServer{}
+	srv := httptest.NewServer(f)
+	defer srv.Close()
+	r := testRunner(t, srv)
+	// the data source reads a state file shipped in the module: the job sandbox (Linux) has a /tmp of its own
+	module := func(name, extra string) string {
+		path := "/v1/archives/" + t.Name() + "-" + name + ".tar.gz"
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if f.modules == nil {
+			f.modules = map[string][]byte{}
+		}
+		f.modules[path] = registrytest.TarGz(t, map[string]string{
+			"other.tfstate": `{"version":4,"terraform_version":"1.5.0","serial":1,"lineage":"x","outputs":{"a":{"value":"b","type":"string"}},"resources":[]}`,
+			"main.tf": `data "terraform_remote_state" "o" {
+  backend = "local"
+  config  = { path = "${path.module}/other.tfstate" }
+}
+resource "terraform_data" "x" { input = data.terraform_remote_state.o.outputs.a }
+` + extra})
+		return path + "?expires=1&sig=secret-signature"
+	}
+	src := module("base", "")
+	for _, phase := range []string{"plan", "apply"} {
+		if res, logs := f.do(t, r, job("run1", phase, "apply", src, nil)); res.Status != "succeeded" {
+			t.Fatalf("%s: %+v\n%s", phase, res, logs)
+		}
+	}
+	if res, logs := f.do(t, r, job("assess", "plan", "assess", src, nil)); res.Status != "succeeded" || res.Plan != nil ||
+		!strings.Contains(logs, "only data sources were read again") {
+		t.Fatalf("assess: %+v\n%s", res, logs)
+	}
+	// an output the configuration added but no apply saved yet (a template whose apply failed) isn't drift either
+	if res, logs := f.do(t, r, job("assess2", "plan", "assess", module("added", `output "new" { value = "n" }`+"\n"), nil)); res.Status != "succeeded" || res.Plan != nil {
+		t.Fatalf("assess with a new output: %+v\n%s", res, logs)
+	}
+}
