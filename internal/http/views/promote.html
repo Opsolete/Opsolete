@@ -4,51 +4,89 @@
 <div class="page-head">
   <div>
     <h1>Promote {{.Source.Name}} to {{.Target.Name}}</h1>
-    <p class="muted">{{if .New}}A new workspace in project <a href="/projects/{{.Target.ProjectName}}">{{.Target.ProjectName}}</a> gets{{else}}<a href="/workspaces/{{.Target.Name}}">{{.Target.Name}}</a> (project <a href="/projects/{{.Target.ProjectName}}">{{.Target.ProjectName}}</a>) becomes{{end}} an exact copy of {{.Source.Name}}'s templates: the same modules, versions and inputs. Per-environment inputs come from its project (else its own value), sensitive ones are never copied; VCS links, variables and settings stay as they are. Each run on {{.Target.Name}} waits for your confirmation, even with auto-apply; discarding one puts the templates back as they were before it.</p>
+    <p class="muted">Review what changes in {{.Target.Name}}. Nothing happens before you confirm its run.</p>
   </div>
 </div>
+<ol class="stepper" aria-label="Promotion steps">
+  <li class="done"><a href="/workspaces/{{$.Source}}/promote">Pick a target</a></li>
+  <li class="current" aria-current="step">Review the changes</li>
+  <li>Confirm the run on {{.Target.Name}}</li>
+</ol>
+
+<div class="route">
+  <div class="end"><small>From</small><strong>{{.Source.Name}}</strong><span>project {{.Source.ProjectName}}</span></div>
+  <span class="arrow" aria-hidden="true">→</span>
+  <div class="end to"><small>To{{if .New}}, a new workspace{{end}}</small>
+    <strong>{{if .New}}{{.Target.Name}}{{else}}<a href="/workspaces/{{.Target.Name}}">{{.Target.Name}}</a>{{end}}</strong>
+    <span>project <a href="/projects/{{.Target.ProjectName}}">{{.Target.ProjectName}}</a></span></div>
+</div>
+
+<p class="counts" aria-label="Summary">
+  {{with .Count "add"}}<span class="change pill create">{{.}} added</span>{{end}}
+  {{with .Count "update"}}<span class="change pill update">{{.}} updated</span>{{end}}
+  {{with .Count "replace"}}<span class="change pill delete">{{.}} replaced</span>{{end}}
+  {{with .Count "remove"}}<span class="change pill delete">{{.}} removed</span>{{end}}
+  {{with .Count "unchanged"}}<span class="change pill same">{{.}} unchanged</span>{{end}}
+</p>
+
 {{with .Destroy}}<div class="alert warn" role="status">This promotion runs twice: first a destroy of {{range $i, $m := .}}{{if $i}}, {{end}}<code>module.{{$m}}</code>{{end}} ({{$.P.DestroyResources}} resource{{if ne $.P.DestroyResources 1}}s{{end}}), then the apply of the rest. Each waits for your confirmation.</div>{{end}}
 {{$f := formOf $.F "promote"}}
 {{template "formerror" $f}}
 <div class="card flush">
 <table>
-<tr><th>Module</th><th>Template</th><th>Change</th><th>Details</th></tr>
+<tr><th>Module</th><th>Change</th><th>Details</th></tr>
 {{range .Modules}}
-<tr>
-  <td><code>module.{{.Module}}</code></td>
-  <td>{{.Template}}</td>
+<tr{{if eq .Change "unchanged"}} class="same"{{end}}>
+  <td class="module-cell"><strong>{{.Template}}</strong><code>module.{{.Module}}</code></td>
   <td>
-    {{if eq .Change "add"}}<span class="change create">added</span>
-    {{else if eq .Change "update"}}<span class="change update">updated</span>
-    {{else if eq .Change "replace"}}<span class="change delete">replaced</span> <small class="muted">another template: remove + add</small>
-    {{else if eq .Change "remove"}}<span class="change delete">removed</span>
-    {{else}}<span class="muted">unchanged</span>{{end}}
+    {{if eq .Change "add"}}<span class="change pill create">added</span>
+    {{else if eq .Change "update"}}<span class="change pill update">updated</span>
+    {{else if eq .Change "replace"}}<span class="change pill delete">replaced</span><br><small class="muted">another template: remove + add</small>
+    {{else if eq .Change "remove"}}<span class="change pill delete">removed</span>
+    {{else}}<span class="change pill same">unchanged</span>{{end}}
   </td>
   <td>
-    {{if and .FromRef .ToRef (or (ne .FromRef .ToRef) (ne .FromSrc .ToSrc))}}<p class="m-0">Version <span class="tag">{{.FromRef}}</span> → <span class="tag">{{.ToRef}}</span>{{if ne .FromSrc .ToSrc}} (source <code>{{.ToSrc}}</code>){{end}}</p>
-    {{else if and (not .FromRef) .ToRef}}<p class="m-0">Version <span class="tag">{{.ToRef}}</span></p>{{end}}
     {{if eq .Change "remove"}}<p class="m-0">Destroys the {{.Resources}} resource{{if ne .Resources 1}}s{{end}} it manages.</p>
     {{else if and (eq .Change "replace") .Resources}}<p class="m-0">Its {{.Resources}} resource{{if ne .Resources 1}}s{{end}} may be destroyed or replaced.</p>{{end}}
-    {{range .Inputs}}<p class="m-0">{{.Title}}:
-      {{if .Field}}<a href="#{{.Field}}">needs a value</a>
-      {{else if .Sensitive}}<span class="muted">sensitive, {{if .Kept}}{{$.P.Target.Name}}'s own value kept{{end}}</span>
-      {{else if eq .Env "project"}}<code>{{.To}}</code> <small class="muted">set by project {{$.P.Target.ProjectName}}</small>
-      {{else if eq .Env "own"}}<code>{{.To}}</code> <small class="muted">per environment: {{$.P.Target.Name}}'s own value kept</small>
-      {{else}}{{with .From}}<code>{{.}}</code> → {{end}}{{with .To}}<code>{{.}}</code>{{else}}<span class="muted">none</span>{{end}}{{end}}
-    </p>{{end}}
+    {{$version := or (and .FromRef .ToRef (or (ne .FromRef .ToRef) (ne .FromSrc .ToSrc))) (and (not .FromRef) .ToRef)}}
+    {{if or $version .Inputs}}
+    <dl class="kv tight">
+      {{if $version}}<dt>Version</dt><dd>{{if .FromRef}}<span class="tag">{{.FromRef}}</span> → {{end}}<span class="tag">{{.ToRef}}</span>{{if and .FromRef (ne .FromSrc .ToSrc)}} <small class="muted">source <code>{{.ToSrc}}</code></small>{{end}}</dd>{{end}}
+      {{range .Inputs}}<dt>{{.Title}}</dt><dd>
+        {{if .Field}}<a href="#{{.Field}}">needs a value</a>
+        {{else if .Sensitive}}<span class="muted">sensitive{{if .Kept}}: {{$.P.Target.Name}}'s own value kept{{end}}</span>
+        {{else if eq .Env "project"}}<code>{{.To}}</code> <small class="muted">set by project {{$.P.Target.ProjectName}}</small>
+        {{else if eq .Env "own"}}<code>{{.To}}</code> <small class="muted">per environment: {{$.P.Target.Name}}'s own value kept</small>
+        {{else}}{{with .From}}<code>{{.}}</code> → {{end}}{{with .To}}<code>{{.}}</code>{{else}}<span class="muted">none</span>{{end}}{{end}}
+      </dd>{{end}}
+    </dl>
+    {{else if eq .Change "unchanged"}}<span class="muted">Same version and inputs.</span>{{end}}
     {{range .Invalid}}<p class="err m-0">{{.}}</p>{{end}}
   </td>
 </tr>
 {{end}}
 </table>
 </div>
+
+<details class="section mt-125">
+  <summary>What a promotion copies</summary>
+  <div class="body">
+    <ul class="m-0">
+      <li>{{if .New}}The new workspace gets{{else}}{{.Target.Name}} becomes{{end}} an exact copy of {{.Source.Name}}'s templates: the same modules, versions and inputs.</li>
+      <li>Per-environment inputs come from {{.Target.Name}}'s project, else its own value. Sensitive values are never copied.</li>
+      <li>VCS links, variables and settings of {{.Target.Name}} stay as they are.</li>
+      <li>Each run on {{.Target.Name}} waits for your confirmation, even with auto-apply; discarding one puts the templates back as they were.</li>
+    </ul>
+  </div>
+</details>
+
 {{$invalid := false}}{{range .Modules}}{{if .Invalid}}{{$invalid = true}}{{end}}{{end}}
 {{if eq .Changes 0}}
 <div class="alert" role="status">Nothing to promote: {{.Target.Name}} already runs what {{.Source.Name}} runs.</div>
 {{else if $invalid}}
 <div class="alert warn" role="status">Some copied values aren't valid for the template (see above): fix them in {{.Source.Name}} first.</div>
 {{else}}
-<form method="post" action="/workspaces/{{$.Source}}/promote" class="card form-rows mt-125"
+<form method="post" action="/workspaces/{{$.Source}}/promote" class="card form-rows"
   data-confirm="Promote {{.Source.Name}} to {{.Target.Name}}? A {{if .Destroy}}destroy {{end}}plan starts on {{.Target.Name}}; nothing changes before you confirm it.">
   {{if .New}}<input type="hidden" name="new" value="{{.Target.Name}}"><input type="hidden" name="project" value="{{.Target.ProjectName}}">
   {{else}}<input type="hidden" name="target" value="{{.Target.Name}}">{{end}}
@@ -62,7 +100,7 @@
   </div>
   {{end}}
   <div class="form-foot">
-    <p class="hint">{{.Changes}} module{{if ne .Changes 1}}s{{end}} change{{if eq .Changes 1}}s{{end}}.</p>
+    <p class="hint">{{.Changes}} module{{if ne .Changes 1}}s{{end}} change{{if eq .Changes 1}}s{{end}} in {{.Target.Name}}. {{if .Destroy}}The destroy plan comes first.{{else}}A plan starts; you confirm it on the run page.{{end}}</p>
     <div class="actions">
       <button type="submit">Promote &amp; start {{if .Destroy}}the destroy {{end}}plan</button>
       <a class="btn secondary" href="/workspaces/{{$.Source}}">Cancel</a>
@@ -75,14 +113,26 @@
 <div class="page-head">
   <div>
     <h1>Promote {{.Source}}</h1>
-    <p class="muted">Copy {{.Source}}'s templates to another workspace, e.g. the next environment's: it becomes an exact copy of them. You'll see what changes before anything does.</p>
+    <p class="muted">Copy {{.Source}}'s templates to another workspace, e.g. the next environment's. You'll see what changes before anything does.</p>
   </div>
 </div>
+{{if .Empty}}
+<div class="card empty-state">
+  <h2>Nothing to promote yet</h2>
+  <p>{{.Source}} has no templates. A promotion copies a workspace's templates to another one: deploy a template here first.</p>
+  <a class="btn" href="/workspaces/{{.Source}}/deploy">Deploy a template</a>
+</div>
+{{else}}
+<ol class="stepper" aria-label="Promotion steps">
+  <li class="current" aria-current="step">Pick a target</li>
+  <li>Review the changes</li>
+  <li>Confirm the run on the target</li>
+</ol>
 {{$f := formOf .F "target"}}
 {{template "formerror" $f}}
-<div class="grid">
+<div class="grid pair">
 <form method="get" class="card form-rows">
-  <div class="rows-head"><h2>An existing workspace</h2></div>
+  <div class="rows-head"><div><h2>Into an existing workspace</h2><p class="muted">It becomes an exact copy of {{.Source}}'s templates.</p></div></div>
   <div class="rows">
   {{if .Targets.Workspaces}}
     <div class="row{{if fieldError $f "target"}} invalid{{end}}">
@@ -90,15 +140,15 @@
       <select id="target" name="target"{{aria $f "target" "target-hint"}}>
         {{$cur := print (value $f "target" .To.Name)}}{{range .Targets.Workspaces}}<option value="{{.Name}}"{{if eq .Name $cur}} selected{{end}}>{{.Name}} ({{.ProjectName}})</option>{{end}}
       </select>
-      <p class="hint" id="target-hint">Workspaces you operate.</p>
+      <p class="hint" id="target-hint">Workspaces you operate, with their project.</p>
       {{template "fielderror" (dict "F" $f "N" "target")}}
     </div>
   {{else}}<p class="empty">You operate no other workspace.</p>{{end}}
   </div>
-  {{if .Targets.Workspaces}}<div class="form-foot"><div class="actions"><button type="submit">Preview</button></div></div>{{end}}
+  {{if .Targets.Workspaces}}<div class="form-foot"><div class="actions"><button type="submit">Review changes</button></div></div>{{end}}
 </form>
 <form method="get" class="card form-rows">
-  <div class="rows-head"><h2>A new workspace</h2></div>
+  <div class="rows-head"><div><h2>Into a new workspace</h2><p class="muted">Created with {{.Source}}'s templates when you promote.</p></div></div>
   <div class="rows">
   {{if .Targets.Projects}}
     <div class="row{{if fieldError $f "new"}} invalid{{end}}">
@@ -116,8 +166,9 @@
     </div>
   {{else}}<p class="empty">You may not create workspaces in any project.</p>{{end}}
   </div>
-  {{if .Targets.Projects}}<div class="form-foot"><div class="actions"><button type="submit">Preview</button></div></div>{{end}}
+  {{if .Targets.Projects}}<div class="form-foot"><div class="actions"><button type="submit">Review changes</button></div></div>{{end}}
 </form>
 </div>
+{{end}}
 {{end}}
 {{template "bottom"}}

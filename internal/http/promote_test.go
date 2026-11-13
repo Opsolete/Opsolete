@@ -40,7 +40,7 @@ func TestPromotePages(t *testing.T) {
 	module := regexp.MustCompile(`<code>module\.([a-z0-9_]+)</code>`).FindStringSubmatch(body)
 	digest := regexp.MustCompile(`name="digest" value="([0-9a-f]+)"`).FindStringSubmatch(body)
 	if rec.Code != http.StatusOK || module == nil || digest == nil || !strings.Contains(body, "<h1>Promote "+src+" to "+dst+"</h1>") ||
-		!strings.Contains(body, `<span class="change create">added</span>`) || !strings.Contains(body, "<code>n1</code>") ||
+		!strings.Contains(body, `<span class="change pill create">added</span>`) || !strings.Contains(body, "<code>n1</code>") ||
 		!strings.Contains(body, `name="secret.`+module[1]+`.secret"`) || strings.Contains(body, "s3cret-dev") {
 		t.Fatalf("preview: %d\n%s", rec.Code, body)
 	}

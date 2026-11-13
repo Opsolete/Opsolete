@@ -90,6 +90,11 @@ type Promotion struct {
 	read             []storage.WorkspaceTemplate
 }
 
+// Count is how many of the promotion's modules change as change says (Promote*).
+func (p Promotion) Count(change string) int {
+	return len(slices.DeleteFunc(slices.Clone(p.Modules), func(m PromoteModule) bool { return m.Change != change }))
+}
+
 // Asks: the promotion asks for at least one value.
 func (p Promotion) Asks() bool {
 	return slices.ContainsFunc(p.Modules, func(m PromoteModule) bool {
