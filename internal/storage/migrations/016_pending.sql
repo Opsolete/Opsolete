@@ -1,4 +1,4 @@
--- Pending runs (as HCP's run queue): a run started while another is active waits as pending instead of being
+-- Pending runs (a run queue): a run started while another is active waits as pending instead of being
 -- refused; when the active run ends, the oldest pending one is queued (storage.promotePending). Pending isn't
 -- active (run_active, runs_one_active_idx): it doesn't hold the workspace.
 ALTER TABLE runs DROP CONSTRAINT runs_status_check;

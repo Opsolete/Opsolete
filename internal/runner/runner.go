@@ -404,7 +404,7 @@ func (r *Runner) plan(ctx context.Context, tf *tfProc, run func(...string) (bool
 	}
 	fmt.Fprintf(w, "\n==> terraform %s\n", strings.Join(append([]string{"plan"}, flags...), " "))
 	// -var-file, not an .auto.tfvars file: a repository's own *.auto.tfvars must not override the workspace's
-	// variables (Terraform reads auto files in name order, the last wins; -var-file beats them all), as in HCP
+	// variables (Terraform reads auto files in name order, the last wins; -var-file beats them all)
 	changes, err := run(append([]string{"plan", "-input=false", "-detailed-exitcode", "-out=" + planFile, "-var-file=" + varsFile,
 		"-lock=" + strconv.FormatBool(!readOnly)}, flags...)...)
 	if err != nil {

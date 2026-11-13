@@ -94,7 +94,7 @@ func addStateVersion(ctx context.Context, q *db.Queries, id, runID uuid.UUID, cl
 }
 
 // DropIntermediateStates deletes the state versions a run saved before its last one: Terraform's
-// intermediate snapshots, superseded once the run ended (as HCP Terraform does). It returns their
+// intermediate snapshots, superseded once the run ended. It returns their
 // blob keys, for the caller to delete.
 func (s *Store) DropIntermediateStates(ctx context.Context, runID uuid.UUID) ([]string, error) {
 	return s.q.DropIntermediateStates(ctx, runID)

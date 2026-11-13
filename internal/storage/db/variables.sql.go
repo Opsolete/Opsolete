@@ -270,7 +270,7 @@ ORDER BY v.category, v.key, CASE WHEN vs.priority THEN -1 WHEN v.workspace_id IS
     ELSE variable_set_rank($1::uuid, v.set_id) END, vs.name
 `
 
-// one per category and key: a priority set's first (HCP), then the workspace's own, then by variable_set_rank,
+// one per category and key: a priority set's first, then the workspace's own, then by variable_set_rank,
 // then the first set by name
 func (q *Queries) RunVariables(ctx context.Context, workspaceID uuid.UUID) ([]Variable, error) {
 	rows, err := q.db.Query(ctx, runVariables, workspaceID)

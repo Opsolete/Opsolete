@@ -169,7 +169,7 @@ func TestTemplateAt(t *testing.T) {
 	}
 }
 
-// An HCL Terraform variable reaches Terraform typed (HCP's "HCL" checkbox); its value is checked when saved: a
+// An HCL Terraform variable reaches Terraform typed (its "HCL" checkbox); its value is checked when saved: a
 // literal (no references, no functions), for Terraform variables only.
 func TestHCLVariables(t *testing.T) {
 	a, ctx := testApp(t), context.Background()

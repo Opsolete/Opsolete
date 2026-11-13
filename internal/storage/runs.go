@@ -17,7 +17,7 @@ import (
 )
 
 // Run statuses. A workspace has at most one active run (enforced by runs_one_active_idx); pending runs wait
-// for it to end, the oldest first (promotePending), as HCP's run queue.
+// for it to end, the oldest first (promotePending): a run queue.
 const (
 	Pending           = "pending" // started while another run is active: waits, doesn't hold the workspace
 	PlanQueued        = "plan_queued"

@@ -168,7 +168,7 @@ func TestDeleteWorkspaceRemovesBlobs(t *testing.T) {
 	}
 }
 
-// What would lose state for good or expose it to everyone is admins', as HCP's workspace admin: deleting a
+// What would lose state for good or expose it to everyone is admins': deleting a
 // workspace that may still manage resources (force), and sharing its state with all workspaces.
 func TestAdminOnlyWorkspaceActions(t *testing.T) {
 	a, ctx := testApp(t), context.Background()

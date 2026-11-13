@@ -115,7 +115,7 @@ func TestCloudLoginAndState(t *testing.T) {
 	if out := api("GET", "/workspaces/"+id+"/current-state-version-outputs", "").Body.String(); !strings.Contains(out, `"name":"pw"`) || strings.Contains(out, `"x"`) {
 		t.Fatalf("with a sensitive output, outputs list names, not values: %s", out)
 	}
-	// without one, the values and their types (HCP's shape): `terraform output` needs no state download then
+	// without one, the values and their types: `terraform output` needs no state download then
 	state2 := `{"version":4,"serial":2,"lineage":"l-1","outputs":{"ids":{"value":["a","b"],"type":["list","string"]},"n":{"value":2,"type":"number"}},"resources":[]}`
 	m2 := md5.Sum([]byte(state2))
 	api("POST", "/workspaces/"+id+"/actions/lock", "")

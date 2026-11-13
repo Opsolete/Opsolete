@@ -182,7 +182,7 @@ func (s *Server) cloudGetWorkspace(w http.ResponseWriter, r *http.Request) {
 	writeWorkspace(w, http.StatusOK, st.Workspace, lock != nil)
 }
 
-// cloudListWorkspaces lists the workspaces the token's user sees, filtered by search[name] (a prefix, as HCP) and
+// cloudListWorkspaces lists the workspaces the token's user sees, filtered by search[name] (a prefix) and
 // search[tags]: Opsolete has no workspace tags, so a tag filter matches none. One page: no pagination.
 // shortcut: locked is false in the list (no per-workspace lock lookup); Terraform reads it from the workspace itself.
 func (s *Server) cloudListWorkspaces(w http.ResponseWriter, r *http.Request) {
@@ -366,8 +366,8 @@ func (s *Server) cloudCurrentState(w http.ResponseWriter, r *http.Request) {
 	writeAPI(w, http.StatusOK, stateVersionObject(st.Workspace.ID, vs[0]))
 }
 
-// cloudOutputs lists the current outputs, as HCP does: with their values and detailed-type, so `terraform output`
-// and the tfe provider's tfe_outputs need only read access (HCP's "read outputs"). The values are the state
+// cloudOutputs lists the current outputs with their values and detailed-type, so `terraform output`
+// and the tfe provider's tfe_outputs need only read access. The values are the state
 // version's stored ones (secrets masked). If any output is sensitive or masked, Opsolete has no value to give for
 // it: names only, Terraform then reads the whole state, which needs operate, as before.
 func (s *Server) cloudOutputs(w http.ResponseWriter, r *http.Request) {

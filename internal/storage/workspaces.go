@@ -187,7 +187,7 @@ func insertWorkspace(ctx context.Context, q *db.Queries, id uuid.UUID, e EmptyWo
 
 // CreateRun queues a new plan (action apply, destroy, refresh or assess); replace lists resource addresses an
 // apply run replaces. While another run is active, a run a user starts (apply, destroy, refresh) waits as
-// pending, as in HCP's run queue (promotePending queues it when that run ends); others: ErrRunActive.
+// pending (promotePending queues it when that run ends); others: ErrRunActive.
 func (s *Store) CreateRun(ctx context.Context, workspaceID uuid.UUID, action string, createdBy uuid.UUID, replace []string) (Run, error) {
 	var r Run
 	err := s.tx(ctx, func(q *db.Queries) error {
@@ -415,7 +415,7 @@ func (s *Store) QueueVCSRun(ctx context.Context, workspaceID uuid.UUID, commit s
 	err := s.tx(ctx, func(q *db.Queries) error {
 		r, err := q.QueueVCSRun(ctx, db.QueueVCSRunParams{WorkspaceID: workspaceID, Action: action, Commit: commit,
 			PullRequest: int32(pullRequest), Message: message})
-		if errors.Is(err, pgx.ErrNoRows) && pullRequest == 0 { // a run is active: a push waits as pending (HCP's run queue)
+		if errors.Is(err, pgx.ErrNoRows) && pullRequest == 0 { // a run is active: a push waits as pending
 			var p db.InsertPendingVCSRunRow
 			p, err = q.InsertPendingVCSRun(ctx, db.InsertPendingVCSRunParams{WorkspaceID: workspaceID, Commit: commit,
 				Message: message + "; pending: it starts when the run before it ends"})

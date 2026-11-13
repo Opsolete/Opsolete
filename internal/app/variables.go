@@ -86,7 +86,7 @@ func (a *App) workspaceMasker(ctx context.Context, workspaceID uuid.UUID) (mask.
 // gets them through tfvars, but only declared ones, since an unknown module argument fails the run.
 // shortcut: registry modules only (their variables are stored); external sources such as git:: get
 // none, as the server can't read their variables. Publish them to the registry (e.g. via VCS) to get
-// them, as HCP Terraform's no-code modules must be. To upgrade: the runner has every module on disk
+// them. To upgrade: the runner has every module on disk
 // after init (writeOutputs reads them there) and could add the declared ones itself, if the job also
 // lists the inputs each template's form asks, which keep winning. Inputs t (the template at the module version it
 // runs, generated inputs included; zero if it's no longer in the catalog) asks for are left alone, also when

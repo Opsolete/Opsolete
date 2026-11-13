@@ -165,7 +165,7 @@ func (s *Store) CancelRun(ctx context.Context, id uuid.UUID, email string, force
 		}
 		status = run.Status
 		busy := status == Planning || status == Applying
-		if busy && force && !run.CancelRequested { // as in HCP: ask Terraform to stop first, cut it off only if it doesn't
+		if busy && force && !run.CancelRequested { // ask Terraform to stop first, cut it off only if it doesn't
 			return ErrForceFirst
 		}
 		if busy && !force {

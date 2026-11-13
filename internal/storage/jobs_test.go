@@ -159,7 +159,7 @@ func TestRunLifecycle(t *testing.T) {
 	if _, ok, _ := s.ClaimJob(ctx, Runner{Name: "r", Pool: DefaultPool}, time.Minute); ok {
 		t.Fatal("a plan waiting for confirmation must not be claimed")
 	}
-	// a second run waits as pending (HCP's run queue): not claimable, and canceled it never ran
+	// a second run waits as pending: not claimable, and canceled it never ran
 	if p, err := s.CreateRun(ctx, w.ID, "apply", uuid.Nil, nil); err != nil || p.Status != Pending {
 		t.Fatalf("second run while one is active: %+v %v", p, err)
 	} else if _, err := s.CancelRun(ctx, p.ID, "test", false); err != nil || status(t, s, p.ID) != Canceled {
@@ -1180,7 +1180,7 @@ func TestCancelUnacknowledged(t *testing.T) {
 	}
 }
 
-// A priority set's variable wins over the workspace's own and every other set's, where the set applies (HCP).
+// A priority set's variable wins over the workspace's own and every other set's, where the set applies.
 func TestPriorityVariableSet(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()

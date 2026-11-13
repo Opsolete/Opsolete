@@ -227,7 +227,7 @@ func TestWorkspaceFlow(t *testing.T) {
 		if rec := post(other, runURL+"/confirm", nil); rec.Code != http.StatusNotFound { // no access: no workspace
 			t.Fatalf("confirm by a user without access: %d", rec.Code)
 		}
-		// a second run waits as pending (HCP's run queue); canceled, it never ran
+		// a second run waits as pending; canceled, it never ran
 		rec := post(h, "/workspaces/"+name+"/runs", url.Values{"action": {"apply"}})
 		pending := rec.Header().Get("Location")
 		if rec.Code != http.StatusSeeOther || !strings.Contains(get(h, pending).Body.String(), "pending") {

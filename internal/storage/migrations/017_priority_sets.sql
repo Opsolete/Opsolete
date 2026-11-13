@@ -1,4 +1,4 @@
--- Priority variable sets (as HCP): their variables win over a workspace's own and every other set's, wherever
+-- Priority variable sets: their variables win over a workspace's own and every other set's, wherever
 -- the set applies (variable_set_rank still decides where). For values an admin enforces, e.g. a provider's region.
 ALTER TABLE variable_sets ADD COLUMN priority boolean NOT NULL DEFAULT false;
 

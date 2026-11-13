@@ -331,7 +331,7 @@ func TestOnce(t *testing.T) {
 	}
 }
 
-// The workspace's variables win over a repository's own *.auto.tfvars, as in HCP: a later-named auto file would
+// The workspace's variables win over a repository's own *.auto.tfvars: a later-named auto file would
 // otherwise override them silently.
 func TestWorkspaceVarsBeatAutoTfvars(t *testing.T) {
 	f := &fakeServer{}

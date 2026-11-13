@@ -29,7 +29,7 @@ WHERE workspace_id IS NOT DISTINCT FROM sqlc.narg(workspace_id)::uuid AND set_id
     AND id = sqlc.arg(id)::uuid;
 
 -- name: RunVariables :many
--- one per category and key: a priority set's first (HCP), then the workspace's own, then by variable_set_rank,
+-- one per category and key: a priority set's first, then the workspace's own, then by variable_set_rank,
 -- then the first set by name
 SELECT DISTINCT ON (v.category, v.key) v.* FROM variables v LEFT JOIN variable_sets vs ON vs.id = v.set_id
 WHERE v.workspace_id = sqlc.arg(workspace_id)::uuid OR variable_set_rank(sqlc.arg(workspace_id)::uuid, v.set_id) IS NOT NULL

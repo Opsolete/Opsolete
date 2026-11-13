@@ -211,7 +211,7 @@ func (a *App) ShareState(ctx context.Context, actor Actor, workspace string, glo
 // DeleteWorkspace deletes a workspace that manages no resources, then its state files; force deletes
 // it anyway, leaving any real resources unmanaged. Conflicts: an active run, resources, a lock.
 //
-// Force is admins' (HCP: a workspace admin's): it deletes every state version for good and orphans real
+// Force is admins': it deletes every state version for good and orphans real
 // resources, too much for anyone who may run the workspace.
 func (a *App) DeleteWorkspace(ctx context.Context, actor Actor, workspace string, force bool) error {
 	ws, _, err := a.Workspace(ctx, actor, workspace, LevelOperate)
