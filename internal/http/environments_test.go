@@ -67,7 +67,4 @@ func TestEnvironmentValuesPages(t *testing.T) {
 	if body = get(h, "/workspaces/"+ws+"/templates/"+added[0].Name).Body.String(); !strings.Contains(body, "data-locked") {
 		t.Fatal("the configure form locks region too")
 	}
-	if body = get(h, "/workspaces/"+ws+"?show=templates").Body.String(); !strings.Contains(body, "<code>northeurope</code> <small class=\"muted\">Set by project") {
-		t.Fatalf("the Templates tab shows the effective value:\n%s", body)
-	}
 }

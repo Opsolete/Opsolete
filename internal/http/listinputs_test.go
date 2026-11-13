@@ -64,10 +64,6 @@ func TestListInputForm(t *testing.T) {
 		t.Fatalf("Terraform gets %#v", got)
 	}
 	store.Pool.Exec(context.Background(), `WITH done AS (UPDATE runs SET status = 'applied', lease_id = NULL, lease_until = NULL WHERE id = $1 RETURNING runs.workspace_id, runs.cv_id) UPDATE workspaces cur SET current_cv_id = COALESCE(done.cv_id, cur.current_cv_id) FROM done WHERE cur.id = done.workspace_id`, j.RunID)
-	ws1 := get(h, "/workspaces/"+ws+"?show=templates").Body.String()
-	if !strings.Contains(ws1, "LUN: 0, Size (GB): 32, type: Premium_LRS, existing: true\nLUN: 1, Size (GB): 8") {
-		t.Errorf("workspace page: the stored rows, a line each:\n%s", ws1)
-	}
 	if edit := get(h, base+j.Modules[0].Name).Body.String(); !strings.Contains(edit, `name="data_disks.1.size_gb" value="8"`) ||
 		!strings.Contains(edit, `id="data_disks.0.existing" name="data_disks.0.existing" checked`) {
 		t.Errorf("edit form: the stored rows:\n%s", edit)

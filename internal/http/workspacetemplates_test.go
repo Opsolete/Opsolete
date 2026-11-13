@@ -104,8 +104,8 @@ func TestWorkspaceTemplates(t *testing.T) {
 	}
 	store.Pool.Exec(context.Background(), `INSERT INTO state_version_resources (state_version_id, address, type, name, provider, module) VALUES ($1, $2, 'a', 'b', 'p', $3)`, vid, "module."+one+".a.b", "module."+one)
 	// each template shows whether it has resources in the state, e.g. after a failed apply
-	if page := get(h, "/workspaces/"+ws+"?show=templates").Body.String(); !strings.Contains(page, "<code>"+one+"</code><br><small class=\"muted\" title=\"resources of this template in the current state\">1 resource</small>") ||
-		!strings.Contains(page, "<code>"+two+"</code><br><small class=\"muted\" title=\"resources of this template in the current state\">⚠ no resources in state</small>") {
+	if page := get(h, "/workspaces/"+ws+"?show=templates").Body.String(); !regexp.MustCompile(`<code>`+one+`</code>.*\n.*\n  <td><span title="resources of this template in the current state">1</span>`).MatchString(page) ||
+		!regexp.MustCompile(`<code>`+two+`</code>.*\n.*\n  <td><span title="resources of this template in the current state">⚠ none in state</span>`).MatchString(page) {
 		t.Fatalf("resources per template: %s", page)
 	}
 	destroy := func(name string, left int) {
@@ -132,7 +132,7 @@ func TestWorkspaceTemplates(t *testing.T) {
 		t.Fatalf("removing twice: %d", rec.Code)
 	}
 	if page := get(h, "/workspaces/"+ws+"?show=templates").Body.String(); !strings.Contains(page, base+one) || strings.Contains(page, base+two) ||
-		!strings.Contains(page, ">Greeting (example)</a>") || !strings.Contains(page, "<summary>2 inputs</summary>") {
+		!strings.Contains(page, ">Greeting (example)</a>") {
 		t.Fatalf("workspace page: %s", page)
 	}
 	destroy(one, 0) // the last one too
@@ -274,17 +274,14 @@ func TestSensitiveInputs(t *testing.T) {
 	if leaks("audit log", audit); !strings.Contains(audit, `"secret.name":"(redacted)"`) {
 		t.Fatalf("audit: %s", audit)
 	}
-	page := get(h, "/workspaces/"+ws+"?show=templates").Body.String()
-	if leaks("workspace page", page); !strings.Contains(page, "(sensitive)") {
-		t.Fatalf("workspace page: %s", page)
-	}
+	leaks("workspace page", get(h, "/workspaces/"+ws+"?show=templates").Body.String())
 	// Reconfigure: the form is empty, and leaving it empty keeps the value even though it's required.
 	var mod string // no key input: the template's name, with a hex suffix
 	store.Pool.QueryRow(context.Background(), `SELECT t.name FROM workspace_templates t JOIN workspaces w ON w.id = t.workspace_id WHERE w.name = $1`, ws).Scan(&mod)
 	if !regexp.MustCompile(`^greeting_example_[0-9a-f]{4}$`).MatchString(mod) {
 		t.Fatalf("module name: %q", mod)
 	}
-	page = get(h, base+mod).Body.String()
+	page := get(h, base+mod).Body.String()
 	if leaks("configure form", page); !strings.Contains(page, "A value is set") {
 		t.Fatalf("configure form: %s", page)
 	}

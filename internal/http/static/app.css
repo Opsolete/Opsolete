@@ -436,16 +436,8 @@ h1 .status { font-size: .85rem; }
 .section .body { border-top: 1px solid var(--border); padding: 1rem; }
 .add > summary { list-style: none; margin-bottom: .75rem; }
 .add > summary::-webkit-details-marker { display: none; }
-.inputs > summary { cursor: pointer; color: var(--muted); }
 .audit > summary { cursor: pointer; overflow-wrap: anywhere; }
 .audit pre { margin-top: .5rem; max-width: 60rem; white-space: pre-wrap; overflow-wrap: anywhere; }
-.inputs > summary:hover { color: var(--text); }
-.inputs dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .4rem 1rem; align-items: baseline;
-  margin: .5rem 0 0; padding: .65rem .85rem; min-width: 20rem; max-width: 34rem; font-size: .8rem;
-  background: var(--code); border: 1px solid var(--border); border-radius: var(--radius); }
-.inputs dt code { background: none; padding: 0; color: var(--muted); }
-.inputs dd { margin: 0; overflow-wrap: anywhere; }
-.inputs dd code { background: var(--surface); white-space: pre-line; } /* a list: a row per line */
 .section.skipped { padding: .75rem 1rem; font-weight: 600; color: var(--muted); }
 .steps { font-size: .8rem; color: var(--muted); padding-bottom: .75rem; border-bottom: 1px solid var(--border); }
 .steps strong { color: var(--text); }
