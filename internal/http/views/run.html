@@ -53,7 +53,7 @@
   </table>{{end}}{{end}}
   <div class="actions">
     {{if .CanReplan}}<form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/plan-again"><button type="submit">Plan again with the found values</button></form>{{end}}
-    {{if and (not $r.Active) (eq (len $.Found) 1)}}<form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/change"><button type="submit" class="secondary">Change settings</button></form>{{end}}
+    {{if not $r.Active}}{{template "change" $}}{{end}}
     {{if .CanAdopt}}<form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/adopt" data-confirm="Apply this import? An apply run of exactly this configuration starts; it waits for your confirmation.">
       <button type="submit">Apply the import</button></form>{{end}}
   </div>
@@ -65,10 +65,7 @@
   <h2 id="found-head">{{if $read}}Importing{{else}}Not applied{{end}}</h2>
   <p>{{if $read}}This plan read the existing resources. {{end}}<strong>Change settings</strong> opens the template's form with
     what you entered for this run{{if $read}} and what its plan found{{end}}; fix what {{if eq $r.Status "errored"}}stopped it{{else}}it would still change{{end}}, and plan again.</p>
-  {{if eq (len .Found) 1}}<form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/change"><button type="submit">Change settings</button></form>
-  {{else}}<ul>{{range .Found}}
-    <li><a href="/workspaces/{{$w.Name}}/templates/{{if .Added}}{{.Module}}?found={{$r.ID}}{{else}}new?template={{.TemplateID}}&amp;found={{$r.ID}}&amp;from={{.Module}}{{end}}">Change settings of {{.Module}}</a></li>{{end}}
-  </ul>{{end}}
+  {{template "change" $}}
 </section>
 {{end}}
 
@@ -180,3 +177,9 @@
   <button type="button" class="secondary small" data-log="fullscreen">Full screen</button></div>
 <pre id="log" class="log" aria-live="polite">{{with .R.LogRemoved}}{{.}}{{else}}{{if eq .R.Status "plan_queued" "apply_queued"}}Waiting for a runner…{{end}}{{end}}</pre>
 {{end}}
+
+{{/* change: back to the form of each template the run set, with what was entered and found (one: a button) */}}
+{{define "change"}}{{$w := .W}}{{$r := .R}}{{if eq (len .Found) 1}}<form method="post" action="/workspaces/{{$w.Name}}/runs/{{$r.ID}}/change"><button type="submit" class="secondary">Change settings</button></form>
+{{else if .Found}}<ul class="change-links">{{range .Found}}
+  <li><a href="/workspaces/{{$w.Name}}/templates/{{if .Added}}{{.Module}}?found={{$r.ID}}{{else}}new?template={{.TemplateID}}&amp;found={{$r.ID}}&amp;from={{.Module}}{{end}}">Change settings of {{.Module}}</a></li>{{end}}
+</ul>{{end}}{{end}}

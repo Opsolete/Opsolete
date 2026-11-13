@@ -356,6 +356,18 @@ func (c *Catalog) Delete(id string) error {
 }
 
 func (t Template) check() error {
+	if err := t.checkInputs(); err != nil {
+		return err
+	}
+	for _, in := range t.Inputs { // the template's own switch; a list's rows may have switches of their own
+		if in.Name == ImportInput {
+			return t.checkImport(in)
+		}
+	}
+	return nil
+}
+
+func (t Template) checkInputs() error {
 	if !idRe.MatchString(t.ID) || t.ID == "new" { // "new" is the builder route
 		return fmt.Errorf("invalid id %q (lowercase letters, digits and dashes)", t.ID)
 	}
@@ -432,6 +444,26 @@ func (t Template) check() error {
 	return nil
 }
 
+// ImportInput is the input with which a template's module imports what exists instead of creating it
+// (docs/resource-import.md): a bool that switches on the module's own import blocks.
+const ImportInput = "existing"
+
+// checkImport checks the import switch: the form chooses between creating and importing with it, so it is a
+// bool that starts off, the same for every workspace, and the template has a key (what an import is found by).
+func (t Template) checkImport(in Input) error {
+	switch {
+	case in.Type != "bool":
+		return fmt.Errorf("input %q: the import switch is a bool (a module that imports what exists when it's true)", in.Name)
+	case in.Default == "true":
+		return fmt.Errorf("input %q: the import switch starts off (no default, or false): the form chooses create or import", in.Name)
+	case in.PerEnvironment || in.Key || in.Sensitive || in.ShowIf != nil:
+		return fmt.Errorf("input %q: the import switch can't be per environment, the key, sensitive or conditional", in.Name)
+	case t.KeyInput() == nil:
+		return fmt.Errorf("input %q: a template that imports needs a key input (what the module finds the resource by)", in.Name)
+	}
+	return nil
+}
+
 // checkList checks a complex input: its fields (a list's or object's), and that it's none of what it can't be (yet).
 func (in Input) checkList() error {
 	hasFields := in.Type == "list" || in.Type == "object"
@@ -458,7 +490,7 @@ func (in Input) checkList() error {
 			return fmt.Errorf("input %q, field %q: a field can't be sensitive, the key, per-environment, shown conditionally or a list", in.Name, f.Name)
 		}
 		names[f.Name] = true
-		if err := (Template{ID: "x", Name: "x", Module: Module{"x", "x"}, Inputs: []Input{f}}).check(); err != nil {
+		if err := (Template{ID: "x", Name: "x", Module: Module{"x", "x"}, Inputs: []Input{f}}).checkInputs(); err != nil {
 			return fmt.Errorf("input %q, field %s", in.Name, strings.TrimPrefix(err.Error(), "input "))
 		}
 	}

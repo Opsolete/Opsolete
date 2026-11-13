@@ -79,7 +79,7 @@ func (s *Server) createWorkspace(w http.ResponseWriter, r *http.Request) {
 		}
 		page := formPage{Page: Page{Section: "templates"}, T: t, Editor: s.canEditTemplates(r), Values: in.Inputs, F: fs, Workspace: in.Name, AutoApply: in.AutoApply, Project: in.Project,
 			Drafts: s.drafts(r, in.Inputs, sensitiveNames(t))}
-		page.importChoice(r) // as posted
+		page.importChoice(r, false) // as posted
 		var err error
 		if page.Projects, err = s.creatableProjects(r); err != nil {
 			s.internalError(w, "list projects", err)

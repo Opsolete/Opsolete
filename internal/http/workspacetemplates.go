@@ -44,10 +44,11 @@ func (s *Server) loadTemplateForm(w http.ResponseWriter, r *http.Request) (formP
 		page.FoundRun = id
 	}
 	page.Values, page.Set = app.FormDefaults(f.Template, own)
-	if f.Current != nil && f.Current.Import { // a module that imports: its form goes on importing
+	importing := f.Current != nil && f.Current.Import
+	if importing && r.URL.Query().Get("import") != "0" { // a module that imports: its form goes on importing
 		page.Values[app.ImportInput] = "true"
 	}
-	page.importChoice(r)
+	page.importChoice(r, importing)
 	if err := s.lock(r, &page, storage.Project{ID: f.Workspace.ProjectID, Name: f.Workspace.ProjectName}, inputs, follows); err != nil {
 		s.internalError(w, "environment values", err)
 		return formPage{}, false
@@ -73,7 +74,6 @@ func (s *Server) saveWorkspaceTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	page.Values = formValues(f, page.T, func(n string) string { return s.draft(r, f, n) })
-	page.importChoice(r) // as posted
 	_, run, err := s.App.SaveTemplate(r.Context(), actor(r), r.PathValue("name"), r.PathValue("module"), page.T.ID, page.Values, page.Found)
 	if s.failed(w, r, err, "template", f, func(status int, fs *formState) {
 		fs.Labels, page.F = inputLabels(page.T), fs

@@ -221,3 +221,38 @@ func TestChangeSettings(t *testing.T) {
 		t.Fatalf("a run with two templates: no link per template:\n%s", page)
 	}
 }
+
+// A template that imports still can stop importing (the resource turns out not to exist): its form offers
+// Create new, and saving that plans it creating.
+func TestImportSwitchOff(t *testing.T) {
+	store := testStore(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "vm.json"), []byte(`{"id": "vm", "name": "VM", "module": {"source": "git::https://x//m", "ref": "v1"},
+		"inputs": [{"name": "name", "type": "string", "required": true, "key": true},
+		{"name": "subnet", "type": "string", "required": true},
+		{"name": "existing", "type": "bool"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := newServer(t, dir, false, store)
+	r := &fakeRunner{h: h}
+	ws := "off-" + strings.ToLower(newID()[:8])
+	run := runID(t, post(h, "/templates/vm", url.Values{fieldWorkspace: {ws}, "name": {"vm1"}, "existing": {"on"}}))
+	j := r.claim(t, run, "plan")
+	mod := j.Modules[0].Name
+	r.finish(t, `{"status": "failed", "message": "plan: no such vm"}`)
+
+	form := "/workspaces/" + ws + "/templates/" + mod
+	page := get(h, form).Body.String()
+	if !strings.Contains(page, `name="existing" value="on"`) || !strings.Contains(page, `href="`+form+`?import=0"`) {
+		t.Fatalf("an importing template's form: importing, with Create new:\n%s", page)
+	}
+	if page := get(h, form+"?import=0").Body.String(); strings.Contains(page, `name="existing" value="on"`) {
+		t.Fatalf("Create new still imports:\n%s", page)
+	}
+	run = runID(t, post(h, form+"?import=0", url.Values{"name": {"vm1"}, "subnet": {"/subnets/a"}}))
+	if j := r.claim(t, run, "plan"); j.Action != "apply" || j.Modules[0].Inputs["existing"] != nil {
+		t.Fatalf("after switching it off: %s %+v", j.Action, j.Modules[0].Inputs)
+	}
+	r.finish(t, `{"status": "failed", "message": "x"}`)
+
+}

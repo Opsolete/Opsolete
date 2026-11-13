@@ -180,3 +180,21 @@ func TestJSONRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// A template that claims import support: its switch is a bool that starts off, the same everywhere, and the
+// template has a key.
+func TestImportSwitch(t *testing.T) {
+	key := `{"name": "name", "type": "string", "key": true}`
+	for in, want := range map[string]string{
+		`{"name": "existing", "type": "string"}, ` + key:                        "is a bool",
+		`{"name": "existing", "type": "bool", "default": true}, ` + key:         "starts off",
+		`{"name": "existing", "type": "bool", "per_environment": true}, ` + key: "can't be per environment",
+		`{"name": "existing", "type": "bool"}`:                                  "needs a key input",
+		`{"name": "existing", "type": "bool", "default": false}, ` + key:        "",
+	} {
+		_, _, err := Parse(map[string][]byte{"t.json": []byte(`{"id": "t", "name": "T", "module": {"source": "s", "ref": "r"}, "inputs": [` + in + `]}`)})
+		if want == "" && err != nil || want != "" && (err == nil || !strings.Contains(err.Error(), want)) {
+			t.Errorf("%s: %v, want %q", in, err, want)
+		}
+	}
+}

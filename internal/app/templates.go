@@ -143,7 +143,7 @@ func runAction(importing bool) string {
 
 // ImportInput is the input with which a template's module imports what exists instead of creating it (a bool);
 // an applied import switches it off again (storage.FinishJob).
-const ImportInput = "existing"
+const ImportInput = templates.ImportInput
 
 // CanImport reports whether t's module imports what exists when asked (ImportInput, a bool input).
 func CanImport(t templates.Template) bool {
