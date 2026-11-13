@@ -215,7 +215,8 @@ func TestImportProjectValue(t *testing.T) {
 		t.Fatal(err)
 	}
 	s, err := a.ImportRound(ctx, admin, ws.Name, run.ID)
-	if err != nil || s.CanReplan || len(s.Modules) != 1 || len(s.Modules[0].Values) != 1 || s.Modules[0].Values[0].Fixed != "set by the project" {
+	if err != nil || s.CanReplan || len(s.Modules) != 1 || len(s.Modules[0].Values) != 1 || s.Modules[0].Values[0].Fixed != "set by the project" ||
+		s.Modules[0].Values[0].Planned != "/subnets/project" || !s.Modules[0].Values[0].Differs { // planned with the project's value, not the workspace's empty one
 		t.Fatalf("round: %+v %v", s, err)
 	}
 	if _, err := a.PlanImportAgain(ctx, admin, ws.Name, run.ID); !IsConflict(err) {
