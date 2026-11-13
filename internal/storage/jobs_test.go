@@ -123,13 +123,13 @@ func TestRunLifecycle(t *testing.T) {
 	if _, err := s.FinishJob(ctx, run.ID, plan.LeaseID, "failed", "", nil, nil, nil, nil, nil); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("a finish before the ack must be refused, got %v", err)
 	}
-	if _, _, _, err := s.WorkingRun(ctx, w.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("state credentials before the ack: %v", err)
+	if runs, err := s.WorkingRuns(ctx, w.ID); err != nil || len(runs) != 0 {
+		t.Fatalf("state credentials before the ack: %v %v", runs, err)
 	}
 	ack(t, s, plan)
 	ack(t, s, plan) // a retried ack is harmless
-	if working, _, _, err := s.WorkingRun(ctx, w.ID); err != nil || working != run.ID {
-		t.Fatalf("the planning run must hold the workspace's state: %q %v", working, err)
+	if working, err := s.WorkingRuns(ctx, w.ID); err != nil || len(working) != 1 || working[0].ID != run.ID {
+		t.Fatalf("the planning run must hold the workspace's state: %v %v", working, err)
 	}
 
 	if _, err := s.Heartbeat(ctx, run.ID, "not-the-lease", time.Minute); !errors.Is(err, ErrLeaseLost) {
@@ -165,8 +165,13 @@ func TestRunLifecycle(t *testing.T) {
 	} else if _, err := s.CancelRun(ctx, p.ID, "test", false); err != nil || status(t, s, p.ID) != Canceled {
 		t.Fatalf("cancel a pending run: %v", err)
 	}
-	if _, err := s.CreateRun(ctx, w.ID, "assess", uuid.Nil, nil); !errors.Is(err, ErrRunActive) {
-		t.Fatalf("a drift check doesn't wait in line: %v", err)
+	// a drift check runs beside it (it reads state, writes nothing), one at a time
+	if a, err := s.CreateRun(ctx, w.ID, "assess", uuid.Nil, nil); err != nil || a.Status != PlanQueued {
+		t.Fatalf("a drift check beside a run waiting for confirmation: %+v %v", a, err)
+	} else if _, err := s.CreateRun(ctx, w.ID, "assess", uuid.Nil, nil); !errors.Is(err, ErrRunActive) {
+		t.Fatalf("a second drift check: %v", err)
+	} else if _, err := s.CancelRun(ctx, a.ID, "test", false); err != nil {
+		t.Fatal(err)
 	}
 	if err := s.ConfirmRun(ctx, run.ID, uuid.Nil, "alice@example.com"); err != nil {
 		t.Fatal(err)
@@ -281,8 +286,8 @@ func TestFinishKeepsForeignStateLock(t *testing.T) {
 	if ok, err := s.StateLockedBy(ctx, w.ID, "rb", uuid.Nil); !ok || err != nil {
 		t.Fatalf("the rollback's own lock: %v %v", ok, err)
 	}
-	if err := s.UnlockState(ctx, w.ID, "rb", run.ID); err != nil {
-		t.Fatal(err)
+	if err := s.UnlockState(ctx, w.ID, "rb", run.ID); !errors.Is(err, ErrStateLocked) { // not its lock: Terraform hears so
+		t.Fatalf("a run unlocking a rollback's lock: %v", err)
 	}
 	if lock, _ := s.StateLockID(ctx, w.ID); lock != "rb" {
 		t.Fatalf("a run released a rollback's lock: %q", lock)
@@ -967,30 +972,28 @@ func TestQueueVCSRun(t *testing.T) {
 			t.Fatalf("queue %s #%d: %v %v, want %v", commit, pr, ok, err, want)
 		}
 	}
-	finish := func(want string) {
-		t.Helper()
+	queue("aaa", 0, true)
+	queue("bbb", 7, true)  // a pull request's plan runs beside the push run: it reads state, writes nothing
+	queue("bbb", 7, false) // one at a time per pull request (and that commit has it)
+	for range 2 {
 		j := claim(t, s, "plan")
-		if j.RunID == uuid.Nil || j.VCSCommit == "" {
+		if j.VCSCommit == "" {
 			t.Fatalf("job without pinned commit: %+v", j)
 		}
-		got, err := s.FinishJob(ctx, j.RunID, j.LeaseID, "succeeded", "", nil, &runnerapi.Plan{Add: 1}, nil, nil, nil)
-		if err != nil || got != want {
-			t.Fatalf("finish: %q %v, want %q", got, err, want)
+		want := map[string]string{"apply": NeedsConfirmation, "plan": Planned}[j.Action]
+		if got, err := s.FinishJob(ctx, j.RunID, j.LeaseID, "succeeded", "", nil, &runnerapi.Plan{Add: 1}, nil, nil, nil); err != nil || got != want {
+			t.Fatalf("finish %s: %q %v, want %q", j.Action, got, err, want)
 		}
 	}
-	queue("aaa", 0, true)
-	queue("bbb", 7, false) // the push run holds the workspace
-	finish(NeedsConfirmation)
-	runs, err := s.Runs(ctx, w.ID, 1)
-	if err != nil || runs[0].Action != "apply" || runs[0].VCSCommit != "aaa" {
+	runs, err := s.Runs(ctx, w.ID, 10)
+	i := slices.IndexFunc(runs, func(r Run) bool { return r.Action == "apply" && r.VCSCommit == "aaa" })
+	if err != nil || i < 0 {
 		t.Fatalf("push run: %+v %v", runs, err)
 	}
-	if err := s.DiscardRun(ctx, runs[0].ID, "x"); err != nil {
+	if err := s.DiscardRun(ctx, runs[i].ID, "x"); err != nil {
 		t.Fatal(err)
 	}
 	queue("aaa", 0, false) // that commit had its run
-	queue("bbb", 7, true)
-	finish(Planned)
 	queue("bbb", 7, false) // planned already
 	queue("bbb", 0, true)  // merged by fast-forward: the speculative plan doesn't count as its run
 }
