@@ -98,7 +98,12 @@ func writeModules(dir string, mods []runnerapi.Module) error {
 		for k, v := range m.Inputs {
 			b[k] = escapeValue(v)
 		}
-		b["source"] = m.Source // last: an input can't replace it
+		b["source"] = m.Source // last: an input can't replace them
+		if m.Version != "" {
+			b["version"] = m.Version
+		} else {
+			delete(b, "version")
+		}
 		blocks[m.Name] = b
 	}
 	j, err := json.Marshal(map[string]any{"module": blocks})

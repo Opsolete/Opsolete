@@ -144,9 +144,9 @@ func TestAddressAndSigning(t *testing.T) {
 		t.Fatal("foreign registry must not parse as ours")
 	}
 
-	got := r.RunnerSource(templates.Module{Source: src, Ref: "1.0.0"}, time.Hour)
+	got, ver := r.RunnerSource(templates.Module{Source: src, Ref: "1.0.0"}, time.Hour)
 	pu, err := url.Parse(got)
-	if err != nil || pu.Host != "" || pu.Path != "/v1/archives/acme/storage/azurerm/1.0.0.tar.gz" {
+	if err != nil || ver != "" || pu.Host != "" || pu.Path != "/v1/archives/acme/storage/azurerm/1.0.0.tar.gz" {
 		t.Fatalf("runner source: %s", got)
 	}
 	q := pu.Query()
@@ -159,11 +159,17 @@ func TestAddressAndSigning(t *testing.T) {
 	if r.VerifyArchiveURL(pu.Path, "1", r.sig(pu.Path, 1)) {
 		t.Fatal("expired signature must fail")
 	}
-	if got := r.RunnerSource(templates.Module{Source: "git::https://x//m", Ref: "v1"}, time.Hour); got != "git::https://x//m?ref=v1" {
-		t.Fatalf("git source: %s", got)
+	if got, ver := r.RunnerSource(templates.Module{Source: "git::https://x//m", Ref: "v1"}, time.Hour); got != "git::https://x//m?ref=v1" || ver != "" {
+		t.Fatalf("git source: %s %s", got, ver)
 	}
-	if got := r.RunnerSource(templates.Module{Source: "git::https://x//m?depth=1", Ref: "v1"}, time.Hour); got != "git::https://x//m?depth=1&ref=v1" {
-		t.Fatalf("git source with a query: %s", got)
+	if got, ver := r.RunnerSource(templates.Module{Source: "git::https://x//m?depth=1", Ref: "v1"}, time.Hour); got != "git::https://x//m?depth=1&ref=v1" || ver != "" {
+		t.Fatalf("git source with a query: %s %s", got, ver)
+	}
+	// another registry's module (the public one, another Opsolete): a version argument, no ?ref= (Terraform refuses it)
+	for _, other := range []string{"other.example.com/acme/storage/azurerm", "Azure/avm-res-resources-resourcegroup/azurerm"} {
+		if got, ver := r.RunnerSource(templates.Module{Source: other, Ref: "1.1.0"}, time.Hour); got != other || ver != "1.1.0" {
+			t.Fatalf("%s: %s %s", other, got, ver)
+		}
 	}
 
 	vs := []string{"1.0.0", "1.10.0", "1.2.0"}

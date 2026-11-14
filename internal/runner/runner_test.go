@@ -392,3 +392,18 @@ resource "terraform_data" "x" { input = data.terraform_remote_state.o.outputs.a 
 		t.Fatalf("assess with a new output: %+v\n%s", res, logs)
 	}
 }
+
+// TestWriteModulesVersion: another registry's module gets its version as the version argument; others have none.
+func TestWriteModulesVersion(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeModules(dir, []runnerapi.Module{{Name: "rg", Source: "other.example.com/ns/rg/azurerm", Version: "1.1.0", Inputs: map[string]any{"name": "x"}},
+		{Name: "git", Source: "git::https://x//m?ref=v1"}}); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(filepath.Join(dir, modulesFile))
+	var got struct{ Module map[string]map[string]any }
+	json.Unmarshal(b, &got)
+	if got.Module["rg"]["version"] != "1.1.0" || got.Module["rg"]["source"] != "other.example.com/ns/rg/azurerm" || got.Module["git"]["version"] != nil {
+		t.Fatalf("module blocks: %s", b)
+	}
+}

@@ -135,8 +135,8 @@ func (a *App) assembleJob(ctx context.Context, j storage.Job) ([]byte, error) {
 		if err == nil {
 			in, err = a.withWorkspaceVars(ctx, t, m.ModuleSource, m.ModuleRef, in, vars)
 		}
-		mods = append(mods, runnerapi.Module{Name: m.Name, Inputs: in,
-			Source: a.Registry.RunnerSource(templates.Module{Source: m.ModuleSource, Ref: m.ModuleRef}, runnerSrcTTL)})
+		src, ver := a.Registry.RunnerSource(templates.Module{Source: m.ModuleSource, Ref: m.ModuleRef}, runnerSrcTTL)
+		mods = append(mods, runnerapi.Module{Name: m.Name, Inputs: in, Source: src, Version: ver})
 	}
 	if err != nil {
 		return nil, err
