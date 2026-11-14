@@ -10,7 +10,8 @@ The [Opsolete provider](https://registry.terraform.io/providers/Opsolete/opsolet
 | Projects (name, description, runner pool, default) and their [environment values]({{< relref "/docs/features/environments#per-environment-inputs" >}}) | Templates, and templates on workspaces (adding one starts a plan) |
 | Workspaces: created empty, name, project, auto-apply, execution mode, drift detection | Runs |
 | Workspace variables, [variable sets]({{< relref "/docs/features/variables" >}}) and their variables, where sets apply | Team access |
-| [VCS connections]({{< relref "/docs/features/vcs-providers" >}}) | States: their versions, rollbacks and locks |
+| [VCS connections]({{< relref "/docs/features/vcs-providers" >}}), [registry modules]({{< relref "/docs/features/module-registry" >}}) published from a repository, the [template catalog]({{< relref "/docs/features/templates#where-templates-live" >}}) | States: their versions, rollbacks and locks |
+| [Runners]({{< relref "/docs/config/runners" >}}) and their tokens | |
 
 It uses the [JSON API]({{< relref "/docs/endpoints#json-api" >}}), so the same access rules, validation and audit log apply as in the UI.
 
@@ -24,7 +25,7 @@ It uses the [JSON API]({{< relref "/docs/endpoints#json-api" >}}), so the same a
      required_providers {
        opsolete = {
          source  = "opsolete/opsolete"
-         version = "~> 0.1" # needs Opsolete 0.10.0 or later
+         version = "~> 0.2" # needs Opsolete 0.11.0 or later
        }
      }
    }
@@ -108,8 +109,11 @@ resource "opsolete_workspace" "shop" {
 | `opsolete_variable_set_project` | applies a set to a project's workspaces | `<variable_set_id>/<project_id>` |
 | `opsolete_variable_set_workspace` | applies a set to one workspace | `<variable_set_id>/<workspace_id>` |
 | `opsolete_vcs_connection` | name, `provider_type` (`github` or `azure-devops`), `base_url`, `token`, `scope`, `project_ids`, `workspace_ids` | its name or id |
+| `opsolete_runner` | name, `pool`, and its `token`: created and returned once (sensitive), or one from a secret store registered | its name or id |
+| `opsolete_registry_module` | a module published from a repository's tags: `vcs_connection_id`, `repo`, `dir`, `tag_prefix`, `namespace`, `name`, `system`; read: `versions`. Destroying it stops publishing, its versions stay | `<namespace>/<name>/<system>` |
+| `opsolete_template_catalog` | the catalog's `vcs_connection_id`, `repo`, `branch`, `dir`, `mode`; one per installation. Destroying it disconnects it | any id |
 
-Data sources look up a `opsolete_project`, `opsolete_workspace` or `opsolete_variable_set` by name. Every attribute is described in the [provider's docs on the Terraform Registry](https://registry.terraform.io/providers/Opsolete/opsolete/latest/docs).
+Data sources look up a `opsolete_project`, `opsolete_workspace`, `opsolete_variable_set` or `opsolete_vcs_connection` by name. `opsolete_runner`, `opsolete_registry_module` and `opsolete_template_catalog` need Opsolete 0.11.0; the others 0.10.0. Every attribute is described in the [provider's docs on the Terraform Registry](https://registry.terraform.io/providers/Opsolete/opsolete/latest/docs).
 
 ## Good to know
 
