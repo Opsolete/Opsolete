@@ -167,6 +167,26 @@ func (q *Queries) GetVariableSet(ctx context.Context, name string) (VariableSetL
 	return i, err
 }
 
+const getVariableSetByID = `-- name: GetVariableSetByID :one
+SELECT id, name, description, global, created_at, workspaces, projects, priority FROM variable_set_list WHERE id = $1::uuid
+`
+
+func (q *Queries) GetVariableSetByID(ctx context.Context, id uuid.UUID) (VariableSetList, error) {
+	row := q.db.QueryRow(ctx, getVariableSetByID, id)
+	var i VariableSetList
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.Global,
+		&i.CreatedAt,
+		&i.Workspaces,
+		&i.Projects,
+		&i.Priority,
+	)
+	return i, err
+}
+
 const listVariables = `-- name: ListVariables :many
 
 SELECT id, workspace_id, set_id, category, key, value, sensitive, updated_at, hcl FROM variables

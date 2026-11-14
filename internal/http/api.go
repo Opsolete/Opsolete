@@ -22,7 +22,8 @@ import (
 
 // The JSON API (/api/v1): the UI's operations for scripts and other front ends, with the same access rules. A
 // client is a signed-in browser (its session; a cross-site POST is refused like the UI's) or carries a user token
-// (terraform login) as a Bearer token. Errors are {"error": message, "fields": {input: message}} with the UI's
+// (terraform login) or a service token (automation: admin rights, audited as token:<name>) as a Bearer token. Objects
+// are addressed by id: names change, and Terraform keeps ids; lists filter by name (?name=). Errors are {"error": message, "fields": {input: message}} with the UI's
 // statuses: 401 not signed in, 403, 404, 409 a conflict, 422 invalid input.
 
 const apiPrefix = "/api/v1"
@@ -36,16 +37,20 @@ func (s *Server) apiRoutes(mux routes) {
 	mux.HandleFunc("GET "+p+"/templates/{id}", s.apiUser(s.apiTemplate))
 	mux.HandleFunc("GET "+p+"/workspaces", s.apiUser(s.apiWorkspaces))
 	mux.HandleFunc("POST "+p+"/workspaces", s.apiUser(s.apiCreateWorkspace))
-	mux.HandleFunc("GET "+p+"/workspaces/{name}", s.apiUser(s.apiWorkspace))
-	mux.HandleFunc("POST "+p+"/workspaces/{name}/templates", s.apiUser(s.apiAddTemplate))
-	mux.HandleFunc("GET "+p+"/workspaces/{name}/templates/{module}", s.apiUser(s.apiTemplateForm))
-	mux.HandleFunc("PUT "+p+"/workspaces/{name}/templates/{module}", s.apiUser(s.apiSaveTemplate))
-	mux.HandleFunc("GET "+p+"/workspaces/{name}/runs", s.apiUser(s.apiRuns))
-	mux.HandleFunc("POST "+p+"/workspaces/{name}/runs", s.apiUser(s.apiStartRun))
-	mux.HandleFunc("GET "+p+"/workspaces/{name}/runs/{run}", s.apiUser(s.apiRun))
-	mux.HandleFunc("POST "+p+"/workspaces/{name}/runs/{run}/confirm", s.apiUser(s.apiDecide(s.App.ConfirmRun)))
-	mux.HandleFunc("POST "+p+"/workspaces/{name}/runs/{run}/discard", s.apiUser(s.apiDecide(s.App.DiscardRun)))
-	mux.HandleFunc("POST "+p+"/workspaces/{name}/runs/{run}/cancel", s.apiUser(s.apiCancel))
+	ws := func(h http.HandlerFunc) http.HandlerFunc { return s.apiUser(s.workspaceByID(h)) }
+	mux.HandleFunc("GET "+p+"/workspaces/{id}", ws(s.apiWorkspace))
+	mux.HandleFunc("PATCH "+p+"/workspaces/{id}", ws(s.apiUpdateWorkspace))
+	mux.HandleFunc("DELETE "+p+"/workspaces/{id}", ws(s.apiDeleteWorkspace))
+	mux.HandleFunc("POST "+p+"/workspaces/{id}/templates", ws(s.apiAddTemplate))
+	mux.HandleFunc("GET "+p+"/workspaces/{id}/templates/{module}", ws(s.apiTemplateForm))
+	mux.HandleFunc("PUT "+p+"/workspaces/{id}/templates/{module}", ws(s.apiSaveTemplate))
+	mux.HandleFunc("GET "+p+"/workspaces/{id}/runs", ws(s.apiRuns))
+	mux.HandleFunc("POST "+p+"/workspaces/{id}/runs", ws(s.apiStartRun))
+	mux.HandleFunc("GET "+p+"/workspaces/{id}/runs/{run}", ws(s.apiRun))
+	mux.HandleFunc("POST "+p+"/workspaces/{id}/runs/{run}/confirm", ws(s.apiDecide(s.App.ConfirmRun)))
+	mux.HandleFunc("POST "+p+"/workspaces/{id}/runs/{run}/discard", ws(s.apiDecide(s.App.DiscardRun)))
+	mux.HandleFunc("POST "+p+"/workspaces/{id}/runs/{run}/cancel", ws(s.apiCancel))
+	s.apiPlatformRoutes(mux)
 }
 
 // apiUser admits a signed-in user (session) or a user token's user (Bearer), as the cloud API does.
@@ -61,8 +66,20 @@ func (s *Server) apiUser(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		id, email, role, groups, err := s.App.TokenUser(r.Context(), token)
-		if errors.Is(err, storage.ErrNotFound) {
-			writeAPIv1Error(w, http.StatusUnauthorized, "invalid or expired token", nil)
+		if errors.Is(err, storage.ErrNotFound) { // not a user's: a service token acts as itself, an admin
+			name, serr := s.App.ServiceTokenName(r.Context(), token)
+			if errors.Is(serr, storage.ErrNotFound) {
+				writeAPIv1Error(w, http.StatusUnauthorized, "invalid or expired token", nil)
+				return
+			}
+			if serr != nil {
+				s.v1Error(w, r, serr)
+				return
+			}
+			a := app.ServiceTokenActor(name)
+			u := auth.User{Email: a.Email, Role: "admin"}
+			auth.SetPrincipal(r.Context(), u, "token")
+			next(w, r.WithContext(auth.WithUser(r.Context(), u)))
 			return
 		}
 		if err != nil {
@@ -228,15 +245,17 @@ func subFields(in templates.Input) []templates.Input {
 }
 
 type apiWorkspace struct {
-	ID            string             `json:"id"`
-	Name          string             `json:"name"`
-	Project       string             `json:"project"`
-	AutoApply     bool               `json:"auto_apply"`
-	ExecutionMode string             `json:"execution_mode"`
-	Drifted       bool               `json:"drifted,omitempty"`
-	CreatedAt     time.Time          `json:"created_at"`
-	Latest        *apiRun            `json:"latest_run,omitempty"`
-	Templates     []apiAddedTemplate `json:"templates,omitempty"`
+	ID             string             `json:"id"`
+	Name           string             `json:"name"`
+	ProjectID      string             `json:"project_id"`
+	Project        string             `json:"project"` // its name
+	AutoApply      bool               `json:"auto_apply"`
+	ExecutionMode  string             `json:"execution_mode"`
+	DriftDetection bool               `json:"drift_detection"`
+	Drifted        bool               `json:"drifted,omitempty"`
+	CreatedAt      time.Time          `json:"created_at"`
+	Latest         *apiRun            `json:"latest_run,omitempty"`
+	Templates      []apiAddedTemplate `json:"templates,omitempty"`
 }
 
 type apiAddedTemplate struct {
@@ -248,8 +267,8 @@ type apiAddedTemplate struct {
 }
 
 func toAPIWorkspace(w storage.Workspace) apiWorkspace {
-	out := apiWorkspace{ID: w.ID.String(), Name: w.Name, Project: w.ProjectName, AutoApply: w.AutoApply, ExecutionMode: w.ExecutionMode,
-		Drifted: w.Drifted, CreatedAt: w.CreatedAt}
+	out := apiWorkspace{ID: w.ID.String(), Name: w.Name, ProjectID: w.ProjectID.String(), Project: w.ProjectName, AutoApply: w.AutoApply,
+		ExecutionMode: w.ExecutionMode, DriftDetection: w.DriftDetection, Drifted: w.Drifted, CreatedAt: w.CreatedAt}
 	if w.Latest != nil {
 		r := toAPIRun(*w.Latest)
 		out.Latest = &r
@@ -318,15 +337,26 @@ func (s *Server) apiTemplate(w http.ResponseWriter, r *http.Request) {
 		Form: toAPIForm(app.NewForm(t, state))})
 }
 
+// apiWorkspaces lists the workspaces the actor sees; ?project_id= and ?name= filter.
 func (s *Server) apiWorkspaces(w http.ResponseWriter, r *http.Request) {
-	list, err := s.App.ListWorkspaces(r.Context(), actor(r), r.URL.Query().Get("project"))
+	project := ""
+	if id := r.URL.Query().Get("project_id"); id != "" {
+		p, ok := s.apiProject(w, r, id)
+		if !ok {
+			return
+		}
+		project = p.Name
+	}
+	list, err := s.App.ListWorkspaces(r.Context(), actor(r), project)
 	if err != nil {
 		s.v1Error(w, r, err)
 		return
 	}
 	out := []apiWorkspace{}
 	for _, ws := range list {
-		out = append(out, toAPIWorkspace(ws))
+		if name := r.URL.Query().Get("name"); name == "" || ws.Name == name {
+			out = append(out, toAPIWorkspace(ws))
+		}
 	}
 	writeAPIv1(w, http.StatusOK, out)
 }
@@ -359,23 +389,37 @@ func (s *Server) apiWorkspace(w http.ResponseWriter, r *http.Request) {
 }
 
 type apiNewWorkspace struct {
-	Name      string         `json:"name"`
-	Project   string         `json:"project"`
-	Template  string         `json:"template"`
-	AutoApply bool           `json:"auto_apply"`
-	Inputs    map[string]any `json:"inputs"`
+	Name           string         `json:"name"`
+	ProjectID      string         `json:"project_id"` // "": the default project
+	Template       string         `json:"template"`   // "": an empty workspace
+	AutoApply      bool           `json:"auto_apply"`
+	ExecutionMode  string         `json:"execution_mode"` // an empty workspace's: "" is remote
+	DriftDetection bool           `json:"drift_detection"`
+	Inputs         map[string]any `json:"inputs"`
 }
 
-// apiCreateWorkspace creates a workspace from a template and queues its first plan: 201 with the run.
+// apiCreateWorkspace creates a workspace: from a template, queueing its first plan (201 with the run), or empty.
 func (s *Server) apiCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	var in apiNewWorkspace
 	if !readJSON(w, r, &in) {
 		return
 	}
-	ws, run, err := s.App.CreateWorkspace(r.Context(), actor(r), app.NewWorkspace{Name: strings.TrimSpace(in.Name), Project: in.Project,
+	project := ""
+	if in.ProjectID != "" {
+		p, ok := s.apiProject(w, r, in.ProjectID)
+		if !ok {
+			return
+		}
+		project = p.Name
+	}
+	if in.Template == "" {
+		s.apiCreateEmptyWorkspace(w, r, in, project)
+		return
+	}
+	ws, run, err := s.App.CreateWorkspace(r.Context(), actor(r), app.NewWorkspace{Name: strings.TrimSpace(in.Name), Project: project,
 		AutoApply: in.AutoApply, TemplateID: in.Template, Inputs: formRaw(in.Inputs)})
 	if err != nil {
-		s.v1Error(w, r, bodyFields(err, map[string]string{app.FieldName: "name", app.FieldProject: "project"}))
+		s.v1Error(w, r, bodyFields(err, map[string]string{app.FieldName: "name", app.FieldProject: "project_id"}))
 		return
 	}
 	out := toAPIWorkspace(ws)

@@ -48,7 +48,7 @@ func main() {
 		os.Exit(runner.SandboxMain(os.Args[2:]))
 	}
 	out := os.Stdout
-	if len(os.Args) > 1 && (os.Args[1] == "token" || os.Args[1] == "runner-token" || os.Args[1] == "unseal-state") {
+	if len(os.Args) > 1 && (os.Args[1] == "token" || os.Args[1] == "runner-token" || os.Args[1] == "api-token" || os.Args[1] == "unseal-state") {
 		out = os.Stderr // stdout must carry only the token or state: scripts capture or pipe it
 	}
 	log := slog.New(slog.NewJSONHandler(out, nil))
@@ -63,12 +63,14 @@ func main() {
 		err = createToken()
 	case os.Args[1] == "runner-token":
 		err = runnerToken(os.Args[2:])
+	case os.Args[1] == "api-token":
+		err = apiToken(os.Args[2:])
 	case os.Args[1] == "rotate-key" && len(os.Args) == 2:
 		err = rotateKey(log)
 	case os.Args[1] == "unseal-state" && len(os.Args) == 3:
 		err = unsealState(os.Args[2])
 	default:
-		err = errors.New("usage: opsolete [runner | token <name> | runner-token [-pool p] [-from-stdin | -from-env NAME] <name> | rotate-key | unseal-state <file>]")
+		err = errors.New("usage: opsolete [runner | token <name> | runner-token [-pool p] [-from-stdin | -from-env NAME] <name> | api-token [-from-stdin | -from-env NAME] <name> | rotate-key | unseal-state <file>]")
 	}
 	if err != nil {
 		log.Error("fatal", "err", err)
@@ -219,6 +221,56 @@ func runnerToken(args []string) error {
 	if err := store.Audit(ctx, "cli", "create runner", map[string]any{"principal": map[string]any{"type": "system"},
 		"name": name, "pool": *pool}); err != nil {
 		return fmt.Errorf("runner registered, but not audited: %w", err)
+	}
+	if !register {
+		fmt.Println(token)
+	}
+	return nil
+}
+
+// apiToken creates a service token (admin rights, for automation such as the Terraform provider) and prints it, or
+// registers one the caller generated (-from-stdin, -from-env): Terraform needs a token before it can create anything.
+func apiToken(args []string) error {
+	fl := flag.NewFlagSet("api-token", flag.ContinueOnError)
+	stdin := fl.Bool("from-stdin", false, "register the token on stdin instead of creating one")
+	env := fl.String("from-env", "", "register the token in this environment variable instead of creating one (a container without a shell)")
+	if err := fl.Parse(args); err != nil {
+		return err
+	}
+	if fl.NArg() != 1 || *stdin && *env != "" {
+		return errors.New("usage: opsolete api-token [-from-stdin | -from-env NAME] <name>")
+	}
+	register := *stdin || *env != ""
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+	store, err := openStore(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	ops := &app.App{Store: store, Log: slog.New(slog.DiscardHandler)}
+	cli, name, token := app.Actor{Email: "cli", Admin: true}, fl.Arg(0), ""
+	if register {
+		token = strings.TrimSpace(os.Getenv(*env))
+		if *stdin {
+			b, rerr := io.ReadAll(io.LimitReader(os.Stdin, 4096))
+			if rerr != nil {
+				return rerr
+			}
+			token = strings.TrimSpace(string(b))
+		}
+		err = ops.RegisterServiceToken(ctx, cli, name, token)
+	} else {
+		token, err = ops.CreateServiceToken(ctx, cli, name, nil)
+	}
+	if err != nil {
+		return err
+	}
+	if err := store.Audit(ctx, "cli", "create service token", map[string]any{"principal": map[string]any{"type": "system"}, "name": name}); err != nil {
+		return fmt.Errorf("service token created, but not audited: %w", err)
 	}
 	if !register {
 		fmt.Println(token)

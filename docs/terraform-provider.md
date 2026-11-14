@@ -1,15 +1,16 @@
 # Managing Opsolete with Terraform: API design (phase 1)
 
-Status: **proposal**, for review before building. Phase 2, the provider (`terraform-provider-opsolete`, its own
+Status: **agreed** (November 2026); phase 1 is being built. Phase 2, the provider (`terraform-provider-opsolete`, its own
 repository), is built on this API.
 
 ## Goal and scope
 
-A Terraform provider manages Opsolete's platform objects: **projects, workspaces (empty, with their settings),
-workspace variables, variable sets (their variables and where they apply) and VCS connections.**
+A Terraform provider manages Opsolete's platform objects: **projects and their environment values, workspaces (empty,
+with their settings), workspace variables, variable sets (their variables and where they apply) and VCS
+connections.**
 
-Not in this phase: templates on workspaces (adding one starts a plan: Terraform would start runs), runs, team access
-(grants), environment values, the template catalog settings, registry modules. Each can follow as its own resource.
+Never managed with Terraform, always in the UI: templates and templates on workspaces, runs, team access (grants).
+Not in this phase: the template catalog settings, registry modules.
 
 Everything below already exists in the service layer (`internal/app`: validation, access rules, audit log); phase 1
 adds the JSON API for it, identifiers Terraform can keep, and a token for automation.
@@ -20,9 +21,9 @@ adds the JSON API for it, identifiers Terraform can keep, and a token for automa
    would look like a deleted and a new object. Every object is addressed by its UUID (`/projects/{id}`), and lists
    filter by name (`GET /projects?name=prd`), which is how the provider looks up objects for `terraform import` by
    name and in data sources.
-   - **Breaking:** the existing `/api/v1/workspaces/{name}/…` routes (templates on a workspace, runs) move to
-     `/api/v1/workspaces/{id}/…`. Opsolete is pre-1.0, and one way to address an object is simpler than two (a
-     workspace name may itself look like a UUID, so a path segment can't safely mean either).
+   - **Breaking, on purpose** (no backward compatibility before 1.0): the existing `/api/v1/workspaces/{name}/…`
+     routes (templates on a workspace, runs) move to `/api/v1/workspaces/{id}/…`. One way to address an object is
+     simpler than two (a workspace name may itself look like a UUID, so a path segment can't safely mean either).
 2. **A service token for automation.** User tokens expire and act as a person. An admin creates a **service token**:
    a name, admin rights, no expiry unless given, revocable, shown once, and every action it takes is in the audit log
    as `token:<name>`. Created under *Settings → API tokens*, or for bootstrapping (Terraform needs a token before it
@@ -48,6 +49,7 @@ adds the JSON API for it, identifiers Terraform can keep, and a token for automa
 | Object | Endpoints | Fields |
 |---|---|---|
 | Project | `GET/POST /projects`, `GET/PATCH/DELETE /projects/{id}` | `name`, `description`, `runner_pool`, `default` (read: `id`) |
+| Environment value | `GET /projects/{id}/environment`, `PUT/DELETE /projects/{id}/environment/{template_id}/{input}` | `value`, `keep_own` (read: `template_id`, `input`, `set_by`, `set_at`); checked by the input's rules. Admins and operators of the project |
 | Workspace | `GET/POST /workspaces`, `GET/PATCH/DELETE /workspaces/{id}` | `name`, `project_id`, `execution_mode` (`remote`/`local`), `auto_apply`, `drift_detection` (read: `id`, `created_at`). `POST` with `template` and `inputs` still creates one from a template, as today. `DELETE` refuses while its state manages resources, unless `?force=1` (admins) |
 | Workspace variable | `GET/POST /workspaces/{id}/variables`, `GET/PATCH/DELETE /workspaces/{id}/variables/{variable_id}` | `category` (`env`/`terraform`), `key`, `value`, `sensitive`, `hcl` |
 | Variable set | `GET/POST /variable-sets`, `GET/PATCH/DELETE /variable-sets/{id}` | `name` (fixed), `description`, `global`, `priority` (read: `project_ids`, `workspace_ids`) |
@@ -95,7 +97,7 @@ resource "opsolete_workspace" "shop" {
 }
 ```
 
-Resources: `opsolete_project`, `opsolete_workspace`, `opsolete_workspace_variable`, `opsolete_variable_set`,
+Resources: `opsolete_project`, `opsolete_environment_value`, `opsolete_workspace`, `opsolete_workspace_variable`, `opsolete_variable_set`,
 `opsolete_variable_set_variable`, `opsolete_variable_set_project`, `opsolete_variable_set_workspace`,
 `opsolete_vcs_connection`; data sources for projects, workspaces and variable sets by name. All importable, by ID or
 name.

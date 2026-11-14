@@ -52,6 +52,9 @@ WHERE id IN (SELECT a.set_id FROM variable_set_projects a WHERE a.project_id = s
 -- name: GetVariableSet :one
 SELECT * FROM variable_set_list WHERE name = sqlc.arg(name)::text;
 
+-- name: GetVariableSetByID :one
+SELECT * FROM variable_set_list WHERE id = sqlc.arg(id)::uuid;
+
 -- name: UpdateVariableSet :exec
 UPDATE variable_sets SET description = sqlc.arg(description)::text, global = sqlc.arg(global)::boolean,
     priority = sqlc.arg(priority)::boolean WHERE id = sqlc.arg(id)::uuid;

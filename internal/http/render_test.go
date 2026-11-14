@@ -97,6 +97,8 @@ func TestPageModels(t *testing.T) {
 			F: &formState{Name: "organization", Fields: map[string]string{"currency": "bad"}}}},
 		"runners.html": {&runnersPage{}, &runnersPage{Runners: []storage.Runner{{Name: "r", Pool: "prd", LastSeen: &now}, {Name: "s"}}, Created: "r", Token: "opsr_x",
 			F: &formState{Name: "runner", Fields: map[string]string{"name": "bad"}}}},
+		"api_tokens.html": {&apiTokensPage{}, &apiTokensPage{Tokens: []storage.ServiceToken{{Name: "tf", CreatedAt: now, ExpiresAt: &now}, {Name: "ci", CreatedAt: now}},
+			Created: "tf", Token: "opst_x", F: &formState{Name: "token", Fields: map[string]string{"name": "bad"}}}},
 		"projects.html": {&projectsPage{}, &projectsPage{Projects: []storage.Project{{Name: "p", Default: true}}, Org: "org", F: &formState{Name: "project"}}},
 		"project.html": {&projectPage{},
 			&projectPage{Page: Page{InProject: "p", Tab: "overview"}, P: storage.Project{Name: "p"}, Workspaces: []storage.Workspace{ws}, CanCreate: true},

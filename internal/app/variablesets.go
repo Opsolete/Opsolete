@@ -149,6 +149,24 @@ func (a *App) DeleteSetVariable(ctx context.Context, actor Actor, name string, i
 	return nil
 }
 
+// AttachSet applies set name to one workspace (project false) or to one project's workspaces, or stops applying it
+// (attach false). Idempotent. Admins only; ErrNotFound for an unknown set, workspace or project.
+func (a *App) AttachSet(ctx context.Context, actor Actor, name, target string, project, attach bool) error {
+	vs, err := a.variableSet(ctx, actor, name)
+	if err != nil {
+		return err
+	}
+	if project {
+		err = a.Store.AttachVariableSetProject(ctx, vs.ID, target, attach)
+	} else {
+		err = a.Store.AttachVariableSet(ctx, vs.ID, target, attach)
+	}
+	if err == nil {
+		a.Log.Info("variable set attachment", "set", name, "project", project, "target", target, "attach", attach, "user", actor.Email)
+	}
+	return err
+}
+
 // SelectSetWorkspaces applies the set to exactly the named workspaces. Admins only;
 // ValidationError: a name isn't a workspace.
 func (a *App) SelectSetWorkspaces(ctx context.Context, actor Actor, name string, workspaces []string) error {

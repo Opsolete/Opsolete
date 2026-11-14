@@ -40,27 +40,29 @@ func TestAPI(t *testing.T) {
 
 	created := call("POST", "/api/v1/workspaces", `{"name": "`+ws+`", "template": "greeting", "inputs": {"greeting": "hi", "name": "api"}}`, http.StatusCreated)
 	run, _ := created["latest_run"].(map[string]any)["id"].(string)
-	if run == "" {
+	id, _ := created["id"].(string)
+	if run == "" || id == "" {
 		t.Fatalf("created: %v", created)
 	}
 	r.claim(t, run, "plan")
 	r.finish(t, `{"status": "succeeded", "plan": {"add": 1, "change": 0, "destroy": 0, "changes": [{"address": "x.y", "action": "create"}]},
 		"diff": [{"address": "x.y", "action": "create", "attrs": [{"path": "input", "after": "\"hi, api!\"", "has_after": true}]}]}`)
-	got := call("GET", "/api/v1/workspaces/"+ws+"/runs/"+run, "", http.StatusOK)
+	got := call("GET", "/api/v1/workspaces/"+id+"/runs/"+run, "", http.StatusOK)
 	if got["status"] != "needs_confirmation" || got["confirm_reason"] != "manual" || len(got["history"].([]any)) < 2 {
 		t.Fatalf("run: %v", got)
 	}
 	if d, _ := got["diff"].([]any); len(d) != 1 || !strings.Contains(mustJSON(d), `"hi, api!`) {
 		t.Fatalf("diff: %v", got["diff"])
 	}
-	call("POST", "/api/v1/workspaces/"+ws+"/runs/"+run+"/confirm", "", http.StatusNoContent)
-	call("POST", "/api/v1/workspaces/"+ws+"/runs/"+run+"/confirm", "", http.StatusConflict) // not waiting anymore
+	call("POST", "/api/v1/workspaces/"+id+"/runs/"+run+"/confirm", "", http.StatusNoContent)
+	call("POST", "/api/v1/workspaces/"+id+"/runs/"+run+"/confirm", "", http.StatusConflict) // not waiting anymore
 
-	w := call("GET", "/api/v1/workspaces/"+ws, "", http.StatusOK)
+	w := call("GET", "/api/v1/workspaces/"+id, "", http.StatusOK)
 	if tpls, _ := w["templates"].([]any); len(tpls) != 1 || !strings.Contains(mustJSON(tpls), `"api"`) {
 		t.Fatalf("workspace: %v", w)
 	}
-	call("GET", "/api/v1/workspaces/nope-"+ws, "", http.StatusNotFound)
+	call("GET", "/api/v1/workspaces/"+newID(), "", http.StatusNotFound)
+	call("GET", "/api/v1/workspaces/"+ws, "", http.StatusNotFound) // by id only: a name isn't one
 }
 
 func mustJSON(v any) string {
