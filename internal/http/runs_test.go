@@ -344,8 +344,8 @@ func TestWorkspaceFlow(t *testing.T) {
 				t.Errorf("workspace page lacks %q", want)
 			}
 		}
-		if tp := get(h, "/workspaces/"+name+"?show=templates").Body.String(); !strings.Contains(tp, "Templates 1<") || !strings.Contains(tp, `href="/templates/storage-account"`) {
-			t.Error("templates tab lacks the template the workspace was created with")
+		if !strings.Contains(page, ">Azure Storage Account</strong>") || strings.Contains(page, "?show=templates") {
+			t.Error("the resources tab lacks the group of the template the workspace was created with")
 		}
 		if dp := get(h, "/workspaces/"+name+"/deploy").Body.String(); !strings.Contains(dp, `href="/workspaces/`+name+`/templates/new?template=storage-account"`) {
 			t.Errorf("deploy page lacks the catalog: %s", dp)

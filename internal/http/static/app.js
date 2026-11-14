@@ -64,9 +64,10 @@ document.addEventListener('input', e => {
   else if (t.hasAttribute('data-filter-resources')) { // the workspace's resources: rows, then groups left empty
     const q = t.value.toLowerCase();
     document.querySelectorAll('#resources tr[data-row]').forEach(tr => tr.hidden = !tr.textContent.toLowerCase().includes(q));
-    document.querySelectorAll('#resources details').forEach(d => { // groups start collapsed: a search opens the ones it matches
-      d.hidden = !d.querySelector('tr[data-row]:not([hidden])');
-      if (q) d.open = !d.hidden;
+    document.querySelectorAll('#resources .group').forEach(g => { // resource lists start folded: a search opens the ones it matches
+      g.hidden = !!q && !g.querySelector('tr[data-row]:not([hidden])'); // empty: all, also templates without resources
+      const d = g.querySelector('details');
+      if (q && d) d.open = !g.hidden;
     });
   } else if (t.dataset.filter) { // a searchable list: in element #<data-filter>, the [data-filter-item]s containing the text
     const q = t.value.trim().toLowerCase();

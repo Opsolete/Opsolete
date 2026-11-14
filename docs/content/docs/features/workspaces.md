@@ -33,6 +33,8 @@ A push waits as pending while another run is active; if several commits land mea
 
 Add any number of templates (**Deploy…** in a workspace's menu, operate access). Each becomes a module block, `module.<name>`, next to the workspace's own configuration (its branch, or nothing), in the same state; add one template several times under different names.
 
+The **Resources** tab groups the state's resources by module: a group per added template (also one with nothing in the state yet, such as after a failed apply), with **Configure…** and **Remove…** when you open it, and a `root` group for the workspace's own configuration.
+
 - Adding, configuring or removing one starts a plan; removing one plans the destruction of its resources. While the workspace's state manages no resources, it's removed at once, without a run.
 - Removing the last one (the workspace's only configuration) starts a destroy run instead, and the template goes once that destroy is applied.
 - Their outputs show as `<name>__<output>`. Terraform keeps all outputs after a destroy limited to one template, so once that destroy is applied, the same run plans the configuration without the template (`-refresh=false`) and applies that plan if it changes only outputs. Otherwise the log says so, and the next apply removes them.
@@ -75,7 +77,7 @@ ignores it, as for a VM's admin password, any value works; if not, the plan show
 
 ## Update to a new module version
 
-When a template is moved to a newer module version, the workspace's **Templates** tab shows *update: <version>* next to it. **Configure…** shows the form filled with its inputs, plus any new ones. Saving moves it to the template's version and queues a plan, which is confirmed as usual.
+When a template is moved to a newer module version, its group on the workspace's **Resources** tab shows *update: <version>*. **Configure…** shows the form filled with its inputs, plus any new ones. Saving moves it to the template's version and queues a plan, which is confirmed as usual.
 
 Every change to a workspace's templates (adding, configuring, removing, a rollout, a promotion) is a new **configuration version**, and its run plans exactly that version, in both phases. While the run is active the workspace shows the templates it's getting. The workspace takes the version when the run's apply starts (or when its plan has nothing to change). If the plan is discarded, or is canceled or errors before its apply starts, nothing changed: the workspace shows the templates it had, and an added template isn't there. Once the apply has started, the new version stays, even if the apply fails: the state may already hold part of it. A workspace created from a template starts with it, so discarding its first plan leaves the template to configure and plan again.
 
