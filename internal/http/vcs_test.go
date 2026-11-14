@@ -211,7 +211,7 @@ func TestVCSPublishAndUpdate(t *testing.T) {
 			return a[0]
 		}
 		configure := "/workspaces/" + wsName + "/templates/" + added().Name
-		if page := get(h, "/workspaces/"+wsName+"?show=templates").Body.String(); !strings.Contains(page, `<span class="tag">update: 1.0.1</span>`) {
+		if page := get(h, "/workspaces/"+wsName).Body.String(); !strings.Contains(page, `<span class="tag">update: 1.0.1</span>`) {
 			t.Fatalf("no update notice: %s", page)
 		}
 		if page := get(h, configure).Body.String(); !strings.Contains(page, `value="nocode"`) ||

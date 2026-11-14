@@ -77,38 +77,48 @@
 </div>
 {{end}}
 
-{{$show := or .Show "resources"}}
+{{$show := .Show}}
 <div class="tabs-row">
   <nav class="chips" aria-label="workspace contents">
     <a href="?show=resources"{{if eq $show "resources"}} aria-current="true"{{end}}>Resources {{len .Resources}}</a>
     <a href="?show=outputs"{{if eq $show "outputs"}} aria-current="true"{{end}}>Outputs {{len .Outputs}}</a>
-    <a href="?show=templates"{{if eq $show "templates"}} aria-current="true"{{end}}>Templates {{len .Added}}</a>
   </nav>
   {{with .Versions}}{{with index . 0}}<small>Current as of state version v{{.Serial}}: {{.CreatedAt.Format "2006-01-02 15:04"}}</small>{{end}}{{end}}
 </div>
 
 {{if eq $show "resources"}}
+<p class="muted">Grouped by module. A template added to the workspace is a module (<code>module.&lt;name&gt;</code>), planned and applied with the rest of its configuration in its one state; its outputs show as <code>&lt;name&gt;__&lt;output&gt;</code>.</p>
+{{if and .Versions (not (index .Versions 0).Indexed)}}<p class="muted">The current state version isn't indexed yet (the run couldn't read it back); the next apply indexes it.</p>{{end}}
 {{with .ResourceGroups}}
-{{$replace := and $.CanOperate (not $.Active) $w.HasConfig (eq $w.ExecutionMode "remote")}}
+{{$rows := false}}{{range .}}{{if .Rows}}{{$rows = true}}{{end}}{{end}}
+{{$replace := and $rows $.CanOperate (not $.Active) $w.HasConfig (eq $w.ExecutionMode "remote")}}
+{{$indexed := and $.Versions (index $.Versions 0).Indexed}}
 <input type="search" placeholder="Filter resources" aria-label="filter resources" class="mw-20" data-filter-resources>
 <form method="post" action="/workspaces/{{$w.Name}}/runs" id="resources"><input type="hidden" name="action" value="apply">
 {{range .}}
 <details class="section">
-  <summary>{{with .Module}}<code>{{.}}</code>{{else}}<span class="muted">root</span>{{end}}{{with .Template}} · {{.}}{{end}}{{with .Ref}} <span class="tag">{{.}}</span>{{end}}
-    <span class="end muted">{{len .Rows}} resource{{if ne (len .Rows) 1}}s{{end}}</span></summary>
-  <table>
+  <summary>{{with .Module}}<code>{{.}}</code>{{else}}<span class="muted">root</span>{{end}}{{with .Template}} · {{.}}{{end}}{{with .Added}} <span class="tag" title="{{.ModuleSource}}">{{moduleName .ModuleSource}} {{.ModuleRef}}</span>{{else}}{{with .Ref}} <span class="tag">{{.}}</span>{{end}}{{end}}{{with .Update}} <span class="tag">update: {{.}}</span>{{end}}
+    <span class="end muted">{{if .Rows}}{{len .Rows}} resource{{if ne (len .Rows) 1}}s{{end}}{{else if $indexed}}⚠ none in state{{end}}</span></summary>
+  {{if and .Added $.CanOperate (not $.Active)}}{{with .Added}}
+  <!-- the template's actions: Remove posts its own form (after this one: forms can't nest) -->
+  <div class="inline actions-row"><a class="btn secondary small" href="/workspaces/{{$w.Name}}/templates/{{.Name}}">Configure…</a>
+    <button type="submit" form="remove-{{.Name}}" class="danger small">Remove…</button></div>
+  {{end}}{{end}}
+  {{if .Rows}}<table>
   <tr>{{if $replace}}<th>Recreate</th>{{end}}<th>Name</th><th>Type</th><th>Provider</th></tr>
   {{range .Rows}}<tr data-row>{{if $replace}}<td class="w-2"><input type="checkbox" name="replace" value="{{.Address}}" aria-label="recreate {{.Address}}"></td>{{end}}
     <td><code title="{{.Address}}">{{.Short}}</code></td><td>{{.Type}}</td><td title="{{provider .Resource.Provider}}">{{.Provider}}</td></tr>{{end}}
-  </table>
+  </table>{{end}}
 </details>
 {{end}}
 {{template "fielderror" (dict "F" (formOf $.F "run") "N" "replace")}}
 {{if $replace}}<div class="actions"><button type="submit" class="secondary">Plan recreating selected</button></div>
 <p class="hint">Recreate destroys the selected resources and creates them again with the same configuration, e.g. a broken VM. You review the plan first. To remove resources for good, remove their template or change its inputs.</p>{{end}}
 </form>
+{{if and $.CanOperate (not $.Active)}}{{range $.Added}}
+<form method="post" action="/workspaces/{{$w.Name}}/templates/{{.Name}}/remove" id="remove-{{.Name}}" data-confirm="Remove {{.Name}}? This starts a plan that destroys its resources." hidden></form>{{end}}{{end}}
 {{else}}
-<p class="muted">{{if not .Versions}}No state saved yet.{{else if not (index .Versions 0).Indexed}}The current state version isn't indexed yet (the run couldn't read it back); the next apply indexes it.{{else}}The current state holds no resources.{{end}}</p>
+<p class="muted">{{if not .Versions}}No state saved yet.{{else if (index .Versions 0).Indexed}}The current state holds no resources.{{end}}</p>
 {{end}}
 {{else if eq $show "outputs"}}
 {{with .Outputs}}
@@ -119,23 +129,6 @@
 </table>
 </div>
 {{else}}<p class="muted">No outputs.</p>{{end}}
-{{else}}
-<p class="muted">Templates added to this workspace: each is a module (<code>module.&lt;name&gt;</code>) planned and applied with the rest of its configuration, in its one state. Their outputs show as <code>&lt;name&gt;__&lt;output&gt;</code>.</p>
-{{if .Added}}
-<div class="card flush">
-<table>
-<tr><th>Name</th><th>Template</th><th>Module</th><th>Resources</th>{{if $.CanOperate}}<th></th>{{end}}</tr>
-{{$indexed := and .Versions (index .Versions 0).Indexed}}
-{{range .Added}}<tr><td><code>{{.Name}}</code></td><td><a href="/templates/{{.TemplateID}}">{{or (index $.TemplateNames .TemplateID) .TemplateID}}</a></td>
-  <td><code title="{{.ModuleSource}}">{{moduleName .ModuleSource}}</code> <span class="tag">{{.ModuleRef}}</span>{{with index $.Updates .Name}} <span class="tag">update: {{.}}</span>{{end}}</td>
-  <td>{{if $indexed}}{{template "deployed" index $.TemplateResources .Name}}{{else}}<span class="muted">—</span>{{end}}</td>
-  {{if $.CanOperate}}<td class="nowrap">{{if not $.Active}}<div class="inline"><a class="btn secondary small" href="/workspaces/{{$w.Name}}/templates/{{.Name}}">Configure…</a>
-    <form method="post" action="/workspaces/{{$w.Name}}/templates/{{.Name}}/remove" class="inline"
-      data-confirm="Remove {{.Name}}? This starts a plan that destroys its resources.">
-      <button type="submit" class="danger small">Remove…</button></form></div>{{end}}</td>{{end}}</tr>{{end}}
-</table>
-</div>
-{{else}}<p class="muted">None.</p>{{end}}
 
 {{end}}
 </div>
@@ -488,4 +481,3 @@
   </span>
   <span class="end"><span class="status {{.Status}}">{{status .Status}}</span><small title="{{.CreatedAt.Format "2006-01-02 15:04"}}">{{ago .CreatedAt}}</small></span>
 </a>{{end}}
-{{define "deployed"}}<span title="resources of this template in the current state">{{if .}}{{.}}{{else}}⚠ none in state{{end}}</span>{{end}}

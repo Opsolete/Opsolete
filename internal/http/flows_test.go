@@ -487,7 +487,7 @@ func TestConfigRestore(t *testing.T) {
 	w, _ := store.GetWorkspace(ctx, ws)
 	added, _ := store.WorkspaceTemplates(ctx, w.ID)
 	module := added[0].Name
-	templatesTab := "/workspaces/" + ws + "?show=templates"
+	templatesTab := "/workspaces/" + ws // the Resources tab: a group per template
 	// current fails unless the workspace's templates are exactly want (name → "ref greeting").
 	current := func(t *testing.T, want map[string]string) {
 		t.Helper()
@@ -511,7 +511,7 @@ func TestConfigRestore(t *testing.T) {
 		current(t, map[string]string{module: "v2 hey"})
 		return id
 	}
-	pageHas(t, h, templatesTab, `<span class="tag">v1</span>`, "update: v2")
+	pageHas(t, h, templatesTab, " v1</span>", "update: v2")
 
 	step(t, "a discarded plan of the new version puts the old version and inputs back", func(t *testing.T) {
 		id := configure(t)
@@ -521,7 +521,7 @@ func TestConfigRestore(t *testing.T) {
 		r.finish(t, planChanges)
 		post(h, "/workspaces/"+ws+"/runs/"+id+"/discard", nil)
 		current(t, map[string]string{module: "v1 hello"})
-		pageHas(t, h, templatesTab, `<span class="tag">v1</span>`, "update: v2")
+		pageHas(t, h, templatesTab, " v1</span>", "update: v2")
 	})
 	step(t, "a failed plan puts it back", func(t *testing.T) {
 		id := configure(t)
@@ -558,7 +558,7 @@ func TestConfigRestore(t *testing.T) {
 		r.claim(t, id, "apply")
 		r.finish(t, `{"status":"failed","message":"apply failed halfway"}`)
 		current(t, map[string]string{module: "v2 hey"})
-		if page := get(h, templatesTab).Body.String(); !strings.Contains(page, `<span class="tag">v2</span>`) || strings.Contains(page, "update: v2") {
+		if page := get(h, templatesTab).Body.String(); !strings.Contains(page, " v2</span>") || strings.Contains(page, "update: v2") {
 			t.Fatalf("templates tab after a started apply: %s", page)
 		}
 	})
@@ -910,7 +910,7 @@ func TestRollout(t *testing.T) {
 		pageHas(t, h, page, "the run in "+b+": discarded", "/rollout/resume")
 		tick(t)
 		queued(t, map[string]bool{b: false, c: false})
-		pageHas(t, h, "/workspaces/"+b+"?show=templates", `<span class="tag">v1</span>`, "update: v2")
+		pageHas(t, h, "/workspaces/"+b, " v1</span>", "update: v2")
 	})
 	step(t, "resume retries it and queues the next one", func(t *testing.T) {
 		action(t, "resume", http.StatusSeeOther)
@@ -933,9 +933,9 @@ func TestRollout(t *testing.T) {
 		status(t, "done", "1 use(s) need an update by hand")
 		action(t, "pause", http.StatusConflict)
 		for _, ws := range []string{a, b, c} {
-			pageHas(t, h, "/workspaces/"+ws+"?show=templates", `<span class="tag">v2</span>`)
+			pageHas(t, h, "/workspaces/"+ws, " v2</span>")
 		}
-		pageHas(t, h, "/workspaces/"+d+"?show=templates", `<span class="tag">v1</span>`)
+		pageHas(t, h, "/workspaces/"+d, " v1</span>")
 	})
 	step(t, "stop ends an open rollout; its plans stay queued", func(t *testing.T) {
 		post(h, "/workspaces/"+d+"/settings", url.Values{"name": {d}, "execution_mode": {"remote"}})

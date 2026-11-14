@@ -37,15 +37,14 @@ type workspacePage struct {
 }
 
 type overviewTab struct {
-	Added             []storage.WorkspaceTemplate
-	Updates           map[string]string // added template name -> module version its template pins now
-	TemplateNames     map[string]string // template id -> display name; a deleted template shows its id
-	ResourceGroups    []resourceGroup
-	TemplateResources map[string]int // module call ("" = root) -> resources in the current state
-	LatestPlan        phase
-	LatestApply       phase
-	Metrics           storage.RunMetrics
-	Show              string // ?show=: resources, outputs or templates
+	Added          []storage.WorkspaceTemplate
+	Updates        map[string]string // added template name -> module version its template pins now
+	TemplateNames  map[string]string // template id -> display name; a deleted template shows its id
+	ResourceGroups []resourceGroup
+	LatestPlan     phase
+	LatestApply    phase
+	Metrics        storage.RunMetrics
+	Show           string // ?show=: resources (the default) or outputs
 }
 
 // deployTab is the catalog, each template one click from its add form.
@@ -157,7 +156,10 @@ func (s *Server) renderWorkspace(w http.ResponseWriter, r *http.Request, tab, su
 			s.internalError(w, "workspace templates", err)
 			return
 		}
-		o := &overviewTab{Added: added, Updates: map[string]string{}, TemplateNames: map[string]string{}, Show: r.URL.Query().Get("show")}
+		o := &overviewTab{Added: added, Updates: map[string]string{}, TemplateNames: map[string]string{}, Show: "resources"}
+		if r.URL.Query().Get("show") == "outputs" {
+			o.Show = "outputs"
+		}
 		for _, a := range added {
 			cur, ok := s.App.Templates.Get(a.TemplateID)
 			if ok {
@@ -179,12 +181,7 @@ func (s *Server) renderWorkspace(w http.ResponseWriter, r *http.Request, tab, su
 			s.internalError(w, "run metrics", err)
 			return
 		}
-		o.ResourceGroups = groupResources(res, added, o.TemplateNames)
-		o.TemplateResources = map[string]int{}
-		for _, g := range o.ResourceGroups {
-			call, _, _ := strings.Cut(strings.TrimPrefix(g.Module, "module."), "[")
-			o.TemplateResources[call] += len(g.Rows)
-		}
+		o.ResourceGroups = groupResources(res, added, o.TemplateNames, o.Updates)
 		p.overviewTab = o
 
 	case "deploy":
@@ -242,6 +239,8 @@ func (s *Server) renderWorkspace(w http.ResponseWriter, r *http.Request, tab, su
 // resourceGroup is the resources of one top-level module ("" = the root: a VCS branch's), with the template it comes from.
 type resourceGroup struct {
 	Module, Template, Ref string
+	Added                 *storage.WorkspaceTemplate // the added template the module is; nil for the root or a module of the workspace's own
+	Update                string                     // the module version its template pins now, when that differs
 	Rows                  []resourceRow
 }
 
@@ -251,30 +250,40 @@ type resourceRow struct {
 	Provider string // e.g. azurerm
 }
 
-// groupResources groups resources by top-level module (nested modules stay in their parent's group),
-// modules by name and the root last.
-func groupResources(res []storage.Resource, added []storage.WorkspaceTemplate, names map[string]string) []resourceGroup {
+// groupResources groups resources by top-level module (nested modules stay in their parent's group), with a group
+// for each added template too, also one without resources in the state (an apply that failed, or none yet), so its
+// Configure and Remove are there. Modules by name, the root last. updates: Update by added template name.
+func groupResources(res []storage.Resource, added []storage.WorkspaceTemplate, names, updates map[string]string) []resourceGroup {
 	var groups []resourceGroup
 	idx := map[string]int{}
+	group := func(top string) int {
+		if i, ok := idx[top]; ok {
+			return i
+		}
+		g := resourceGroup{Module: top}
+		call, _, _ := strings.Cut(strings.TrimPrefix(top, "module."), "[") // module.vm["a"] is the call vm
+		for i, a := range added {
+			if top != "" && a.Name == call {
+				g.Template, g.Ref, g.Added, g.Update = cmp.Or(names[a.TemplateID], a.TemplateID), a.ModuleRef, &added[i], updates[a.Name]
+			}
+		}
+		idx[top] = len(groups)
+		groups = append(groups, g)
+		return idx[top]
+	}
 	for _, r := range res {
 		top, _, _ := strings.Cut(r.Module, ".module.")
-		i, ok := idx[top]
-		if !ok {
-			g := resourceGroup{Module: top}
-			call, _, _ := strings.Cut(strings.TrimPrefix(top, "module."), "[") // module.vm["a"] is the call vm
-			for _, a := range added {
-				if top != "" && a.Name == call {
-					g.Template, g.Ref = cmp.Or(names[a.TemplateID], a.TemplateID), a.ModuleRef
-				}
-			}
-			i, idx[top] = len(groups), len(groups)
-			groups = append(groups, g)
-		}
+		i := group(top)
 		short := r.Address
 		if top != "" {
 			short = strings.TrimPrefix(r.Address, top+".")
 		}
 		groups[i].Rows = append(groups[i].Rows, resourceRow{r, short, path.Base(r.Provider)})
+	}
+	for i := range added { // templates nothing in the state belongs to
+		if !slices.ContainsFunc(groups, func(g resourceGroup) bool { return g.Added == &added[i] }) {
+			group("module." + added[i].Name)
+		}
 	}
 	slices.SortFunc(groups, func(a, b resourceGroup) int {
 		switch { // group keys are unique: at most one root

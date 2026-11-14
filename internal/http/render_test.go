@@ -49,7 +49,7 @@ func TestPageModels(t *testing.T) {
 		return tab("overview", "", func(p *workspacePage) {
 			p.overviewTab = &overviewTab{Added: []storage.WorkspaceTemplate{{Name: "vm_1", TemplateID: "vm"}}, Updates: map[string]string{"vm_1": "v2"},
 				TemplateNames:  map[string]string{"vm": "VM"},
-				ResourceGroups: groupResources(p.Resources, nil, nil), TemplateResources: map[string]int{"vm_1": 1}, LatestPlan: plan, LatestApply: apply, Show: show}
+				ResourceGroups: groupResources(p.Resources, nil, nil, nil), LatestPlan: plan, LatestApply: apply, Show: show}
 		})
 	}
 	pages := map[string][]interface{ base() *Page }{

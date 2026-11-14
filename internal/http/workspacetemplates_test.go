@@ -104,8 +104,8 @@ func TestWorkspaceTemplates(t *testing.T) {
 	}
 	store.Pool.Exec(context.Background(), `INSERT INTO state_version_resources (state_version_id, address, type, name, provider, module) VALUES ($1, $2, 'a', 'b', 'p', $3)`, vid, "module."+one+".a.b", "module."+one)
 	// each template shows whether it has resources in the state, e.g. after a failed apply
-	if page := get(h, "/workspaces/"+ws+"?show=templates").Body.String(); !regexp.MustCompile(`<code>`+one+`</code>.*\n.*\n  <td><span title="resources of this template in the current state">1</span>`).MatchString(page) ||
-		!regexp.MustCompile(`<code>`+two+`</code>.*\n.*\n  <td><span title="resources of this template in the current state">⚠ none in state</span>`).MatchString(page) {
+	if page := get(h, "/workspaces/"+ws).Body.String(); !regexp.MustCompile(`<code>module\.`+one+`</code>.*\n.*>1 resource</span>`).MatchString(page) ||
+		!regexp.MustCompile(`<code>module\.`+two+`</code>.*\n.*>⚠ none in state</span>`).MatchString(page) || !strings.Contains(page, `form="remove-`+two+`"`) {
 		t.Fatalf("resources per template: %s", page)
 	}
 	destroy := func(name string, left int) {
@@ -131,8 +131,8 @@ func TestWorkspaceTemplates(t *testing.T) {
 	if rec := post(h, base+two+"/remove", nil); rec.Code != http.StatusNotFound {
 		t.Fatalf("removing twice: %d", rec.Code)
 	}
-	if page := get(h, "/workspaces/"+ws+"?show=templates").Body.String(); !strings.Contains(page, base+one) || strings.Contains(page, base+two) ||
-		!strings.Contains(page, ">Greeting (example)</a>") {
+	if page := get(h, "/workspaces/"+ws).Body.String(); !strings.Contains(page, base+one) || strings.Contains(page, base+two) ||
+		!strings.Contains(page, " · Greeting (example)") {
 		t.Fatalf("workspace page: %s", page)
 	}
 	destroy(one, 0) // the last one too
@@ -213,8 +213,16 @@ func TestGroupResources(t *testing.T) {
 	}
 	res := []storage.Resource{r("azurerm_resource_group.rg", ""), r("module.vm.azurerm_nic.self", "module.vm"),
 		r(`module.app["a"].module.net.azurerm_subnet.s`, `module.app["a"].module.net`), r("module.vm.azurerm_vm.self[0]", "module.vm")}
-	added := []storage.WorkspaceTemplate{{Name: "vm", TemplateID: "vm-id", ModuleRef: "3.0.0"}, {Name: "app", TemplateID: "gone", ModuleRef: "2.0.0"}}
-	g := groupResources(res, added, map[string]string{"vm-id": "Virtual machine"})
+	added := []storage.WorkspaceTemplate{{Name: "vm", TemplateID: "vm-id", ModuleRef: "3.0.0"}, {Name: "app", TemplateID: "gone", ModuleRef: "2.0.0"},
+		{Name: "failed", TemplateID: "vm-id", ModuleRef: "3.0.0"}} // nothing of "failed" in the state: a group of its own, empty
+	g := groupResources(res, added, map[string]string{"vm-id": "Virtual machine"}, map[string]string{"vm": "3.1.0"})
+	if len(g) != 4 || g[1].Module != "module.failed" || g[1].Added != &added[2] || len(g[1].Rows) != 0 {
+		t.Fatalf("a template without resources: %+v", g)
+	}
+	g = slices.Delete(g, 1, 2)
+	if g[1].Added != &added[0] || g[1].Update != "3.1.0" || g[0].Added != &added[1] || g[2].Added != nil {
+		t.Fatalf("templates and updates: %+v", g)
+	}
 	if len(g) != 3 || g[0].Module != `module.app["a"]` || g[0].Template != "gone" || g[0].Rows[0].Short != "module.net.azurerm_subnet.s" ||
 		g[1].Module != "module.vm" || g[1].Template != "Virtual machine" || g[1].Ref != "3.0.0" || len(g[1].Rows) != 2 || g[1].Rows[1].Short != "azurerm_vm.self[0]" ||
 		g[2].Module != "" || g[2].Template != "" || g[2].Rows[0].Short != "azurerm_resource_group.rg" || g[2].Rows[0].Provider != "azurerm" {
@@ -274,7 +282,7 @@ func TestSensitiveInputs(t *testing.T) {
 	if leaks("audit log", audit); !strings.Contains(audit, `"secret.name":"(redacted)"`) {
 		t.Fatalf("audit: %s", audit)
 	}
-	leaks("workspace page", get(h, "/workspaces/"+ws+"?show=templates").Body.String())
+	leaks("workspace page", get(h, "/workspaces/"+ws).Body.String())
 	// Reconfigure: the form is empty, and leaving it empty keeps the value even though it's required.
 	var mod string // no key input: the template's name, with a hex suffix
 	store.Pool.QueryRow(context.Background(), `SELECT t.name FROM workspace_templates t JOIN workspaces w ON w.id = t.workspace_id WHERE w.name = $1`, ws).Scan(&mod)
