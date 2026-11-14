@@ -115,6 +115,21 @@ func TestAPIPlatform(t *testing.T) {
 		t.Fatalf("detached: %v", set)
 	}
 
+	// A workspace whose state manages resources isn't deleted through the API, not even forced by an admin token: a
+	// state is Opsolete's alone (the UI's Delete workspace anyway)
+	held := call("POST", "/workspaces", `{"name":"held-`+sfx+`"}`, http.StatusCreated)["id"].(string)
+	var sv int64
+	if err := store.Pool.QueryRow(ctx, `INSERT INTO state_versions (workspace_id, serial, lineage, blob_key, md5, size, indexed)
+		VALUES ($1::uuid, 1, 'l', 'api/'||$1::text||'.tfstate', 'm', 2, true) RETURNING id`, held).Scan(&sv); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Pool.Exec(ctx, `INSERT INTO state_version_resources (state_version_id, address, type, name, provider, module)
+		VALUES ($1, 'x.y', 'x', 'y', 'p', '')`, sv); err != nil {
+		t.Fatal(err)
+	}
+	call("DELETE", "/workspaces/"+held+"?force=1", "", http.StatusConflict)
+	call("GET", "/workspaces/"+held, "", http.StatusOK)
+
 	// Deleting: the workspace, the set, the projects (empty now).
 	call("DELETE", "/workspaces/"+wid, "", http.StatusNoContent)
 	call("DELETE", "/variable-sets/"+sid, "", http.StatusNoContent)

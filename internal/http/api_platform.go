@@ -381,10 +381,11 @@ func (s *Server) apiUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	writeAPIv1(w, http.StatusOK, toAPIWorkspace(ws))
 }
 
-// apiDeleteWorkspace deletes the workspace (operate): refused while its state manages resources, unless ?force=1
-// (admins). 204.
+// apiDeleteWorkspace deletes the workspace (operate): refused while a run is active or its state manages resources.
+// Never forced here: a workspace's state is Opsolete's alone, so throwing one away that still manages resources is
+// the UI's admin action (Delete workspace anyway), not the API's. 204.
 func (s *Server) apiDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
-	if err := s.App.DeleteWorkspace(r.Context(), actor(r), r.PathValue("name"), r.URL.Query().Get("force") == "1"); err != nil {
+	if err := s.App.DeleteWorkspace(r.Context(), actor(r), r.PathValue("name"), false); err != nil {
 		s.v1Error(w, r, err)
 		return
 	}

@@ -9,7 +9,10 @@ A Terraform provider manages Opsolete's platform objects: **projects and their e
 with their settings), workspace variables, variable sets (their variables and where they apply) and VCS
 connections.**
 
-Never managed with Terraform, always in the UI: templates and templates on workspaces, runs, team access (grants).
+Never managed with Terraform, always in the UI: templates and templates on workspaces, runs, team access (grants),
+and **states**: a workspace's state versions, rollbacks, locks and force-deleting a workspace whose state still manages
+resources. A state is bound to everything Opsolete controls (its runs, imports, drift, the resource index), so only
+Opsolete changes it.
 Not in this phase: the template catalog settings, registry modules.
 
 Everything below already exists in the service layer (`internal/app`: validation, access rules, audit log); phase 1
@@ -50,7 +53,7 @@ adds the JSON API for it, identifiers Terraform can keep, and a token for automa
 |---|---|---|
 | Project | `GET/POST /projects`, `GET/PATCH/DELETE /projects/{id}` | `name`, `description`, `runner_pool`, `default` (read: `id`) |
 | Environment value | `GET /projects/{id}/environment`, `PUT/DELETE /projects/{id}/environment/{template_id}/{input}` | `value`, `keep_own` (read: `template_id`, `input`, `set_by`, `set_at`); checked by the input's rules. Admins and operators of the project |
-| Workspace | `GET/POST /workspaces`, `GET/PATCH/DELETE /workspaces/{id}` | `name`, `project_id`, `execution_mode` (`remote`/`local`), `auto_apply`, `drift_detection` (read: `id`, `created_at`). `POST` with `template` and `inputs` still creates one from a template, as today. `DELETE` refuses while its state manages resources, unless `?force=1` (admins) |
+| Workspace | `GET/POST /workspaces`, `GET/PATCH/DELETE /workspaces/{id}` | `name`, `project_id`, `execution_mode` (`remote`/`local`), `auto_apply`, `drift_detection` (read: `id`, `created_at`). `POST` with `template` and `inputs` still creates one from a template, as today. `DELETE` refuses while its state manages resources: never forced through the API |
 | Workspace variable | `GET/POST /workspaces/{id}/variables`, `GET/PATCH/DELETE /workspaces/{id}/variables/{variable_id}` | `category` (`env`/`terraform`), `key`, `value`, `sensitive`, `hcl` |
 | Variable set | `GET/POST /variable-sets`, `GET/PATCH/DELETE /variable-sets/{id}` | `name` (fixed), `description`, `global`, `priority` (read: `project_ids`, `workspace_ids`) |
 | Set variable | `…/variable-sets/{id}/variables[/{variable_id}]` | as a workspace variable |

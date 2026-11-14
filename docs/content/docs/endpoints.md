@@ -197,7 +197,7 @@ Objects are addressed by **id** (names change; Terraform keeps ids); lists filte
 | `POST /api/v1/workspaces` | operate on the project | Creates a workspace (`name`, `project_id`, `auto_apply`): empty (`execution_mode`, `drift_detection`), or from a template (`template`, `inputs`), queueing its plan: `201` |
 | `GET /api/v1/workspaces/{id}` | read | A workspace (`project_id`, `execution_mode`, `auto_apply`, `drift_detection`) and its templates with their inputs (sensitive ones never) |
 | `PATCH /api/v1/workspaces/{id}` | operate | Changes `name`, `auto_apply`, `execution_mode`, `drift_detection`, and moves it (`project_id`: operate on that project too) |
-| `DELETE /api/v1/workspaces/{id}` | operate | Deletes it: refused while a run is active, or while its state manages resources unless `?force=1` (admins). `204` |
+| `DELETE /api/v1/workspaces/{id}` | operate | Deletes it: refused while a run is active or its state manages resources (destroy them first; forcing it is only in the UI, for admins). `204` |
 | `GET /api/v1/workspaces/{id}/variables` | read | Its own variables: `id`, `category`, `key`, `value`, `sensitive`, `hcl` |
 | `POST /api/v1/workspaces/{id}/variables` | operate | Creates one (`category`: `env` or `terraform`, `key`, `value`, `sensitive`, `hcl`): `201`; `409` if that key exists |
 | `GET /api/v1/workspaces/{id}/variables/{variable}` | read | One variable |
