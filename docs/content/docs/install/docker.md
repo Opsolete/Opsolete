@@ -4,7 +4,7 @@ weight: 1
 ---
 
 <!-- x-release-please-start-version -->
-The release images are `ghcr.io/opsolete/opsolete-app` and `ghcr.io/opsolete/opsolete-runner` (linux/amd64), tagged with the version (e.g. `0.9.0`; `0.9` follows the latest patch), `latest` and the commit.
+The release images are `ghcr.io/opsolete/opsolete-app` and `ghcr.io/opsolete/opsolete-runner` (linux/amd64), tagged with the version (e.g. `0.10.0`; `0.9` follows the latest patch), `latest` and the commit.
 
 ## Try it on one machine
 
@@ -18,11 +18,11 @@ docker run -d --name opsolete-app --network opsolete -p 8080:8080 \
   -e SECRET_KEY=$(openssl rand -base64 32) \
   -e STATE_STORE='file:///tmp/state?create_dir=1&metadata=skip' \
   -e AUTH_DEV_USER=dev@localhost -e ADMIN_EMAILS=dev@localhost \
-  ghcr.io/opsolete/opsolete-app:0.9.0
+  ghcr.io/opsolete/opsolete-app:0.10.0
 export OPS_RUNNER_TOKEN=$(docker exec opsolete-app /bin/opsolete runner-token local)  # once the app is up
 docker run -d --name opsolete-runner --network opsolete \
   -e OPS_SERVER_URL=http://opsolete-app:8080 -e OPS_RUNNER_TOKEN \
-  ghcr.io/opsolete/opsolete-runner:0.9.0
+  ghcr.io/opsolete/opsolete-runner:0.10.0
 ```
 <!-- x-release-please-end -->
 

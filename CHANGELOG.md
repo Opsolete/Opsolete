@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.10.0](https://github.com/Opsolete/Opsolete/compare/v0.9.0...v0.10.0) (2026-11-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** /api/v1/workspaces/{name}/... is /api/v1/workspaces/{id}/...; creating a workspace takes project_id, not project; the workspace JSON has project_id and drift_detection.
+* **ui:** the Templates tab (?show=templates) is gone; any other show= value shows the Resources tab.
+
+### Features
+
+* **api:** platform objects by id for a Terraform provider; service tokens ([46365a1](https://github.com/Opsolete/Opsolete/commit/46365a12e80c62748baf785c58bfa74880ebfc83))
+* **ui:** a template card's title holds its version and an update tag; recreate inside the resource list ([eaebf1c](https://github.com/Opsolete/Opsolete/commit/eaebf1cd60caedea198b4b947280755a2ddf0933))
+* **ui:** one Resources tab: templates are its groups, with Configure and Remove ([6529d7c](https://github.com/Opsolete/Opsolete/commit/6529d7ca2afaa86b01b8e0ea09c060dbb20dacd4))
+* **ui:** template groups as cards: a readable header with its buttons, resources fold open ([ca4af9a](https://github.com/Opsolete/Opsolete/commit/ca4af9af64d3ed9252e654958a63f5b5ee466f3e))
+
+
+### Bug Fixes
+
+* **api:** a token sent wins over a session ([6fd80e1](https://github.com/Opsolete/Opsolete/commit/6fd80e1da5def161c18adcd42d2a214281810f1c))
+* **api:** a token sent wins over a session ([2d8d860](https://github.com/Opsolete/Opsolete/commit/2d8d860028fdce5a3f679abb6cb9f15967fa87e1))
+* **deps:** bump the go group with 3 updates ([884ced1](https://github.com/Opsolete/Opsolete/commit/884ced18e21aede69bd6d61509201498e7640420))
+* **deps:** bump the go group with 3 updates ([b29e328](https://github.com/Opsolete/Opsolete/commit/b29e328e7f94d22be8795699da4673a11373dd54))
+* **flake:** update vendorHash ([3f18dc9](https://github.com/Opsolete/Opsolete/commit/3f18dc987f2a4228b91abc838ea016d3586bca01))
+* **templates:** another registry's module gets a version argument, not ?ref= ([d99577e](https://github.com/Opsolete/Opsolete/commit/d99577e49752b42c55601068848443e8ad8adde2))
+* **templates:** another registry's module gets a version argument, not ?ref= ([2b32649](https://github.com/Opsolete/Opsolete/commit/2b32649b0e76eb498d2818714cbae20deaa34b8a))
+
 ## [0.9.0](https://github.com/Opsolete/Opsolete/compare/v0.8.0...v0.9.0) (2026-11-13)
 
 
