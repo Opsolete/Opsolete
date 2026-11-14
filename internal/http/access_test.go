@@ -422,6 +422,17 @@ func accessRows() []accessRow {
 		{"GET /api/v1/vcs-connections/{id}", "/api/v1/vcs-connections/{conn}", "", onAPI, []int{401, 403, 403, 403, 200}, false},
 		{"PATCH /api/v1/vcs-connections/{id}", "/api/v1/vcs-connections/{conn}", `{"scope":"all"}`, onAPI, []int{401, 403, 403, 403, 200}, true},
 		{"DELETE /api/v1/vcs-connections/{id}", "/api/v1/vcs-connections/{conn}", "", onAPI, []int{401, 403, 403, 403, 204}, true},
+		{"GET /api/v1/runners", "/api/v1/runners", "", onAPI, []int{401, 403, 403, 403, 200}, false},
+		{"POST /api/v1/runners", "/api/v1/runners", `{"name":"{proj}-r"}`, onAPI, []int{401, 403, 403, 403, 201}, true},
+		{"GET /api/v1/runners/{id}", "/api/v1/runners/00000000-0000-0000-0000-000000000000", "", onAPI, []int{401, 403, 403, 403, 404}, false},
+		{"DELETE /api/v1/runners/{id}", "/api/v1/runners/00000000-0000-0000-0000-000000000000", "", onAPI, []int{401, 403, 403, 403, 404}, false},
+		{"GET /api/v1/vcs-modules", "/api/v1/vcs-modules", "", onAPI, []int{401, 403, 403, 403, 200}, false},
+		{"POST /api/v1/vcs-modules", "/api/v1/vcs-modules", `{"connection_id":"{conn}","repo":"acc/none"}`, onAPI, []int{401, 403, 403, 403, 422}, false},
+		{"GET /api/v1/vcs-modules/{namespace}/{name}/{system}", "/api/v1/vcs-modules/{ns}/net/azurerm", "", onAPI, []int{401, 403, 403, 403, 404}, false},
+		{"DELETE /api/v1/vcs-modules/{namespace}/{name}/{system}", "/api/v1/vcs-modules/{ns}/net/azurerm", "", onAPI, []int{401, 403, 403, 403, 404}, false},
+		{"GET /api/v1/template-catalog", "/api/v1/template-catalog", "", onAPI, []int{401, 403, 403, 403, 404}, false},
+		{"PUT /api/v1/template-catalog", "/api/v1/template-catalog", `{"connection_id":"{conn}","repo":"acc/none"}`, onAPI, []int{401, 403, 403, 403, 422}, false},
+		{"DELETE /api/v1/template-catalog", "/api/v1/template-catalog", "", onAPI, []int{401, 403, 403, 403, 204}, false},
 
 		// UI: OAuth consent, account, organization, audit.
 		{"GET /oauth/authorization", "/oauth/authorization?client_id=terraform-cli&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A10000%2Flogin&state=s&code_challenge=c&code_challenge_method=S256", "", onUI, []int{302, 200, 200, 200, 200}, false},

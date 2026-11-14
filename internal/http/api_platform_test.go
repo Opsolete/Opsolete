@@ -10,6 +10,7 @@ import (
 
 	"github.com/opsolete/opsolete/internal/auth"
 	"github.com/opsolete/opsolete/internal/auth/authtest"
+	"github.com/opsolete/opsolete/internal/vcs"
 )
 
 // TestAPIPlatform: what a Terraform provider does, over HTTP with a service token: create, read (by id, and by name
@@ -132,4 +133,55 @@ func TestAPIPlatform(t *testing.T) {
 		t.Fatal(err)
 	}
 	call("GET", "/projects", "", http.StatusUnauthorized)
+}
+
+// TestAPISettings: runners (a new token returned once, or one's own registered), and the template catalog (saved
+// even when its templates don't load: sync_error, as the settings are saved), over the JSON API.
+func TestAPISettings(t *testing.T) {
+	store := testStore(t)
+	gh := fakeGitHubRepo(t)
+	srv := newApp(t, "../../catalog", store, devAuth(t, store, "admin@example.com", true), Features{Deployments: true, VCS: true})
+	srv.App.VCS = vcs.NewClient(gh.Client())
+	h := srv.Handler()
+	sfx := strings.ToLower(newID()[:8])
+	call := func(method, path, body string, want int) map[string]any {
+		t.Helper()
+		req := httptest.NewRequest(method, "/api/v1"+path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := do(h, req)
+		if rec.Code != want {
+			t.Fatalf("%s %s: %d, want %d: %s", method, path, rec.Code, want, rec.Body.String())
+		}
+		var out map[string]any
+		json.Unmarshal(rec.Body.Bytes(), &out)
+		return out
+	}
+
+	// Runners.
+	rn := call("POST", "/runners", `{"name":"k8s-`+sfx+`","pool":"prd"}`, http.StatusCreated)
+	if tok, _ := rn["token"].(string); !strings.HasPrefix(tok, "opsr_") || rn["pool"] != "prd" {
+		t.Fatalf("runner: %v", rn)
+	}
+	rid := rn["id"].(string)
+	if got := call("GET", "/runners/"+rid, "", http.StatusOK); got["token"] != nil || got["name"] != "k8s-"+sfx {
+		t.Fatalf("a runner read back (no token): %v", got)
+	}
+	call("POST", "/runners", `{"name":"k8s-`+sfx+`"}`, http.StatusUnprocessableEntity) // taken
+	own := call("POST", "/runners", `{"name":"own-`+sfx+`","token":"`+strings.Repeat("t", 40)+`"}`, http.StatusCreated)
+	if own["token"] != nil || own["pool"] != "default" {
+		t.Fatalf("a registered runner (its token not echoed): %v", own)
+	}
+	call("DELETE", "/runners/"+rid, "", http.StatusNoContent)
+	call("GET", "/runners/"+rid, "", http.StatusNotFound)
+
+	// The template catalog: a connection, a repository whose templates can't be loaded (the fake has no tree).
+	call("GET", "/template-catalog", "", http.StatusNotFound)
+	conn := call("POST", "/vcs-connections", `{"name":"gh-`+sfx+`","provider":"github","base_url":"`+gh.URL+`","token":"pat"}`, http.StatusCreated)["id"].(string)
+	call("PUT", "/template-catalog", `{"connection_id":"`+conn+`","repo":"acme/none"}`, http.StatusUnprocessableEntity) // the branch can't be read
+	tc := call("PUT", "/template-catalog", `{"connection_id":"`+conn+`","repo":"acme/infra"}`, http.StatusOK)
+	if tc["repo"] != "acme/infra" || tc["branch"] != "main" || tc["mode"] != "off" || tc["sync_error"] == nil {
+		t.Fatalf("catalog saved, its templates not loaded: %v", tc)
+	}
+	call("DELETE", "/template-catalog", "", http.StatusNoContent)
+	call("GET", "/template-catalog", "", http.StatusNotFound)
 }

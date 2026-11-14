@@ -56,6 +56,9 @@ adds the JSON API for it, identifiers Terraform can keep, and a token for automa
 | Set variable | `…/variable-sets/{id}/variables[/{variable_id}]` | as a workspace variable |
 | Set attachment | `PUT/DELETE /variable-sets/{id}/projects/{project_id}`, `PUT/DELETE /variable-sets/{id}/workspaces/{workspace_id}` | none (idempotent) |
 | VCS connection | `GET/POST /vcs-connections`, `GET/PATCH/DELETE /vcs-connections/{id}` | `name` (fixed), `provider` (`github`/`azure-devops`, fixed), `base_url` (fixed), `token` (write-only; a new one is checked like in the UI), `scope` (`""`/`all`/`selected`), `project_ids`, `workspace_ids` |
+| Runner | `GET/POST /runners`, `GET/DELETE /runners/{id}` | `name`, `pool`; a new `token` returned once, or `token` sent (registered) |
+| Registry module from VCS | `GET/POST /vcs-modules`, `GET/DELETE /vcs-modules/{namespace}/{name}/{system}` | `connection_id`, `repo`, `dir`, `tag_prefix`, the address; deleting stops publishing, its versions stay |
+| Template catalog | `GET/PUT/DELETE /template-catalog` | `connection_id`, `repo`, `branch`, `dir`, `mode`; one per installation |
 | Service token | *Settings → API tokens*, `opsolete api-token` | `name`, `expires_at` (optional) |
 
 Lists aren't paginated: these objects number in the hundreds at most. If that changes, `?page` comes later without

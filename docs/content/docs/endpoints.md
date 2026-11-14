@@ -231,6 +231,17 @@ Objects are addressed by **id** (names change; Terraform keeps ids); lists filte
 | `GET /api/v1/vcs-connections/{id}` | admin | A connection |
 | `PATCH /api/v1/vcs-connections/{id}` | admin | Replaces the `token` (checked again), changes `scope`, `project_ids`, `workspace_ids` (name, provider and URL are fixed) |
 | `DELETE /api/v1/vcs-connections/{id}` | admin | Deletes it: `204` |
+| `GET /api/v1/runners` | admin | Runners (`?name=`): `id`, `name`, `pool`, `last_seen` |
+| `POST /api/v1/runners` | admin | Registers one (`name`, `pool`): with a new token, returned once (`token`), or with the `token` sent (at least 32 characters), which replaces that runner's token and pool: `201` |
+| `GET /api/v1/runners/{id}` | admin | A runner (never its token) |
+| `DELETE /api/v1/runners/{id}` | admin | Deletes it: its token stops working at once. `204` |
+| `GET /api/v1/vcs-modules` | admin | Registry modules published from a repository: `namespace`, `name`, `system`, `connection_id`, `repo`, `dir`, `tag_prefix`, `synced_at`, `sync_error`, `versions` |
+| `POST /api/v1/vcs-modules` | admin | Publishes one (`connection_id`, `repo`, `dir`, `tag_prefix`, `namespace`, `name`, `system`; the address follows the repository if empty) and its tags right away: `201` |
+| `GET /api/v1/vcs-modules/{namespace}/{name}/{system}` | admin | One, with its versions |
+| `DELETE /api/v1/vcs-modules/{namespace}/{name}/{system}` | admin | Stops publishing it from its repository; its versions stay (workspaces pin them). `204` |
+| `GET /api/v1/template-catalog` | admin | The template catalog's settings (`connection_id`, `repo`, `branch`, `dir`, `mode`, `commit`, `synced_at`, `sync_error`); `404` while the templates come from `TEMPLATES_DIR` |
+| `PUT /api/v1/template-catalog` | admin | Points it at a repository branch's folder (`connection_id`, `repo`, `branch`: `main`, `dir`, `mode`: `off`, `commit` or `pr`) and loads it. Saved but its templates don't load: `200` with `sync_error` |
+| `DELETE /api/v1/template-catalog` | admin | Disconnects it: the templates come from `TEMPLATES_DIR` again. `204` |
 
 ## Terraform CLI
 
