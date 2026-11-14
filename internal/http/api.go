@@ -51,6 +51,7 @@ func (s *Server) apiRoutes(mux routes) {
 	mux.HandleFunc("POST "+p+"/workspaces/{id}/runs/{run}/discard", ws(s.apiDecide(s.App.DiscardRun)))
 	mux.HandleFunc("POST "+p+"/workspaces/{id}/runs/{run}/cancel", ws(s.apiCancel))
 	s.apiPlatformRoutes(mux)
+	s.apiSettingsRoutes(mux)
 }
 
 // apiUser admits a token's user or service token (Bearer), else a signed-in user (session). A token sent wins over a
