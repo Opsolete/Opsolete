@@ -84,7 +84,7 @@ func TestWorkspaceTemplates(t *testing.T) {
 	}
 	j := claim()
 	if j.ModuleSource != "" || len(j.Modules) != 2 || j.Modules[0].Name != one || j.Modules[1].Inputs["name"] != "two" ||
-		!strings.HasSuffix(j.Modules[0].Source, "/examples/greeting/terraform?ref=1.1.0") {
+		!strings.HasSuffix(j.Modules[0].Source, "/examples/greeting/terraform") || j.Modules[0].Version != "1.1.0" { // another registry's: a version argument
 		t.Fatalf("job: %+v", j)
 	}
 

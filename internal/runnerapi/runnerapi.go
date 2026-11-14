@@ -79,9 +79,10 @@ type RegistryAccess struct {
 // Module is a template added to the workspace: the runner adds it as module.<Name> next to the
 // root configuration, and exposes each of its outputs as the root output <Name>__<output>.
 type Module struct {
-	Name   string         `json:"name"`
-	Source string         `json:"source"` // like ModuleSource
-	Inputs map[string]any `json:"inputs"`
+	Name    string         `json:"name"`
+	Source  string         `json:"source"`            // like ModuleSource
+	Version string         `json:"version,omitempty"` // another registry's module: its version argument (Source takes none)
+	Inputs  map[string]any `json:"inputs"`
 }
 
 // Import is an existing resource a plan imports (an import block, in a template's module): ID into the address To.

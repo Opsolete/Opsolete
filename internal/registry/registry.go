@@ -117,18 +117,22 @@ func (r *Registry) VerifyArchiveURL(path, expires, sig string) bool {
 	return hmac.Equal([]byte(sig), []byte(r.sig(path, exp)))
 }
 
-// RunnerSource resolves a template's module for `terraform init -from-module`: source?ref=ref, or for
-// this registry's modules a relative signed archive path that runners resolve against the URL
-// they reach Opsolete on (in k8s, the internal service).
-func (r *Registry) RunnerSource(m templates.Module, ttl time.Duration) string {
+// RunnerSource resolves a template's module for its module block: for this registry's modules a relative signed
+// archive path that runners resolve against the URL they reach Opsolete on (in k8s, the internal service); for a
+// module of another registry (the public one, another Opsolete) the address with ref as its version argument, since
+// a registry address takes no ?ref=; otherwise (git:: and other packages) source?ref=ref, version "".
+func (r *Registry) RunnerSource(m templates.Module, ttl time.Duration) (source, version string) {
 	if ns, name, sys, ok := r.ParseSource(m.Source); ok {
-		return r.SignedArchiveURL(ArchivePath(ns, name, sys, m.Ref), ttl)
+		return r.SignedArchiveURL(ArchivePath(ns, name, sys, m.Ref), ttl), ""
+	}
+	if _, err := tfaddr.ParseModuleSource(m.Source); err == nil {
+		return m.Source, m.Ref
 	}
 	sep := "?"
 	if strings.Contains(m.Source, "?") { // e.g. git::https://host/repo//dir?depth=1
 		sep = "&"
 	}
-	return m.Source + sep + "ref=" + url.QueryEscape(m.Ref)
+	return m.Source + sep + "ref=" + url.QueryEscape(m.Ref), ""
 }
 
 // Inspection is what Inspect learns from a module archive.
