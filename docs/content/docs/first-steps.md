@@ -71,3 +71,4 @@ A round that would replace or delete anything can't be applied, and a normal app
 - [Projects]({{< relref "/docs/features/projects" >}}) and [environments]({{< relref "/docs/features/environments" >}}) to group workspaces and share settings.
 - [Teams]({{< relref "/docs/config/authentication#teams-access-per-workspace" >}}) to give users access to workspaces.
 - [The Terraform CLI]({{< relref "/docs/features/terraform-cli" >}}) against Opsolete's state and runs.
+- [The Terraform provider]({{< relref "/docs/features/terraform-provider" >}}) to set up projects, variable sets and workspaces as code.

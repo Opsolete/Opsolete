@@ -33,7 +33,7 @@ Scripts and the Terraform provider use the [JSON API]({{< relref "/docs/endpoint
 - **Settings → API tokens** (admins): a name; the token is shown once. Revoking it refuses its next request.
 - Or on the server, for bootstrapping (Terraform needs a token before it can create anything): `opsolete api-token <name>` prints a new one; `opsolete api-token -from-env NAME <name>` (or `-from-stdin`) registers one you generated yourself (at least 32 characters, e.g. `openssl rand -hex 32`) and replaces that token's old value, at every start if you like.
 
-A service token has **admin rights** and isn't a person: the audit log names it `token:<name>`. Keep it like any admin credential, and give each automation its own, so you can revoke one alone.
+The [Terraform provider]({{< relref "/docs/features/terraform-provider" >}}) uses one. A service token has **admin rights** and isn't a person: the audit log names it `token:<name>`. Keep it like any admin credential, and give each automation its own, so you can revoke one alone.
 
 ## Audit log
 
