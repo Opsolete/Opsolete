@@ -104,8 +104,8 @@ func TestWorkspaceTemplates(t *testing.T) {
 	}
 	store.Pool.Exec(context.Background(), `INSERT INTO state_version_resources (state_version_id, address, type, name, provider, module) VALUES ($1, $2, 'a', 'b', 'p', $3)`, vid, "module."+one+".a.b", "module."+one)
 	// each template shows whether it has resources in the state, e.g. after a failed apply
-	if page := get(h, "/workspaces/"+ws).Body.String(); !regexp.MustCompile(`>`+one+` · version [^<]*</small>(?s:.)*?<summary>1 resource</summary>`).MatchString(page) ||
-		!regexp.MustCompile(`>`+two+` · version [^<]*</small>(?s:.)*?No resources in the state yet`).MatchString(page) || !strings.Contains(page, `form="remove-`+two+`"`) {
+	if page := get(h, "/workspaces/"+ws).Body.String(); !regexp.MustCompile(`>`+one+`</small>(?s:.)*?<summary>1 resource</summary>`).MatchString(page) ||
+		!regexp.MustCompile(`>`+two+`</small>(?s:.)*?No resources in the state yet`).MatchString(page) || !strings.Contains(page, `form="remove-`+two+`"`) {
 		t.Fatalf("resources per template: %s", page)
 	}
 	destroy := func(name string, left int) {

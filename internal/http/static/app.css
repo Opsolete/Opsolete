@@ -433,9 +433,12 @@ h1 .status { font-size: .85rem; }
 .section > summary::before { content: "›"; display: inline-block; width: .8rem; color: var(--muted); transition: transform .15s; }
 .section[open] > summary::before { transform: rotate(90deg); }
 .section > summary .end { margin-left: auto; font-size: .85rem; }
-.group-head { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem 1rem; padding: .75rem 1rem; }
-.group-head small { margin-left: .35rem; }
-.group-head .end { margin-left: auto; }
+/* the title takes the room, the buttons keep theirs on the same line; the module's name on a line of its own */
+.group-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 1rem; padding: .75rem 1rem; }
+.group-head small { display: block; margin-top: .15rem; }
+.group-head .nowrap { flex-wrap: nowrap; }
+.group-note button + span { margin-left: .6rem; }
+.tag.update { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
 .group > details > summary { padding: .5rem 1rem; border-top: 1px solid var(--border); cursor: pointer; color: var(--muted); font-size: .85rem; }
 .group > details > summary:hover { color: var(--text); }
 .group-note { margin: 0; padding: .5rem 1rem; border-top: 1px solid var(--border); font-size: .85rem; }

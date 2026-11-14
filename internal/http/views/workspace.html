@@ -87,7 +87,6 @@
 </div>
 
 {{if eq $show "resources"}}
-<p class="muted">Grouped by module. A template added to the workspace is a module (<code>module.&lt;name&gt;</code>), planned and applied with the rest of its configuration in its one state; its outputs show as <code>&lt;name&gt;__&lt;output&gt;</code>.</p>
 {{if and .Versions (not (index .Versions 0).Indexed)}}<p class="muted">The current state version isn't indexed yet (the run couldn't read it back); the next apply indexes it.</p>{{end}}
 {{with .ResourceGroups}}
 {{$rows := false}}{{range .}}{{if .Rows}}{{$rows = true}}{{end}}{{end}}
@@ -100,15 +99,15 @@
 <div class="section group">
   <div class="group-head">
     <div>
-      {{if .Added}}<strong title="{{.Added.ModuleSource}}">{{.Template}}</strong>
-      <small class="muted">{{.Added.Name}} · version {{.Ref}}</small>
-      {{with .Update}}<span class="tag" title="The template now uses version {{.}}: Configure… to move to it">Version {{.}} available</span>{{end}}
+      {{if .Added}}<strong title="{{.Added.ModuleSource}}">{{.Template}}</strong> <span class="tag">{{.Ref}}</span>
+      {{with .Update}}<span class="tag update" title="The template now uses version {{.}}: Configure… to move to it">Update available</span>{{end}}
+      <small class="muted">{{.Added.Name}}</small>
       {{else if .Module}}<strong><code>{{.Module}}</code></strong>{{with .Template}} <small class="muted">{{.}}</small>{{end}}
       {{else}}<strong>Own configuration</strong> <small class="muted">{{if $w.VCSLinked}}from the linked repository{{else}}from the Terraform CLI{{end}}</small>{{end}}
     </div>
     {{if and .Added $.CanOperate (not $.Active)}}{{with .Added}}
     <!-- Remove posts its own form, after this one: forms can't nest -->
-    <div class="inline end"><a class="btn secondary small" href="/workspaces/{{$w.Name}}/templates/{{.Name}}">Configure…</a>
+    <div class="inline nowrap"><a class="btn secondary small" href="/workspaces/{{$w.Name}}/templates/{{.Name}}">Configure…</a>
       <button type="submit" form="remove-{{.Name}}" class="danger small">Remove…</button></div>
     {{end}}{{end}}
   </div>
@@ -119,12 +118,12 @@
     {{range .Rows}}<tr data-row>{{if $replace}}<td class="w-2"><input type="checkbox" name="replace" value="{{.Address}}" aria-label="recreate {{.Address}}"></td>{{end}}
       <td><code title="{{.Address}}">{{.Short}}</code></td><td>{{.Type}}</td><td title="{{provider .Resource.Provider}}">{{.Provider}}</td></tr>{{end}}
     </table>
+    {{if $replace}}<div class="group-note"><button type="submit" class="secondary small">Plan recreating selected</button>
+      <span class="muted">Destroys and recreates the ticked resources (e.g. a broken VM); you review the plan first.</span></div>{{end}}
   </details>{{else if $indexed}}<p class="group-note muted">No resources in the state yet (or anymore): its last apply failed, or hasn't run.</p>{{end}}
 </div>
 {{end}}
 {{template "fielderror" (dict "F" (formOf $.F "run") "N" "replace")}}
-{{if $replace}}<div class="actions"><button type="submit" class="secondary">Plan recreating selected</button></div>
-<p class="hint">Recreate destroys the selected resources and creates them again with the same configuration, e.g. a broken VM. You review the plan first. To remove resources for good, remove their template or change its inputs.</p>{{end}}
 </form>
 {{if and $.CanOperate (not $.Active)}}{{range $.Added}}
 <form method="post" action="/workspaces/{{$w.Name}}/templates/{{.Name}}/remove" id="remove-{{.Name}}" data-confirm="Remove {{.Name}}? This starts a plan that destroys its resources." hidden></form>{{end}}{{end}}
