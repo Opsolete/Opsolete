@@ -3,7 +3,7 @@ title: Terraform provider
 weight: 12
 ---
 
-The [Opsolete provider](https://github.com/Opsolete/terraform-provider-opsolete) manages Opsolete's platform objects with Terraform: set up projects, their credentials and network values, and empty workspaces as code, and review changes to them in a plan like any other infrastructure.
+The [Opsolete provider](https://registry.terraform.io/providers/Opsolete/opsolete/latest) manages Opsolete's platform objects with Terraform: set up projects, their credentials and network values, and empty workspaces as code, and review changes to them in a plan like any other infrastructure.
 
 | Managed with the provider | Stays in Opsolete's UI |
 |---|---|
@@ -22,7 +22,10 @@ It uses the [JSON API]({{< relref "/docs/endpoints#json-api" >}}), so the same a
    ```hcl
    terraform {
      required_providers {
-       opsolete = { source = "opsolete/opsolete" }
+       opsolete = {
+         source  = "opsolete/opsolete"
+         version = "~> 0.1" # needs Opsolete 0.10.0 or later
+       }
      }
    }
 
@@ -33,27 +36,6 @@ It uses the [JSON API]({{< relref "/docs/endpoints#json-api" >}}), so the same a
    }
    ```
 
-{{< callout type="info" >}}
-**Not on the Terraform Registry yet.** Until the first release, build it from source and point Terraform at the binary:
-
-```sh
-git clone https://github.com/Opsolete/terraform-provider-opsolete
-cd terraform-provider-opsolete
-go install .   # into $(go env GOPATH)/bin
-```
-
-```hcl
-# ~/.terraformrc
-provider_installation {
-  dev_overrides {
-    "opsolete/opsolete" = "/home/you/go/bin" # $(go env GOPATH)/bin
-  }
-  direct {}
-}
-```
-
-With `dev_overrides`, skip `terraform init` for this provider: `plan` and `apply` use the binary directly (and warn that they do).
-{{< /callout >}}
 
 ## Example: a project per subscription
 
@@ -127,7 +109,7 @@ resource "opsolete_workspace" "shop" {
 | `opsolete_variable_set_workspace` | applies a set to one workspace | `<variable_set_id>/<workspace_id>` |
 | `opsolete_vcs_connection` | name, `provider_type` (`github` or `azure-devops`), `base_url`, `token`, `scope`, `project_ids`, `workspace_ids` | its name or id |
 
-Data sources look up a `opsolete_project`, `opsolete_workspace` or `opsolete_variable_set` by name. Every attribute is described in the [provider's docs](https://github.com/Opsolete/terraform-provider-opsolete/tree/main/docs).
+Data sources look up a `opsolete_project`, `opsolete_workspace` or `opsolete_variable_set` by name. Every attribute is described in the [provider's docs on the Terraform Registry](https://registry.terraform.io/providers/Opsolete/opsolete/latest/docs).
 
 ## Good to know
 
