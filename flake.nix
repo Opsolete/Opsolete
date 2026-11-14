@@ -44,7 +44,7 @@
         pname = "opsolete";
         version = "0.9.0"; # x-release-please-version
         src = self;
-        vendorHash = "sha256-5fMwU+1PPzgY457RPy3yuwh3h6mYnGkQLIg2ENGTwb0="; # update after go.mod changes
+        vendorHash = "sha256-esaXMMp88VvkqXZw4m1nwBDbcU6pluc3Fp7Rr71qy1g="; # update after go.mod changes
         subPackages = ["cmd/opsolete"];
         # DB tests skip themselves without TEST_DATABASE_URL; the rest use catalog/ from src. The package
         # ships no templates: they come from a Git repository (Settings → Templates), or TEMPLATES_DIR.
