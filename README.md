@@ -37,3 +37,7 @@ Opsolete is at <!-- x-release-please-start-version -->0.9.0<!-- x-release-please
 ## Documentation
 
 Everything else, from writing templates to running Opsolete on Kubernetes, is at **https://opsolete.github.io/Opsolete/**. The source is in [`docs/`](docs/content/docs).
+
+## License
+
+[Mozilla Public License 2.0](LICENSE).
