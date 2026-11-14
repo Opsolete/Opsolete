@@ -63,6 +63,13 @@ func TestAPI(t *testing.T) {
 	}
 	call("GET", "/api/v1/workspaces/"+newID(), "", http.StatusNotFound)
 	call("GET", "/api/v1/workspaces/"+ws, "", http.StatusNotFound) // by id only: a name isn't one
+
+	// a token sent wins over the session (here dev login's, which every request has): a wrong one is refused
+	req := httptest.NewRequest("GET", "/api/v1/workspaces/"+id, nil)
+	req.Header.Set("Authorization", "Bearer not-a-token")
+	if rec := do(h, req); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("a wrong token with a session: %d %s", rec.Code, rec.Body.String())
+	}
 }
 
 func mustJSON(v any) string {

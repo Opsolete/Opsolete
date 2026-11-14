@@ -53,16 +53,17 @@ func (s *Server) apiRoutes(mux routes) {
 	s.apiPlatformRoutes(mux)
 }
 
-// apiUser admits a signed-in user (session) or a user token's user (Bearer), as the cloud API does.
+// apiUser admits a token's user or service token (Bearer), else a signed-in user (session). A token sent wins over a
+// session: it's what the client chose, also on a dev server (AUTH_DEV_USER) where every request has a session.
 func (s *Server) apiUser(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if p := auth.CurrentPrincipal(r.Context()); p.Type == "user" {
-			next(w, r.WithContext(auth.WithUser(r.Context(), p.User)))
-			return
-		}
 		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if !ok {
-			writeAPIv1Error(w, http.StatusUnauthorized, "sign in, or send a user token (terraform login) as a Bearer token", nil)
+			if p := auth.CurrentPrincipal(r.Context()); p.Type == "user" {
+				next(w, r.WithContext(auth.WithUser(r.Context(), p.User)))
+				return
+			}
+			writeAPIv1Error(w, http.StatusUnauthorized, "sign in, or send a token (terraform login, or a service token) as a Bearer token", nil)
 			return
 		}
 		id, email, role, groups, err := s.App.TokenUser(r.Context(), token)
