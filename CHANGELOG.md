@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.0](https://github.com/Opsolete/Opsolete/compare/v0.10.0...v0.11.0) (2026-11-14)
+
+
+### Features
+
+* **api:** runners, registry modules from VCS and the template catalog ([d316e2d](https://github.com/Opsolete/Opsolete/commit/d316e2d3d95606f83f30732a3d68c816f2d4f4a2))
+* **api:** runners, registry modules from VCS and the template catalog ([bf82b5a](https://github.com/Opsolete/Opsolete/commit/bf82b5af71d822d5716e4f5889bb18cfa5c45086))
+
 ## [0.10.0](https://github.com/Opsolete/Opsolete/compare/v0.9.0...v0.10.0) (2026-11-14)
 
 
