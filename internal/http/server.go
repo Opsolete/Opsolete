@@ -116,6 +116,9 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("GET /organization/runners", s.admin(s.runnersPage))
 		mux.HandleFunc("POST /organization/runners", s.admin(s.createRunner))
 		mux.HandleFunc("POST /organization/runners/{id}/delete", s.admin(s.deleteRunner))
+		mux.HandleFunc("GET /organization/api-tokens", s.admin(s.apiTokensPage))
+		mux.HandleFunc("POST /organization/api-tokens", s.admin(s.createAPIToken))
+		mux.HandleFunc("POST /organization/api-tokens/{id}/revoke", s.admin(s.revokeAPIToken))
 	}
 	if !s.Features.Deployments {
 		mux.Handle("GET /{$}", http.RedirectHandler("/registry", http.StatusFound))

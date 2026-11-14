@@ -45,6 +45,25 @@ func (q *Queries) CreateModule(ctx context.Context, arg CreateModuleParams) erro
 	return err
 }
 
+const createServiceToken = `-- name: CreateServiceToken :one
+INSERT INTO api_tokens (name, token_hash, scope, expires_at)
+VALUES ($1::text, $2::bytea, 'service', $3::timestamptz)
+RETURNING id
+`
+
+type CreateServiceTokenParams struct {
+	Name      string
+	TokenHash []byte
+	ExpiresAt *time.Time
+}
+
+func (q *Queries) CreateServiceToken(ctx context.Context, arg CreateServiceTokenParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, createServiceToken, arg.Name, arg.TokenHash, arg.ExpiresAt)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const createToken = `-- name: CreateToken :exec
 INSERT INTO api_tokens (name, token_hash, scope) VALUES ($1::text, $2::bytea, $3::text)
 `
@@ -94,6 +113,18 @@ type DeleteModuleVersionsParams struct {
 
 func (q *Queries) DeleteModuleVersions(ctx context.Context, arg DeleteModuleVersionsParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteModuleVersions, arg.Namespace, arg.Name, arg.System)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteServiceToken = `-- name: DeleteServiceToken :execrows
+DELETE FROM api_tokens WHERE id = $1::uuid AND scope = 'service'
+`
+
+func (q *Queries) DeleteServiceToken(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteServiceToken, id)
 	if err != nil {
 		return 0, err
 	}
@@ -286,6 +317,73 @@ DELETE FROM api_tokens WHERE scope = 'user' AND user_id = $1::uuid
 func (q *Queries) RevokeUserTokens(ctx context.Context, userID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, revokeUserTokens, userID)
 	return err
+}
+
+const serviceTokenName = `-- name: ServiceTokenName :one
+SELECT name FROM api_tokens WHERE token_hash = $1::bytea AND scope = 'service'
+    AND (expires_at IS NULL OR expires_at > now())
+`
+
+func (q *Queries) ServiceTokenName(ctx context.Context, tokenHash []byte) (string, error) {
+	row := q.db.QueryRow(ctx, serviceTokenName, tokenHash)
+	var name string
+	err := row.Scan(&name)
+	return name, err
+}
+
+const serviceTokens = `-- name: ServiceTokens :many
+SELECT id, name, created_at, expires_at FROM api_tokens WHERE scope = 'service' ORDER BY name
+`
+
+type ServiceTokensRow struct {
+	ID        uuid.UUID
+	Name      string
+	CreatedAt time.Time
+	ExpiresAt *time.Time
+}
+
+func (q *Queries) ServiceTokens(ctx context.Context) ([]ServiceTokensRow, error) {
+	rows, err := q.db.Query(ctx, serviceTokens)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ServiceTokensRow
+	for rows.Next() {
+		var i ServiceTokensRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.CreatedAt,
+			&i.ExpiresAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setServiceToken = `-- name: SetServiceToken :one
+INSERT INTO api_tokens (name, token_hash, scope) VALUES ($1::text, $2::bytea, 'service')
+ON CONFLICT (name) WHERE scope = 'service' DO UPDATE SET token_hash = EXCLUDED.token_hash, expires_at = NULL, created_at = now()
+RETURNING id
+`
+
+type SetServiceTokenParams struct {
+	Name      string
+	TokenHash []byte
+}
+
+// registers a token the caller generated as the named service token, replacing its old one
+func (q *Queries) SetServiceToken(ctx context.Context, arg SetServiceTokenParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, setServiceToken, arg.Name, arg.TokenHash)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const tokenUser = `-- name: TokenUser :one

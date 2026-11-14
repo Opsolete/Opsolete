@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"gocloud.dev/blob"
 
 	"github.com/opsolete/opsolete/internal/app"
@@ -216,6 +218,57 @@ func TestRunnerTokenCLI(t *testing.T) {
 		t.Fatal("both sources")
 	}
 	if _, err := store.RunnerByToken(ctx, token); err == nil {
+		t.Fatal("the replaced token still works")
+	}
+}
+
+// TestAPITokenCLI: `opsolete api-token` prints a new service token alone; -from-env registers one generated
+// elsewhere (refused when short), replacing that token's old value.
+func TestAPITokenCLI(t *testing.T) {
+	store := testEnv(t, strings.Repeat("k", 32))
+	ctx := context.Background()
+	run := func(args ...string) (string, error) {
+		t.Helper()
+		outR, outW, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		stdoutWas := os.Stdout
+		os.Stdout = outW
+		err = apiToken(args)
+		os.Stdout = stdoutWas
+		outW.Close()
+		out, _ := io.ReadAll(outR)
+		return string(out), err
+	}
+	name := "tf-" + strings.ToLower(uuid.NewString()[:8])
+	out, err := run(name)
+	token, rest, _ := strings.Cut(out, "\n")
+	if err != nil || token == "" || rest != "" {
+		t.Fatalf("stdout must be the token alone: %q %v", out, err)
+	}
+	if n, err := store.ServiceTokenName(ctx, token); err != nil || n != name {
+		t.Fatalf("printed token: %q %v", n, err)
+	}
+	if d := audited(t, store, "create service token"); !strings.Contains(d, name) || strings.Contains(d, token) {
+		t.Fatalf("audit entry: %s", d)
+	}
+	if _, err := run(name); err == nil {
+		t.Fatal("the same name again")
+	}
+	t.Setenv("OPS_TF_TOKEN", "short")
+	if _, err := run("-from-env", "OPS_TF_TOKEN", name); err == nil {
+		t.Fatal("a short token registered")
+	}
+	own := strings.Repeat("s", 40)
+	t.Setenv("OPS_TF_TOKEN", own)
+	if out, err := run("-from-env", "OPS_TF_TOKEN", name); err != nil || out != "" {
+		t.Fatalf("register: %q %v", out, err)
+	}
+	if n, err := store.ServiceTokenName(ctx, own); err != nil || n != name {
+		t.Fatalf("registered token: %q %v", n, err)
+	}
+	if _, err := store.ServiceTokenName(ctx, token); err == nil {
 		t.Fatal("the replaced token still works")
 	}
 }

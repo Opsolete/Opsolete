@@ -127,6 +127,12 @@ func (s *Store) GetVariableSet(ctx context.Context, name string) (VariableSet, e
 	return toSet(v), notFound(err)
 }
 
+// VariableSetByID returns ErrNotFound for an unknown id.
+func (s *Store) VariableSetByID(ctx context.Context, id uuid.UUID) (VariableSet, error) {
+	v, err := s.q.GetVariableSetByID(ctx, id)
+	return toSet(v), notFound(err)
+}
+
 func (s *Store) UpdateVariableSet(ctx context.Context, id uuid.UUID, description string, global, priority bool) error {
 	return s.q.UpdateVariableSet(ctx, db.UpdateVariableSetParams{ID: id, Description: description, Global: global, Priority: priority})
 }

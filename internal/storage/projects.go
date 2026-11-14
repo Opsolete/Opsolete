@@ -61,6 +61,12 @@ func (s *Store) Project(ctx context.Context, name string) (Project, error) {
 	return toProject(p), notFound(err)
 }
 
+// ProjectByID returns ErrNotFound for an unknown id. Callers check visibility.
+func (s *Store) ProjectByID(ctx context.Context, id uuid.UUID) (Project, error) {
+	p, err := s.q.GetProjectByID(ctx, id)
+	return toProject(p), notFound(err)
+}
+
 // ProjectsExist reports whether there is a project for each name.
 func (s *Store) ProjectsExist(ctx context.Context, names []string) (bool, error) {
 	return s.q.ProjectsExist(ctx, names)

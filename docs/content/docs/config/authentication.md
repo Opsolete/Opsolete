@@ -26,6 +26,15 @@ Teams are your IdP's groups. At every login Opsolete records the ID token's `gro
 - **Entra ID:** in the app registration, under *Token configuration*, choose *Add groups claim* and select *Security groups* for the ID token. Entra sends group **object IDs**, so grant those. Users in more than 200 groups get an "overage" reference instead of the list, which Opsolete doesn't follow (shortcut: assign groups to the app so the list stays short, or add a Microsoft Graph lookup if that's not enough). Keycloak and Dex need a `groups` mapper or scope.
 - Group membership changes take effect at the user's next login. Grants and revokes take effect immediately.
 
+## API tokens (automation)
+
+Scripts and the Terraform provider use the [JSON API]({{< relref "/docs/endpoints#json-api" >}}) with a token as `Authorization: Bearer …`. A `terraform login` token acts as you and expires; for automation, create a **service token**:
+
+- **Settings → API tokens** (admins): a name; the token is shown once. Revoking it refuses its next request.
+- Or on the server, for bootstrapping (Terraform needs a token before it can create anything): `opsolete api-token <name>` prints a new one; `opsolete api-token -from-env NAME <name>` (or `-from-stdin`) registers one you generated yourself (at least 32 characters, e.g. `openssl rand -hex 32`) and replaces that token's old value, at every start if you like.
+
+A service token has **admin rights** and isn't a person: the audit log names it `token:<name>`. Keep it like any admin credential, and give each automation its own, so you can revoke one alone.
+
 ## Audit log
 
 Admins, **Settings → Audit log**: every state-changing request, every sign-in (`GET /auth/callback`, successful or not), and every request refused as unauthenticated or forbidden (401/403), reads included. Each workspace a [template rollout]({{< relref "/docs/features/workspaces#update-to-a-new-module-version" >}}) upgrades gets its own entry (`template rollout`, with the workspace, module, versions and run), in the name of the admin who started it. The page shows the changes; sign-ins and refused requests are on their own tab (`/audit?show=access`).

@@ -54,3 +54,24 @@ DELETE FROM api_tokens WHERE scope = 'user' AND user_id = sqlc.arg(user_id)::uui
 
 -- name: RevokeUserTokens :exec
 DELETE FROM api_tokens WHERE scope = 'user' AND user_id = sqlc.arg(user_id)::uuid;
+
+-- name: CreateServiceToken :one
+INSERT INTO api_tokens (name, token_hash, scope, expires_at)
+VALUES (sqlc.arg(name)::text, sqlc.arg(token_hash)::bytea, 'service', sqlc.narg(expires_at)::timestamptz)
+RETURNING id;
+
+-- name: SetServiceToken :one
+-- registers a token the caller generated as the named service token, replacing its old one
+INSERT INTO api_tokens (name, token_hash, scope) VALUES (sqlc.arg(name)::text, sqlc.arg(token_hash)::bytea, 'service')
+ON CONFLICT (name) WHERE scope = 'service' DO UPDATE SET token_hash = EXCLUDED.token_hash, expires_at = NULL, created_at = now()
+RETURNING id;
+
+-- name: ServiceTokens :many
+SELECT id, name, created_at, expires_at FROM api_tokens WHERE scope = 'service' ORDER BY name;
+
+-- name: DeleteServiceToken :execrows
+DELETE FROM api_tokens WHERE id = sqlc.arg(id)::uuid AND scope = 'service';
+
+-- name: ServiceTokenName :one
+SELECT name FROM api_tokens WHERE token_hash = sqlc.arg(token_hash)::bytea AND scope = 'service'
+    AND (expires_at IS NULL OR expires_at > now());

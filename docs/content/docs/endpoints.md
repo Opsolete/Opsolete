@@ -170,28 +170,67 @@ Every route the server registers. A test (`TestEndpointsDocumented`) fails when 
 | `GET /organization/runners` | admin | Settings → Runners (with deployments) |
 | `POST /organization/runners` | admin | Creates a runner (`name`, `pool`) and shows its token once |
 | `POST /organization/runners/{id}/delete` | admin | Deletes a runner: its token stops working |
+| `GET /organization/api-tokens` | admin | Settings → API tokens: service tokens for automation (with deployments) |
+| `POST /organization/api-tokens` | admin | Creates one (`name`) and shows it once |
+| `POST /organization/api-tokens/{id}/revoke` | admin | Revokes one: its next request is refused |
 | `GET /audit` | admin | Audit log; `?show=access` for sign-ins and refused requests |
 
 ## JSON API
 
-`/api/v1`: the UI's operations for scripts and other front ends, with the same access as the UI (the access column). A signed-in browser uses its session (a cross-site `POST` is refused); a script sends a `terraform login` token as `Authorization: Bearer <token>`. Bodies are JSON; input values are typed (`"size": 2`, `"tags": {"env": "prd"}`), a sensitive one omitted keeps its stored value. Errors are `{"error": "…", "fields": {"name": "…", "inputs.<input>": "…"}}` (fields as the body names them) with the UI's statuses (`401`, `403`, `404`, `409` a conflict such as an active run, `422` invalid input).
+`/api/v1`: the UI's operations for scripts, other front ends and the Terraform provider, with the same access as the UI (the access column). A signed-in browser uses its session (a cross-site `POST` is refused); a script sends a token as `Authorization: Bearer <token>`: a `terraform login` token (acts as you) or a **service token** (Settings → API tokens, or `opsolete api-token <name>` on the server: admin rights, audited as `token:<name>`).
+
+Objects are addressed by **id** (names change; Terraform keeps ids); lists filter by name with `?name=`. `PATCH` changes only the fields sent; a field that can't change (a variable's key, a set's name) is refused with `422`. Sensitive values (variables, VCS tokens) are write-only: `"value": null`. Errors are `{"error": "…", "fields": {field: message}}` with `401`, `403`, `404` (also for objects you may not see), `409` and `422`. The design: [docs/terraform-provider.md](https://github.com/Opsolete/Opsolete/blob/master/docs/terraform-provider.md).
 
 | Endpoint | Access | Purpose |
 |---|---|---|
 | `GET /api/v1/templates` | user | The catalog |
 | `GET /api/v1/templates/{id}` | user | A template and its deploy form (`fields`: type, value, required, visible, options, locked by `?project=`) |
-| `GET /api/v1/workspaces` | user | Workspaces you can see (`?project=`), with their latest run |
-| `POST /api/v1/workspaces` | operate on the project | Creates a workspace from a template (`name`, `project`, `template`, `auto_apply`, `inputs`) and queues its plan: `201` |
-| `GET /api/v1/workspaces/{name}` | read | A workspace and its templates with their inputs (sensitive ones never) |
-| `POST /api/v1/workspaces/{name}/templates` | operate | Adds a template (`template`, `inputs`) and queues the plan: `201` with the module name |
-| `GET /api/v1/workspaces/{name}/templates/{module}` | operate | An added template's configure form, its stored values |
-| `PUT /api/v1/workspaces/{name}/templates/{module}` | operate | Saves its inputs (`inputs`) and the template's module version, queues the plan |
-| `GET /api/v1/workspaces/{name}/runs` | read | The latest 25 runs |
-| `POST /api/v1/workspaces/{name}/runs` | operate | Queues a run (`action`, `replace`): `201`, with status `pending` while another run is active (as above) |
-| `GET /api/v1/workspaces/{name}/runs/{run}` | read | A run with its history and its plan's attribute changes (`diff`, values that are sensitive or hold a secret hidden) |
-| `POST /api/v1/workspaces/{name}/runs/{run}/confirm` | operate | Confirms a plan that waits: `204` |
-| `POST /api/v1/workspaces/{name}/runs/{run}/discard` | operate | Discards it: `204` |
-| `POST /api/v1/workspaces/{name}/runs/{run}/cancel` | operate | Cancels a run (`force`); returns its status |
+| `GET /api/v1/projects` | user | Projects you can see (`?name=`): `id`, `name`, `description`, `runner_pool`, `default` |
+| `POST /api/v1/projects` | admin | Creates one (`name`, `description`, `runner_pool`, `default`): `201` |
+| `GET /api/v1/projects/{id}` | sees it | A project |
+| `PATCH /api/v1/projects/{id}` | admin | Changes `name`, `description`, `runner_pool`, `default` (`true` only: make another the default to unset it) |
+| `DELETE /api/v1/projects/{id}` | admin | Deletes an empty project (`409` otherwise): `204` |
+| `GET /api/v1/projects/{id}/environment` | sees it | Its environment values: `template_id`, `input`, `value`, `keep_own`, `set_by`, `set_at` |
+| `PUT /api/v1/projects/{id}/environment/{template}/{input}` | operate on it | Sets the value of a template's per-environment input (`value`, `keep_own`), checked by the input's rules |
+| `DELETE /api/v1/projects/{id}/environment/{template}/{input}` | operate on it | Clears it: its workspaces use their own value again. `204` |
+| `GET /api/v1/workspaces` | user | Workspaces you can see (`?project_id=`, `?name=`), with their latest run |
+| `POST /api/v1/workspaces` | operate on the project | Creates a workspace (`name`, `project_id`, `auto_apply`): empty (`execution_mode`, `drift_detection`), or from a template (`template`, `inputs`), queueing its plan: `201` |
+| `GET /api/v1/workspaces/{id}` | read | A workspace (`project_id`, `execution_mode`, `auto_apply`, `drift_detection`) and its templates with their inputs (sensitive ones never) |
+| `PATCH /api/v1/workspaces/{id}` | operate | Changes `name`, `auto_apply`, `execution_mode`, `drift_detection`, and moves it (`project_id`: operate on that project too) |
+| `DELETE /api/v1/workspaces/{id}` | operate | Deletes it: refused while a run is active, or while its state manages resources unless `?force=1` (admins). `204` |
+| `GET /api/v1/workspaces/{id}/variables` | read | Its own variables: `id`, `category`, `key`, `value`, `sensitive`, `hcl` |
+| `POST /api/v1/workspaces/{id}/variables` | operate | Creates one (`category`: `env` or `terraform`, `key`, `value`, `sensitive`, `hcl`): `201`; `409` if that key exists |
+| `GET /api/v1/workspaces/{id}/variables/{variable}` | read | One variable |
+| `PATCH /api/v1/workspaces/{id}/variables/{variable}` | operate | Changes `value`, `sensitive`, `hcl` (a sensitive variable's `value` is sent again) |
+| `DELETE /api/v1/workspaces/{id}/variables/{variable}` | operate | Deletes it: `204` |
+| `POST /api/v1/workspaces/{id}/templates` | operate | Adds a template (`template`, `inputs`) and queues the plan: `201` with the module name |
+| `GET /api/v1/workspaces/{id}/templates/{module}` | operate | An added template's configure form, its stored values |
+| `PUT /api/v1/workspaces/{id}/templates/{module}` | operate | Saves its inputs (`inputs`) and the template's module version, queues the plan |
+| `GET /api/v1/workspaces/{id}/runs` | read | The latest 25 runs |
+| `POST /api/v1/workspaces/{id}/runs` | operate | Queues a run (`action`, `replace`): `201`, with status `pending` while another run is active (as above) |
+| `GET /api/v1/workspaces/{id}/runs/{run}` | read | A run with its history and its plan's attribute changes (`diff`, values that are sensitive or hold a secret hidden) |
+| `POST /api/v1/workspaces/{id}/runs/{run}/confirm` | operate | Confirms a plan that waits: `204` |
+| `POST /api/v1/workspaces/{id}/runs/{run}/discard` | operate | Discards it: `204` |
+| `POST /api/v1/workspaces/{id}/runs/{run}/cancel` | operate | Cancels a run (`force`); returns its status |
+| `GET /api/v1/variable-sets` | admin | Variable sets (`?name=`): `id`, `name`, `description`, `global`, `priority`, `project_ids`, `workspace_ids` |
+| `POST /api/v1/variable-sets` | admin | Creates one (`name`, `description`, `global`, `priority`): `201` |
+| `GET /api/v1/variable-sets/{id}` | admin | A variable set |
+| `PATCH /api/v1/variable-sets/{id}` | admin | Changes `description`, `global`, `priority` (the name is fixed) |
+| `DELETE /api/v1/variable-sets/{id}` | admin | Deletes it: `204` |
+| `GET /api/v1/variable-sets/{id}/variables` | admin | Its variables, as a workspace's |
+| `POST /api/v1/variable-sets/{id}/variables` | admin | Creates one, as a workspace's: `201` |
+| `GET /api/v1/variable-sets/{id}/variables/{variable}` | admin | One variable |
+| `PATCH /api/v1/variable-sets/{id}/variables/{variable}` | admin | Changes one, as a workspace's |
+| `DELETE /api/v1/variable-sets/{id}/variables/{variable}` | admin | Deletes one: `204` |
+| `PUT /api/v1/variable-sets/{id}/projects/{target}` | admin | Applies the set to a project's workspaces (`{target}`: the project's id): `204`, also if it already did |
+| `DELETE /api/v1/variable-sets/{id}/projects/{target}` | admin | Stops that: `204` |
+| `PUT /api/v1/variable-sets/{id}/workspaces/{target}` | admin | Applies the set to a workspace (`{target}`: its id): `204` |
+| `DELETE /api/v1/variable-sets/{id}/workspaces/{target}` | admin | Stops that: `204` |
+| `GET /api/v1/vcs-connections` | admin | VCS connections (`?name=`): `id`, `name`, `provider`, `base_url`, `scope`, `project_ids`, `workspace_ids` (never the token) |
+| `POST /api/v1/vcs-connections` | admin | Creates one (`name`, `provider`: `github` or `azure-devops`, `base_url`, `token`, `scope`, `project_ids`, `workspace_ids`), the token checked against the provider: `201` |
+| `GET /api/v1/vcs-connections/{id}` | admin | A connection |
+| `PATCH /api/v1/vcs-connections/{id}` | admin | Replaces the `token` (checked again), changes `scope`, `project_ids`, `workspace_ids` (name, provider and URL are fixed) |
+| `DELETE /api/v1/vcs-connections/{id}` | admin | Deletes it: `204` |
 
 ## Terraform CLI
 

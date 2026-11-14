@@ -40,11 +40,11 @@ const (
 
 // accessFixture is one set of the objects the matrix requests: every name has a random suffix.
 type accessFixture struct {
-	project, ws, wsID, module, run, cws, cwsID, version, wsVar, set, setVar, tpl, ns, conn string
+	project, projID, ws, wsID, module, run, cws, cwsID, version, wsVar, set, setID, setVar, tpl, ns, conn string
 }
 
 func (f accessFixture) path(p string) string {
-	return strings.NewReplacer("{proj}", f.project, "{ws}", f.ws, "{wsid}", f.wsID, "{module}", f.module, "{run}", f.run, "{cws}", f.cws, "{cwsid}", f.cwsID,
+	return strings.NewReplacer("{projid}", f.projID, "{setid}", f.setID, "{proj}", f.project, "{ws}", f.ws, "{wsid}", f.wsID, "{module}", f.module, "{run}", f.run, "{cws}", f.cws, "{cwsid}", f.cwsID,
 		"{sv}", f.version, "{var}", f.wsVar, "{set}", f.set, "{setvar}", f.setVar, "{tpl}", f.tpl, "{ns}", f.ns, "{conn}", f.conn).Replace(p)
 }
 
@@ -152,6 +152,7 @@ func TestAccessMatrix(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		f.projID = p.ID.String()
 		var obj struct{ Data struct{ ID string } }
 		rec = must(t, apiCall("POST", cloudPrefix+"/organizations/acc/workspaces",
 			fmt.Sprintf(`{"data":{"attributes":{"name":%q},"relationships":{"project":{"data":{"id":%q}}}}}`, f.cws, p.ID)), http.StatusCreated, "cli workspace")
@@ -187,6 +188,7 @@ func TestAccessMatrix(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		f.setID = set.ID.String()
 		if vars, err = store.Variables(ctx, storage.VarOwner{SetID: set.ID}); err != nil || len(vars) != 1 {
 			t.Fatalf("set variable: %v %v", vars, err)
 		}
@@ -372,18 +374,54 @@ func accessRows() []accessRow {
 		{"GET /api/v1/templates", "/api/v1/templates", "", onAPI, []int{401, 200, 200, 200, 200}, false},
 		{"GET /api/v1/templates/{id}", "/api/v1/templates/{tpl}", "", onAPI, []int{401, 200, 200, 200, 200}, false},
 		{"GET /api/v1/workspaces", "/api/v1/workspaces", "", onAPI, []int{401, 200, 200, 200, 200}, false},
-		{"POST /api/v1/workspaces", "/api/v1/workspaces", `{"name":"{ws}-api","project":"{proj}","template":"{tpl}","inputs":{"location":"westeurope"}}`,
-			onAPI, []int{401, 422, 422, 201, 201}, true},
-		{"GET /api/v1/workspaces/{name}", "/api/v1" + ws, "", onAPI, []int{401, 404, 200, 200, 200}, false},
-		{"POST /api/v1" + w + "/templates", "/api/v1" + ws + "/templates", `{"template":"{tpl}","inputs":{"location":"northeurope"}}`, onAPI, []int{401, 404, 403, 409, 409}, true},
-		{"GET /api/v1" + w + "/templates/{module}", "/api/v1" + ws + "/templates/{module}", "", onAPI, []int{401, 404, 403, 200, 200}, false},
-		{"PUT /api/v1" + w + "/templates/{module}", "/api/v1" + ws + "/templates/{module}", `{"inputs":{"location":"northeurope"}}`, onAPI, []int{401, 404, 403, 409, 409}, true},
-		{"GET /api/v1" + w + "/runs", "/api/v1" + ws + "/runs", "", onAPI, []int{401, 404, 200, 200, 200}, false},
-		{"POST /api/v1" + w + "/runs", "/api/v1" + ws + "/runs", `{"action":"plan"}`, onAPI, []int{401, 404, 403, 409, 409}, true},
-		{"GET /api/v1" + w + "/runs/{run}", "/api/v1" + ws + "/runs/{run}", "", onAPI, []int{401, 404, 200, 200, 200}, false},
-		{"POST /api/v1" + w + "/runs/{run}/confirm", "/api/v1" + ws + "/runs/{run}/confirm", "", onAPI, []int{401, 404, 403, 409, 409}, true},
-		{"POST /api/v1" + w + "/runs/{run}/discard", "/api/v1" + ws + "/runs/{run}/discard", "", onAPI, []int{401, 404, 403, 409, 409}, true},
-		{"POST /api/v1" + w + "/runs/{run}/cancel", "/api/v1" + ws + "/runs/{run}/cancel", `{}`, onAPI, []int{401, 404, 403, 200, 200}, true},
+		{"POST /api/v1/workspaces", "/api/v1/workspaces", `{"name":"{ws}-api","project_id":"{projid}","template":"{tpl}","inputs":{"location":"westeurope"}}`,
+			onAPI, []int{401, 404, 422, 201, 201}, true},
+		{"GET /api/v1/workspaces/{id}", "/api/v1/workspaces/{wsid}", "", onAPI, []int{401, 404, 200, 200, 200}, false},
+		{"PATCH /api/v1/workspaces/{id}", "/api/v1/workspaces/{wsid}", `{"auto_apply":true}`, onAPI, []int{401, 404, 403, 200, 200}, true},
+		{"DELETE /api/v1/workspaces/{id}", "/api/v1/workspaces/{wsid}", "", onAPI, []int{401, 404, 403, 409, 409}, true},
+		{"POST /api/v1/workspaces/{id}/templates", "/api/v1/workspaces/{wsid}/templates", `{"template":"{tpl}","inputs":{"location":"northeurope"}}`, onAPI, []int{401, 404, 403, 409, 409}, true},
+		{"GET /api/v1/workspaces/{id}/templates/{module}", "/api/v1/workspaces/{wsid}/templates/{module}", "", onAPI, []int{401, 404, 403, 200, 200}, false},
+		{"PUT /api/v1/workspaces/{id}/templates/{module}", "/api/v1/workspaces/{wsid}/templates/{module}", `{"inputs":{"location":"northeurope"}}`, onAPI, []int{401, 404, 403, 409, 409}, true},
+		{"GET /api/v1/workspaces/{id}/runs", "/api/v1/workspaces/{wsid}/runs", "", onAPI, []int{401, 404, 200, 200, 200}, false},
+		{"POST /api/v1/workspaces/{id}/runs", "/api/v1/workspaces/{wsid}/runs", `{"action":"plan"}`, onAPI, []int{401, 404, 403, 409, 409}, true},
+		{"GET /api/v1/workspaces/{id}/runs/{run}", "/api/v1/workspaces/{wsid}/runs/{run}", "", onAPI, []int{401, 404, 200, 200, 200}, false},
+		{"POST /api/v1/workspaces/{id}/runs/{run}/confirm", "/api/v1/workspaces/{wsid}/runs/{run}/confirm", "", onAPI, []int{401, 404, 403, 409, 409}, true},
+		{"POST /api/v1/workspaces/{id}/runs/{run}/discard", "/api/v1/workspaces/{wsid}/runs/{run}/discard", "", onAPI, []int{401, 404, 403, 409, 409}, true},
+		{"POST /api/v1/workspaces/{id}/runs/{run}/cancel", "/api/v1/workspaces/{wsid}/runs/{run}/cancel", `{}`, onAPI, []int{401, 404, 403, 200, 200}, true},
+		{"GET /api/v1/workspaces/{id}/variables", "/api/v1/workspaces/{wsid}/variables", "", onAPI, []int{401, 404, 200, 200, 200}, false},
+		{"POST /api/v1/workspaces/{id}/variables", "/api/v1/workspaces/{wsid}/variables", `{"category":"terraform","key":"k2","value":"v"}`, onAPI, []int{401, 404, 403, 201, 201}, true},
+		{"GET /api/v1/workspaces/{id}/variables/{variable}", "/api/v1/workspaces/{wsid}/variables/{var}", "", onAPI, []int{401, 404, 200, 200, 200}, false},
+		{"PATCH /api/v1/workspaces/{id}/variables/{variable}", "/api/v1/workspaces/{wsid}/variables/{var}", `{"value":"v2"}`, onAPI, []int{401, 404, 403, 200, 200}, true},
+		{"DELETE /api/v1/workspaces/{id}/variables/{variable}", "/api/v1/workspaces/{wsid}/variables/{var}", "", onAPI, []int{401, 404, 403, 204, 204}, true},
+
+		// JSON API: platform objects (projects, environment values, variable sets, VCS connections).
+		{"GET /api/v1/projects", "/api/v1/projects", "", onAPI, []int{401, 200, 200, 200, 200}, false},
+		{"POST /api/v1/projects", "/api/v1/projects", `{"name":"{proj}-api"}`, onAPI, []int{401, 403, 403, 403, 201}, true},
+		{"GET /api/v1/projects/{id}", "/api/v1/projects/{projid}", "", onAPI, []int{401, 404, 200, 200, 200}, false},
+		{"PATCH /api/v1/projects/{id}", "/api/v1/projects/{projid}", `{"description":"d"}`, onAPI, []int{401, 404, 403, 403, 200}, true},
+		{"DELETE /api/v1/projects/{id}", "/api/v1/projects/{projid}", "", onAPI, []int{401, 404, 403, 403, 409}, true},
+		{"GET /api/v1/projects/{id}/environment", "/api/v1/projects/{projid}/environment", "", onAPI, []int{401, 404, 200, 200, 200}, false},
+		{"PUT /api/v1/projects/{id}/environment/{template}/{input}", "/api/v1/projects/{projid}/environment/{tpl}/location", `{"value":"northeurope"}`, onAPI, []int{401, 404, 403, 200, 200}, true},
+		{"DELETE /api/v1/projects/{id}/environment/{template}/{input}", "/api/v1/projects/{projid}/environment/{tpl}/location", "", onAPI, []int{401, 404, 403, 204, 204}, true},
+		{"GET /api/v1/variable-sets", "/api/v1/variable-sets", "", onAPI, []int{401, 403, 403, 403, 200}, false},
+		{"POST /api/v1/variable-sets", "/api/v1/variable-sets", `{"name":"{set}-api"}`, onAPI, []int{401, 403, 403, 403, 201}, true},
+		{"GET /api/v1/variable-sets/{id}", "/api/v1/variable-sets/{setid}", "", onAPI, []int{401, 403, 403, 403, 200}, false},
+		{"PATCH /api/v1/variable-sets/{id}", "/api/v1/variable-sets/{setid}", `{"description":"d"}`, onAPI, []int{401, 403, 403, 403, 200}, true},
+		{"DELETE /api/v1/variable-sets/{id}", "/api/v1/variable-sets/{setid}", "", onAPI, []int{401, 403, 403, 403, 204}, true},
+		{"GET /api/v1/variable-sets/{id}/variables", "/api/v1/variable-sets/{setid}/variables", "", onAPI, []int{401, 403, 403, 403, 200}, false},
+		{"POST /api/v1/variable-sets/{id}/variables", "/api/v1/variable-sets/{setid}/variables", `{"category":"env","key":"K2","value":"v"}`, onAPI, []int{401, 403, 403, 403, 201}, true},
+		{"GET /api/v1/variable-sets/{id}/variables/{variable}", "/api/v1/variable-sets/{setid}/variables/{setvar}", "", onAPI, []int{401, 403, 403, 403, 200}, false},
+		{"PATCH /api/v1/variable-sets/{id}/variables/{variable}", "/api/v1/variable-sets/{setid}/variables/{setvar}", `{"value":"v2"}`, onAPI, []int{401, 403, 403, 403, 200}, true},
+		{"DELETE /api/v1/variable-sets/{id}/variables/{variable}", "/api/v1/variable-sets/{setid}/variables/{setvar}", "", onAPI, []int{401, 403, 403, 403, 204}, true},
+		{"PUT /api/v1/variable-sets/{id}/projects/{target}", "/api/v1/variable-sets/{setid}/projects/{projid}", "", onAPI, []int{401, 403, 403, 403, 204}, true},
+		{"DELETE /api/v1/variable-sets/{id}/projects/{target}", "/api/v1/variable-sets/{setid}/projects/{projid}", "", onAPI, []int{401, 403, 403, 403, 204}, true},
+		{"PUT /api/v1/variable-sets/{id}/workspaces/{target}", "/api/v1/variable-sets/{setid}/workspaces/{wsid}", "", onAPI, []int{401, 403, 403, 403, 204}, true},
+		{"DELETE /api/v1/variable-sets/{id}/workspaces/{target}", "/api/v1/variable-sets/{setid}/workspaces/{wsid}", "", onAPI, []int{401, 403, 403, 403, 204}, true},
+		{"GET /api/v1/vcs-connections", "/api/v1/vcs-connections", "", onAPI, []int{401, 403, 403, 403, 200}, false},
+		{"POST /api/v1/vcs-connections", "/api/v1/vcs-connections", `{"name":"{conn}-api","provider":"github","token":"t"}`, onAPI, []int{401, 403, 403, 403, 422}, false},
+		{"GET /api/v1/vcs-connections/{id}", "/api/v1/vcs-connections/{conn}", "", onAPI, []int{401, 403, 403, 403, 200}, false},
+		{"PATCH /api/v1/vcs-connections/{id}", "/api/v1/vcs-connections/{conn}", `{"scope":"all"}`, onAPI, []int{401, 403, 403, 403, 200}, true},
+		{"DELETE /api/v1/vcs-connections/{id}", "/api/v1/vcs-connections/{conn}", "", onAPI, []int{401, 403, 403, 403, 204}, true},
 
 		// UI: OAuth consent, account, organization, audit.
 		{"GET /oauth/authorization", "/oauth/authorization?client_id=terraform-cli&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A10000%2Flogin&state=s&code_challenge=c&code_challenge_method=S256", "", onUI, []int{302, 200, 200, 200, 200}, false},
@@ -398,6 +436,9 @@ func accessRows() []accessRow {
 		{"GET /organization/runners", "/organization/runners", "", onUI, []int{302, 403, 403, 403, 200}, false},
 		{"POST /organization/runners", "/organization/runners", "name=", onUI, []int{401, 403, 403, 403, 422}, false},
 		{"POST /organization/runners/{id}/delete", "/organization/runners/00000000-0000-0000-0000-000000000000/delete", "", onUI, []int{401, 403, 403, 403, 404}, false},
+		{"GET /organization/api-tokens", "/organization/api-tokens", "", onUI, []int{302, 403, 403, 403, 200}, false},
+		{"POST /organization/api-tokens", "/organization/api-tokens", "name=", onUI, []int{401, 403, 403, 403, 422}, false},
+		{"POST /organization/api-tokens/{id}/revoke", "/organization/api-tokens/00000000-0000-0000-0000-000000000000/revoke", "", onUI, []int{401, 403, 403, 403, 404}, false},
 		{"GET /audit", "/audit", "", onUI, []int{302, 403, 403, 403, 200}, false},
 		{"GET /{$}", "/", "", onUI, []int{302, 200, 200, 200, 200}, false},
 

@@ -1,0 +1,45 @@
+{{template "top" .Page}}
+<nav class="back" aria-label="breadcrumb">Organization settings: API tokens</nav>
+<div class="page-head">
+  <div>
+    <h1>API tokens</h1>
+    <p class="muted">For automation, such as the Terraform provider: a token acts with admin rights as itself, not as a person, and the audit log names it
+      <code>token:&lt;name&gt;</code>. Send it as <code>Authorization: Bearer …</code> to the JSON API. Revoking a token refuses its next request.</p>
+  </div>
+</div>
+
+{{with .Token}}
+<section class="alert" role="status" aria-labelledby="token-head">
+  <h2 id="token-head">Token {{$.Created}}</h2>
+  <p>Copy it now: it isn't shown again.</p>
+  <pre><code>{{.}}</code></pre>
+  <button type="button" class="secondary" data-copy="{{.}}">Copy token</button>
+</section>
+{{end}}
+
+<div class="card flush">
+<table>
+<tr><th>Name</th><th>Created</th><th>Expires</th><th><span class="sr-hint">Actions</span></th></tr>
+{{range .Tokens}}
+<tr>
+  <td><strong>{{.Name}}</strong></td>
+  <td><span title="{{.CreatedAt.Format "2006-01-02 15:04"}}">{{ago .CreatedAt}}</span></td>
+  <td>{{with .ExpiresAt}}{{.Format "2006-01-02"}}{{else}}<span class="muted">never</span>{{end}}</td>
+  <td class="nowrap"><form method="post" action="/organization/api-tokens/{{.ID}}/revoke" data-confirm="Revoke token {{.Name}}? It stops working at once.">
+    <button type="submit" class="secondary">Revoke</button></form></td>
+</tr>
+{{else}}
+<tr><td colspan="4" class="empty">No API tokens yet: create one below, or with <code>opsolete api-token &lt;name&gt;</code> on the server.</td></tr>
+{{end}}
+</table>
+</div>
+
+<h2 id="create">Create an API token</h2>
+{{$f := .F}}{{template "formerror" $f}}
+<form method="post" action="/organization/api-tokens" class="card">
+  <label for="name">Name <span class="req" aria-hidden="true">*</span></label>
+  <input id="name" name="name" required pattern="[a-z0-9][a-z0-9\-]{1,62}" placeholder="terraform" value="{{value $f "name" ""}}"{{aria $f "name"}}>
+  {{template "fielderror" (dict "F" $f "N" "name")}}
+  <div class="actions"><button type="submit">Create token</button></div>
+</form>
+{{template "bottom"}}
