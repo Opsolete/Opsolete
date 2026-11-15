@@ -27,7 +27,7 @@ This site lives in `docs/` (Hugo with the [Hextra](https://imfing.github.io/hext
 
 `.github/workflows/ci.yml` runs on every PR and every push to `master`. Its jobs run in parallel:
 
-- **`commits`** (PRs only): every commit in the PR must be a [Conventional Commit](https://www.conventionalcommits.org) (merge commits are skipped). PRs are merged with merge commits, so release-please reads each commit, not the PR title.
+- **`commits`** (PRs only): every commit in the PR must be a [Conventional Commit](https://www.conventionalcommits.org) (merge commits are skipped). PRs are rebased onto `master`, so release-please reads each commit, not the PR title.
 - **`lint`:** gofmt, vet and `govulncheck`.
 - **`test`:** all tests **with the race detector** against a Postgres 17 service, with the Terraform version from `.terraform-version` for the runner tests; its Go build cache is saved on every run, so the race build stays incremental.
 - **`runner-linux`:** `just test-linux`: the tests in a Linux container, once with the test binary as PID 1 and once under tini (`docker --init`), the two ways the runner image runs. It proves the runner kills what a job leaves behind.
@@ -57,10 +57,10 @@ On each push to `master`, once every check passed, the `release-please` job at t
 
 Repo settings, one-time:
 
-1. **General → Pull Requests:** allow only *merge commits*, so every commit (and its `BREAKING CHANGE` footer) reaches release-please:
+1. **General → Pull Requests:** allow only *rebase merging*, so every commit (and its `BREAKING CHANGE` footer) reaches release-please. Not merge commits: GitHub puts the PR title in their body, which release-please counts a second time.
    ```sh
-   gh api -X PATCH repos/Opsolete/Opsolete -F allow_merge_commit=true -F allow_squash_merge=false \
-     -F allow_rebase_merge=false -F delete_branch_on_merge=true
+   gh api -X PATCH repos/Opsolete/Opsolete -F allow_merge_commit=false -F allow_squash_merge=false \
+     -F allow_rebase_merge=true -F delete_branch_on_merge=true
    ```
 2. **Rules → Rulesets → New branch ruleset** for `master`: require a pull request, require the status checks `commits`, `lint`, `test`, `runner-linux`, `nix` and `nixos-test`, block force pushes, and restrict deletions. Don't require the docs check: it only runs when `docs/` changes.
 3. **Release PR checks:** a release PR opened with the default `GITHUB_TOKEN` gets no CI run (GitHub shows *action required*), so its required checks never pass. Add a fine-grained PAT, or a GitHub App token with *contents* and *pull requests* write access, as the secret `RELEASE_PLEASE_TOKEN`.

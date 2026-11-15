@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Pull requests are merged with merge commits, so Release Please reads every commit, not the PR title:
+  # Pull requests are rebased onto master, so Release Please reads every commit, not the PR title:
   # each commit must be a Conventional Commit (merge commits are skipped).
   commits:
     if: github.event_name == 'pull_request'
