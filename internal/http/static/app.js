@@ -94,6 +94,8 @@ document.addEventListener('change', e => {
   else if (t.closest('[data-refresh]')) { // the server shows the form again for the new choice, typed values kept
     t.form.append(Object.assign(document.createElement('input'), {type: 'hidden', name: 'refresh', value: '1'}));
     t.form.submit(); // not requestSubmit: no validation, no "Starting plan…"
+  } else if (t.dataset.mask) { // variables.html: only a sensitive value is typed masked
+    t.form.elements[t.dataset.mask].type = t.checked ? 'password' : 'text';
   } else if (choice) { // radios in a <details> menu: the summary mirrors the choice
     const d = choice.closest('details');
     d.querySelector('summary span').textContent = t.closest('label').querySelector('strong').textContent;

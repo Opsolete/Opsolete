@@ -22,8 +22,8 @@
   <select name="category" aria-label="category" class="flex-8"{{aria $f "category"}}><option value="env"{{if eq $c "env"}} selected{{end}}>env</option><option value="terraform"{{if eq $c "terraform"}} selected{{end}}>terraform</option></select>
   <input name="key" aria-label="key" placeholder="ARM_CLIENT_SECRET" required maxlength="128" value="{{value $f "key" ""}}"{{aria $f "key"}}>
   <!-- the value isn't echoed back: it may be a secret -->
-  <input name="value" type="password" aria-label="value" placeholder="value" autocomplete="off"{{aria $f "value"}}>
-  <label class="plain"><input type="checkbox" name="sensitive"{{if checked $f "sensitive" true}} checked{{end}}> Sensitive</label>
+  <input name="value" type="{{if checked $f "sensitive" true}}password{{else}}text{{end}}" aria-label="value" placeholder="value" autocomplete="off"{{aria $f "value"}}>
+  <label class="plain"><input type="checkbox" name="sensitive" data-mask="value"{{if checked $f "sensitive" true}} checked{{end}}> Sensitive</label>
   <label class="plain" title="Terraform variables: the value is HCL, e.g. [&quot;a&quot;, &quot;b&quot;] or {size = 2}"><input type="checkbox" name="hcl"{{if checked $f "hcl" false}} checked{{end}}> HCL</label>
   <button type="submit">Save variable</button>
 </form>
