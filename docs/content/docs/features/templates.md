@@ -256,7 +256,7 @@ A `select` option is either a string or an object `{"value": "...", "label": "..
 Things to know:
 
 - **Module variables need a default.** Every variable behind a conditional input needs one (e.g. `default = null`). Without it, Terraform fails with a missing variable whenever that input is hidden.
-- **Registry modules drop unknown inputs.** For a template on a [registry]({{< relref "/docs/features/module-registry" >}}) module, the form follows the module's variables, and JSON inputs the module doesn't declare are dropped. If the dropdown or yes / no input a `show_if` refers to (such as `os`) isn't a module variable, every input that depends on it stays hidden. Add it to the module as a variable.
+- **Registry modules drop unknown inputs.** For a template on a [registry]({{< relref "/docs/features/module-registry" >}}) module, the form follows the module's variables, and JSON inputs the module doesn't declare are dropped. A module variable the template leaves out is added to the form only when it has no default; with one, it stays off the form and the module's default applies. If the dropdown or yes / no input a `show_if` refers to (such as `os`) isn't a module variable, every input that depends on it stays hidden. Add it to the module as a variable.
 - **A dropdown without a value counts as its first option**, the one the browser shows selected.
 
 ## Where templates live

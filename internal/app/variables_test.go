@@ -143,7 +143,7 @@ func TestTemplateAt(t *testing.T) {
 	for ver, vars := range map[string][]string{"1.0.0": {"greeting", "name"}, "2.0.0": {"greeting"}} {
 		var decl []registry.Variable
 		for _, v := range vars {
-			decl = append(decl, registry.Variable{Variable: tfconfig.Variable{Name: v}})
+			decl = append(decl, registry.Variable{Variable: tfconfig.Variable{Name: v, Required: true}})
 		}
 		if err := a.Store.CreateModule(ctx, storage.Module{Namespace: ns, Name: "m", System: "null", Version: ver, Variables: decl},
 			storage.ModuleDocs{}, []byte("x")); err != nil {

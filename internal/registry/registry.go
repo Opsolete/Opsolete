@@ -509,7 +509,8 @@ func overrideField(in, o templates.Input) templates.Input {
 // with name, type, required-ness and regex validation pattern from variables.tf. The template's JSON
 // inputs only add a label, help, a pattern (replacing the module's), select options or default, and keep their order;
 // a list's fields the same (by name; the module's type says which there are). JSON inputs the module doesn't declare are
-// dropped. Sensitive variables appear only if the JSON lists them; listed, they are sensitive inputs.
+// dropped. Variables the JSON leaves out are added only when they have no default (Terraform needs a value); with one,
+// leaving them out keeps them off the form. Sensitive variables appear only if the JSON lists them; listed, they are sensitive inputs.
 func Resolve(overrides []templates.Input, vars []Variable) []templates.Input {
 	gen, _ := Inputs(vars)
 	sensitive := map[string]bool{}
@@ -543,7 +544,7 @@ func Resolve(overrides []templates.Input, vars []Variable) []templates.Input {
 		out = append(out, in)
 	}
 	for _, v := range vars {
-		if in, ok := byName[v.Name]; ok && !v.Sensitive {
+		if in, ok := byName[v.Name]; ok && v.Required && !v.Sensitive { // with a default, the module's default applies
 			out = append(out, in)
 		}
 	}
