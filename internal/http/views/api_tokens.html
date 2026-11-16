@@ -9,11 +9,13 @@
 </div>
 
 {{with .Token}}
-<section class="alert" role="status" aria-labelledby="token-head">
-  <h2 id="token-head">Token {{$.Created}}</h2>
+<section class="alert ok" role="status" aria-labelledby="token-head">
+  <h2 id="token-head">✓ Token <code>{{$.Created}}</code> created</h2>
   <p>Copy it now: it isn't shown again.</p>
-  <pre><code>{{.}}</code></pre>
-  <button type="button" class="secondary" data-copy="{{.}}">Copy token</button>
+  <div class="secret">
+    <code>{{.}}</code>
+    <button type="button" data-copy="{{.}}">Copy token</button>
+  </div>
 </section>
 {{end}}
 

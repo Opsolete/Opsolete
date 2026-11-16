@@ -31,6 +31,33 @@ document.addEventListener('submit', e => {
   opsConfirm(e, f.dataset.confirm, f.dataset.confirmWord);
 });
 
+// [data-copy] buttons. navigator.clipboard only exists in secure contexts (https, localhost): over plain http,
+// e.g. on a LAN, fall back to execCommand on a hidden textarea. The button says how it went for a moment.
+async function copyText(btn) {
+  let ok = false;
+  try {
+    if (navigator.clipboard) { await navigator.clipboard.writeText(btn.dataset.copy); ok = true; }
+  } catch { /* denied: try the fallback */ }
+  if (!ok) {
+    const ta = Object.assign(document.createElement('textarea'), {value: btn.dataset.copy, readOnly: true});
+    ta.style.cssText = 'position:fixed;top:0;opacity:0';
+    document.body.append(ta);
+    ta.select();
+    try { ok = document.execCommand('copy'); } catch { /* ok stays false */ }
+    ta.remove();
+    btn.focus(); // select() moved the focus to the textarea
+  }
+  // icon buttons (.copy) keep their icon and change their name; the others their text
+  const icon = btn.classList.contains('copy');
+  const was = btn.dataset.copyWas ??= icon ? btn.getAttribute('aria-label') : btn.textContent;
+  const msg = ok ? (icon ? 'Copied' : '✓ Copied') : 'Copy failed: select it and copy by hand';
+  if (icon) { btn.setAttribute('aria-label', msg); btn.title = msg; } else btn.textContent = msg;
+  clearTimeout(btn.copyTimer);
+  btn.copyTimer = setTimeout(() => {
+    if (icon) { btn.setAttribute('aria-label', was); btn.title = was; } else btn.textContent = was;
+  }, 2000);
+}
+
 // filters a picker (layout.html "picker") by the search text and "Show selected", and shows the count in its summary
 function filterPicker(el) {
   const d = el.closest('details'), q = d.querySelector('input[type=search]').value.toLowerCase();
@@ -49,7 +76,7 @@ document.addEventListener('click', e => {
   const log = document.getElementById('log'); // run.html's
   if (t?.dataset.showDialog) document.getElementById(t.dataset.showDialog).showModal();
   else if (t?.hasAttribute('data-close-dialog')) t.closest('dialog').close();
-  else if (t?.dataset.copy) navigator.clipboard.writeText(t.dataset.copy);
+  else if (t?.dataset.copy) copyText(t);
   else if (t?.dataset.log === 'top') log.scrollTop = 0;
   else if (t?.dataset.log === 'bottom') log.scrollTop = log.scrollHeight;
   else if (t?.dataset.log === 'fullscreen') log.requestFullscreen();
