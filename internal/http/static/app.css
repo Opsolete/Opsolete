@@ -139,6 +139,13 @@ input[type="file"] { padding: .35rem; }
 .alert { border-radius: var(--radius); padding: .75rem 1rem; margin: 0 0 1rem; font-size: .9rem; border: 1px solid; border-left-width: 4px; }
 .alert.error { background: var(--danger-soft); color: var(--danger); }
 .alert.warn { background: var(--warn-soft); color: var(--warn); }
+.alert.ok { background: var(--ok-soft); color: var(--ok); }
+.alert.ok h2 { margin-top: 0; font-size: 1rem; }
+.alert.ok p { color: var(--text); }
+/* a one-time secret with its copy button: easy to select (one click selects all), never wraps mid-word */
+.secret { display: flex; gap: .5rem; align-items: stretch; flex-wrap: wrap; margin-top: .75rem; }
+.secret code { flex: 1; min-width: 0; padding: .55rem .75rem; background: var(--surface); color: var(--text); border: 1px solid var(--border);
+  border-radius: 5px; font-size: .9rem; overflow-wrap: anywhere; user-select: all; }
 .actions { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; margin-top: 1.5rem; }
 .inline { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
 .inline select, .inline input { flex: 1; }
