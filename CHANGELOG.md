@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.11.1](https://github.com/Opsolete/Opsolete/compare/v0.11.0...v0.11.1) (2026-11-16)
+
+
+### Bug Fixes
+
+* **templates:** keep module variables with a default off the form when the template leaves them out ([6203c94](https://github.com/Opsolete/Opsolete/commit/6203c94dd03a380a382bcb20918e0c038ea19b81))
+* **ui:** copy buttons work over plain http; a clearer new API token box ([05d13fc](https://github.com/Opsolete/Opsolete/commit/05d13fce20a2e9467184587855753dbf693644c0))
+* **ui:** type a variable's value unmasked when it isn't sensitive ([b300bcd](https://github.com/Opsolete/Opsolete/commit/b300bcda40c377590e712810273c6445011e8d75))
+* **ui:** type a variable's value unmasked when it isn't sensitive ([4ab2cbb](https://github.com/Opsolete/Opsolete/commit/4ab2cbb4b349abdac44dcab88c7e60813a149a76))
+
 ## [0.11.0](https://github.com/Opsolete/Opsolete/compare/v0.10.0...v0.11.0) (2026-11-14)
 
 
