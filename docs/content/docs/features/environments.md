@@ -5,7 +5,7 @@ aliases:
   - /docs/usage/environments/
 ---
 
-Opsolete has no separate "environment" object: **projects are the environments**. Put dev, test, acc and prd each in their own [project]({{< relref "/docs/features/projects" >}}), build in dev, and **promote** a workspace to the next environment instead of filling in its forms again.
+OPS has no separate "environment" object: **projects are the environments**. Put dev, test, acc and prd each in their own [project]({{< relref "/docs/features/projects" >}}), build in dev, and **promote** a workspace to the next environment instead of filling in its forms again.
 
 ## Model environments as projects
 
@@ -89,4 +89,4 @@ Every promotion is in the [audit log]({{< relref "/docs/config/authentication#au
 
 - **No promotion paths:** the target is picked each time; nothing enforces dev → test → acc → prd.
 - **Templates only:** promotion copies a workspace's templates. A workspace's own configuration from a linked repository branch isn't promoted; promote that through your branches or tags.
-- Promoting to a workspace that uses local execution isn't possible: its runs don't start in Opsolete.
+- Promoting to a workspace that uses local execution isn't possible: its runs don't start in OPS.

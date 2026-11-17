@@ -5,7 +5,7 @@ weight: 8
 
 ## Done in 0.6
 
-0.6.0 rebuilt Opsolete on one database schema, a service layer with one access rule, a scheduler that runs background work on one replica, `LISTEN`/`NOTIFY` instead of polling, two-phase job claims, job timeouts with a grace period for Terraform to save state, key rotation without downtime, retention, and template format 1.0. See [Upgrading to 0.6]({{< relref "/docs/install/upgrading" >}}).
+0.6.0 rebuilt OPS on one database schema, a service layer with one access rule, a scheduler that runs background work on one replica, `LISTEN`/`NOTIFY` instead of polling, two-phase job claims, job timeouts with a grace period for Terraform to save state, key rotation without downtime, retention, and template format 1.0. See [Upgrading to 0.6]({{< relref "/docs/install/upgrading" >}}).
 
 ## Next: 1.0
 
@@ -22,7 +22,7 @@ weight: 8
 
 **How it would work**
 
-- Opsolete acts as an OIDC issuer. It signs a short-lived JWT per run (TTL about 10 minutes) with claims such as `workspace`, `template`, `repo`, `run_id` and `run_phase`.
+- OPS acts as an OIDC issuer. It signs a short-lived JWT per run (TTL about 10 minutes) with claims such as `workspace`, `template`, `repo`, `run_id` and `run_phase`.
 - Runs exchange the token for cloud credentials:
   - **Azure:** `ARM_USE_OIDC=true` plus `ARM_OIDC_TOKEN_FILE_PATH`
   - **AWS:** `AWS_ROLE_ARN` plus `AWS_WEB_IDENTITY_TOKEN_FILE`
@@ -33,7 +33,7 @@ weight: 8
 
 - Only the discovery document and the JWKS must be public over HTTPS, and both are static files (an S3 bucket, a Blob static website and so on). Signing can happen anywhere, including `localhost`.
 - GCP can take an uploaded JWKS, so it needs no public URL. AWS and Azure need one.
-- Use one issuer per Opsolete environment (dev, prod), each with its own key, so a dev key can never mint tokens that prod accepts.
+- Use one issuer per OPS environment (dev, prod), each with its own key, so a dev key can never mint tokens that prod accepts.
 - Keep static secrets as a credential mode (`static` or `oidc` per connection) for local development and tests.
 
 **Blocker: Entra ID only does exact matching**
@@ -42,11 +42,11 @@ Entra federated identity credentials match `iss`, `sub` and `aud` exactly, with 
 
 **Options for Azure if this goes ahead**
 
-1. **One identity per environment and phase (preferred).** For example, `ops-prod-plan` with `sub = env:prod:phase:plan` (Reader) and `ops-prod-apply` with `sub = env:prod:phase:apply` (Contributor). Opsolete maps workspace → environment and decides which `sub` to mint.
-2. **One user-assigned managed identity per workspace,** created automatically when a workspace is created, with an exact FIC. This gives blast-radius isolation, but Opsolete then needs rights to create identities and role assignments.
+1. **One identity per environment and phase (preferred).** For example, `ops-prod-plan` with `sub = env:prod:phase:plan` (Reader) and `ops-prod-apply` with `sub = env:prod:phase:apply` (Contributor). OPS maps workspace → environment and decides which `sub` to mint.
+2. **One user-assigned managed identity per workspace,** created automatically when a workspace is created, with an exact FIC. This gives blast-radius isolation, but OPS then needs rights to create identities and role assignments.
 3. **Wait** until flexible FIC supports custom issuers.
 
 **Risks**
 
-- With exact matching, Opsolete becomes the policy decision point, so its subject-minting code is security-critical. It needs negative tests: a dev workspace must never get an `env:prod` subject, and a plan run must never get `phase:apply`.
+- With exact matching, OPS becomes the policy decision point, so its subject-minting code is security-critical. It needs negative tests: a dev workspace must never get an `env:prod` subject, and a plan run must never get `phase:apply`.
 - Cloud access tokens last about an hour, so check how each provider re-exchanges tokens during long applies.

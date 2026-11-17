@@ -391,14 +391,14 @@ func (s State) Lock(ctx context.Context, why string) error {
 	if utf8.RuneCountInString(why) > 300 {
 		return invalid("reason", "the reason is at most 300 characters")
 	}
-	return s.userLock(ctx, "locked in Opsolete", why)
+	return s.userLock(ctx, "locked in OPS", why)
 }
 
 // LockCLI takes the state lock for the actor's Terraform (cloud block). Terraform then runs on the
 // actor's machine: only for local-execution workspaces. Needs operate.
 func (s State) LockCLI(ctx context.Context) error {
 	if s.Workspace.ExecutionMode != "local" {
-		return reason{ErrRemoteExecution, "workspace " + s.Workspace.Name + " uses remote execution: Opsolete runners plan and apply it. " +
+		return reason{ErrRemoteExecution, "workspace " + s.Workspace.Name + " uses remote execution: OPS runners plan and apply it. " +
 			"Set its execution mode to local in the workspace's settings to run Terraform on your machine"}
 	}
 	return s.userLock(ctx, "terraform (cloud block)", "")

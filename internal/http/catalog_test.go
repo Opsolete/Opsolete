@@ -389,7 +389,7 @@ func TestTemplateCatalogInGit(t *testing.T) {
 		// a lookalike pull request listed first, whose description names the template but whose branch isn't its own, is ignored
 		g.mu.Lock()
 		g.branches["opsolete/template-other-abcdef"] = g.branches["main"]
-		g.pulls = append([]fakePull{{"opsolete/template-other-abcdef", "Add template X\n\nSaved in Opsolete by x (template " + kept[1] + ")."}}, g.pulls...)
+		g.pulls = append([]fakePull{{"opsolete/template-other-abcdef", "Add template X\n\nSaved in OPS by x (template " + kept[1] + ")."}}, g.pulls...)
 		g.mu.Unlock()
 		rec = post(h, "/templates/new", url.Values{"id": {kept[1]}, "name": {"Queue v2"}, "module_source": {"git::https://example.com/q.git"}, "module_ref": {"v1"}})
 		g.mu.Lock()

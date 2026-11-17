@@ -408,7 +408,7 @@ func importConflict(ctx context.Context, q *db.Queries, imports []runnerapi.Impo
 	for i, im := range imports {
 		ids[i] = strings.ToLower(im.ID)
 		if ids[i] == "" { // nothing to check it against: it could be in another state already
-			return "import refused: Terraform reported no id for " + im.To + ", so Opsolete can't check that no other state manages it; nothing was applied", nil
+			return "import refused: Terraform reported no id for " + im.To + ", so OPS can't check that no other state manages it; nothing was applied", nil
 		}
 		if slices.Index(ids, ids[i]) < i {
 			return "import refused: " + im.ID + " is imported twice in this plan (" + imports[slices.Index(ids, ids[i])].To + " and " + im.To + "); nothing was applied", nil

@@ -1,5 +1,5 @@
 ---
-title: Opsolete
+title: OPS
 layout: hextra-home
 ---
 

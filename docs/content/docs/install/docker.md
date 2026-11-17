@@ -26,7 +26,7 @@ docker run -d --name opsolete-runner --network opsolete \
 ```
 <!-- x-release-please-end -->
 
-Then open http://opsolete.localhost:8080. This setup is for trying Opsolete only:
+Then open http://opsolete.localhost:8080. This setup is for trying OPS only:
 
 - `AUTH_DEV_USER` logs every visitor in as that user.
 - The state in `/tmp` is lost with the container.

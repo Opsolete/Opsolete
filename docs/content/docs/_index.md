@@ -1,8 +1,8 @@
 ---
-title: Opsolete Docs
+title: OPS Docs
 ---
 
-Opsolete is a self-hosted way to deploy your existing Terraform modules: pick a template, fill in a form, review the plan, apply. See [About Opsolete]({{< relref "/docs/about" >}}) for how it fits together.
+OPS is a self-hosted way to deploy your existing Terraform modules: pick a template, fill in a form, review the plan, apply. See [About OPS]({{< relref "/docs/about" >}}) for how it fits together.
 
 ## Get started
 
@@ -12,7 +12,7 @@ Run the app and at least one runner. Both are one binary, shipped as container i
 
 What every deployment needs, then a guide for each way to run it: [Install]({{< relref "/docs/install" >}}).
 
-- [Docker]({{< relref "/docs/install/docker" >}}): try Opsolete on one machine in a few commands.
+- [Docker]({{< relref "/docs/install/docker" >}}): try OPS on one machine in a few commands.
 - [Kubernetes (Helm)]({{< relref "/docs/install/kubernetes" >}})
 - [NixOS]({{< relref "/docs/install/nixos" >}})
 - [Run from source]({{< relref "/docs/install/build" >}}), with or without Nix, with examples.

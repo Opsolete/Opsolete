@@ -56,7 +56,7 @@ func (a *App) OpenToken(c storage.VCSConnection) (string, error) {
 	return a.Secrets.Open(c.Token, TokenAD(c))
 }
 
-// SealedPrefix starts every state store file; a file without it isn't Opsolete's.
+// SealedPrefix starts every state store file; a file without it isn't OPS's.
 const SealedPrefix = "opsolete-sealed-v1\n"
 
 // WriteBlob stores a state file or run artifact, sealed: they hold secrets, so bucket read access
@@ -78,7 +78,7 @@ func (a *App) ReadBlob(ctx context.Context, key string) ([]byte, error) {
 	}
 	sealed, ok := bytes.CutPrefix(b, []byte(SealedPrefix))
 	if !ok {
-		return nil, fmt.Errorf("decrypt %s: not a sealed Opsolete file", key)
+		return nil, fmt.Errorf("decrypt %s: not a sealed OPS file", key)
 	}
 	plain, err := a.Secrets.Open(sealed, BlobAD(key))
 	if err != nil {

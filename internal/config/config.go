@@ -140,7 +140,7 @@ func getenv(key, def string) string {
 
 // Runner configures `opsolete runner`. It needs no database: it talks to the server API only.
 type Runner struct {
-	ServerURL  *url.URL      // how the runner reaches Opsolete (in k8s: the internal service)
+	ServerURL  *url.URL      // how the runner reaches OPS (in k8s: the internal service)
 	Token      string        // its own token (opsolete runner-token)
 	Name       string        // shown on deployments; defaults to the hostname (pod name)
 	Terraform  string        // terraform binary

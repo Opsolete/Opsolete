@@ -282,9 +282,9 @@
     <legend>Execution mode</legend>
     <p class="hint">Changing the execution mode doesn't stop a run or a CLI lock already under way; it only refuses new ones.</p>
     <label class="check"><input type="radio" name="execution_mode" value="remote"{{if ne $mode "local"}} checked{{end}}{{aria $gf "execution_mode"}}>
-      <span>Remote<small>Your plans and applies run on Opsolete's runners, and your team can review and collaborate on runs directly in the app.</small></span></label>
+      <span>Remote<small>Your plans and applies run on OPS's runners, and your team can review and collaborate on runs directly in the app.</small></span></label>
     <label class="check"><input type="radio" name="execution_mode" value="local"{{if eq $mode "local"}} checked{{end}}{{aria $gf "execution_mode"}}>
-      <span>Local<small>Your plans and applies run on your own machines with Terraform's cloud block. Opsolete only stores and synchronizes state.</small></span></label>
+      <span>Local<small>Your plans and applies run on your own machines with Terraform's cloud block. OPS only stores and synchronizes state.</small></span></label>
     {{template "fielderror" (dict "F" $gf "N" "execution_mode")}}
   </fieldset>
   <fieldset>
@@ -332,7 +332,7 @@
 <h1>Locking</h1>
 <div class="mw-44">
 {{with .Lock}}
-<p>The <strong>{{$w.Name}}</strong> workspace is locked{{with .Who}} by <strong>{{.}}</strong>{{end}}{{if .OpsoleteRun}} (a run's Terraform){{else if not .Cloud}} (a state rollback){{else if ne .Operation "locked in Opsolete"}} (Terraform's cloud block){{end}}{{with .Created}} since {{.}}{{end}}.
+<p>The <strong>{{$w.Name}}</strong> workspace is locked{{with .Who}} by <strong>{{.}}</strong>{{end}}{{if .OPSRun}} (a run's Terraform){{else if not .Cloud}} (a state rollback){{else if ne .Operation "locked in OPS"}} (Terraform's cloud block){{end}}{{with .Created}} since {{.}}{{end}}.
   Runs wait until it is unlocked, and nobody else can take the state lock.</p>
 {{with .Info}}<div class="field">Reason</div><p>{{.}}</p>{{end}}
 {{if .Cloud}}
@@ -385,7 +385,7 @@
 {{else}}
 <h1>Destruction and deletion</h1>
 <p class="muted mw-52">There are two independent steps for destroying this workspace and the infrastructure associated with it.
-  First, its Terraform infrastructure should be destroyed. Second, the workspace in Opsolete, including its runs, variables, settings and state history, can be deleted.</p>
+  First, its Terraform infrastructure should be destroyed. Second, the workspace in OPS, including its runs, variables, settings and state history, can be deleted.</p>
 
 <h2>Manually destroy</h2>
 <p class="mw-44">Queuing a destroy plan will redirect to a new plan that will destroy all of the infrastructure managed by Terraform.
@@ -415,7 +415,7 @@
 {{$unindexed := and .Versions (not (index .Versions 0).Indexed)}}
 {{if or .Resources .Active $unindexed}}
 <ul>
-  {{if $unindexed}}<li>The current state version <strong>isn't indexed</strong>, so Opsolete can't tell which resources it manages. Destroy them first, or delete anyway: any that still exist are then no longer managed by Terraform.</li>{{end}}
+  {{if $unindexed}}<li>The current state version <strong>isn't indexed</strong>, so OPS can't tell which resources it manages. Destroy them first, or delete anyway: any that still exist are then no longer managed by Terraform.</li>{{end}}
   {{with .Resources}}<li>This workspace <strong>manages {{len .}} resource{{if ne (len .) 1}}s{{end}}</strong>. Destroy them first (queue a destroy plan above), or delete anyway: they are then no longer managed by Terraform and must be cleaned up by hand.</li>{{end}}
   {{if .Active}}<li>A run is in progress: cancel it before deleting.</li>{{end}}
 </ul>

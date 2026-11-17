@@ -1,11 +1,11 @@
-# Managing Opsolete with Terraform: API design (phase 1)
+# Managing OPS with Terraform: API design (phase 1)
 
 Status: **agreed** (November 2026); phase 1 is being built. Phase 2, the provider (`terraform-provider-opsolete`, its own
 repository), is built on this API.
 
 ## Goal and scope
 
-A Terraform provider manages Opsolete's platform objects: **projects and their environment values, workspaces (empty,
+A Terraform provider manages OPS's platform objects: **projects and their environment values, workspaces (empty,
 with their settings), workspace variables, variable sets (their variables and where they apply) and VCS
 connections.**
 
@@ -110,7 +110,7 @@ name.
 - **Two sources of truth.** A change made in the UI to a managed object is reverted by the next apply, as with any
   provider.
 - **Secrets in Terraform's state.** Sensitive values and VCS tokens Terraform manages end up in its state; keep that
-  state encrypted (in Opsolete itself, for instance).
+  state encrypted (in OPS itself, for instance).
 
 ## Phase 1 work
 

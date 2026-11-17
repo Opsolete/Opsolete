@@ -161,12 +161,12 @@ self: {
   };
 in {
   options.services.opsolete = {
-    enable = mkEnableOption "the Opsolete server (web UI, module registry, runner API)";
+    enable = mkEnableOption "the OPS server (web UI, module registry, runner API)";
     package = mkOption {
       type = types.package;
       default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
       defaultText = lib.literalExpression "opsolete.packages.\${system}.default";
-      description = "Opsolete package; also used by the runner and opsolete-admin.";
+      description = "OPS package; also used by the runner and opsolete-admin.";
     };
     listenAddress = mkOption {
       type = types.str;
@@ -270,7 +270,7 @@ in {
     secretFiles = secretFiles "Extra secret environment variables: name -> file holding the value (e.g. a sops-nix secret path).";
 
     runner = {
-      enable = mkEnableOption "an Opsolete runner (executes Terraform runs, one at a time)";
+      enable = mkEnableOption "an OPS runner (executes Terraform runs, one at a time)";
       serverUrl = mkOption {
         type = types.str;
         default = "http://${
@@ -374,7 +374,7 @@ in {
       };
 
       systemd.services.opsolete = {
-        description = "Opsolete";
+        description = "OPS";
         wantedBy = ["multi-user.target"];
         wants = ["network-online.target"];
         after = ["network-online.target"] ++ optional cfg.database.createLocally "postgresql.target";
@@ -414,7 +414,7 @@ in {
       users.groups.opsolete-runner = {};
 
       systemd.services.opsolete-runner = {
-        description = "Opsolete runner";
+        description = "OPS runner";
         wantedBy = ["multi-user.target"];
         wants = ["network-online.target"];
         after = ["network-online.target"] ++ optional cfg.enable "opsolete.service";

@@ -165,7 +165,7 @@ func resealBlobs(ctx context.Context, bucket *blob.Bucket, reseal func(string, [
 		}
 		old, ok := bytes.CutPrefix(b, []byte(SealedPrefix))
 		if !ok {
-			return fmt.Errorf("file %s: not a sealed Opsolete file (is STATE_STORE shared with something else?)", obj.Key)
+			return fmt.Errorf("file %s: not a sealed OPS file (is STATE_STORE shared with something else?)", obj.Key)
 		}
 		sealed, err := reseal("file "+obj.Key, old, BlobAD(obj.Key))
 		if err != nil {

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Opsolete</title>
+<title>OPS</title>
 <link rel="stylesheet" href="{{asset "app.css"}}">
 <script src="{{asset "app.js"}}" defer></script>
 <!-- JavaScript is required: e.g. confirmations (opsConfirm) would be skipped without it -->
@@ -11,7 +11,7 @@
 </head>
 <body>
 <header class="topbar">
-  <a class="brand" href="/"><span class="logo" aria-hidden="true">OPS</span>Opsolete</a>
+  <a class="brand" href="/"><span class="logo">OPS</span></a>
   {{with .User}}{{if .Email}}
   <form class="who" method="post" action="/auth/logout">
     <a href="/account/profile" title="Account settings">{{.Email}}</a>{{if .Admin}}<span class="tag">admin</span>{{end}}
@@ -107,7 +107,7 @@
   {{end}}
   {{end}}{{end}}
 </aside>
-<noscript><div class="wrap"><p class="alert error" role="alert">Opsolete requires JavaScript. Turn it on in your browser and reload the page.</p></div></noscript>
+<noscript><div class="wrap"><p class="alert error" role="alert">OPS requires JavaScript. Turn it on in your browser and reload the page.</p></div></noscript>
 <main class="wrap">
 {{end}}
 {{define "wscrumb"}}<!-- a workspace's breadcrumb: its project first -->

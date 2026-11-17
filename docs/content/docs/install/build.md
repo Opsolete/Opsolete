@@ -5,7 +5,7 @@ aliases:
   - /docs/getting-started/
 ---
 
-Run Opsolete from a checkout of the repository, to try it or to work on it.
+Run OPS from a checkout of the repository, to try it or to work on it.
 
 ## Run locally with Nix (recommended)
 

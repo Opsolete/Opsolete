@@ -127,7 +127,7 @@ func (a *App) publishTags(ctx context.Context, m storage.VCSModule) ([]string, e
 }
 
 // PollVCSModules syncs every linked module once (a scheduler job). It needs no inbound webhooks, so
-// Opsolete can stay private. A module's error is logged and doesn't stop the others.
+// OPS can stay private. A module's error is logged and doesn't stop the others.
 func (a *App) PollVCSModules(ctx context.Context) error {
 	mods, err := a.Store.VCSModules(ctx)
 	if err != nil {

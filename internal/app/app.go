@@ -1,4 +1,4 @@
-// Package app holds Opsolete's operations: access checks, sealing and the other rules every surface
+// Package app holds OPS's operations: access checks, sealing and the other rules every surface
 // (the UI, the cloud API, a future SPA) shares. Surfaces decode a request, call an operation with the
 // Actor who asked, and map its error (see errors.go).
 package app

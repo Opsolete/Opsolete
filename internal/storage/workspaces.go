@@ -47,7 +47,7 @@ type Workspace struct {
 	AutoApply         bool   // apply plans of apply runs without confirmation
 	DriftDetection    bool   // queue an assess run (refresh-only plan, never applied) daily
 	GlobalRemoteState bool   // every workspace's runs may read this state; else only RemoteStateConsumers
-	ExecutionMode     string // remote: runs on Opsolete runners; local: the CLI (cloud block) runs Terraform, no runs
+	ExecutionMode     string // remote: runs on OPS runners; local: the CLI (cloud block) runs Terraform, no runs
 	Drifted           bool   // the latest assessment found drift and nothing was applied since
 	CreatedBy         string // email; empty for workspaces from before login
 	CreatedAt         time.Time

@@ -1,3 +1,3 @@
 # greeting
 
-Example module for Opsolete: one `terraform_data` resource holding a greeting.
+Example module for OPS: one `terraform_data` resource holding a greeting.

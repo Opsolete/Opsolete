@@ -3,13 +3,13 @@ title: First steps
 weight: 3
 ---
 
-From a fresh install to a first managed resource. The steps are the same however you [installed]({{< relref "/docs/install" >}}) Opsolete (Kubernetes, NixOS, Docker or from source): everything below happens in the web UI, as an admin (`ADMIN_EMAILS`), and needs `SECRET_KEY` set (tokens and sensitive variables are stored encrypted) and at least one runner connected (**Settings → Runners**).
+From a fresh install to a first managed resource. The steps are the same however you [installed]({{< relref "/docs/install" >}}) OPS (Kubernetes, NixOS, Docker or from source): everything below happens in the web UI, as an admin (`ADMIN_EMAILS`), and needs `SECRET_KEY` set (tokens and sensitive variables are stored encrypted) and at least one runner connected (**Settings → Runners**).
 
 The example uses Azure and a storage account behind a private endpoint, from [terraform-modules-examples](https://github.com/Opsolete/terraform-modules-examples/tree/main/storage-account). Any module and cloud work the same way.
 
 ## 1. Connect your repositories
 
-**Settings → Providers** (under Version control) **→ Add VCS provider**: pick GitHub or Azure DevOps and paste an access token (for Azure DevOps also the organization URL, `https://dev.azure.com/<org>`). Opsolete checks the token by listing its repositories.
+**Settings → Providers** (under Version control) **→ Add VCS provider**: pick GitHub or Azure DevOps and paste an access token (for Azure DevOps also the organization URL, `https://dev.azure.com/<org>`). OPS checks the token by listing its repositories.
 
 - The module repository needs **read** access (GitHub: *Contents: read*; Azure DevOps: *Code: read*).
 - The template repository needs **write** access if the template builder should commit to it (*Contents: read and write*, or *Code: read & write*). Use a separate connection for it if you'd rather keep the module token read-only.
@@ -30,7 +30,7 @@ A module meant for templates configures its own provider and reads credentials f
 - **commit**: the builder commits to the branch.
 - **pr**: the builder opens a pull request; the template is live once it's merged.
 
-Opsolete loads every JSON file in the folder and checks the branch every minute. A commit with an invalid template isn't loaded: the page says which file and why. Until a repository is connected, templates come from `TEMPLATES_DIR`. More: [Where templates live]({{< relref "/docs/features/templates#where-templates-live" >}}).
+OPS loads every JSON file in the folder and checks the branch every minute. A commit with an invalid template isn't loaded: the page says which file and why. Until a repository is connected, templates come from `TEMPLATES_DIR`. More: [Where templates live]({{< relref "/docs/features/templates#where-templates-live" >}}).
 
 ## 4. Create a template
 
@@ -57,10 +57,10 @@ Sensitive values can't be read back and are masked in run logs. Give the service
 
 ## 7. Or import what exists
 
-A resource made outside Opsolete (in the portal, say) is taken over through the same template, if its module [can import]({{< relref "/docs/features/templates#writing-modules-that-can-import" >}}):
+A resource made outside OPS (in the portal, say) is taken over through the same template, if its module [can import]({{< relref "/docs/features/templates#writing-modules-that-can-import" >}}):
 
 1. On the template, choose **Import existing**. Fill in what finds the resource: here the account name, resource group, subnet and private endpoint name. The rest can stay at the form's defaults.
-2. Opsolete runs a **plan round**: it looks the resources up, imports them in the plan and never applies by itself. The round's page shows, per input, what was **found** next to what it was **planned with**.
+2. OPS runs a **plan round**: it looks the resources up, imports them in the plan and never applies by itself. The round's page shows, per input, what was **found** next to what it was **planned with**.
 3. **Plan again with the found values** until the plan only imports. In the example: round 1 found the region and replication (the defaults would have replaced both resources), round 2 found the tags (it would have removed them), round 3 was `2 to import, 0 to add, 0 to change, 0 to destroy`.
 4. **Apply the import**, confirm, and the resources are in the workspace's state, managed by the template. A drift check (**New run → Check for drift**) then shows no changes.
 
@@ -70,5 +70,5 @@ A round that would replace or delete anything can't be applied, and a normal app
 
 - [Projects]({{< relref "/docs/features/projects" >}}) and [environments]({{< relref "/docs/features/environments" >}}) to group workspaces and share settings.
 - [Teams]({{< relref "/docs/config/authentication#teams-access-per-workspace" >}}) to give users access to workspaces.
-- [The Terraform CLI]({{< relref "/docs/features/terraform-cli" >}}) against Opsolete's state and runs.
+- [The Terraform CLI]({{< relref "/docs/features/terraform-cli" >}}) against OPS's state and runs.
 - [The Terraform provider]({{< relref "/docs/features/terraform-provider" >}}) to set up projects, variable sets and workspaces as code.

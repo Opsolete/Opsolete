@@ -61,7 +61,7 @@ Deleting a runner revokes its token at once: its next request gets `401` and it 
 
 Provider credentials come from the workspace's [variables]({{< relref "/docs/features/variables" >}}), set as environment variables for Terraform on top of the runner's own environment. Runners are generic: give them no cloud credentials of their own, or every workspace without variables runs with them. Runners need no state storage credentials.
 
-**Every runner is trusted with the secrets of every workspace in its pool.** A runner, or anyone holding its token, can claim any job of a project in its pool and receives that workspace's variables (sensitive ones in clear text) and a credential for its state. Treat a runner's token like the most privileged cloud credential in its pool: keep it in a secret store, run runners only on infrastructure as trusted as the workspaces they serve, and use pools to keep production credentials on production runners. Module code runs on the runner with the provider credentials, so scope them to what Opsolete may deploy.
+**Every runner is trusted with the secrets of every workspace in its pool.** A runner, or anyone holding its token, can claim any job of a project in its pool and receives that workspace's variables (sensitive ones in clear text) and a credential for its state. Treat a runner's token like the most privileged cloud credential in its pool: keep it in a secret store, run runners only on infrastructure as trusted as the workspaces they serve, and use pools to keep production credentials on production runners. Module code runs on the runner with the provider credentials, so scope them to what OPS may deploy.
 
 ## Cost estimation
 

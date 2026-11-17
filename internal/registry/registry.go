@@ -1,4 +1,4 @@
-// Package registry implements Opsolete's private Terraform module registry: archive
+// Package registry implements OPS's private Terraform module registry: archive
 // inspection, address validation, signed download URLs and mapping module variables to form inputs.
 // The HTTP protocol endpoints live in internal/http.
 package registry
@@ -118,8 +118,8 @@ func (r *Registry) VerifyArchiveURL(path, expires, sig string) bool {
 }
 
 // RunnerSource resolves a template's module for its module block: for this registry's modules a relative signed
-// archive path that runners resolve against the URL they reach Opsolete on (in k8s, the internal service); for a
-// module of another registry (the public one, another Opsolete) the address with ref as its version argument, since
+// archive path that runners resolve against the URL they reach OPS on (in k8s, the internal service); for a
+// module of another registry (the public one, another OPS) the address with ref as its version argument, since
 // a registry address takes no ?ref=; otherwise (git:: and other packages) source?ref=ref, version "".
 func (r *Registry) RunnerSource(m templates.Module, ttl time.Duration) (source, version string) {
 	if ns, name, sys, ok := r.ParseSource(m.Source); ok {

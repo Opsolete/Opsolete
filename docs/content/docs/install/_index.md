@@ -19,7 +19,7 @@ Each runner has its own token, its `OPS_RUNNER_TOKEN`: create one with `opsolete
 Every setting is listed in the [option reference]({{< relref "/docs/config/reference" >}}).
 
 {{< cards >}}
-  {{< card link="docker" title="Docker" subtitle="The release images, to try Opsolete on one machine or run it in containers." >}}
+  {{< card link="docker" title="Docker" subtitle="The release images, to try OPS on one machine or run it in containers." >}}
   {{< card link="kubernetes" title="Kubernetes (Helm)" subtitle="The app and the runners as two Deployments, with the Helm chart." >}}
   {{< card link="nixos" title="NixOS" subtitle="The NixOS module runs the server and a runner as services." >}}
   {{< card link="build" title="Run from source" subtitle="From a checkout, with or without Nix, with examples." >}}

@@ -3,9 +3,9 @@ title: Terraform provider
 weight: 12
 ---
 
-The [Opsolete provider](https://registry.terraform.io/providers/Opsolete/opsolete/latest) manages Opsolete's platform objects with Terraform: set up projects, their credentials and network values, and empty workspaces as code, and review changes to them in a plan like any other infrastructure.
+The [OPS provider](https://registry.terraform.io/providers/Opsolete/opsolete/latest) manages OPS's platform objects with Terraform: set up projects, their credentials and network values, and empty workspaces as code, and review changes to them in a plan like any other infrastructure.
 
-| Managed with the provider | Stays in Opsolete's UI |
+| Managed with the provider | Stays in OPS's UI |
 |---|---|
 | Projects (name, description, runner pool, default) and their [environment values]({{< relref "/docs/features/environments#per-environment-inputs" >}}) | Templates, and templates on workspaces (adding one starts a plan) |
 | Workspaces: created empty, name, project, auto-apply, execution mode, drift detection | Runs |
@@ -25,7 +25,7 @@ It uses the [JSON API]({{< relref "/docs/endpoints#json-api" >}}), so the same a
      required_providers {
        opsolete = {
          source  = "opsolete/opsolete"
-         version = "~> 0.2" # needs Opsolete 0.11.0 or later
+         version = "~> 0.2" # needs OPS 0.11.0 or later
        }
      }
    }
@@ -88,7 +88,7 @@ resource "opsolete_environment_value" "region" {
   value       = "swedencentral"
 }
 
-# A workspace per resource group; its templates are added in Opsolete
+# A workspace per resource group; its templates are added in OPS
 resource "opsolete_workspace" "shop" {
   name            = "shop-prd"
   project_id      = opsolete_project.prd.id
@@ -113,11 +113,11 @@ resource "opsolete_workspace" "shop" {
 | `opsolete_registry_module` | a module published from a repository's tags: `vcs_connection_id`, `repo`, `dir`, `tag_prefix`, `namespace`, `name`, `system`; read: `versions`. Destroying it stops publishing, its versions stay | `<namespace>/<name>/<system>` |
 | `opsolete_template_catalog` | the catalog's `vcs_connection_id`, `repo`, `branch`, `dir`, `mode`; one per installation. Destroying it disconnects it | any id |
 
-Data sources look up a `opsolete_project`, `opsolete_workspace`, `opsolete_variable_set` or `opsolete_vcs_connection` by name. `opsolete_runner`, `opsolete_registry_module` and `opsolete_template_catalog` need Opsolete 0.11.0; the others 0.10.0. Every attribute is described in the [provider's docs on the Terraform Registry](https://registry.terraform.io/providers/Opsolete/opsolete/latest/docs).
+Data sources look up a `opsolete_project`, `opsolete_workspace`, `opsolete_variable_set` or `opsolete_vcs_connection` by name. `opsolete_runner`, `opsolete_registry_module` and `opsolete_template_catalog` need OPS 0.11.0; the others 0.10.0. Every attribute is described in the [provider's docs on the Terraform Registry](https://registry.terraform.io/providers/Opsolete/opsolete/latest/docs).
 
 ## Good to know
 
-- **Sensitive values are write-only** (sensitive variables, VCS tokens): Opsolete never returns them, so the provider keeps the configured value and can't see a change made to it in the UI. They are in Terraform's state: keep that state encrypted (for instance in Opsolete itself).
+- **Sensitive values are write-only** (sensitive variables, VCS tokens): OPS never returns them, so the provider keeps the configured value and can't see a change made to it in the UI. They are in Terraform's state: keep that state encrypted (for instance in OPS itself).
 - **A change in the UI to a managed object** is reverted by the next apply, as with any provider.
 - **Renaming** a project or workspace changes it in place: it keeps its id, its state, runs and grants.
 - **Deleting a workspace** whose state still manages resources fails, unless `force_delete = true` (admins): its resources then stay, unmanaged.

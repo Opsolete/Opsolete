@@ -225,3 +225,25 @@ func TestImportingUpgrade(t *testing.T) {
 		t.Fatalf("modules: %v", got)
 	}
 }
+
+// TestOPSRunUpgrade: migration 020 renames a state lock's OpsoleteRun key to OPSRun; other keys and locks without it stay.
+func TestOPSRunUpgrade(t *testing.T) {
+	ctx := context.Background()
+	conn, apply := migratedTo(t, "020_ops_run_lock.sql")
+	if _, err := conn.Exec(ctx, `INSERT INTO workspaces (id, name, project_id, state_lock, state_locked_at) VALUES
+		('00000000-0000-0000-0000-00000000000a', 'run', (SELECT default_project_id FROM organization), '{"ID": "x", "OpsoleteRun": "r1"}', now()),
+		('00000000-0000-0000-0000-00000000000b', 'cli', (SELECT default_project_id FROM organization), '{"ID": "y"}', now())`); err != nil {
+		t.Fatal(err)
+	}
+	apply("020_ops_run_lock.sql")
+	locks := map[string]string{}
+	rows, _ := conn.Query(ctx, `SELECT name, state_lock::text FROM workspaces WHERE name IN ('run', 'cli')`)
+	for rows.Next() {
+		var n, l string
+		rows.Scan(&n, &l)
+		locks[n] = l
+	}
+	if locks["run"] != `{"ID": "x", "OPSRun": "r1"}` || locks["cli"] != `{"ID": "y"}` {
+		t.Fatalf("locks: %v", locks)
+	}
+}

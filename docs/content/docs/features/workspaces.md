@@ -20,7 +20,7 @@ Runs need configuration: added templates, a linked branch, or both.
 
 A workspace can be linked to a **VCS repository branch** (GitHub or Azure DevOps, through a [VCS connection]({{< relref "/docs/features/vcs-providers" >}}), if the connection allows the workspace). Runs then plan the repository root at the branch's latest commit. That commit is pinned for the run, so the apply uses the configuration that was planned.
 
-The server checks the branch every minute (no webhooks, so Opsolete can stay internal; see [API usage of VCS polling]({{< relref "/docs/features/vcs-providers#api-usage-of-vcs-polling" >}})):
+The server checks the branch every minute (no webhooks, so OPS can stay internal; see [API usage of VCS polling]({{< relref "/docs/features/vcs-providers#api-usage-of-vcs-polling" >}})):
 
 - **Start a run on every new commit** (on by default for new links) queues an apply run of each new commit that has no run yet, applied with auto-apply or after confirmation.
 - **Speculative plans for pull requests** (opt-in) queue a plan-only run, never applied, for each new commit of an open pull request into the branch; pull requests from forks are skipped.
@@ -44,7 +44,7 @@ The **Resources** tab groups the state's resources by module: a group per added 
 
 ## Import existing resources
 
-Resources built outside Opsolete (in the Azure portal, by scripts) can be taken over without being created again,
+Resources built outside OPS (in the Azure portal, by scripts) can be taken over without being created again,
 with any template whose module can import (an `existing` input; see
 [Writing modules that can import]({{< relref "/docs/features/templates#writing-modules-that-can-import" >}})):
 
@@ -92,7 +92,7 @@ The rollout moves each workspace to the template's version, with its current inp
 
 - **Busy** workspaces (with an active run) are retried until that run ends.
 - **Needs input:** the new version has a required input without a default. The rollout skips the workspace; use its update form.
-- **Local execution:** runs can't start in Opsolete, so the rollout skips the workspace.
+- **Local execution:** runs can't start in OPS, so the rollout skips the workspace.
 
 A rollout of its own that errors, is discarded or is canceled **pauses** the rollout: check it, then **Resume**. A workspace whose plan ended before its apply is back on its previous version, so resuming retries it; to skip it, **Stop** the rollout. **Stop** ends a rollout; plans it already queued stay. If the template moves to another version meanwhile, the rollout stops: start a new one. A rollout is **done** when no workspace in its scope is left to upgrade and its plans have ended. A template has at most one open rollout. Each upgrade is recorded in the audit log.
 
@@ -100,7 +100,7 @@ A rollout of its own that errors, is discarded or is canceled **pauses** the rol
 
 A workspace's *Settings* need `operate`:
 
-- **General:** its project (admins move it), **name** (state, runs and grants are keyed by its id and stay put), **execution mode** and **auto-apply**, and [remote state sharing]({{< relref "/docs/features/state#remote-state-sharing" >}}). *Remote* (the default) runs plans and applies on Opsolete's runners. *Local* is for the [Terraform CLI]({{< relref "/docs/features/terraform-cli" >}}): Terraform runs on your machine and Opsolete only keeps the state, so runs, drift checks, VCS triggers and rollouts don't start here. The mode can't change while a run is active (wait for it to end or cancel it); a CLI lock already under way isn't stopped by a change.
+- **General:** its project (admins move it), **name** (state, runs and grants are keyed by its id and stay put), **execution mode** and **auto-apply**, and [remote state sharing]({{< relref "/docs/features/state#remote-state-sharing" >}}). *Remote* (the default) runs plans and applies on OPS's runners. *Local* is for the [Terraform CLI]({{< relref "/docs/features/terraform-cli" >}}): Terraform runs on your machine and OPS only keeps the state, so runs, drift checks, VCS triggers and rollouts don't start here. The mode can't change while a run is active (wait for it to end or cancel it); a CLI lock already under way isn't stopped by a change.
 - **Health:** [drift detection]({{< relref "/docs/features/runs#drift-detection" >}}).
 - **Locking:** lock the workspace's state by hand, with an optional reason; see [Locking]({{< relref "/docs/features/state#locking" >}}).
 - **Team access:** the grants below (admins change them).
