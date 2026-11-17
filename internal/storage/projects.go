@@ -28,7 +28,7 @@ type Project struct {
 	RunnerPool  string // only runners of this pool get its workspaces' jobs
 }
 
-// toProject maps a project_list row (001_schema.sql).
+// toProject maps a project_list row (001_ops_schema.sql).
 func toProject(p db.ProjectList) Project {
 	return Project{ID: p.ID, Name: p.Name, Description: p.Description, Default: p.IsDefault, Workspaces: int(p.Workspaces),
 		Grants: int(p.Grants), CreatedAt: p.CreatedAt, RunnerPool: p.RunnerPool}

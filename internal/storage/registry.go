@@ -144,7 +144,7 @@ func (s *Store) DeleteModule(ctx context.Context, namespace, name, system string
 
 // Token scopes: registry tokens are for Terraform clients, user tokens (terraform login) act as a
 // user and also work for the registry. Runners use their own tokens (runners table) instead. The values are
-// api_tokens.scope's (001_schema.sql).
+// api_tokens.scope's (001_ops_schema.sql).
 const (
 	ScopeRegistry = "registry"
 	ScopeUser     = "user"

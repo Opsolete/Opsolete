@@ -5,6 +5,13 @@ aliases:
   - /docs/operations/upgrading/
 ---
 
+## To 0.12
+
+The database migrations are squashed into one schema, and the product is called OPS. There is no upgrade path from 0.11 or older: start with a clean database.
+
+1. **A new, empty database and state store.** The server refuses an older database ("this database was created by OPS 0.11 or earlier (it has migration …)"). Point `DATABASE_URL` at a new database and `STATE_STORE` at a new container or bucket. There is no import: recreate projects, grants, variable sets, VCS connections, runners, API tokens and workspaces (the [Terraform provider]({{< relref "/docs/features/terraform-provider" >}}) does this from code). To keep managing existing resources, bring their state over with Terraform (for example through the [`cloud` block]({{< relref "/docs/features/terraform-cli" >}}) into a local-execution workspace) or import them.
+2. **Runners and servers on the same version.** Runners send their lease as `X-OPS-Lease` now; an older runner's job updates are refused. Upgrade all runners with the server.
+
 ## To 0.8
 
 Each runner has its own token now, and the server no longer reads `RUNNER_TOKEN` (it warns when it's set). Before upgrading the runners, register each one's token with the new server, so its current `OPS_RUNNER_TOKEN` keeps working:

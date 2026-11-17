@@ -105,7 +105,7 @@ func TestAfterPlan(t *testing.T) {
 	}
 }
 
-// run_active and run_working (001_schema.sql) agree with the Go state machine for every status.
+// run_active and run_working (001_ops_schema.sql) agree with the Go state machine for every status.
 func TestRunActiveSQL(t *testing.T) {
 	s := testStore(t)
 	statuses := map[string]bool{}

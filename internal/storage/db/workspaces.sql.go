@@ -226,7 +226,7 @@ type InsertWorkspaceParams struct {
 	Project   string
 }
 
-// Workspaces, their grants, VCS links and settings. Viewer filters use access_level (001_schema.sql).
+// Workspaces, their grants, VCS links and settings. Viewer filters use access_level (001_ops_schema.sql).
 func (q *Queries) InsertWorkspace(ctx context.Context, arg InsertWorkspaceParams) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, insertWorkspace,
 		arg.ID,

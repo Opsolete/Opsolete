@@ -1,4 +1,4 @@
--- Workspaces, their grants, VCS links and settings. Viewer filters use access_level (001_schema.sql).
+-- Workspaces, their grants, VCS links and settings. Viewer filters use access_level (001_ops_schema.sql).
 
 -- name: InsertWorkspace :one
 INSERT INTO workspaces (id, name, auto_apply, created_by, project_id)

@@ -64,7 +64,7 @@ func (w Workspace) HasConfig() bool {
 	return w.VCSLinked() || w.Templates > 0
 }
 
-// toWorkspace maps a workspace_list row (001_schema.sql).
+// toWorkspace maps a workspace_list row (001_ops_schema.sql).
 func toWorkspace(w db.WorkspaceList) Workspace {
 	return Workspace{ID: w.ID, Name: w.Name, VCSConnectionID: w.VcsConnectionID.UUID, VCSRepo: w.VcsRepo, VCSBranch: w.VcsBranch,
 		VCSTrigger: w.VcsTrigger, VCSPullRequests: w.VcsPullRequests, VCSTagsRegex: w.VcsTagsRegex, VCSTagBaseline: w.VcsTagBaseline,
@@ -73,7 +73,7 @@ func toWorkspace(w db.WorkspaceList) Workspace {
 		ProjectID: w.ProjectID, ProjectName: w.ProjectName}
 }
 
-// toRun maps a run_list row (001_schema.sql).
+// toRun maps a run_list row (001_ops_schema.sql).
 func toRun(r db.RunList) (Run, error) {
 	run := Run{ID: r.ID, WorkspaceID: r.WorkspaceID, Action: r.Action, Status: r.Status, Runner: r.Runner,
 		CreatedBy: r.CreatedByEmail, ConfirmedBy: r.ConfirmedByEmail, CancelRequested: r.CancelRequested,

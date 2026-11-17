@@ -1,4 +1,4 @@
--- Variables and variable sets. Which sets reach a workspace: variable_set_rank (001_schema.sql).
+-- Variables and variable sets. Which sets reach a workspace: variable_set_rank (001_ops_schema.sql).
 
 -- name: ListVariables :many
 -- exactly one of workspace_id and set_id is set
