@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.12.0](https://github.com/Opsolete/Opsolete/compare/v0.11.1...v0.12.0) (2026-11-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **storage:** a database migrated by 0.11 or earlier is refused ("needs a new, empty database"): start with a new database and state store.
+* runners send X-OPS-Lease: upgrade the server and its runners together. URLs (GitHub org, docs site, template schema) and the binary name are unchanged.
+
+### Features
+
+* rename Opsolete to OPS ([9fe58fa](https://github.com/Opsolete/Opsolete/commit/9fe58fac72d29f3effbd17489b9466a1fdf2893c))
+* **storage:** squash the database migrations into one schema ([fa33344](https://github.com/Opsolete/Opsolete/commit/fa333449b057d062f593d2a476882f64cb66fd9c))
+
 ## [0.11.1](https://github.com/Opsolete/Opsolete/compare/v0.11.0...v0.11.1) (2026-11-16)
 
 
