@@ -121,7 +121,7 @@ type Rollout struct {
 // Open: the rollout may still queue runs (paused ones once resumed).
 func (r Rollout) Open() bool { return r.Status == "active" || r.Status == "paused" }
 
-// toRollout maps a rollout_list row (001_schema.sql).
+// toRollout maps a rollout_list row (001_ops_schema.sql).
 func toRollout(o db.RolloutList) Rollout {
 	return Rollout{ID: o.ID, TemplateID: o.TemplateID, ModuleSource: o.ModuleSource, ModuleRef: o.ModuleRef, ProjectID: o.ProjectID.UUID,
 		ProjectName: o.ProjectName, BatchSize: int(o.BatchSize), Status: o.Status, Message: o.Message, CreatedBy: o.CreatedBy.UUID,

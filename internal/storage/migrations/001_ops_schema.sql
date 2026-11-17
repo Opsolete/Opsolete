@@ -1,5 +1,5 @@
--- Opsolete 1.0 schema. Later versions add numbered migrations after this file; 0.x databases are
--- not upgraded (Migrate refuses them): 1.0 starts from a fresh database.
+-- OPS schema: the migrations up to 0.11 squashed into one. Later versions add numbered migrations after this
+-- file; databases from before the squash are not upgraded (Migrate refuses them): this starts from a fresh one.
 --
 -- Rules that live in Go, not here: the run state machine (storage/runs.go) and every side effect
 -- of a run ending. The schema only keeps the invariants a bug must never break: one active run per
@@ -19,12 +19,14 @@ CREATE TABLE users (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
--- api_tokens: registry tokens (opsolete token <name>, no user, no expiry) and user tokens
--- (terraform login, a user and an expiry). Only the SHA-256 of a token is stored.
+-- api_tokens: registry tokens (opsolete token <name>, no user, no expiry), user tokens (terraform login, a user and
+-- an expiry) and service tokens: automation (the Terraform provider, scripts) acts with admin rights as the token
+-- itself, not as a person; no user, an expiry only if one was given, names unique so an audit entry token:<name>
+-- names one token. Only the SHA-256 of a token is stored.
 CREATE TABLE api_tokens (
     id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name       text NOT NULL,
-    scope      text NOT NULL CHECK (scope IN ('registry', 'user')),
+    scope      text NOT NULL CHECK (scope IN ('registry', 'user', 'service')),
     user_id    uuid REFERENCES users ON DELETE CASCADE,
     token_hash bytea NOT NULL UNIQUE,
     expires_at timestamptz,
@@ -32,6 +34,7 @@ CREATE TABLE api_tokens (
     CHECK ((scope = 'user') = (user_id IS NOT NULL AND expires_at IS NOT NULL))
 );
 CREATE INDEX api_tokens_user_idx ON api_tokens (user_id) WHERE user_id IS NOT NULL;
+CREATE UNIQUE INDEX api_tokens_service_name_idx ON api_tokens (name) WHERE scope = 'service';
 
 -- sessions: browser logins; the cookie holds the token, only its SHA-256 is stored. admin_email and
 -- admin_groups are what can make the session admin (re-checked against ADMIN_EMAILS/ADMIN_GROUPS per
@@ -51,11 +54,13 @@ CREATE TABLE sessions (
 CREATE INDEX sessions_user_idx ON sessions (user_id);
 CREATE INDEX sessions_expires_idx ON sessions (expires_at);
 
+-- runner_pool: only runners of this pool get its workspaces' jobs (runners.pool).
 CREATE TABLE projects (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name        text NOT NULL UNIQUE,
     description text NOT NULL DEFAULT '',
-    created_at  timestamptz NOT NULL DEFAULT now()
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    runner_pool text NOT NULL DEFAULT 'default'
 );
 
 -- organization is the one row of instance settings.
@@ -74,6 +79,16 @@ CREATE TABLE project_access (
     group_name text NOT NULL,
     level      text NOT NULL CHECK (level IN ('read', 'operate')),
     PRIMARY KEY (project_id, group_name)
+);
+
+-- runners: one row per runner, with its own token (only the SHA-256 is stored). Deleting a row revokes the runner.
+CREATE TABLE runners (
+    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    name         text NOT NULL UNIQUE,
+    pool         text NOT NULL DEFAULT 'default',
+    token_hash   bytea NOT NULL UNIQUE,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    last_seen_at timestamptz
 );
 
 -- VCS connections ------------------------------------------------------------------------------
@@ -99,9 +114,9 @@ CREATE INDEX vcs_connection_projects_project_idx ON vcs_connection_projects (pro
 
 -- Workspaces -----------------------------------------------------------------------------------
 
--- A workspace holds one Terraform state. Its configuration is its added templates
--- (workspace_templates) next to a VCS branch's root configuration (workspace_vcs), or nothing.
--- state_lock is Terraform's LockInfo plus OpsoleteRun, the run holding it (absent for CLI and UI locks).
+-- A workspace holds one Terraform state. Its configuration is its added templates (a configuration version,
+-- current_cv_id; workspace_templates) next to a VCS branch's root configuration (workspace_vcs), or nothing.
+-- state_lock is Terraform's LockInfo plus OPSRun, the run holding it (absent for CLI and UI locks).
 CREATE TABLE workspaces (
     id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name                text NOT NULL UNIQUE,
@@ -152,20 +167,6 @@ CREATE TABLE workspace_access (
     PRIMARY KEY (workspace_id, group_name)
 );
 
--- workspace_templates: the templates added to a workspace, each the module block module.<name>,
--- pinned to a module version. inputs: the form values; sensitive ones are {"sealed": "<base64>"}.
-CREATE TABLE workspace_templates (
-    workspace_id  uuid NOT NULL REFERENCES workspaces ON DELETE CASCADE,
-    name          text NOT NULL,
-    template_id   text NOT NULL,
-    module_source text NOT NULL,
-    module_ref    text NOT NULL,
-    inputs        jsonb NOT NULL,
-    created_at    timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (workspace_id, name)
-);
-CREATE INDEX workspace_templates_template_idx ON workspace_templates (template_id);
-
 CREATE TABLE remote_state_consumers (
     workspace_id uuid NOT NULL REFERENCES workspaces ON DELETE CASCADE,
     consumer_id  uuid NOT NULL REFERENCES workspaces ON DELETE CASCADE,
@@ -201,7 +202,8 @@ CREATE TABLE variable_sets (
     name        text NOT NULL UNIQUE,
     description text NOT NULL DEFAULT '',
     global      boolean NOT NULL DEFAULT false, -- applies to every workspace without a VCS link
-    created_at  timestamptz NOT NULL DEFAULT now()
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    priority    boolean NOT NULL DEFAULT false -- its variables win over a workspace's own and other sets' (values an admin enforces)
 );
 
 CREATE TABLE variable_set_workspaces (
@@ -219,7 +221,8 @@ CREATE TABLE variable_set_projects (
 CREATE INDEX variable_set_projects_project_idx ON variable_set_projects (project_id);
 
 -- variables belong to a workspace or a set. value is sealed (AES-GCM, bound to owner, category,
--- key and sensitivity).
+-- key and sensitivity). hcl: a Terraform variable whose value is an HCL expression (a list, map, object,
+-- number or bool); otherwise the value is a string.
 CREATE TABLE variables (
     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id uuid REFERENCES workspaces ON DELETE CASCADE,
@@ -231,7 +234,9 @@ CREATE TABLE variables (
     updated_at   timestamptz NOT NULL DEFAULT now(),
     CHECK ((workspace_id IS NULL) <> (set_id IS NULL)),
     UNIQUE (workspace_id, category, key),
-    UNIQUE (set_id, category, key)
+    UNIQUE (set_id, category, key),
+    hcl          boolean NOT NULL DEFAULT false,
+    CONSTRAINT variables_hcl_terraform CHECK (NOT hcl OR category = 'terraform')
 );
 
 -- variable_set_rank is how a variable set applies to a workspace's runs: 1 attached to it, 2
@@ -286,37 +291,99 @@ CREATE TABLE template_rollouts (
 );
 CREATE UNIQUE INDEX template_rollouts_open_idx ON template_rollouts (template_id) WHERE status IN ('active', 'paused');
 
+-- environment_values: per-environment template inputs (template field per_environment): a project's value for an
+-- input of a template, applied to every workspace in the project at each run, over the workspace's own. value is
+-- the input's canonical form string ("7", "true"), as templates hold defaults. keep_own: a workspace with its own
+-- value for the input (saved before the project set one, or an imported resource's) keeps it; else all take it.
+CREATE TABLE environment_values (
+    project_id  uuid NOT NULL REFERENCES projects ON DELETE CASCADE,
+    template_id text NOT NULL,
+    input_name  text NOT NULL,
+    value       text NOT NULL,
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+    updated_by  uuid REFERENCES users ON DELETE SET NULL,
+    keep_own    boolean NOT NULL DEFAULT false,
+    PRIMARY KEY (project_id, template_id, input_name)
+);
+
+-- Configuration versions (docs/configuration-versions.md) ------------------------------------
+
+-- A workspace's templates are an immutable version; a run plans one (runs.cv_id) and the workspace points at the
+-- one whose apply started (workspaces.current_cv_id).
+CREATE TABLE configuration_versions (
+    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id uuid NOT NULL REFERENCES workspaces ON DELETE CASCADE,
+    parent_id    uuid REFERENCES configuration_versions ON DELETE SET NULL, -- the current version it was made from
+    source       text NOT NULL CHECK (source IN ('form', 'promote', 'rollout', 'import', 'remove', 'upgrade')),
+    created_by   uuid REFERENCES users,
+    created_at   timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX configuration_versions_workspace_idx ON configuration_versions (workspace_id);
+
+-- configuration_modules: a version's template modules, each the module block module.<name>, pinned to a module
+-- version. inputs: the form values; sensitive ones are {"sealed": "<base64>"} (rotate-key re-seals them here).
+-- follows: the per-environment inputs that take the project's value even when it lets workspaces keep their own
+-- (keep_own), decided when the form was saved (app.EnvironmentMap.Locked). importing: the module imports what
+-- exists (the template's import switch, app.ImportInput, added to its inputs for the runner only).
+CREATE TABLE configuration_modules (
+    cv_id         uuid NOT NULL REFERENCES configuration_versions ON DELETE CASCADE,
+    name          text NOT NULL,
+    template_id   text NOT NULL,
+    module_source text NOT NULL,
+    module_ref    text NOT NULL,
+    inputs        jsonb NOT NULL,
+    follows       text[] NOT NULL DEFAULT '{}',
+    importing     boolean NOT NULL DEFAULT false,
+    PRIMARY KEY (cv_id, name)
+);
+CREATE INDEX configuration_modules_template_idx ON configuration_modules (template_id);
+
+ALTER TABLE workspaces ADD COLUMN current_cv_id uuid REFERENCES configuration_versions ON DELETE SET NULL;
+
 -- Runs -----------------------------------------------------------------------------------------
 
--- A run is one plan, then (confirmed or auto-applied) one apply, of a workspace. The statuses and
--- every allowed transition are in storage/runs.go; a run is active from plan_queued to applying
--- (run_active), and runs_one_active_idx keeps it to one per workspace.
+-- A run is one plan, then (confirmed or auto-applied) one apply, of a workspace's configuration version (cv_id).
+-- The statuses and every allowed transition are in storage/runs.go; a run is active from plan_queued to applying
+-- (run_active). A run started while a blocking one is active waits as pending; when that one ends, the oldest
+-- pending run is queued (storage.promotePending).
 --   action: apply | destroy | refresh (refresh-only) | assess (drift check, never applied)
 --           | plan (speculative plan of a pull request, never applied)
 --   lease_id/lease_until: the claiming runner's fencing token, while planning or applying
 --   lease_acked_at: when the runner acknowledged the claim (storage.AckJob); NULL until then, and an
 --           unacknowledged claim goes back to the queue (storage.UnclaimJobs)
---   remove_template: a destroy run that removes that added template (-target module.<name>)
---   config_changes: [{module, before, after}] the run changed (configuring templates, rollouts);
---           put back if it ends before its apply started
+--   remove_templates: a destroy run that removes those added templates (-target module.<name> each)
+--   found: what a plan that imports found, per template module, the inputs and their real values
+--           (runnerapi.FinishRequest.Found), for the form's "Use found values"
+--   confirm_reason: why the run's plan waits for a human (storage.confirmReason); set when it does
+--   plan_diff: the plan's attribute changes per resource (runnerapi.ResourceDiff, values masked), apart
+--           from plan (counts and addresses), which every run list reads
 --   log_removed_at: retention (app/retention.go) deleted its run_logs then; updated_at is when it ended
 -- run_active: the run holds its workspace (storage.Ended is its negation; a test keeps them equal).
 -- run_working: a runner holds its lease. Every query and index that asks either uses these.
+-- run_blocking: an active run that holds the workspace, one per workspace (runs_one_active_idx). Drift checks and
+-- pull requests' speculative plans run beside it (they read the state without locking it and run the current
+-- configuration): one active drift check per workspace, one active plan per pull request. Self-contained
+-- (run_active's statuses written out): PostgreSQL inlines index predicates with a restricted search_path, where
+-- run_active can't be found by name.
 CREATE FUNCTION run_active(status text) RETURNS boolean LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')
 $$;
 CREATE FUNCTION run_working(status text) RETURNS boolean LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
     SELECT status IN ('planning', 'applying')
 $$;
+CREATE FUNCTION run_blocking(status text, action text, pull_request integer) RETURNS boolean LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+    SELECT status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying')
+        AND action <> 'assess' AND pull_request IS NULL
+$$;
 
 CREATE TABLE runs (
     id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id     uuid NOT NULL REFERENCES workspaces ON DELETE CASCADE,
     action           text NOT NULL CHECK (action IN ('apply', 'destroy', 'refresh', 'assess', 'plan')),
-    status           text NOT NULL CHECK (status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued',
-                         'applying', 'applied', 'no_changes', 'drifted', 'planned', 'discarded', 'errored', 'canceled')),
+    status           text NOT NULL CHECK (status IN ('pending', 'plan_queued', 'planning', 'needs_confirmation',
+                         'apply_queued', 'applying', 'applied', 'no_changes', 'drifted', 'planned', 'discarded', 'errored',
+                         'canceled')),
     replace          jsonb, -- resource addresses the plan replaces (-replace)
-    remove_template  text,
     plan             jsonb, -- runnerapi.Plan: counts and addresses, never values
     outputs          jsonb, -- non-sensitive outputs after the apply
     runner           text,
@@ -329,18 +396,27 @@ CREATE TABLE runs (
     vcs_commit       text,    -- pinned by the plan (or when queued for a commit)
     vcs_pull_request integer, -- speculative plans
     rollout_id       uuid REFERENCES template_rollouts ON DELETE SET NULL,
-    config_changes   jsonb,
     created_by       uuid REFERENCES users,
     confirmed_by     uuid REFERENCES users,
     created_at       timestamptz NOT NULL DEFAULT now(),
     updated_at       timestamptz NOT NULL DEFAULT now(),
+    remove_templates text[],
+    found            jsonb,
+    cv_id            uuid REFERENCES configuration_versions ON DELETE SET NULL,
+    confirm_reason   text,
+    plan_diff        jsonb,
     CHECK ((lease_id IS NULL) = (lease_until IS NULL)),
     CHECK (lease_id IS NULL OR run_working(status)),
     CHECK (lease_acked_at IS NULL OR lease_id IS NOT NULL),
-    CHECK (remove_template IS NULL OR action = 'destroy'),
+    CHECK (remove_templates IS NULL OR action = 'destroy'),
     CHECK (vcs_pull_request IS NULL OR action = 'plan')
 );
-CREATE UNIQUE INDEX runs_one_active_idx ON runs (workspace_id) WHERE run_active(status);
+CREATE UNIQUE INDEX runs_one_active_idx ON runs (workspace_id) WHERE run_blocking(status, action, vcs_pull_request);
+CREATE UNIQUE INDEX runs_one_assess_idx ON runs (workspace_id)
+    WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying') AND action = 'assess';
+CREATE UNIQUE INDEX runs_one_pull_request_idx ON runs (workspace_id, vcs_pull_request)
+    WHERE status IN ('plan_queued', 'planning', 'needs_confirmation', 'apply_queued', 'applying') AND vcs_pull_request IS NOT NULL;
+CREATE INDEX runs_pending_idx ON runs (workspace_id, created_at) WHERE status = 'pending';
 CREATE INDEX runs_queue_idx ON runs (updated_at) WHERE status IN ('plan_queued', 'apply_queued');
 CREATE INDEX runs_leases_idx ON runs (lease_until) WHERE lease_id IS NOT NULL;
 CREATE INDEX runs_workspace_idx ON runs (workspace_id, created_at DESC);
@@ -371,6 +447,21 @@ CREATE TABLE run_logs (
 );
 CREATE INDEX run_logs_run_idx ON run_logs (run_id, seq);
 
+-- promotions: a promotion's target templates are a configuration version (cv_id), applied by apply_run_id; one
+-- that removes or replaces a deployed template destroys them first (destroy_run_id), and the destroy applied
+-- queues the apply run (storage.continuePromotion).
+CREATE TABLE promotions (
+    id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    target_workspace_id uuid NOT NULL REFERENCES workspaces ON DELETE CASCADE,
+    source              text NOT NULL,  -- the source workspace's name, for history and audit
+    cv_id               uuid REFERENCES configuration_versions ON DELETE SET NULL,
+    created_by          uuid REFERENCES users,
+    actor               text NOT NULL DEFAULT '', -- created_by's email, for the chained apply run's audit entry
+    destroy_run_id      uuid UNIQUE REFERENCES runs ON DELETE SET NULL,
+    apply_run_id        uuid UNIQUE REFERENCES runs ON DELETE SET NULL,
+    created_at          timestamptz NOT NULL DEFAULT now()
+);
+
 -- State ----------------------------------------------------------------------------------------
 
 -- state_versions: immutable; the file is in STATE_STORE at blob_key, sealed. indexed: resources
@@ -393,7 +484,8 @@ CREATE INDEX state_versions_workspace_idx ON state_versions (workspace_id, id DE
 CREATE INDEX state_versions_rollback_of_idx ON state_versions (rollback_of) WHERE rollback_of IS NOT NULL;
 CREATE INDEX state_versions_run_idx ON state_versions (run_id) WHERE run_id IS NOT NULL;
 
--- state_version_resources: names and types only, never attribute values.
+-- state_version_resources: names and types only, never attribute values. resource_id: the resource's id attribute
+-- (runnerapi.Resource.ID): an import of a managed resource is refused.
 CREATE TABLE state_version_resources (
     state_version_id bigint NOT NULL REFERENCES state_versions ON DELETE CASCADE,
     address          text NOT NULL,
@@ -401,8 +493,10 @@ CREATE TABLE state_version_resources (
     name             text NOT NULL,
     provider         text NOT NULL,
     module           text NOT NULL DEFAULT '',
+    resource_id      text,
     PRIMARY KEY (state_version_id, address)
 );
+CREATE INDEX state_version_resources_id_idx ON state_version_resources (lower(resource_id)) WHERE resource_id IS NOT NULL;
 
 -- Registry -------------------------------------------------------------------------------------
 
@@ -421,7 +515,9 @@ CREATE TABLE modules (
     PRIMARY KEY (namespace, name, system, version)
 );
 
--- vcs_modules: a registry module published from a repository's semver tags (dir: its folder).
+-- vcs_modules: a registry module published from a repository's semver tags (dir: its folder). tag_prefix: only
+-- tags starting with it publish, the rest of the tag being the version (data-disk-v1.0.0 with prefix
+-- "data-disk-"); '' takes every semver tag.
 CREATE TABLE vcs_modules (
     namespace     text NOT NULL,
     name          text NOT NULL,
@@ -431,6 +527,7 @@ CREATE TABLE vcs_modules (
     dir           text NOT NULL DEFAULT '',
     synced_at     timestamptz,
     sync_error    text NOT NULL DEFAULT '',
+    tag_prefix    text NOT NULL DEFAULT '',
     PRIMARY KEY (namespace, name, system)
 );
 CREATE INDEX vcs_modules_connection_idx ON vcs_modules (connection_id);
@@ -461,6 +558,14 @@ CREATE TRIGGER audit_log_no_truncate BEFORE TRUNCATE ON audit_log
 
 -- The one definition of the computed columns lists and pages show; storage/queries select from these.
 
+-- workspace_templates: the templates a workspace has or is getting: the blocking run's version while there is one
+-- (drift checks and pull request plans run the current one anyway), else its current one. A run that ends without
+-- its apply leaves the current one. Writes create versions (storage/configversions.go).
+CREATE VIEW workspace_templates AS
+SELECT w.id AS workspace_id, m.name, m.template_id, m.module_source, m.module_ref, m.inputs, m.follows, m.importing
+FROM workspaces w JOIN configuration_modules m ON m.cv_id = COALESCE(
+    (SELECT r.cv_id FROM runs r WHERE r.workspace_id = w.id AND run_blocking(r.status, r.action, r.vcs_pull_request)), w.current_cv_id);
+
 -- workspace_list: a workspace with its project, creator, VCS link (vcs_* empty if none), number of
 -- added templates, and drifted: the latest assessment found drift and nothing was applied since.
 CREATE VIEW workspace_list AS
@@ -484,7 +589,7 @@ CREATE VIEW run_list AS
 SELECT r.id, r.workspace_id, r.action, r.status, r.replace, r.plan, r.outputs, r.runner, r.cancel_requested,
     COALESCE(r.vcs_commit, '') AS vcs_commit, COALESCE(r.vcs_pull_request, 0)::integer AS vcs_pull_request,
     COALESCE(cu.email, '') AS created_by_email, COALESCE(fu.email, '') AS confirmed_by_email, r.created_at, r.updated_at,
-    r.log_removed_at, r.log_bytes
+    r.log_removed_at, r.log_bytes, COALESCE(r.confirm_reason, '') AS confirm_reason
 FROM runs r
 LEFT JOIN users cu ON cu.id = r.created_by
 LEFT JOIN users fu ON fu.id = r.confirmed_by;
@@ -493,7 +598,7 @@ LEFT JOIN users fu ON fu.id = r.confirmed_by;
 CREATE VIEW project_list AS
 SELECT p.id, p.name, p.description, (p.id = o.default_project_id)::boolean AS is_default,
     (SELECT count(*) FROM workspaces w WHERE w.project_id = p.id)::bigint AS workspaces,
-    (SELECT count(*) FROM project_access a WHERE a.project_id = p.id)::bigint AS grants, p.created_at
+    (SELECT count(*) FROM project_access a WHERE a.project_id = p.id)::bigint AS grants, p.created_at, p.runner_pool
 FROM projects p, organization o;
 
 -- variable_set_list: a variable set with the names of the workspaces and projects it's attached to.
@@ -502,7 +607,8 @@ SELECT vs.id, vs.name, vs.description, vs.global, vs.created_at,
     ARRAY(SELECT w.name FROM variable_set_workspaces a JOIN workspaces w ON w.id = a.workspace_id
         WHERE a.set_id = vs.id ORDER BY w.name)::text[] AS workspaces,
     ARRAY(SELECT p.name FROM variable_set_projects a JOIN projects p ON p.id = a.project_id
-        WHERE a.set_id = vs.id ORDER BY p.name)::text[] AS projects
+        WHERE a.set_id = vs.id ORDER BY p.name)::text[] AS projects,
+    vs.priority
 FROM variable_sets vs;
 
 -- vcs_connection_list: a connection with its selected workspaces and projects (names) and what uses it.
@@ -524,9 +630,3 @@ SELECT o.id, o.template_id, o.module_source, o.module_ref, o.project_id, COALESC
 FROM template_rollouts o
 LEFT JOIN projects p ON p.id = o.project_id
 LEFT JOIN users u ON u.id = o.created_by;
-
--- template_config is an added template's configuration as runs.config_changes records it (storage/runs.go).
-CREATE FUNCTION template_config(template_id text, module_source text, module_ref text, inputs jsonb) RETURNS jsonb
-LANGUAGE sql IMMUTABLE AS $$
-    SELECT jsonb_build_object('template_id', template_id, 'module_source', module_source, 'module_ref', module_ref, 'inputs', inputs)
-$$;

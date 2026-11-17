@@ -46,7 +46,7 @@ func (s *Store) CreateVCSConnection(ctx context.Context, c VCSConnection) (uuid.
 	return id, err
 }
 
-// toConnection maps a vcs_connection_list row (001_schema.sql).
+// toConnection maps a vcs_connection_list row (001_ops_schema.sql).
 func toConnection(c db.VcsConnectionList) VCSConnection {
 	return VCSConnection{ID: c.ID, Name: c.Name, Provider: c.Provider, BaseURL: c.BaseUrl, Token: c.Token, WorkspaceScope: c.WorkspaceScope,
 		Workspaces: c.Workspaces, Projects: c.Projects, CreatedAt: c.CreatedAt, LinkedWorkspaces: int(c.LinkedWorkspaces),

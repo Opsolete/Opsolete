@@ -199,7 +199,7 @@ type ListVariablesParams struct {
 	SetID       uuid.NullUUID
 }
 
-// Variables and variable sets. Which sets reach a workspace: variable_set_rank (001_schema.sql).
+// Variables and variable sets. Which sets reach a workspace: variable_set_rank (001_ops_schema.sql).
 // exactly one of workspace_id and set_id is set
 func (q *Queries) ListVariables(ctx context.Context, arg ListVariablesParams) ([]Variable, error) {
 	rows, err := q.db.Query(ctx, listVariables, arg.WorkspaceID, arg.SetID)
