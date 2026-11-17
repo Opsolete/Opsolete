@@ -1,8 +1,8 @@
-// Opsolete's UI behaviour. The CSP allows no inline script: pages mark elements with data-*
+// OPS's UI behaviour. The CSP allows no inline script: pages mark elements with data-*
 // attributes and the listeners below act on them. Loaded with defer: the page is parsed when it runs.
 "use strict";
 
-// Opsolete's own confirm(): it stops the submit event e, asks msg in #confirm-dialog and submits the
+// OPS's own confirm(): it stops the submit event e, asks msg in #confirm-dialog and submits the
 // form again (with the same button) once confirmed. word: the user must type it, like when deleting a workspace.
 function opsConfirm(e, msg, word) {
   const f = e.target, by = e.submitter;

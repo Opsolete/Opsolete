@@ -14,7 +14,7 @@ optional parts through the modules' import blocks (`runner/probe.go`), and check
 
 Terraform already does each of those jobs: finding (data sources), importing (import blocks in modules, ≥ 1.16),
 mapping attributes to variables (the plan JSON's `configuration` references) and judging the fit (the plan).
-Opsolete should be the GUI around that, not a second interpreter.
+OPS should be the GUI around that, not a second interpreter.
 
 A tried and dropped middle way: tracing the module with marked inputs and solving the marks against what exists
 (spike, November 2026). It filled 21 inputs of `test-vm` without knowing the module, but needed an ARM-to-azurerm
@@ -22,7 +22,7 @@ type table, recipes for composite IDs and fallbacks for every format the provide
 
 ## Design
 
-**The module imports itself; the plan is the check; Opsolete copies what the plan found into the form.**
+**The module imports itself; the plan is the check; OPS copies what the plan found into the form.**
 
 ### Contract for modules
 
@@ -130,7 +130,7 @@ can come back on `terraform query` if wanted.
   request plans and the runs of the same version (a failed adopt) don't, so they never block the session.
 - **The guard compares the imported object's own `id`** (the plan's `before.id`, else the import id): what state
   indexes hold. An import Terraform names no id for (by identity) is refused, as is the same id imported twice in one
-  plan: Opsolete can't otherwise promise one resource, one state.
+  plan: OPS can't otherwise promise one resource, one state.
 - **Inputs the project sets** (per environment, not keep-own), or hidden by `show_if`, show what was found but never
   ask for another round: planning again would set them back (a loop).
 - **Retention** keeps pending rounds: the session lives on them.
@@ -156,7 +156,7 @@ The prefill was a 50-line Python spike over the plan JSON, without knowledge of 
 |---|---|
 | `registry/adopt.go`, `runner/scan.go`, `runner/probe.go`, `app/imports.go`, the scan wire types | deleted |
 | scan runs, Import page, `POST /workspaces/{name}/scans` | removed (migration 008 deletes scan runs) |
-| `runs.imports`, import blocks written by Opsolete | the module's import blocks; `Plan.Imports` feeds the guard |
+| `runs.imports`, import blocks written by OPS | the module's import blocks; `Plan.Imports` feeds the guard |
 | form filled from a scan (`?scan&n`) | `?found=<run>` from the plan JSON (`runner/found.go`, `runs.found`) |
 | random placeholders for ignored secrets | gone: the user types a value (any, if the module ignores it; else the plan shows it changes) |
 

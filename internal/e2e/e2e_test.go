@@ -209,18 +209,18 @@ func TestRealRunner(t *testing.T) {
 		send(t, "/registry", mw.FormDataContentType(), &body)
 	})
 	t.Run("create a workspace from the template: the runner plans it", func(t *testing.T) {
-		runOf(postForm(t, "/templates/greeting", url.Values{"ops-workspace": {ws}, "greeting": {"hi"}, "name": {"Opsolete"}}))
+		runOf(postForm(t, "/templates/greeting", url.Values{"ops-workspace": {ws}, "greeting": {"hi"}, "name": {"OPS"}}))
 		await(t, storage.NeedsConfirmation)
 		// the plan's attribute changes: what Terraform plans for the resource, an id it knows only after apply
 		if p := page(t, "/workspaces/"+ws+"/runs/"+runID.String()); !strings.Contains(p, `<span class="change create">+1</span>`) ||
-			!strings.Contains(p, `<details class="attrs">`) || !strings.Contains(p, "hi, Opsolete!") || !strings.Contains(p, "(known after apply)") {
+			!strings.Contains(p, `<details class="attrs">`) || !strings.Contains(p, "hi, OPS!") || !strings.Contains(p, "(known after apply)") {
 			t.Fatalf("plan page: %s", p)
 		}
 	})
 	t.Run("confirmed, the runner applies it", func(t *testing.T) {
 		confirm(t)
 		await(t, storage.Applied)
-		if out := page(t, "/workspaces/"+ws+"?show=outputs"); !strings.Contains(out, "hi, Opsolete!") {
+		if out := page(t, "/workspaces/"+ws+"?show=outputs"); !strings.Contains(out, "hi, OPS!") {
 			t.Fatalf("outputs: %s", out)
 		}
 		w, _ := store.GetWorkspace(ctx, ws)
@@ -243,7 +243,7 @@ module "inner" {
   source   = "opsolete.localhost:8080/examples/greeting/terraform"
   version  = "~> 1.1"
   greeting = "nested"
-  name     = "Opsolete"
+  name     = "OPS"
 }
 output "message" { value = module.inner.message }
 `), 0o600)
@@ -259,7 +259,7 @@ output "message" { value = module.inner.message }
 		runOf(postForm(t, "/workspaces/"+ws+"/templates/new?template=nested", url.Values{}))
 		await(t, storage.NeedsConfirmation)
 		if log := runLog(t); !strings.Contains(log, "Downloading opsolete.localhost:8080/examples/greeting/terraform 1.1.0 for") ||
-			!strings.Contains(log, "nested, Opsolete!") {
+			!strings.Contains(log, "nested, OPS!") {
 			t.Fatalf("plan log: %s", log)
 		}
 		postForm(t, "/workspaces/"+ws+"/runs/"+runID.String()+"/discard", nil) // the template goes again
@@ -361,7 +361,7 @@ output "message" { value = module.inner.message }
 		if res, _ := store.Resources(ctx, w.ID); len(res) != 1 || strings.Contains(res[0].Address, secretModule) {
 			t.Fatalf("resources after the removal: %+v", res)
 		}
-		if out := page(t, "/workspaces/"+ws+"?show=outputs"); strings.Contains(out, secretModule) || !strings.Contains(out, "hi, Opsolete!") {
+		if out := page(t, "/workspaces/"+ws+"?show=outputs"); strings.Contains(out, secretModule) || !strings.Contains(out, "hi, OPS!") {
 			t.Fatalf("outputs after the removal: %s", out)
 		}
 	})

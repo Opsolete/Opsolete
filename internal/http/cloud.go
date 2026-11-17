@@ -24,10 +24,10 @@ import (
 )
 
 // Terraform's cloud block and `terraform login`: https://developer.hashicorp.com/terraform/cli/cloud/settings
-// Opsolete serves the part of Terraform's remote API (tfe.v2) that Terraform uses with local
+// OPS serves the part of Terraform's remote API (tfe.v2) that Terraform uses with local
 // execution: the organization (one, ORGANIZATION), workspaces by name, state versions and locks.
 // Entitlements say "no remote operations", so plan and apply always run on the user's machine and
-// Opsolete is the state backend, with the same versions, locks and outputs as its runs.
+// OPS is the state backend, with the same versions, locks and outputs as its runs.
 const cloudPrefix = "/api/v2"
 
 const oauthClient = "terraform-cli"
@@ -53,7 +53,7 @@ func (s *Server) cloudRoutes(mux routes) {
 	// go-tfe reads the API version from ping's headers, whatever the status.
 	mux.HandleFunc("GET "+cloudPrefix+"/ping", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("TFP-API-Version", "2.5")
-		w.Header().Set("TFP-AppName", "Opsolete")
+		w.Header().Set("TFP-AppName", "OPS")
 		w.WriteHeader(http.StatusNoContent)
 	})
 	p := cloudPrefix
@@ -183,7 +183,7 @@ func (s *Server) cloudGetWorkspace(w http.ResponseWriter, r *http.Request) {
 }
 
 // cloudListWorkspaces lists the workspaces the token's user sees, filtered by search[name] (a prefix) and
-// search[tags]: Opsolete has no workspace tags, so a tag filter matches none. One page: no pagination.
+// search[tags]: OPS has no workspace tags, so a tag filter matches none. One page: no pagination.
 // shortcut: locked is false in the list (no per-workspace lock lookup); Terraform reads it from the workspace itself.
 func (s *Server) cloudListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	list, err := s.App.ListWorkspaces(r.Context(), actor(r), "")
@@ -282,7 +282,7 @@ func (s *Server) cloudCreateProject(w http.ResponseWriter, r *http.Request) {
 	name := body.Data.Attributes.Name
 	p, err := s.App.CreateProject(r.Context(), actor(r), name, body.Data.Attributes.Description)
 	if errors.Is(err, app.ErrForbidden) { // Terraform shows this when the cloud block's project is missing
-		writeAPIError(w, http.StatusForbidden, fmt.Sprintf("there is no project %q you may use: an Opsolete admin creates projects", name))
+		writeAPIError(w, http.StatusForbidden, fmt.Sprintf("there is no project %q you may use: an OPS admin creates projects", name))
 		return
 	}
 	if err != nil {
@@ -335,7 +335,7 @@ func (s *Server) cloudLock(w http.ResponseWriter, r *http.Request) {
 			if force {
 				status = http.StatusLocked
 			}
-			writeAPIError(w, status, "workspace is locked by Run: an Opsolete run or rollback holds it until it ends")
+			writeAPIError(w, status, "workspace is locked by Run: an OPS run or rollback holds it until it ends")
 			return
 		}
 		writeWorkspace(w, http.StatusOK, st.Workspace, false)
@@ -368,7 +368,7 @@ func (s *Server) cloudCurrentState(w http.ResponseWriter, r *http.Request) {
 
 // cloudOutputs lists the current outputs with their values and detailed-type, so `terraform output`
 // and the tfe provider's tfe_outputs need only read access. The values are the state
-// version's stored ones (secrets masked). If any output is sensitive or masked, Opsolete has no value to give for
+// version's stored ones (secrets masked). If any output is sensitive or masked, OPS has no value to give for
 // it: names only, Terraform then reads the whole state, which needs operate, as before.
 func (s *Server) cloudOutputs(w http.ResponseWriter, r *http.Request) {
 	st, ok := s.cloudState(w, r, app.LevelRead)

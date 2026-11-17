@@ -210,12 +210,12 @@ func (s *Store) StateLockID(ctx context.Context, id uuid.UUID) (string, error) {
 	return lock, notFound(err)
 }
 
-// StateLock is the Terraform LockInfo of a workspace's state lock, plus Opsolete's own fields.
+// StateLock is the Terraform LockInfo of a workspace's state lock, plus OPS's own fields.
 type StateLock struct {
 	ID, Operation, Who, Created string
 	Info                        string // the reason given when locking in the UI
 	UserID                      string // cloud API and UI locks
-	OpsoleteRun                 string // the run whose Terraform holds it
+	OPSRun                      string // the run whose Terraform holds it
 }
 
 // Cloud: taken through the cloud API or the UI, so unlock and force-unlock release it.

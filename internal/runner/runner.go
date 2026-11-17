@@ -1,4 +1,4 @@
-// Package runner executes Opsolete deployments with Terraform. It pulls jobs from the
+// Package runner executes OPS deployments with Terraform. It pulls jobs from the
 // server's runner API, runs init/plan/apply (or a destroy plan) in a throwaway directory,
 // ships output back as it happens and reports the result with the terraform outputs.
 package runner
@@ -257,7 +257,7 @@ func (r *Runner) terraform(ctx context.Context, job runnerapi.Job, src string, w
 			return fail("download plan", err)
 		}
 	}
-	fmt.Fprintln(w, "\n==> terraform init (Opsolete state)")
+	fmt.Fprintln(w, "\n==> terraform init (OPS state)")
 	if _, err := run(append([]string{"init", "-input=false", "-reconfigure"}, r.backendArgs(job)...)...); err != nil {
 		return fail("init", err)
 	}

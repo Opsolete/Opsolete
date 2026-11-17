@@ -149,7 +149,7 @@ func hasValue(opts []Option, v string) bool {
 var (
 	idRe    = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`) // safe for use in state keys
 	wholeRe = regexp.MustCompile(`^-?[0-9]+$`)
-	// a Terraform variable name (vmSize too), without "-": form fields of Opsolete's own have one, so never collide
+	// a Terraform variable name (vmSize too), without "-": form fields of OPS's own have one, so never collide
 	nameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	// Terraform forbids these as variable names; as inputs they'd set a module block's meta-arguments
 	// (source: run other code with the workspace's credentials).

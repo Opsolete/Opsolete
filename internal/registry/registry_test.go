@@ -165,7 +165,7 @@ func TestAddressAndSigning(t *testing.T) {
 	if got, ver := r.RunnerSource(templates.Module{Source: "git::https://x//m?depth=1", Ref: "v1"}, time.Hour); got != "git::https://x//m?depth=1&ref=v1" || ver != "" {
 		t.Fatalf("git source with a query: %s %s", got, ver)
 	}
-	// another registry's module (the public one, another Opsolete): a version argument, no ?ref= (Terraform refuses it)
+	// another registry's module (the public one, another OPS): a version argument, no ?ref= (Terraform refuses it)
 	for _, other := range []string{"other.example.com/acme/storage/azurerm", "Azure/avm-res-resources-resourcegroup/azurerm"} {
 		if got, ver := r.RunnerSource(templates.Module{Source: other, Ref: "1.1.0"}, time.Hour); got != other || ver != "1.1.0" {
 			t.Fatalf("%s: %s %s", other, got, ver)

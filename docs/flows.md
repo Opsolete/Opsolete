@@ -1,6 +1,6 @@
 # Flow inventory (1.0, Phase 8 step 1)
 
-Every user flow of Opsolete, the tests that cover it, and the gaps. Not published (outside `docs/content`).
+Every user flow of OPS, the tests that cover it, and the gaps. Not published (outside `docs/content`).
 
 **Verdicts.** `full`: the flow end to end through the real HTTP stack (`Server.Handler()`, real Postgres; the
 runner's calls made by the test against the real runner API), or through the real runner (`runner.Execute`

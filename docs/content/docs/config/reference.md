@@ -5,7 +5,7 @@ aliases:
   - /docs/operations/configuration/
 ---
 
-The server and the runner are configured with environment variables; an invalid value stops them at startup with a message naming it. The server applies its database schema on startup (also `opsolete token`, `opsolete runner-token` and `opsolete rotate-key`), and refuses a database created by Opsolete 0.5 or older (see [Upgrading to 0.6]({{< relref "/docs/install/upgrading" >}})). The NixOS column is the option under `services.opsolete` ([NixOS]({{< relref "/docs/install/nixos" >}})); variables without one go in `environment` (or `secretFiles` for secrets).
+The server and the runner are configured with environment variables; an invalid value stops them at startup with a message naming it. The server applies its database schema on startup (also `opsolete token`, `opsolete runner-token` and `opsolete rotate-key`), and refuses a database created by OPS 0.5 or older (see [Upgrading to 0.6]({{< relref "/docs/install/upgrading" >}})). The NixOS column is the option under `services.opsolete` ([NixOS]({{< relref "/docs/install/nixos" >}})); variables without one go in `environment` (or `secretFiles` for secrets).
 
 ## Server
 
@@ -22,7 +22,7 @@ The server and the runner are configured with environment variables; an invalid 
 | `ADMIN_GROUPS` | | Comma-separated IdP groups (the `groups` claim; object IDs for Entra ID) that get the admin role. Preferred over `ADMIN_EMAILS` | `adminGroups` |
 | `ADMIN_EMAILS` | | Comma-separated emails (the IdP's `email` claim, never `preferred_username`) that get the admin role | `adminEmails` |
 | `ORGANIZATION` | `opsolete` | The one organization Terraform's [`cloud` block]({{< relref "/docs/features/terraform-cli" >}}) may name | `organization` |
-| `DEPLOYMENTS_ENABLED` | `true` | Templates, workspaces, runs, the runner API and the state backend. `false` makes Opsolete a module registry only | `deployments.enable` |
+| `DEPLOYMENTS_ENABLED` | `true` | Templates, workspaces, runs, the runner API and the state backend. `false` makes OPS a module registry only | `deployments.enable` |
 | `REGISTRY_ENABLED` | `true` | Module registry pages and the Terraform registry protocol. With `false`, startup fails if a template uses a registry module. Both `false` is refused | `registry.enable` |
 | `TEMPLATES_DIR` | `catalog` | Local folder of JSON template definitions, for development and tests. In containers, keep the templates in a [Git repository]({{< relref "/docs/features/templates#where-templates-live" >}}) instead; the image and the Nix package ship none | `templatesDir` (default: none) |
 | `TEMPLATE_EDITOR` | off | Development: `1` lets the template builder write into `TEMPLATES_DIR` (which must be writable, or startup fails) and turns on module uploads (on in the nix dev shell). A Git template catalog doesn't use it: its editor is set up in **Settings → Template catalog**, module uploads in **Settings → General** | `templateEditor` |
@@ -37,7 +37,7 @@ The server and the runner are configured with environment variables; an invalid 
 
 | Env var | Default | Purpose | NixOS (`runner.…`) |
 |---|---|---|---|
-| `OPS_SERVER_URL` | required | How the runner reaches Opsolete (in k8s: the Service URL). Registry modules are fetched from here too | `serverUrl` (the local server) |
+| `OPS_SERVER_URL` | required | How the runner reaches OPS (in k8s: the Service URL). Registry modules are fetched from here too | `serverUrl` (the local server) |
 | `OPS_RUNNER_TOKEN` | required | The runner's own token: `opsolete runner-token <name>` or Settings → Runners ([Runners]({{< relref "/docs/config/runners" >}})) | `tokenFile` (default: `runnerTokenFile`) |
 | `OPS_JOB_TIMEOUT` | `1h` | Limit per run phase; then Terraform is interrupted | `jobTimeout` |
 | `OPS_SANDBOX` | `auto` | Each Terraform command in its own Linux namespaces (a private `/tmp`, its own processes): `namespaces` requires it (the runner doesn't start without it), `auto` uses it where the kernel and the container allow it and warns where they don't, `off` never. See [Runners]({{< relref "/docs/config/runners#the-job-sandbox" >}}) | `sandbox` |

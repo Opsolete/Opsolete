@@ -220,7 +220,7 @@ func (a *App) writeTemplate(ctx context.Context, id, name string, body []byte, b
 		file, isNew, verb = path.Join(tc.Dir, id+".json"), true, "Add"
 	}
 	title := fmt.Sprintf("%s template %s", verb, name)
-	msg := fmt.Sprintf("%s\n\nSaved in Opsolete by %s (template %s).", title, by, id)
+	msg := fmt.Sprintf("%s\n\nSaved in OPS by %s (template %s).", title, by, id)
 	branch := tc.Branch
 	if tc.Mode == "pr" && body != nil { // a save while the template's pull request is open adds a commit to it
 		pr, ok, err := templatePR(ctx, c, tc, id)

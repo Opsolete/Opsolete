@@ -1,4 +1,4 @@
-// Package runnerapi defines the wire format between Opsolete and its runners.
+// Package runnerapi defines the wire format between OPS and its runners.
 package runnerapi
 
 import (
@@ -7,8 +7,8 @@ import (
 
 const (
 	Prefix      = "/api/runner/v1"
-	StatePrefix = "/api/state/v1"    // Terraform http state backend: StatePrefix + "/<workspace id>"
-	LeaseHeader = "X-Opsolete-Lease" // fencing token returned by claim; required on every job update
+	StatePrefix = "/api/state/v1" // Terraform http state backend: StatePrefix + "/<workspace id>"
+	LeaseHeader = "X-OPS-Lease"   // fencing token returned by claim; required on every job update
 
 	// A claimed job is acknowledged (POST Prefix/jobs/<run>/ack with the lease, 204) before any other
 	// call for it, which the server refuses (409) until then; one not acknowledged within 30 s of its

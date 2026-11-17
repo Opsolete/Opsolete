@@ -1,6 +1,6 @@
 # Documentation site: Hugo + Hextra. Preview with `just docs`; CI publishes it to GitHub Pages (.github/workflows/docs.yml).
 baseURL: https://opsolete.github.io/Opsolete/
-title: Opsolete
+title: OPS
 enableGitInfo: true
 
 module:

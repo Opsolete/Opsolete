@@ -27,8 +27,8 @@ import (
 	"github.com/opsolete/opsolete/internal/vcs"
 )
 
-// TestTerraformCLI drives the real Terraform CLI through a `cloud` block against Opsolete: init creates the
-// workspace (local execution), apply keeps its state in Opsolete under the CLI's lock, plan sees changes,
+// TestTerraformCLI drives the real Terraform CLI through a `cloud` block against OPS: init creates the
+// workspace (local execution), apply keeps its state in OPS under the CLI's lock, plan sees changes,
 // state list and output read it back. A user who may only read the workspace reads its outputs.
 // Offline: terraform_data, no provider download.
 func TestTerraformCLI(t *testing.T) {
@@ -140,7 +140,7 @@ output "o" { value = terraform_data.x.output }
 	}
 
 	// A reader can't download the state (it holds secrets: operators only), so the CLI's init refuses; the outputs
-	// it reads as the tfe provider's tfe_outputs does: values and types from Opsolete.
+	// it reads as the tfe provider's tfe_outputs does: values and types from OPS.
 	if err := a.SetGrant(ctx, app.Actor{Email: admin, Admin: true}, "cli-ws", "cli-readers", "read"); err != nil {
 		t.Fatal(err)
 	}

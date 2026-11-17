@@ -1,6 +1,6 @@
 -- State versions, their resource index and the state lock.
 --
--- Lock ownership: a lock belongs to the run in state_lock->>'OpsoleteRun' (none for rollbacks, the
+-- Lock ownership: a lock belongs to the run in state_lock->>'OPSRun' (none for rollbacks, the
 -- UI and the CLI). LockState, UnlockState and StateLockedBy compare it with their run_id, so a run
 -- can't take over or release a lock of another run, a rollback, the UI or the CLI whose ID it saw in a 423.
 
@@ -28,7 +28,7 @@ WHERE (sqlc.narg(run_id)::uuid IS NULL OR EXISTS (SELECT 1 FROM runs
     AND (sqlc.arg(cloud_user)::text = '' OR EXISTS (SELECT 1 FROM workspaces WHERE id = sqlc.arg(workspace_id)::uuid
         AND starts_with(state_lock->>'ID', sqlc.arg(cloud_prefix)::text) AND state_lock->>'UserID' = sqlc.arg(cloud_user)::text FOR SHARE))
     AND (sqlc.arg(rollback_lock)::text = '' OR EXISTS (SELECT 1 FROM workspaces WHERE id = sqlc.arg(workspace_id)::uuid
-        AND state_lock->>'ID' = sqlc.arg(rollback_lock)::text AND state_lock->>'OpsoleteRun' IS NULL FOR SHARE));
+        AND state_lock->>'ID' = sqlc.arg(rollback_lock)::text AND state_lock->>'OPSRun' IS NULL FOR SHARE));
 
 -- name: DropIntermediateStates :many
 DELETE FROM state_versions WHERE run_id = sqlc.arg(run_id)::uuid
@@ -51,10 +51,10 @@ WHERE state_versions.id = (SELECT cur.id FROM cur);
 -- taken: the lock is now info's (free, or already lock_id's and the same run's); held: the lock now.
 -- held can be '' when not taken: the statement's snapshot predates the winner's commit (CurrentStateLock).
 WITH taken AS (
-    UPDATE workspaces SET state_lock = (sqlc.arg(info)::jsonb - 'OpsoleteRun') || jsonb_strip_nulls(jsonb_build_object('OpsoleteRun', sqlc.narg(run_id)::uuid)),
+    UPDATE workspaces SET state_lock = (sqlc.arg(info)::jsonb - 'OPSRun') || jsonb_strip_nulls(jsonb_build_object('OPSRun', sqlc.narg(run_id)::uuid)),
         state_locked_at = CASE WHEN state_lock IS NULL THEN now() ELSE state_locked_at END
     WHERE id = sqlc.arg(id)::uuid AND (state_lock IS NULL OR state_lock->>'ID' = sqlc.arg(lock_id)::text
-        AND state_lock->>'OpsoleteRun' IS NOT DISTINCT FROM sqlc.narg(run_id)::uuid::text)
+        AND state_lock->>'OPSRun' IS NOT DISTINCT FROM sqlc.narg(run_id)::uuid::text)
     RETURNING 1
 )
 SELECT EXISTS (SELECT 1 FROM taken)::boolean AS taken,
@@ -67,8 +67,8 @@ SELECT COALESCE((SELECT w.state_lock::text FROM workspaces w WHERE w.id = sqlc.a
 -- a run's lock once that run no longer works with a lease; a rollback's after timeout_secs; never cloud locks
 WITH stale AS (
     SELECT w.id, w.state_lock FROM workspaces w WHERE w.state_lock IS NOT NULL AND CASE
-        WHEN w.state_lock->>'OpsoleteRun' IS NOT NULL THEN NOT EXISTS (SELECT 1 FROM runs r
-            WHERE r.id::text = w.state_lock->>'OpsoleteRun' AND run_working(r.status) AND r.lease_id IS NOT NULL)
+        WHEN w.state_lock->>'OPSRun' IS NOT NULL THEN NOT EXISTS (SELECT 1 FROM runs r
+            WHERE r.id::text = w.state_lock->>'OPSRun' AND run_working(r.status) AND r.lease_id IS NOT NULL)
         ELSE NOT starts_with(w.state_lock->>'ID', sqlc.arg(cloud_prefix)::text)
             AND w.state_locked_at < now() - make_interval(secs => sqlc.arg(timeout_secs)::float8)
     END FOR UPDATE
@@ -79,11 +79,11 @@ RETURNING workspaces.id, stale.state_lock::text AS info;
 -- name: UnlockState :execrows
 UPDATE workspaces SET state_lock = NULL, state_locked_at = NULL
 WHERE id = sqlc.arg(id)::uuid AND state_lock->>'ID' = sqlc.arg(lock_id)::text
-    AND state_lock->>'OpsoleteRun' IS NOT DISTINCT FROM sqlc.narg(run_id)::uuid::text;
+    AND state_lock->>'OPSRun' IS NOT DISTINCT FROM sqlc.narg(run_id)::uuid::text;
 
 -- name: StateLockedBy :one
 SELECT EXISTS (SELECT 1 FROM workspaces WHERE id = sqlc.arg(id)::uuid AND state_lock->>'ID' = sqlc.arg(lock_id)::text
-    AND state_lock->>'OpsoleteRun' IS NOT DISTINCT FROM sqlc.narg(run_id)::uuid::text);
+    AND state_lock->>'OPSRun' IS NOT DISTINCT FROM sqlc.narg(run_id)::uuid::text);
 
 -- name: StateLockID :one
 SELECT COALESCE(state_lock->>'ID', '')::text FROM workspaces WHERE id = sqlc.arg(id)::uuid;
@@ -95,7 +95,7 @@ SELECT state_lock FROM workspaces WHERE id = sqlc.arg(id)::uuid;
 -- by user (or anyone: user ''); a run's Terraform picks its own lock ID: it can't make it a cloud one
 UPDATE workspaces SET state_lock = NULL, state_locked_at = NULL WHERE id = sqlc.arg(id)::uuid
     AND starts_with(state_lock->>'ID', sqlc.arg(cloud_prefix)::text) AND (sqlc.arg(user_id)::text = '' OR state_lock->>'UserID' = sqlc.arg(user_id)::text)
-    AND state_lock->>'OpsoleteRun' IS NULL;
+    AND state_lock->>'OPSRun' IS NULL;
 
 -- name: CloudLocked :one
 SELECT COALESCE(starts_with(state_lock->>'ID', sqlc.arg(cloud_prefix)::text) AND state_lock->>'UserID' = sqlc.arg(user_id)::text, false)::boolean

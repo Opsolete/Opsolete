@@ -1,4 +1,4 @@
-# Opsolete tasks. Run inside `nix develop` (or direnv); it sets PGHOST/PGDATA/DATABASE_URL.
+# OPS tasks. Run inside `nix develop` (or direnv); it sets PGHOST/PGDATA/DATABASE_URL.
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
@@ -66,7 +66,7 @@ seed: db-start
 
     echo "workspaces: greeting-dev (auto-apply), greeting-prod (waits for confirmation), empty, credentials-only"
     req /templates/greeting -d ops-workspace=greeting-dev -d ops-auto-apply=on -d greeting=hello -d name=world
-    req /templates/greeting -d ops-workspace=greeting-prod -d greeting=hi -d "name=Opsolete team"
+    req /templates/greeting -d ops-workspace=greeting-prod -d greeting=hi -d "name=OPS team"
     req /variable-sets/example-azure/workspaces -d workspace=greeting-prod
     req /workspaces/new -d name=empty
     req /workspaces/new -d name=credentials-only

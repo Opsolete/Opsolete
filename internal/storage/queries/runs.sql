@@ -115,7 +115,7 @@ INSERT INTO run_status_history (run_id, status, message) VALUES (sqlc.arg(run_id
 -- name: ReleaseRunStateLock :execrows
 -- only the lock the run's own Terraform took, never a rollback's or CLI's
 UPDATE workspaces SET state_lock = NULL, state_locked_at = NULL
-WHERE id = sqlc.arg(workspace_id)::uuid AND state_lock->>'OpsoleteRun' = sqlc.arg(run_id)::uuid::text;
+WHERE id = sqlc.arg(workspace_id)::uuid AND state_lock->>'OPSRun' = sqlc.arg(run_id)::uuid::text;
 
 -- name: ListWorkspaceTemplates :many
 SELECT name, template_id, module_source, module_ref, inputs, follows, importing FROM workspace_templates

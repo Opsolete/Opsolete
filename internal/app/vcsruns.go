@@ -16,7 +16,7 @@ import (
 
 // PollVCSRuns queues the runs VCS events call for, once (a scheduler job): an apply run for a new
 // commit on a workspace's branch, a speculative plan for each new commit of a pull request into it.
-// Polling, like PollVCSModules, needs no inbound webhooks, so Opsolete can stay internal. Each
+// Polling, like PollVCSModules, needs no inbound webhooks, so OPS can stay internal. Each
 // repository branch is polled once per round however many workspaces link it, and on GitHub with
 // conditional requests, so an unchanged branch costs no rate limit.
 func (a *App) PollVCSRuns(ctx context.Context) error {

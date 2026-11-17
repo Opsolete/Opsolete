@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://opsolete.github.io/Opsolete/schema/template-1.json",
-  "title": "Opsolete template 1.0",
-  "description": "A catalog template: a Terraform module at a pinned ref and the form inputs that set its variables. Opsolete's loader is the reference: it also checks what a schema can't (show_if refers to an earlier input, select defaults and show_if values are options, at most one key, patterns compile).",
+  "title": "OPS template 1.0",
+  "description": "A catalog template: a Terraform module at a pinned ref and the form inputs that set its variables. OPS's loader is the reference: it also checks what a schema can't (show_if refers to an earlier input, select defaults and show_if values are options, at most one key, patterns compile).",
   "type": "object",
   "additionalProperties": false,
   "required": ["id", "name", "module"],

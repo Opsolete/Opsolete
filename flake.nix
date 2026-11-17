@@ -1,5 +1,5 @@
 {
-  description = "Opsolete - from forms to infrastructure";
+  description = "OPS - from forms to infrastructure";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 

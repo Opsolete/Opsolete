@@ -21,7 +21,7 @@ WHERE ($8::uuid IS NULL OR EXISTS (SELECT 1 FROM runs
     AND ($9::text = '' OR EXISTS (SELECT 1 FROM workspaces WHERE id = $1::uuid
         AND starts_with(state_lock->>'ID', $10::text) AND state_lock->>'UserID' = $9::text FOR SHARE))
     AND ($11::text = '' OR EXISTS (SELECT 1 FROM workspaces WHERE id = $1::uuid
-        AND state_lock->>'ID' = $11::text AND state_lock->>'OpsoleteRun' IS NULL FOR SHARE))
+        AND state_lock->>'ID' = $11::text AND state_lock->>'OPSRun' IS NULL FOR SHARE))
 `
 
 type AddStateVersionParams struct {
@@ -199,10 +199,10 @@ func (q *Queries) InsertStateIndex(ctx context.Context, arg InsertStateIndexPara
 
 const lockState = `-- name: LockState :one
 WITH taken AS (
-    UPDATE workspaces SET state_lock = ($2::jsonb - 'OpsoleteRun') || jsonb_strip_nulls(jsonb_build_object('OpsoleteRun', $3::uuid)),
+    UPDATE workspaces SET state_lock = ($2::jsonb - 'OPSRun') || jsonb_strip_nulls(jsonb_build_object('OPSRun', $3::uuid)),
         state_locked_at = CASE WHEN state_lock IS NULL THEN now() ELSE state_locked_at END
     WHERE id = $1::uuid AND (state_lock IS NULL OR state_lock->>'ID' = $4::text
-        AND state_lock->>'OpsoleteRun' IS NOT DISTINCT FROM $3::uuid::text)
+        AND state_lock->>'OPSRun' IS NOT DISTINCT FROM $3::uuid::text)
     RETURNING 1
 )
 SELECT EXISTS (SELECT 1 FROM taken)::boolean AS taken,
@@ -314,8 +314,8 @@ func (q *Queries) ModuleResources(ctx context.Context, workspaceID uuid.UUID) ([
 const releaseOrphanedLocks = `-- name: ReleaseOrphanedLocks :many
 WITH stale AS (
     SELECT w.id, w.state_lock FROM workspaces w WHERE w.state_lock IS NOT NULL AND CASE
-        WHEN w.state_lock->>'OpsoleteRun' IS NOT NULL THEN NOT EXISTS (SELECT 1 FROM runs r
-            WHERE r.id::text = w.state_lock->>'OpsoleteRun' AND run_working(r.status) AND r.lease_id IS NOT NULL)
+        WHEN w.state_lock->>'OPSRun' IS NOT NULL THEN NOT EXISTS (SELECT 1 FROM runs r
+            WHERE r.id::text = w.state_lock->>'OPSRun' AND run_working(r.status) AND r.lease_id IS NOT NULL)
         ELSE NOT starts_with(w.state_lock->>'ID', $1::text)
             AND w.state_locked_at < now() - make_interval(secs => $2::float8)
     END FOR UPDATE
@@ -415,7 +415,7 @@ func (q *Queries) StateLockID(ctx context.Context, id uuid.UUID) (string, error)
 
 const stateLockedBy = `-- name: StateLockedBy :one
 SELECT EXISTS (SELECT 1 FROM workspaces WHERE id = $1::uuid AND state_lock->>'ID' = $2::text
-    AND state_lock->>'OpsoleteRun' IS NOT DISTINCT FROM $3::uuid::text)
+    AND state_lock->>'OPSRun' IS NOT DISTINCT FROM $3::uuid::text)
 `
 
 type StateLockedByParams struct {
@@ -527,7 +527,7 @@ func (q *Queries) UnknownResource(ctx context.Context, arg UnknownResourceParams
 const unlockCloudState = `-- name: UnlockCloudState :execrows
 UPDATE workspaces SET state_lock = NULL, state_locked_at = NULL WHERE id = $1::uuid
     AND starts_with(state_lock->>'ID', $2::text) AND ($3::text = '' OR state_lock->>'UserID' = $3::text)
-    AND state_lock->>'OpsoleteRun' IS NULL
+    AND state_lock->>'OPSRun' IS NULL
 `
 
 type UnlockCloudStateParams struct {
@@ -548,7 +548,7 @@ func (q *Queries) UnlockCloudState(ctx context.Context, arg UnlockCloudStatePara
 const unlockState = `-- name: UnlockState :execrows
 UPDATE workspaces SET state_lock = NULL, state_locked_at = NULL
 WHERE id = $1::uuid AND state_lock->>'ID' = $2::text
-    AND state_lock->>'OpsoleteRun' IS NOT DISTINCT FROM $3::uuid::text
+    AND state_lock->>'OPSRun' IS NOT DISTINCT FROM $3::uuid::text
 `
 
 type UnlockStateParams struct {
@@ -579,7 +579,7 @@ type WorkingRunsRow struct {
 
 // State versions, their resource index and the state lock.
 //
-// Lock ownership: a lock belongs to the run in state_lock->>'OpsoleteRun' (none for rollbacks, the
+// Lock ownership: a lock belongs to the run in state_lock->>'OPSRun' (none for rollbacks, the
 // UI and the CLI). LockState, UnlockState and StateLockedBy compare it with their run_id, so a run
 // can't take over or release a lock of another run, a rollback, the UI or the CLI whose ID it saw in a 423.
 // a blocking run, and drift checks and pull request plans beside it

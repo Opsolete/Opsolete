@@ -34,7 +34,7 @@ See also [`catalog/storage-account.json`](https://github.com/Opsolete/Opsolete/b
 
 | Field | Type | | |
 |---|---|---|---|
-| `$schema` | string | optional | The JSON Schema URL; allowed and ignored by Opsolete. |
+| `$schema` | string | optional | The JSON Schema URL; allowed and ignored by OPS. |
 | `id` | string | required | Lowercase letters, digits and dashes, at most 63 characters, not `new`. Unique in the catalog. The builder gives new templates a UUID. |
 | `name` | string | required | The title in the catalog. |
 | `description` | string | optional | One sentence, shown on the catalog card. |
@@ -95,7 +95,7 @@ storage-account.json: template storage-account, input name: unknown field "lable
 
 A catalog has at most 500 files of at most 256 KiB each, 8 MiB in total.
 
-**Editor support.** The format is published as a JSON Schema at <https://opsolete.github.io/Opsolete/schema/template-1.json>. With `"$schema"` in the file, as above, VS Code (and other editors with JSON Schema support) completes field names, shows each field's description, and marks unknown fields and wrongly typed defaults as you type; no extension or setting is needed. The builder writes `"$schema"` into every file it saves. Opsolete itself validates more than the schema can (for example that a `show_if` refers to an input above it), so a file the editor accepts can still fail to load with a clear error.
+**Editor support.** The format is published as a JSON Schema at <https://opsolete.github.io/Opsolete/schema/template-1.json>. With `"$schema"` in the file, as above, VS Code (and other editors with JSON Schema support) completes field names, shows each field's description, and marks unknown fields and wrongly typed defaults as you type; no extension or setting is needed. The builder writes `"$schema"` into every file it saves. OPS itself validates more than the schema can (for example that a `show_if` refers to an input above it), so a file the editor accepts can still fail to load with a clear error.
 
 Mark a `string` or `number` input `"sensitive": true` for passwords and keys. It is typed in a password field, stored encrypted with `SECRET_KEY`, shown as *(sensitive)*, left out of the audit log, and kept when left empty on reconfigure. When a form is refused (a typo elsewhere), what was typed is kept for an hour without being shown: sealed in the page, for the same user and form only. It can't have a `default`. A module variable declared `sensitive` in Terraform becomes a sensitive input when the template lists it. Values saved before an input was marked sensitive are encrypted the next time the template is configured.
 
@@ -107,7 +107,7 @@ Fields generated from a [registry]({{< relref "/docs/features/module-registry" >
 
 ## Converting 0.x templates
 
-Since Opsolete 0.6, only format 1.0 loads; there is no compatibility mode. Three things changed from the 0.5 format:
+Since OPS 0.6, only format 1.0 loads; there is no compatibility mode. Three things changed from the 0.5 format:
 
 1. **`default` and `show_if.equals` are typed** by the input's type: a number is a JSON number, a yes / no value a JSON boolean. Strings stay strings.
 2. **`help` is its own field.** A `label` is no longer split at `: `; a 0.x label like `"Account name: 3-24 lowercase letters"` would show whole as the label, so move the text after `: ` into `help`.
@@ -175,7 +175,7 @@ A template's module is deployed by people who never write Terraform, so it has t
 
 - **Configure the providers in the module.** Declare `required_providers` and write the `provider` blocks in the module itself, e.g. `provider "azurerm" { features {} }`. The workspace writes no provider configuration, and a template always runs as `module.<name>`, next to other templates. With its own providers, each template works on its own, whatever else the workspace holds.
 
-  Reusable modules called from your own Terraform normally *leave out* provider blocks. A module that has them can't be called with `count`, `for_each` or `depends_on`. Opsolete never writes those arguments, so that limit doesn't apply. Terraform also needs a module's provider configuration to destroy its resources, so removing an added template first runs a destroy targeted at `module.<name>` while its block is still there, and only then drops the block.
+  Reusable modules called from your own Terraform normally *leave out* provider blocks. A module that has them can't be called with `count`, `for_each` or `depends_on`. OPS never writes those arguments, so that limit doesn't apply. Terraform also needs a module's provider configuration to destroy its resources, so removing an added template first runs a destroy targeted at `module.<name>` while its block is still there, and only then drops the block.
 - **No credentials in the module.** Pass them as environment variables (`ARM_CLIENT_ID`, `AWS_ACCESS_KEY_ID`, …) through a [variable set]({{< relref "/docs/features/variables" >}}). Environment variables reach every template in the workspace.
 - **Resources in the module's root directory**, in the standard module structure (`main.tf`, `variables.tf`, `outputs.tf`), so the [registry]({{< relref "/docs/features/module-registry" >}}) can generate the docs and the form from it.
 - **One specific use case, few decisions.** Hard-code what your standards fix (SKU, region list, logging, network rules) and expose only what users must choose.
@@ -193,8 +193,8 @@ finds and imports them itself, and must be able to describe them as they are:
   for what the user doesn't know (a VM's network interface); `azurerm_resources` finds any type by name without
   the feature-frozen `azurerm_virtual_machine` family, and its postcondition says clearly when nothing is there. The
   template lists the input like any other; the form doesn't show it as a field (its *Create new* / *Import existing*
-  choice sets it), and Opsolete turns it on only for the runs of an import, never storing it: once the import is
-  applied it's off, so the data sources aren't read anymore. Opsolete writes no import blocks and knows nothing
+  choice sets it), and OPS turns it on only for the runs of an import, never storing it: once the import is
+  applied it's off, so the data sources aren't read anymore. OPS writes no import blocks and knows nothing
   about the cloud: the module does.
 - **The template is checked when it loads**: the `existing` input must be a `bool` without a `true` default, not
   per environment, the key, sensitive or conditional, and no `show_if` may refer to it. A template that breaks one of these is refused with a

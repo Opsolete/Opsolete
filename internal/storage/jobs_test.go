@@ -273,7 +273,7 @@ func TestFinishKeepsForeignStateLock(t *testing.T) {
 		t.Fatalf("claim: %v %v", ok, err)
 	}
 	ack(t, s, j)
-	if _, ok, err := s.LockState(ctx, w.ID, "rb", uuid.Nil, []byte(`{"ID":"rb","OpsoleteRun":"`+run.ID.String()+`"}`)); !ok || err != nil {
+	if _, ok, err := s.LockState(ctx, w.ID, "rb", uuid.Nil, []byte(`{"ID":"rb","OPSRun":"`+run.ID.String()+`"}`)); !ok || err != nil {
 		t.Fatalf("lock: %v %v", ok, err)
 	}
 	// The run saw the lock's ID in a 423: that alone must not let it take over, use or release the lock.

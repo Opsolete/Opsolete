@@ -33,10 +33,10 @@ import (
 )
 
 // TestAzureImport runs an import session against real Azure (only with OPS_AZURE_E2E=1 and ARM_CLIENT_ID,
-// ARM_CLIENT_SECRET, ARM_TENANT_ID, ARM_SUBSCRIPTION_ID set): a resource group made outside Opsolete is imported
+// ARM_CLIENT_SECRET, ARM_TENANT_ID, ARM_SUBSCRIPTION_ID set): a resource group made outside OPS is imported
 // by a template whose module imports itself (examples/modules/azure-rg). The form's default region differs from
 // the group's, so the first round would replace it and can't be adopted; planned again with what it found, it only
-// imports, is adopted, confirmed and applied. Then a change made outside Opsolete shows as drift, and removing
+// imports, is adopted, confirmed and applied. Then a change made outside OPS shows as drift, and removing
 // the template destroys the group. Credentials come in a global variable set, sensitive: never in a log.
 // Free resources only: a resource group, in westeurope/northeurope.
 func TestAzureImport(t *testing.T) {
@@ -59,7 +59,7 @@ func TestAzureImport(t *testing.T) {
 	os.MkdirAll(cache, 0o755)
 	t.Setenv("TF_PLUGIN_CACHE_DIR", cache)
 
-	// The group made outside Opsolete, with Terraform of its own (removed again however the test ends). It gets
+	// The group made outside OPS, with Terraform of its own (removed again however the test ends). It gets
 	// the credentials explicitly: they leave this process's environment below, for the runner's sake.
 	outside := t.TempDir()
 	outsideEnv := os.Environ()
@@ -89,7 +89,7 @@ resource "azurerm_resource_group" "pre" {
 		}
 	}
 	outsideTF(t, "e2e", "apply", "-auto-approve", "-input=false")
-	t.Cleanup(func() { // whatever Opsolete did: nothing stays behind in the subscription
+	t.Cleanup(func() { // whatever OPS did: nothing stays behind in the subscription
 		cmd := exec.Command(tf, "destroy", "-auto-approve", "-input=false")
 		cmd.Dir, cmd.Env = outside, outsideEnv
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -97,7 +97,7 @@ resource "azurerm_resource_group" "pre" {
 		}
 	})
 
-	// Opsolete: server, runner, a registry module and its template.
+	// OPS: server, runner, a registry module and its template.
 	store, err := storage.Open(ctx, testdb.URL(t))
 	if err != nil {
 		t.Fatal(err)
@@ -242,7 +242,7 @@ resource "azurerm_resource_group" "pre" {
 		t.Fatalf("after the import: templates %+v, resources %+v", mods, res)
 	}
 
-	// A change made outside Opsolete is drift.
+	// A change made outside OPS is drift.
 	outsideTF(t, "changed-outside", "apply", "-auto-approve", "-input=false", "-refresh=false")
 	drift := runOf(post(t, "/workspaces/"+ws+"/runs", url.Values{"action": {"assess"}}))
 	runs = append(runs, drift)

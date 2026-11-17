@@ -2,7 +2,7 @@
 <div class="page-head">
   <div>
     <h1>Audit log</h1>
-    <p class="muted">Every change made in Opsolete, every sign-in and every refused request, newest first (the latest 500 of each). Entries can't be edited or deleted, and each one is signed with SECRET_KEY together with the one before it. Every entry is also written to the server log (stdout).</p>
+    <p class="muted">Every change made in OPS, every sign-in and every refused request, newest first (the latest 500 of each). Entries can't be edited or deleted, and each one is signed with SECRET_KEY together with the one before it. Every entry is also written to the server log (stdout).</p>
   </div>
 </div>
 {{if .Broken}}<p class="alert error" role="alert">The audit log was tampered with: entry {{.Broken}} was changed, or an entry before it removed.</p>

@@ -516,7 +516,7 @@ func (q *Queries) QueueVCSRun(ctx context.Context, arg QueueVCSRunParams) (Queue
 
 const releaseRunStateLock = `-- name: ReleaseRunStateLock :execrows
 UPDATE workspaces SET state_lock = NULL, state_locked_at = NULL
-WHERE id = $1::uuid AND state_lock->>'OpsoleteRun' = $2::uuid::text
+WHERE id = $1::uuid AND state_lock->>'OPSRun' = $2::uuid::text
 `
 
 type ReleaseRunStateLockParams struct {

@@ -1,6 +1,6 @@
 // Package vcs is the client of GitHub and Azure DevOps: repositories, tags, branch heads, pull
 // requests, archives and the commits and pull requests of the template editor. It talks to the
-// providers' REST APIs with an access token, so the server needs no git binary. What Opsolete does
+// providers' REST APIs with an access token, so the server needs no git binary. What OPS does
 // with them (module versions, VCS runs, the Git template catalog) is internal/app's.
 package vcs
 

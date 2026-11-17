@@ -5,7 +5,7 @@ aliases:
   - /docs/catalog/module-registry/
 ---
 
-Opsolete is a private Terraform module registry, built on the standard [module registry protocol](https://developer.hashicorp.com/terraform/internals/module-registry-protocol): `/.well-known/terraform.json`, `GET /v1/modules/:ns/:name/:system/versions` and `.../:version/download`. HashiCorp's `terraform-config-inspect` reads each uploaded module's variables, `terraform-registry-address` validates addresses and `go-version` handles semver.
+OPS is a private Terraform module registry, built on the standard [module registry protocol](https://developer.hashicorp.com/terraform/internals/module-registry-protocol): `/.well-known/terraform.json`, `GET /v1/modules/:ns/:name/:system/versions` and `.../:version/download`. HashiCorp's `terraform-config-inspect` reads each uploaded module's variables, `terraform-registry-address` validates addresses and `go-version` handles semver.
 
 - **Upload** (once an admin turns on *Module uploads* in **Settings → General**): on `/registry`, *Publish module* → *Upload workflow*: pick a namespace, name, system and semver version, plus a `.tar.gz` with the module at its root (`tar czf module.tar.gz -C path/to/module .`). Versions are immutable.
 - **The list** (`/registry`) is for finding a module: its name, namespace and system, latest version and when it was published, with a search box that matches name, namespace, system and repository (*vcs* or *uploaded* for how it's published). For admins, a *VCS* tag marks a module published from a repository, *sync failed* its last sync's error, and *Sync now* checks its tags at once. The rest is on the module's page: *Create template*, *Unlink*, *Delete module*.
